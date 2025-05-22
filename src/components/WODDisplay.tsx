@@ -60,7 +60,7 @@ const WODDisplay = () => {
         {!wod ? (
           <div className="text-center text-xl">No WOD found for selected date.</div>
         ) : (
-          <div className="grid grid-cols-2 gap-12 bg-concrete border border-steel rounded-xl shadow-2xl p-16 animate-fadeIn">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 md:gap-12">
             <div className="space-y-8">
               <h1 className="text-7xl font-heading text-bone uppercase tracking-widest">AlphaWOD</h1>
               <h2 className="text-4xl font-semibold text-bone flex items-center gap-2">
