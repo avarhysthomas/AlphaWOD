@@ -46,7 +46,7 @@ const WODDisplay = () => {
   };
 
   return (
-    <div className="bg-black text-white min-h-screen flex flex-col items-center p-6 space-y-6">
+    <div className="bg-black text-white min-h-screen flex flex-col items-center p-4 sm:p-6 space-y-6">
       <div className="w-full max-w-4xl">
         <div className="flex justify-center mb-6">
           <input
@@ -59,8 +59,8 @@ const WODDisplay = () => {
 
         {!wod ? (
           <div className="text-center text-xl">No WOD found for selected date.</div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 md:gap-12">
+            ) : (
+            <div className="bg-neutral-900 border border-neutral-700 rounded-xl shadow-2xl p-6 sm:p-12 max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8 md:gap-12">
             <div className="space-y-8">
               <h1 className="text-7xl font-heading text-bone uppercase tracking-widest">AlphaWOD</h1>
               <h2 className="text-4xl font-semibold text-bone flex items-center gap-2">
