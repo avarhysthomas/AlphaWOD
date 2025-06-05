@@ -11,7 +11,7 @@ const WODEditor = () => {
     duration: '',
     rounds: '',
     movements: [{ partner1: '', partner2: '' }],
-    strengthMovements: [{ movement: '', sets: '', reps: '' }],
+    strengthMovements: [{ movement: '', sets: '', reps: '', rpe: '' }],
     notes: '',
   });
 
@@ -29,16 +29,16 @@ const WODEditor = () => {
         rounds: formData.rounds && formData.rounds.trim() !== '' ? formData.rounds : '1',
       };
       await addDoc(collection(db, 'wods'), finalData);
-      alert('✅ WOD saved to Firebase!');
+      alert('WOD saved to Firebase!');
     } catch (err) {
       console.error('Error saving WOD:', err);
-      alert('❌ Failed to save WOD');
+      alert('Failed to save WOD');
     }
   };
 
   return (
     <form onSubmit={handleSubmit} className="max-w-xl mx-auto bg-neutral-900 p-6 rounded-lg space-y-6 text-white">
-      <h1 className="text-3xl font-heading font-bold text-center uppercase tracking-widest">AlphaWOD Editor</h1>
+      <h1 className="text-3xl font-heading font-bold text-center uppercase tracking-widest">AlphaFIT Editor</h1>
 
       <input type="date" name="date" value={formData.date} onChange={handleChange} className="w-full p-2 bg-neutral-800 rounded" />
 
@@ -172,12 +172,23 @@ const WODEditor = () => {
                 }}
                 className="w-full p-2 bg-neutral-800 rounded"
               />
+              <input
+                type="text"
+                placeholder="RPE (optional)"
+                value={sm.rpe}
+                onChange={e => {
+                  const updated = [...formData.strengthMovements];
+                  updated[idx].rpe = e.target.value;
+                  setFormData(prev => ({ ...prev, strengthMovements: updated }));
+                }}
+                className="w-full p-2 bg-neutral-800 rounded"
+                />
             </div>
           ))}
           <button
             type="button"
             className="text-sm text-white mt-2 underline"
-            onClick={() => setFormData(prev => ({ ...prev, strengthMovements: [...prev.strengthMovements, { movement: '', sets: '', reps: '' }] }))}
+            onClick={() => setFormData(prev => ({ ...prev, strengthMovements: [...prev.strengthMovements, { movement: '', sets: '', reps: '', rpe: ''}] }))}
           >
             + Add Movement
           </button>

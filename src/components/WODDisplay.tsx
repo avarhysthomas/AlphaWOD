@@ -62,7 +62,7 @@ const WODDisplay = () => {
             ) : (
             <div className="bg-neutral-900 border border-neutral-700 rounded-xl shadow-2xl p-6 sm:p-12 max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8 md:gap-12">
             <div className="space-y-8">
-              <h1 className="text-7xl font-heading text-bone uppercase tracking-widest">AlphaWOD</h1>
+              <h1 className="text-7xl font-heading text-bone uppercase tracking-widest">AlphaFIT</h1>
               <h2 className="text-4xl font-semibold text-bone flex items-center gap-2">
                 <CalendarDays className="w-6 h-6" />
                 {wod.date.toDate().toISOString().split('T')[0]}
@@ -85,7 +85,10 @@ const WODDisplay = () => {
                     {wod.strengthMovements?.map((sm: any, index: number) => (
                       <li key={index} className="flex items-center gap-2">
                         <Dumbbell className="w-5 h-5 text-bone" />
-                        {sm.movement} – {sm.sets} sets × {sm.reps} reps
+                        {sm.movement} –
+                        {sm.sets && ` – ${sm.sets} set${sm.sets > 1 ? 's' : ''}`}
+                        {sm.reps && ` × ${sm.reps} rep${sm.reps > 1 ? 's' : ''}`}
+                        {sm.rpe && ` @ RPE ${sm.rpe}`}
                       </li>
                     ))}
                   </ul>
