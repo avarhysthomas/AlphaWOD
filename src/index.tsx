@@ -3,7 +3,8 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import './index.css';
 import { BrowserRouter } from 'react-router-dom';
-import { register } from './serviceWorkerRegistration'; // ✅ add this
+import * as serviceWorkerRegistration from './serviceWorkerRegistration';
+serviceWorkerRegistration.register();
 
 const root = ReactDOM.createRoot(document.getElementById('root')!);
 root.render(
@@ -12,4 +13,3 @@ root.render(
   </BrowserRouter>
 );
 
-register(); // ✅ this line activates the PWA magic
