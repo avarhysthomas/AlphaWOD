@@ -60,9 +60,9 @@ const WODDisplay = () => {
         {!wod ? (
           <div className="text-center text-xl">No WOD found for selected date.</div>
             ) : (
-            <div className="bg-neutral-900 border border-neutral-700 rounded-xl shadow-2xl p-6 sm:p-12 max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8 md:gap-12">
+            <div className="bg-neutral-900 border border-neutral-700 rounded-xl shadow-2xl p-6 sm:p-12 max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-6 sm:gap-10 md:gap-12 px-4">
             <div className="space-y-8">
-              <h1 className="text-7xl font-heading text-bone uppercase tracking-widest">AlphaFIT</h1>
+              <h1 className="text-4xl sm:text-6xl md:text-7xl font-heading text-bone uppercase tracking-widest">AlphaFIT</h1>
               <h2 className="text-4xl font-semibold text-bone flex items-center gap-2">
                 <CalendarDays className="w-6 h-6" />
                 {wod.date.toDate().toISOString().split('T')[0]}
@@ -103,7 +103,7 @@ const WODDisplay = () => {
 
             {wod.sessionType === 'WOD' && (
               <div className="flex flex-col items-center justify-center text-center">
-                <h3 className="text-5xl font-bold text-bone mb-8 uppercase">Movements</h3>
+                <h3 className="text-3xl sm:text-4xl md:text-5xl font-bold text-bone mb-8 uppercase">Movements</h3>
                 <ul className="space-y-6 text-4xl text-white">
                   {wod.movements?.map((move: any, index: number) => (
                     <li key={index} className="flex flex-col gap-2">

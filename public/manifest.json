@@ -1,20 +1,20 @@
 {
   "short_name": "AlphaFIT",
-  "name": "AlphaFIT App",
+  "name": "AlphaFIT",
   "icons": [
     {
       "src": "icon-512.png",
-      "sizes": "192x192",
-      "type": "image/png"
+      "type": "image/png",
+      "sizes": "192x192"
     },
     {
       "src": "icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "sizes": "512x512"
     }
   ],
   "start_url": ".",
   "display": "standalone",
   "theme_color": "#000000",
-  "background_color": "#1a1a1a"
+  "background_color": "#000000"
 }
