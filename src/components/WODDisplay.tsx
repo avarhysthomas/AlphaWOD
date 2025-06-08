@@ -46,7 +46,7 @@ const WODDisplay = () => {
   };
 
   return (
-    <div className="bg-black text-white min-h-screen flex flex-col items-center p-4 sm:p-6 space-y-6">
+    <div className="bg-black text-white min-h-screen flex flex-col items-center p-4 sm:p-6 space-y-6 pb-24">
       <div className="w-full max-w-4xl">
         <div className="flex justify-center mb-6">
           <input
