@@ -37,7 +37,7 @@ const WODEditor = () => {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="max-w-xl mx-auto bg-neutral-900 p-6 rounded-lg space-y-6 text-white">
+    <form onSubmit={handleSubmit} className="max-w-xl mx-auto bg-neutral-900 p-6 pb-24 rounded-lg space-y-6 text-white">
       <h1 className="text-3xl font-heading font-bold text-center uppercase tracking-widest">AlphaFIT Editor</h1>
 
       <input type="date" name="date" value={formData.date} onChange={handleChange} className="w-full p-2 bg-neutral-800 rounded" />
