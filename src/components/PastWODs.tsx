@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { collection, query, orderBy, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
-import { CalendarDays, Dumbbell, Flame, NotebookPen, Timer } from 'lucide-react';
+import { CalendarDays, Dumbbell, Flame, NotebookPen, Timer, Sun, Moon } from 'lucide-react';
 
 const PastWODs = () => {
   const [wods, setWods] = useState<any[]>([]);
@@ -22,7 +22,7 @@ const PastWODs = () => {
   }, []);
 
   return (
-    <div className="min-h-screen bg-black text-white p-6 space-y-8">
+    <div className="min-h-screen bg-black text-white p-6 space-y-8 pb-24">
       <h1 className="text-4xl font-heading text-bone text-center uppercase tracking-widest">Past AlphaWODs</h1>
       {wods.length === 0 ? (
         <p className="text-center">No WODs found.</p>
@@ -33,7 +33,9 @@ const PastWODs = () => {
               <CalendarDays className="w-5 h-5" />
               {wod.date?.toDate?.().toISOString().split('T')[0] || 'Unknown Date'}
             </h2>
+
             <p className="text-bone text-lg">Type: <span className="font-medium">{wod.sessionType}</span></p>
+
             {wod.sessionType === 'WOD' && (
               <>
                 <p className="text-bone">WOD Style: <span className="font-medium">{wod.wodType}</span></p>
@@ -66,6 +68,7 @@ const PastWODs = () => {
                 </div>
               </>
             )}
+
             {wod.sessionType === 'Strength' && (
               <div>
                 <span className="font-bold text-bone">Strength Movements:</span>
@@ -73,12 +76,16 @@ const PastWODs = () => {
                   {wod.strengthMovements?.map((sm: any, index: number) => (
                     <li key={index} className="flex items-center gap-2">
                       <Dumbbell className="w-5 h-5 text-bone" />
-                      {sm.movement} – {sm.sets} sets × {sm.reps} reps
+                      {sm.movement}
+                      {sm.sets && ` – ${sm.sets} sets`}
+                      {sm.reps && ` × ${sm.reps} reps`}
+                      {sm.rpe && ` @ RPE ${sm.rpe}`}
                     </li>
                   ))}
                 </ul>
               </div>
             )}
+
             <div className="flex items-center gap-2 text-bone">
               <NotebookPen className="w-5 h-5 text-bone" />
               <span className="font-bold">Notes:</span> {wod.notes || '—'}

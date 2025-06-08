@@ -41,7 +41,6 @@ const WODEditor = () => {
       <h1 className="text-3xl font-heading font-bold text-center uppercase tracking-widest">AlphaFIT Editor</h1>
 
       <input type="date" name="date" value={formData.date} onChange={handleChange} className="w-full p-2 bg-neutral-800 rounded" />
-
       <select name="sessionType" value={formData.sessionType} onChange={handleChange} className="w-full p-2 bg-neutral-800 rounded">
         <option value="WOD">WOD</option>
         <option value="Strength">Strength</option>
