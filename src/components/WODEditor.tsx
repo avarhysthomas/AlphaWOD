@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
 import { collection, addDoc, Timestamp } from 'firebase/firestore';
 import { db } from '../firebase';
+import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 
 const WODEditor = () => {
   const [formData, setFormData] = useState({
     date: '',
-    sessionType: 'WOD',
+    timeOfDay: 'AM', // Default to AM
+    sessionType: 'HYROX',
     wodType: 'AMRAP',
     wodStructure: 'Individual',
     duration: '',
@@ -20,33 +22,76 @@ const WODEditor = () => {
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      const finalData = {
-        ...formData,
-        date: Timestamp.fromDate(new Date(formData.date)),
-        rounds: formData.rounds && formData.rounds.trim() !== '' ? formData.rounds : '1',
-      };
-      await addDoc(collection(db, 'wods'), finalData);
-      alert('WOD saved to Firebase!');
-    } catch (err) {
-      console.error('Error saving WOD:', err);
-      alert('Failed to save WOD');
-    }
+
+
+const handleSubmit = async (e: React.FormEvent) => {
+  e.preventDefault();
+
+  const sessionKey = formData.timeOfDay; // 'AM' or 'PM'
+  const dateString = formData.date; // e.g. '2025-06-10'
+  const docRef = doc(db, 'wods', dateString);
+
+  const sessionPayload = {
+    sessionType: formData.sessionType,
+    notes: formData.notes,
+    createdAt: new Date(),
   };
+
+  if (formData.sessionType === 'HYROX') {
+    Object.assign(sessionPayload, {
+      wodType: formData.wodType,
+      wodStructure: formData.wodStructure,
+      duration: formData.duration,
+      rounds: formData.rounds && formData.rounds.trim() !== '' ? formData.rounds : '1',
+      movements: formData.movements,
+    });
+  } else if (formData.sessionType === 'Strength') {
+    Object.assign(sessionPayload, {
+      strengthMovements: formData.strengthMovements,
+    });
+  }
+
+  try {
+    const docSnap = await getDoc(docRef);
+
+    if (docSnap.exists()) {
+      await updateDoc(docRef, {
+        [sessionKey]: sessionPayload
+      });
+    } else {
+      await setDoc(docRef, {
+        [sessionKey]: sessionPayload
+      });
+    }
+
+    alert(`${sessionKey} session saved for ${dateString}`);
+  } catch (err) {
+    console.error('Error saving session:', err);
+    alert('Failed to save session. Please try again.');
+  }
+};
+
 
   return (
     <form onSubmit={handleSubmit} className="max-w-xl mx-auto bg-neutral-900 p-6 pb-24 rounded-lg space-y-6 text-white">
       <h1 className="text-3xl font-heading font-bold text-center uppercase tracking-widest">AlphaFIT Editor</h1>
 
       <input type="date" name="date" value={formData.date} onChange={handleChange} className="w-full p-2 bg-neutral-800 rounded" />
+      <select
+        name="timeOfDay"
+        value={formData.timeOfDay || 'AM'}
+        onChange={handleChange}
+        className="w-full p-2 bg-neutral-800 rounded"
+      >
+        <option value="AM">AM Session</option>
+        <option value="PM">PM Session</option>
+      </select>
       <select name="sessionType" value={formData.sessionType} onChange={handleChange} className="w-full p-2 bg-neutral-800 rounded">
-        <option value="WOD">WOD</option>
+        <option value="HYROX">HYROX</option>
         <option value="Strength">Strength</option>
       </select>
 
-      {formData.sessionType === 'WOD' && (
+      {formData.sessionType === 'HYROX' && (
         <>
           <select name="wodType" value={formData.wodType} onChange={handleChange} className="w-full p-2 bg-neutral-800 rounded">
             <option value="AMRAP">AMRAP</option>
@@ -202,7 +247,7 @@ const WODEditor = () => {
         className="w-full p-2 bg-neutral-800 rounded"
       />
 
-      <button type="submit" className="bg-white text-black px-4 py-2 rounded w-full font-bold">Save WOD</button>
+      <button type="submit" className="bg-white text-black px-4 py-2 rounded w-full font-bold">Save Session</button>
     </form>
   );
 };
