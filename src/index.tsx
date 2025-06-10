@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import './index.css';
+import { AuthProvider } from './context/AuthContext';
 import { BrowserRouter } from 'react-router-dom';
 import * as serviceWorkerRegistration from './serviceWorkerRegistration';
 serviceWorkerRegistration.register();
@@ -9,7 +10,9 @@ serviceWorkerRegistration.register();
 const root = ReactDOM.createRoot(document.getElementById('root')!);
 root.render(
   <BrowserRouter>
-    <App />
+    <AuthProvider>
+      <App />
+    </AuthProvider>
   </BrowserRouter>
 );
 

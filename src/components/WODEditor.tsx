@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { collection, addDoc, Timestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import LogoutButton from './LogoutButton';
 
 const WODEditor = () => {
   const [formData, setFormData] = useState({
@@ -248,6 +249,7 @@ const handleSubmit = async (e: React.FormEvent) => {
       />
 
       <button type="submit" className="bg-white text-black px-4 py-2 rounded w-full font-bold">Save Session</button>
+      <LogoutButton />
     </form>
   );
 };
