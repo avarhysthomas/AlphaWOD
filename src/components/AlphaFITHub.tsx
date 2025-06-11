@@ -1,12 +1,30 @@
 import React, { useEffect, useState } from 'react';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Dumbbell, Timer, CalendarDays, Flame, NotebookPen, Sun, Moon } from 'lucide-react';
+import {
+  Dumbbell,
+  Timer,
+  CalendarDays,
+  Flame,
+  NotebookPen,
+  Sun,
+  Moon,
+} from 'lucide-react';
 
 const AlphaFITHub = () => {
   const [wod, setWod] = useState<any>(null);
   const [selectedDate, setSelectedDate] = useState<string>('');
   const [isPM, setIsPM] = useState<boolean>(false);
+  const dayName = new Date(selectedDate).toLocaleDateString('en-GB', {
+    weekday: 'long',
+  });
+  
+  const strengthTitle =
+    dayName === 'Tuesday'
+      ? 'Upper Strength'
+      : dayName === 'Thursday'
+      ? 'Lower Strength'
+      : 'Strength Work';
 
   const fetchWODForDate = async (dateString: string, isPMClass: boolean) => {
     try {
@@ -18,11 +36,7 @@ const AlphaFITHub = () => {
         const sessionKey = isPMClass ? 'PM' : 'AM';
         const sessionData = data[sessionKey];
 
-        if (sessionData) {
-          setWod(sessionData);
-        } else {
-          setWod(null);
-        }
+        setWod(sessionData || null);
       } else {
         setWod(null);
       }
@@ -50,7 +64,7 @@ const AlphaFITHub = () => {
   };
 
   return (
-    <div className="bg-black text-white min-h-screen flex flex-col items-center p-4 sm:p-6 pb-40 space-y-6">
+    <div className="bg-black text-white min-h-screen flex flex-col items-center p-4 sm:p-6 pb-24 space-y-6">
       <div className="w-full max-w-7xl flex flex-col gap-6">
         <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
           <div className="flex items-center gap-4">
@@ -81,67 +95,87 @@ const AlphaFITHub = () => {
           <div className="grid md:grid-cols-2 gap-8">
             {/* LEFT PANEL */}
             <div className="space-y-6">
-              <h1 className="text-7xl md:text-8xl lg:text-9xl font-heading text-bone uppercase tracking-widest">AlphaFIT</h1>
+                <h1 className="text-9xl font-heading text-bone uppercase tracking-widest">AlphaFIT</h1>
               <h2 className="text-3xl font-semibold text-bone flex items-center gap-2">
                 <CalendarDays className="w-6 h-6" />
                 {selectedDate}
               </h2>
-              <p className="text-xl text-bone">Type: <span className="font-bold uppercase">{wod.sessionType}</span></p>
+              <p className="text-xl text-bone">
+                Type: <span className="font-bold uppercase">{wod.sessionType}</span>
+              </p>
 
-              {wod.sessionType === 'WOD' || wod.sessionType === 'HYROX' ? (
+              {(wod.sessionType === 'WOD' || wod.sessionType === 'HYROX') && (
                 <>
-                  <p className="text-xl text-bone">Style: <span className="uppercase font-semibold">{wod.wodType}</span></p>
-                  {wod.wodStructure && <p className="text-base text-bone">Structure: {wod.wodStructure}</p>}
-                  {wod.duration && <p className="text-base flex items-center gap-2"><Timer className="w-5 h-5" /> Duration: {wod.duration}</p>}
-                  {wod.rounds && (<p className="text-base">Rounds: <span className="font-semibold">{wod.rounds}</span></p>)}
+                  <p className="text-xl text-bone">
+                    Style: <span className="uppercase font-semibold">{wod.wodType}</span>
+                  </p>
+                  {wod.wodStructure && (
+                    <p className="text-base text-bone">Structure: {wod.wodStructure}</p>
+                  )}
+                  {wod.duration && (
+                    <p className="text-base flex items-center gap-2">
+                      <Timer className="w-5 h-5" /> Duration: {wod.duration}
+                    </p>
+                  )}
+                  {wod.rounds && (
+                    <p className="text-base">Rounds: <span className="font-semibold">{wod.rounds}</span></p>
+                  )}
                 </>
-              ) : null}
+              )}
 
-              {wod.sessionType === 'Strength' && (
+
+
+              <div className="text-lg text-bone flex items-center gap-2">
+                <NotebookPen className="w-5 h-5 text-bone" />
+                <span className="font-bold">Notes:</span> {wod.notes || '—'}
+              </div>
+
+              <div className="flex justify-center mt-10">
+                <img
+                  src="/ZERO-ALPHA.png"
+                  alt="Zero Alpha Fitness Logo"
+                  className="h-65 object-contain"
+                />
+              </div>
+            </div>
+
+            {/* RIGHT PANEL */}
+            {wod.sessionType === 'Strength' && (
                 <div>
-                  <h3 className="text-xl font-bold text-bone mb-2">Strength Work</h3>
-                  <div className="mt-4 grid gap-3">
+                  <h3 className="text-3xl font-bold text-bone uppercase mb-6 text-center w-full">{strengthTitle}</h3>
+                  <div className="grid md:grid-cols-2 gap-4">
                     {wod.strengthMovements?.map((sm: any, index: number) => (
                       <div
                         key={index}
                         className="flex flex-col gap-1 px-4 py-3 rounded-lg bg-neutral-800 border border-neutral-700 shadow transition hover:scale-[1.01]"
                       >
-                        <div className="flex justify-between items-center text-white text-base font-semibold">
+                        <div className="text-white text-lg font-semibold">
                           <span className="flex items-center gap-2">
                             <Dumbbell className="w-5 h-5 text-bone" /> {sm.movement}
                           </span>
-                          <span>{sm.sets} × {sm.reps} reps</span>
                         </div>
-                        {sm.rpe && (
-                          <div className="text-sm text-neutral-400 font-medium pl-7">
-                            RPE {sm.rpe}
-                          </div>
-                        )}
+                        <div className="text-base text-neutral-300">
+                          {sm.sets} × {sm.reps} 
+                          {sm.rpe && ` @ RPE ${sm.rpe}`}
+                        </div>
                       </div>
                     ))}
                   </div>
                 </div>
               )}
-
-              <div className="text-base text-bone flex items-center gap-2">
-                <NotebookPen className="w-5 h-5 text-bone" />
-                <span className="font-bold">Notes:</span> {wod.notes || '—'}
-              </div>
-            </div>
-
-            {/* RIGHT PANEL */}
             {wod.sessionType !== 'Strength' && (
-              <div className="flex flex-col items-center text-center space-y-6 pb-12">
-                <h3 className="text-4xl font-bold text-bone uppercase">Movements</h3>
-                <ul className="space-y-4 text-lg text-white w-full">
+              <div className="flex flex-col items-center text-center space-y-6">
+                <h3 className="text-4xl font-bold text-bone uppercase">The WOD</h3>
+                <ul className="grid grid-cols-1 md:grid-cols-2 gap-4 text-lg text-white w-full">
                   {wod.movements?.map((move: any, index: number) => (
-                    <li key={index} className="flex flex-col gap-2 bg-neutral-800 p-4 rounded-xl border border-neutral-700 shadow">
+                    <li
+                      key={index}
+                      className="flex flex-col gap-2 bg-neutral-800 p-4 rounded-xl border border-neutral-700 shadow"
+                    >
                       {wod.wodStructure === 'Individual' ? (
-                        <div className="flex justify-between text-white text-base">
-                          <span className="font-semibold flex items-center gap-2">
-                            <Flame className="w-4 h-4 text-yellow-400" /> Movement:
-                          </span>
-                          <span>{move.partner1}</span>
+                        <div className="flex items-center gap-4">
+                          <Flame className="w-6 h-6 text-yellow-400 flex-shrink-0" />
+                          <span className="text-lg font-medium text-left">{move.partner1}</span>
                         </div>
                       ) : (
                         <>
