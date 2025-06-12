@@ -24,13 +24,13 @@ const App = () => {
     <div className="min-h-screen flex flex-col bg-black text-white">
       <div className="flex-1">
         <Routes>
-          <Route path="/login" element={<Login />} />
+          <Route path="/" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
 
           {/* Admin Routes */}
           {role === 'admin' && (
             <>
-              <Route path="/" element={<HomeScreen />} />
+              <Route path="/home" element={<HomeScreen />} />
               <Route path="/display" element={<WODDisplay />} />
               <Route path="/editor" element={<WODEditor />} />
               <Route path="/past" element={<PastWODs />} />
@@ -40,7 +40,7 @@ const App = () => {
           {/* User Routes */}
           {role === 'user' && (
             <>
-             <Route path="/" element={<UserSplash />} />
+             <Route path="/home" element={<UserSplash />} />
               <Route path="/show" element={<AlphaFITHub />} />
               <Route path="/past" element={<PastWODs />} />
               <Route path="/log" element={<UserLogWorkout />} />

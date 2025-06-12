@@ -6,6 +6,7 @@ import LogoutButton from './LogoutButton';
 
 const WODEditor = () => {
   const [formData, setFormData] = useState({
+    wodName: '',
     date: '',
     timeOfDay: 'AM', // Default to AM
     sessionType: 'HYROX',
@@ -33,6 +34,7 @@ const handleSubmit = async (e: React.FormEvent) => {
   const docRef = doc(db, 'wods', dateString);
 
   const sessionPayload = {
+    wodName: formData.wodName,
     sessionType: formData.sessionType,
     notes: formData.notes,
     createdAt: new Date(),
@@ -40,6 +42,7 @@ const handleSubmit = async (e: React.FormEvent) => {
 
   if (formData.sessionType === 'HYROX') {
     Object.assign(sessionPayload, {
+      wodName: formData.wodName,
       wodType: formData.wodType,
       wodStructure: formData.wodStructure,
       duration: formData.duration,
@@ -76,6 +79,20 @@ const handleSubmit = async (e: React.FormEvent) => {
   return (
     <form onSubmit={handleSubmit} className="max-w-xl mx-auto bg-neutral-900 p-6 pb-24 rounded-lg space-y-6 text-white">
       <h1 className="text-3xl font-heading font-bold text-center uppercase tracking-widest">AlphaFIT Editor</h1>
+
+          <div className="mb-4">
+      <label htmlFor="wodName" className="block text-sm font-medium text-bone mb-1">
+        Workout Name
+      </label>
+      <input
+        type="text"
+        id="wodName"
+        name="wodName"
+        value={formData.wodName}
+        onChange={(e) => setFormData({ ...formData, wodName: e.target.value })}
+        className="w-full p-2 rounded bg-neutral-800 border border-steel text-white"
+      />
+    </div>
 
       <input type="date" name="date" value={formData.date} onChange={handleChange} className="w-full p-2 bg-neutral-800 rounded" />
       <select

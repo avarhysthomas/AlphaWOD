@@ -25,7 +25,7 @@ const Signup = () => {
         role: 'user'
       });
 
-      navigate('/');
+      navigate('/home');
     } catch (err: any) {
       setError(err.message);
     }

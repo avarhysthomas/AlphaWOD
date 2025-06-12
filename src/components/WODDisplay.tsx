@@ -93,9 +93,13 @@ const WODDisplay = () => {
           <div className="text-center text-xl">No WOD found for selected date.</div>
         ) : (
           <div className="grid md:grid-cols-2 gap-8">
+
             {/* LEFT PANEL */}
             <div className="space-y-6">
-                <h1 className="text-9xl font-heading text-bone uppercase tracking-widest">AlphaFIT</h1>
+                <h1 className="text-8xl font-heading text-bone uppercase tracking-widest">AlphaFIT</h1>
+                {wod.wodName && (
+                  <h2 className="text-4xl font-bold text-white italic mb-4 tracking-tight">{wod.wodName}</h2>
+                )}
               <h2 className="text-3xl font-semibold text-bone flex items-center gap-2">
                 <CalendarDays className="w-6 h-6" />
                 {selectedDate}
