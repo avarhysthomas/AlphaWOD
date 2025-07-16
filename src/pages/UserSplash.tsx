@@ -18,6 +18,12 @@ const UserSplash = () => {
         View Today’s WOD
       </button>
 
+      <button
+        className="w-full bg-neutral-600 text-white py-3 rounded font-bold text-sm"
+        onClick={() => navigate('/timetable')}
+      >
+        Book a Class
+      </button>
         <button
           className="w-full bg-neutral-700 text-white py-3 rounded font-bold text-sm"
           onClick={() => navigate('/log')}

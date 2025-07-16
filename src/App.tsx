@@ -9,8 +9,9 @@ import Login from './pages/Login';
 import Signup from './pages/Signup';
 import UserSplash from './pages/UserSplash';
 import UserLogWorkout from './pages/UserLogWorkout';
+import Timetable from './pages/Timetable';
 
-import { Dumbbell, Timer, CalendarDays, Flame, NotebookPen } from 'lucide-react';
+import { Dumbbell, Timer, CalendarDays, Flame, NotebookPen, CalendarCheck} from 'lucide-react';
 import { useAuth } from './context/AuthContext';
 
 const App = () => {
@@ -34,6 +35,7 @@ const App = () => {
               <Route path="/display" element={<WODDisplay />} />
               <Route path="/editor" element={<WODEditor />} />
               <Route path="/past" element={<PastWODs />} />
+              <Route path="/timetable" element={<Timetable />} />
             </>
           )}
 
@@ -44,6 +46,7 @@ const App = () => {
               <Route path="/show" element={<AlphaFITHub />} />
               <Route path="/past" element={<PastWODs />} />
               <Route path="/log" element={<UserLogWorkout />} />
+              <Route path="/timetable" element={<Timetable />} />
 
             </>
           )}
@@ -79,6 +82,15 @@ const App = () => {
           >
             <CalendarDays className="h-6 w-6" />
             <span className="text-xs">Past</span>
+          </NavLink>
+          <NavLink
+            to="/timetable"
+            className={({ isActive }) =>
+              `text-sm flex flex-col items-center ${isActive ? 'text-white font-bold' : 'text-gray-400'}`
+            }
+          >
+            <CalendarCheck className="h-6 w-6" />
+            <span className="text-xs">Timetable</span>
           </NavLink>
         </nav>
       )}

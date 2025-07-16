@@ -101,6 +101,7 @@ const handleSubmit = async (e: React.FormEvent) => {
         onChange={handleChange}
         className="w-full p-2 bg-neutral-800 rounded"
       >
+        <option value="930AM">9:30 AM Session</option>
         <option value="AM">AM Session</option>
         <option value="PM">PM Session</option>
       </select>

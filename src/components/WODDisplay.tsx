@@ -14,7 +14,7 @@ import {
 const WODDisplay = () => {
   const [wod, setWod] = useState<any>(null);
   const [selectedDate, setSelectedDate] = useState<string>('');
-  const [isPM, setIsPM] = useState<boolean>(false);
+  const [sessionKey, setSessionKey] = useState<'AM' | 'PM' | '930AM'>('AM');
   const dayName = new Date(selectedDate).toLocaleDateString('en-GB', {
     weekday: 'long',
   });
@@ -26,25 +26,23 @@ const WODDisplay = () => {
       ? 'Lower Strength'
       : 'Strength Work';
 
-  const fetchWODForDate = async (dateString: string, isPMClass: boolean) => {
-    try {
-      const docRef = doc(db, 'wods', dateString);
-      const docSnap = await getDoc(docRef);
+    const fetchWODForDate = async (dateString: string, key: 'AM' | 'PM' | '930AM') => {
+      try {
+        const docRef = doc(db, 'wods', dateString);
+        const docSnap = await getDoc(docRef);
 
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        const sessionKey = isPMClass ? 'PM' : 'AM';
-        const sessionData = data[sessionKey];
-
-        setWod(sessionData || null);
-      } else {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          const sessionData = data[key];
+          setWod(sessionData || null);
+        } else {
+          setWod(null);
+        }
+      } catch (error) {
+        console.error('Error fetching WOD:', error);
         setWod(null);
       }
-    } catch (error) {
-      console.error('Error fetching WOD:', error);
-      setWod(null);
-    }
-  };
+    };
 
   useEffect(() => {
     const today = new Date();
@@ -53,10 +51,11 @@ const WODDisplay = () => {
   }, []);
 
   useEffect(() => {
-    if (selectedDate) {
-      fetchWODForDate(selectedDate, isPM);
-    }
-  }, [selectedDate, isPM]);
+  if (selectedDate) {
+    fetchWODForDate(selectedDate, sessionKey);
+  }
+}, [selectedDate, sessionKey]);
+
 
   const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
@@ -67,28 +66,34 @@ const WODDisplay = () => {
     <div className="bg-black text-white min-h-screen flex flex-col items-center p-4 sm:p-6 pb-24 space-y-6">
       <div className="w-full max-w-7xl flex flex-col gap-6">
         <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-4 w-full sm:w-auto">
             <input
               type="date"
               value={selectedDate}
               onChange={handleDateChange}
-              className="p-2 rounded bg-neutral-800 text-white border border-steel"
+              className="p-2 rounded bg-neutral-800 text-white border border-steel w-full sm:w-auto"
             />
             <button
-              onClick={() => setIsPM(false)}
-              className={`px-4 py-2 rounded ${!isPM ? 'bg-white text-black' : 'bg-neutral-800 text-white'}`}
+              onClick={() => setSessionKey('AM')}
+              className={`px-4 py-2 rounded ${sessionKey === 'AM' ? 'bg-white text-black' : 'bg-neutral-800 text-white'}`}
             >
               AM <Sun className="inline ml-1 w-4 h-4" />
             </button>
             <button
-              onClick={() => setIsPM(true)}
-              className={`px-4 py-2 rounded ${isPM ? 'bg-white text-black' : 'bg-neutral-800 text-white'}`}
+              onClick={() => setSessionKey('930AM')}
+              className={`px-4 py-2 rounded ${sessionKey === '930AM' ? 'bg-white text-black' : 'bg-neutral-800 text-white'}`}
+            >
+              9:30AM
+            </button>
+            <button
+              onClick={() => setSessionKey('PM')}
+              className={`px-4 py-2 rounded ${sessionKey === 'PM' ? 'bg-white text-black' : 'bg-neutral-800 text-white'}`}
             >
               PM <Moon className="inline ml-1 w-4 h-4" />
             </button>
           </div>
-        </div>
 
+        </div>
         {!wod ? (
           <div className="text-center text-xl">No WOD found for selected date.</div>
         ) : (
@@ -100,39 +105,47 @@ const WODDisplay = () => {
                 {wod.wodName && (
                   <h2 className="text-4xl font-bold text-white italic mb-4 tracking-tight">{wod.wodName}</h2>
                 )}
-              <h2 className="text-3xl font-semibold text-bone flex items-center gap-2">
-                <CalendarDays className="w-6 h-6" />
-                {selectedDate}
-              </h2>
-              <p className="text-xl text-bone">
-                Type: <span className="font-bold uppercase">{wod.sessionType}</span>
-              </p>
-
-              {(wod.sessionType === 'WOD' || wod.sessionType === 'HYROX') && (
-                <>
-                  <p className="text-xl text-bone">
-                    Style: <span className="uppercase font-semibold">{wod.wodType}</span>
-                  </p>
-                  {wod.wodStructure && (
-                    <p className="text-base text-bone">Structure: {wod.wodStructure}</p>
-                  )}
-                  {wod.duration && (
-                    <p className="text-base flex items-center gap-2">
-                      <Timer className="w-5 h-5" /> Duration: {wod.duration}
-                    </p>
-                  )}
-                  {wod.rounds && (
-                    <p className="text-base">Rounds: <span className="font-semibold">{wod.rounds}</span></p>
-                  )}
-                </>
-              )}
-
-
-
-              <div className="text-lg text-bone flex items-center gap-2">
-                <NotebookPen className="w-5 h-5 text-bone" />
-                <span className="font-bold">Notes:</span> {wod.notes || '—'}
+              <div className="bg-neutral-900 border border-neutral-700 rounded-xl p-6 space-y-4 w-full sm:max-w-md shadow-md">
+              <div className="flex items-center gap-2 text-xl font-semibold text-white">
+                <CalendarDays className="w-6 h-6 text-bone" />
+                {new Date(selectedDate).toLocaleDateString('en-GB', {
+                  weekday: 'long',
+                  day: 'numeric',
+                  month: 'long',
+                  year: 'numeric',
+                })}
               </div>
+              <div className="text-bone text-base flex items-center gap-2">
+                <span className="font-bold">Type:</span> {wod.sessionType}
+              </div>
+              {wod.wodType && (
+                <div className="text-bone text-base flex items-center gap-2">
+                  <span className="font-bold">Style:</span> {wod.wodType}
+                </div>
+              )}
+              {wod.wodStructure && (
+                <div className="text-bone text-base flex items-center gap-2">
+                  <span className="font-bold">Format:</span> {wod.wodStructure}
+                </div>
+              )}
+              {wod.duration && (
+                <div className="text-bone text-base flex items-center gap-2">
+                  <span className="font-bold">Duration:</span> {wod.duration}
+                </div>
+              )}
+              {wod.rounds && (
+                <div className="text-bone text-base flex items-center gap-2">
+                  <span className="font-bold">Rounds:</span> {wod.rounds}
+                </div>
+              )}
+              <div className="text-bone text-base flex items-start gap-2">
+                <NotebookPen className="w-5 h-5 text-bone mt-1" />
+                <div>
+                  <span className="font-bold">Notes:</span> {wod.notes || '—'}
+                </div>
+              </div>
+            </div>
+
 
               <div className="flex justify-center mt-10">
                 <img
