@@ -17,11 +17,10 @@ const UserLogWorkout = () => {
   const [loading, setLoading] = useState(true);
   const [submitted, setSubmitted] = useState(false);
 
-  const today = format(new Date(), 'yyyy-MM-dd');
-
   useEffect(() => {
-    setSelectedDate(today);
-  }, []);
+  const today = format(new Date(), 'yyyy-MM-dd');
+  setSelectedDate(today);
+}, []);
 
   useEffect(() => {
     const fetchWODByDate = async () => {

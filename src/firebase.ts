@@ -1,6 +1,6 @@
 // Import the functions you need from the SDKs you need
 import { initializeApp } from "firebase/app";
-import { getAnalytics } from "firebase/analytics";
+//import { getAnalytics } from "firebase/analytics";
 import { getFirestore } from 'firebase/firestore';
 import { getAuth } from "firebase/auth";
 
@@ -21,7 +21,11 @@ const firebaseConfig = {
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
-const analytics = getAnalytics(app);
+// Only initialise analytics in the browser, and only if you actually use it.
+// If you don't use analytics anywhere, just remove it.
+if (typeof window !== "undefined") {
+  // getAnalytics(app);
+}
 const db = getFirestore(app);
 export const auth = getAuth(app);
 
