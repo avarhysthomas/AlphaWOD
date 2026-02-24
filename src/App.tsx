@@ -3,21 +3,19 @@ import { useLocation, Routes, Route, NavLink } from 'react-router-dom';
 import HomeScreen from './components/HomeScreen';
 import WODEditor from './components/WODEditor';
 import WODDisplay from './components/WODDisplay';
-import PastWODs from './components/PastWODs';
 import AlphaFITHub from './components/AlphaFITHub';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
 import UserSplash from './pages/UserSplash';
 import UserLogWorkout from './pages/UserLogWorkout';
-import Timetable from './pages/Timetable';
 
-import { Dumbbell, Timer, CalendarDays, Flame, NotebookPen, CalendarCheck} from 'lucide-react';
+import { Dumbbell, NotebookPen} from 'lucide-react';
 import { useAuth } from './context/AuthContext';
 
 const App = () => {
   const location = useLocation();
   const hideNav = location.pathname === '/';
-  const { user, role, loading } = useAuth();
+  const { role, loading } = useAuth();
 
   if (loading) return <div className="text-white text-center mt-20">Loading...</div>;
 
@@ -34,8 +32,6 @@ const App = () => {
               <Route path="/home" element={<HomeScreen />} />
               <Route path="/display" element={<WODDisplay />} />
               <Route path="/editor" element={<WODEditor />} />
-              <Route path="/past" element={<PastWODs />} />
-              <Route path="/timetable" element={<Timetable />} />
             </>
           )}
 
@@ -44,9 +40,7 @@ const App = () => {
             <>
              <Route path="/home" element={<UserSplash />} />
               <Route path="/show" element={<AlphaFITHub />} />
-              <Route path="/past" element={<PastWODs />} />
               <Route path="/log" element={<UserLogWorkout />} />
-              <Route path="/timetable" element={<Timetable />} />
 
             </>
           )}
@@ -73,24 +67,6 @@ const App = () => {
           >
             <NotebookPen className="h-6 w-6" />
             <span className="text-xs">Editor</span>
-          </NavLink>
-          <NavLink
-            to="/past"
-            className={({ isActive }) =>
-              `text-sm flex flex-col items-center ${isActive ? 'text-white font-bold' : 'text-gray-400'}`
-            }
-          >
-            <CalendarDays className="h-6 w-6" />
-            <span className="text-xs">Past</span>
-          </NavLink>
-          <NavLink
-            to="/timetable"
-            className={({ isActive }) =>
-              `text-sm flex flex-col items-center ${isActive ? 'text-white font-bold' : 'text-gray-400'}`
-            }
-          >
-            <CalendarCheck className="h-6 w-6" />
-            <span className="text-xs">Timetable</span>
           </NavLink>
         </nav>
       )}
