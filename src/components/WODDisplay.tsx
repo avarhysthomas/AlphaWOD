@@ -190,7 +190,7 @@ const WODDisplay = () => {
               extra={sessionHeaderBits.extra}
             />
 
-            <div className="grid gap-4 lg:grid-cols-[1fr_2fr]">
+            <div className="grid gap-4 grid-cols-[1fr_2fr] max-lg:grid-cols-1">
               {/* LEFT */}
               <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-6">
                 <div className="flex items-start justify-between gap-6">
