@@ -112,7 +112,7 @@ function AdminLayout() {
 /** ---------- App ---------- */
 
 export default function App() {
-  const { user, appUser, loading } = useAuth();
+  const { user, loading } = useAuth();
 
   if (loading)
     return <div className="text-white text-center mt-20">Loading...</div>;
