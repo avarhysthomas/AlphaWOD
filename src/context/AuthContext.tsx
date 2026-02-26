@@ -1,47 +1,58 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
-import { onAuthStateChanged, User } from 'firebase/auth';
-import { auth, db } from '../firebase';
-import { doc, getDoc } from 'firebase/firestore';
+// context/AuthContext.tsx
+import React, { createContext, useContext, useEffect, useState } from "react";
+import { onAuthStateChanged, User, getAuth } from "firebase/auth";
+import { doc, getDoc } from "firebase/firestore";
+import { db } from "../firebase";
 
-interface AuthContextType {
+type AppUser = {
+  uid: string;
+  email?: string | null;
+  name?: string;
+  role?: "admin" | "user";
+};
+
+type AuthCtx = {
   user: User | null;
-  role: 'admin' | 'user' | null;
+  appUser: AppUser | null;
   loading: boolean;
-}
+};
 
-const AuthContext = createContext<AuthContextType>({
-  user: null,
-  role: null,
-  loading: true,
-});
+const Ctx = createContext<AuthCtx>({ user: null, appUser: null, loading: true });
 
-export const useAuth = () => useContext(AuthContext);
-
-export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const auth = getAuth();
   const [user, setUser] = useState<User | null>(null);
-  const [role, setRole] = useState<'admin' | 'user' | null>(null);
+  const [appUser, setAppUser] = useState<AppUser | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      setUser(firebaseUser);
-      if (firebaseUser) {
-        const docRef = doc(db, 'users', firebaseUser.uid);
-        const docSnap = await getDoc(docRef);
-        const fetchedRole = docSnap.exists() ? docSnap.data().role : 'user';
-        setRole(fetchedRole);
-      } else {
-        setRole(null);
+    return onAuthStateChanged(auth, async (u) => {
+      setUser(u);
+
+      if (!u) {
+        setAppUser(null);
+        setLoading(false);
+        return;
       }
-      setLoading(false);
+
+      try {
+        const snap = await getDoc(doc(db, "users", u.uid));
+        const data: any = snap.exists() ? snap.data() : {};
+        setAppUser({
+          uid: u.uid,
+          email: u.email,
+          name: data?.name,
+          role: data?.role || "user",
+        });
+      } catch {
+        setAppUser({ uid: u.uid, email: u.email, role: "user" });
+      } finally {
+        setLoading(false);
+      }
     });
+  }, [auth]);
 
-    return () => unsubscribe();
-  }, []);
+  return <Ctx.Provider value={{ user, appUser, loading }}>{children}</Ctx.Provider>;
+}
 
-  return (
-    <AuthContext.Provider value={{ user, role, loading }}>
-      {children}
-    </AuthContext.Provider>
-  );
-};
+export const useAuth = () => useContext(Ctx);

@@ -1,5 +1,6 @@
 // src/pages/Schedule.tsx
 import React, { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { getAuth, onAuthStateChanged, User } from "firebase/auth";
 import {
   collection,
@@ -14,7 +15,7 @@ import {
   where,
 } from "firebase/firestore";
 import { db } from "../firebase";
-import { Link } from "react-router-dom";
+import { useAuth } from "../context/AuthContext";
 
 type ClassDoc = {
   title: string;
@@ -41,7 +42,7 @@ const RANGE_OPTIONS = [7, 14, 28] as const;
 const DEFAULT_TZ = "Europe/London";
 
 function classIdToBookingId(classId: string, userId: string) {
-  // deterministic booking id (matches what you’re already using in Firestore screenshots)
+  // deterministic booking id
   return `${classId}_${userId}`;
 }
 
@@ -65,7 +66,9 @@ function fmtTime(d: Date, timeZone: string) {
 
 function startOfTodayUtc(): Date {
   const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0));
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0)
+  );
 }
 
 function addDaysUtc(date: Date, days: number): Date {
@@ -75,15 +78,22 @@ function addDaysUtc(date: Date, days: number): Date {
 }
 
 export default function Schedule() {
+  const navigate = useNavigate();
   const auth = getAuth();
+
+  // ✅ role comes from AuthContext (not Firebase auth user)
+  const { appUser } = useAuth();
+  const isAdmin = appUser?.role === "admin";
 
   const [user, setUser] = useState<User | null>(auth.currentUser);
   const [rangeDays, setRangeDays] = useState<(typeof RANGE_OPTIONS)[number]>(14);
 
-  const [classes, setClasses] = useState<Array<{ id: string; data: ClassDoc }>>([]);
-  const [activeBookingsByClassId, setActiveBookingsByClassId] = useState<Record<string, BookingDoc>>(
-    {}
+  const [classes, setClasses] = useState<Array<{ id: string; data: ClassDoc }>>(
+    []
   );
+  const [activeBookingsByClassId, setActiveBookingsByClassId] = useState<
+    Record<string, BookingDoc>
+  >({});
 
   const [busyClassId, setBusyClassId] = useState<string | null>(null);
 
@@ -95,7 +105,7 @@ export default function Schedule() {
 
   const windowUtc = useMemo(() => {
     const from = startOfTodayUtc();
-    const to = addDaysUtc(from, rangeDays + 1); // +1 so the last day is included
+    const to = addDaysUtc(from, rangeDays + 1); // +1 include last day
     return { from, to };
   }, [rangeDays]);
 
@@ -112,12 +122,13 @@ export default function Schedule() {
     const unsub = onSnapshot(
       q,
       (snap) => {
-        const rows = snap.docs.map((d) => ({ id: d.id, data: d.data() as ClassDoc }));
+        const rows = snap.docs.map((d) => ({
+          id: d.id,
+          data: d.data() as ClassDoc,
+        }));
         setClasses(rows);
       },
-      (err) => {
-        console.error("classes onSnapshot error:", err);
-      }
+      (err) => console.error("classes onSnapshot error:", err)
     );
 
     return () => unsub();
@@ -147,16 +158,13 @@ export default function Schedule() {
         });
         setActiveBookingsByClassId(map);
       },
-      (err) => {
-        console.error("bookings onSnapshot error:", err);
-      }
+      (err) => console.error("bookings onSnapshot error:", err)
     );
 
     return () => unsub();
   }, [user]);
 
   const grouped = useMemo(() => {
-    // group classes by “date label” in the class timezone
     const groups: Record<string, Array<{ id: string; data: ClassDoc }>> = {};
     for (const c of classes) {
       const tz = c.data.timezone || DEFAULT_TZ;
@@ -179,11 +187,12 @@ export default function Schedule() {
       const bookingRef = doc(db, "bookings", bookingId);
 
       await runTransaction(db, async (tx) => {
-        const [classSnap, bookingSnap] = await Promise.all([tx.get(classRef), tx.get(bookingRef)]);
+        const [classSnap, bookingSnap] = await Promise.all([
+          tx.get(classRef),
+          tx.get(bookingRef),
+        ]);
 
-        if (!classSnap.exists()) {
-          throw new Error("Class not found");
-        }
+        if (!classSnap.exists()) throw new Error("Class not found");
 
         const classData = classSnap.data() as ClassDoc;
         const capacity = Number(classData.capacity ?? 0);
@@ -222,8 +231,10 @@ export default function Schedule() {
       });
     } catch (e: any) {
       console.error("Book failed:", e);
-      if (e?.code === "already-booked" || e?.message === "Already booked") return alert("Already booked");
-      if (e?.code === "full" || e?.message === "Class is full") return alert("Class is full");
+      if (e?.code === "already-booked" || e?.message === "Already booked")
+        return alert("Already booked");
+      if (e?.code === "full" || e?.message === "Class is full")
+        return alert("Class is full");
       alert(e?.message || "Booking failed");
     } finally {
       setBusyClassId(null);
@@ -240,7 +251,10 @@ export default function Schedule() {
       const bookingRef = doc(db, "bookings", bookingId);
 
       await runTransaction(db, async (tx) => {
-        const [classSnap, bookingSnap] = await Promise.all([tx.get(classRef), tx.get(bookingRef)]);
+        const [classSnap, bookingSnap] = await Promise.all([
+          tx.get(classRef),
+          tx.get(bookingRef),
+        ]);
 
         if (!bookingSnap.exists()) {
           const err: any = new Error("No active booking found");
@@ -255,11 +269,8 @@ export default function Schedule() {
           throw err;
         }
 
-        if (!classSnap.exists()) {
-          throw new Error("Class not found");
-        }
+        if (!classSnap.exists()) throw new Error("Class not found");
 
-        // mark booking cancelled + decrement count once (transaction prevents double-cancel)
         tx.update(bookingRef, {
           status: "cancelled",
           cancelledAt: serverTimestamp(),
@@ -283,9 +294,11 @@ export default function Schedule() {
   return (
     <div className="min-h-screen bg-black text-white p-6">
       <div className="max-w-5xl mx-auto">
-        <div className="flex items-start justify-between gap-4">
+        <div className="min-h-screen flex flex-col bg-black text-white overflow-x-hidden">
           <div>
-            <h1 className="text-5xl font-extrabold uppercase tracking-widest">Schedule</h1>
+            <h1 className="text-5xl font-extrabold uppercase tracking-widest">
+              Schedule
+            </h1>
             <div className="text-white/60 mt-1">Upcoming classes</div>
           </div>
 
@@ -312,7 +325,10 @@ export default function Schedule() {
             </div>
           ) : (
             Object.entries(grouped).map(([dayLabel, items]) => (
-              <div key={dayLabel} className="rounded-3xl border border-neutral-800 bg-neutral-950/60 p-6">
+              <div
+                key={dayLabel}
+                className="rounded-3xl border border-neutral-800 bg-neutral-950/60 p-6"
+              >
                 <h2 className="text-2xl font-bold">{dayLabel}</h2>
 
                 <div className="mt-4 grid gap-3">
@@ -327,89 +343,67 @@ export default function Schedule() {
                     const full = capacity > 0 && bookedCount >= capacity;
 
                     return (
-                    <div
+                      <div
                         key={id}
                         className="rounded-2xl border border-neutral-800 bg-neutral-900/40 p-5 flex items-center justify-between gap-4"
-                    >
-                        <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-3">
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-3">
                             <div className="font-semibold">
-                            {fmtTime(start, tz)}–{fmtTime(end, tz)} • {data.title}
+                              {fmtTime(start, tz)}–{fmtTime(end, tz)} •{" "}
+                              {data.title}
                             </div>
 
-                            {booked && (
-                            <span className="text-xs font-semibold tracking-wide uppercase rounded-full px-2 py-0.5 border border-emerald-500/60 text-emerald-200">
+                            {booked ? (
+                              <span className="text-xs font-semibold tracking-wide uppercase rounded-full px-2 py-0.5 border border-emerald-500/60 text-emerald-200">
                                 Booked
-                            </span>
-                            )}
+                              </span>
+                            ) : null}
 
-                            {!booked && full && (
-                            <span className="text-xs font-semibold tracking-wide uppercase rounded-full px-2 py-0.5 border border-red-500/60 text-red-200">
+                            {!booked && full ? (
+                              <span className="text-xs font-semibold tracking-wide uppercase rounded-full px-2 py-0.5 border border-red-500/60 text-red-200">
                                 Full
-                            </span>
-                            )}
+                              </span>
+                            ) : null}
+                          </div>
+
+                          <div className="text-sm text-white/60 mt-1">
+                            Coach: {data.coachName || "—"} •{" "}
+                            {data.location || "—"} • {bookedCount}/
+                            {capacity || "—"}
+                          </div>
                         </div>
 
-                        <div className="text-sm text-white/60 mt-1">
-                            Coach: {data.coachName || "—"} • {data.location || "—"} • {bookedCount}/{capacity || "—"}
-                        </div>
-
-                        {/* Capacity Progress Bar */}
-                        {capacity > 0 && (
-                            <div className="mt-3">
-                            <div className="h-2 w-full rounded-full bg-neutral-800 overflow-hidden">
-                                <div
-                                className={`h-full transition-all duration-300 ${
-                                    full ? "bg-red-500/70" : "bg-white/70"
-                                }`}
-                                style={{
-                                    width: `${Math.min(
-                                    100,
-                                    Math.round((bookedCount / capacity) * 100)
-                                    )}%`,
-                                }}
-                                />
-                            </div>
-                            <div className="mt-1 text-xs text-white/50">
-                                {bookedCount} / {capacity} booked
-                            </div>
-                            </div>
-                        )}
-                        </div>
-                        <Link
-                        to={`/admin/classes/${id}`}
-                        className="px-4 py-2 rounded-lg border border-sky-500/60 text-sky-200 hover:bg-sky-500/10"
-                        >
-                        Roster
-                        </Link>
                         <div className="flex items-center gap-2 shrink-0">
-                        {booked ? (
+                          {/* ✅ Admin-only roster button */}
+                          {isAdmin ? (
                             <button
-                            onClick={() => handleCancel(id)}
-                            disabled={busyClassId === id}
-                            className="px-5 py-2 rounded-lg border border-yellow-500/70 text-yellow-100 font-semibold disabled:opacity-50"
+                              onClick={() => navigate(`/admin/classes/${id}`)}
+                              className="px-5 py-2 rounded-lg border border-sky-500/60 text-sky-200 font-semibold hover:bg-white/5"
                             >
-                            {busyClassId === id ? "Cancelling…" : "Cancel"}
+                              Roster
                             </button>
-                        ) : (
+                          ) : null}
+
+                          {booked ? (
                             <button
-                            onClick={() => handleBook(id)}
-                            disabled={busyClassId === id || full}
-                            className={`px-5 py-2 rounded-lg border font-semibold transition ${
-                                full
-                                ? "border-neutral-700 text-neutral-500 cursor-not-allowed"
-                                : "border-emerald-500/60 text-emerald-100 hover:bg-emerald-500/10"
-                            }`}
+                              onClick={() => handleCancel(id)}
+                              disabled={busyClassId === id}
+                              className="px-5 py-2 rounded-lg border border-yellow-500/70 text-yellow-100 font-semibold disabled:opacity-50"
                             >
-                            {busyClassId === id
-                                ? "Booking…"
-                                : full
-                                ? "Full"
-                                : "Book"}
+                              {busyClassId === id ? "Cancelling…" : "Cancel"}
                             </button>
-                        )}
+                          ) : (
+                            <button
+                              onClick={() => handleBook(id)}
+                              disabled={busyClassId === id || full}
+                              className="px-5 py-2 rounded-lg border border-emerald-500/60 text-emerald-100 font-semibold disabled:opacity-40"
+                            >
+                              {busyClassId === id ? "Booking…" : "Book"}
+                            </button>
+                          )}
                         </div>
-                    </div>
+                      </div>
                     );
                   })}
                 </div>

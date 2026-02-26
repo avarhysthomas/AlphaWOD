@@ -1,4 +1,10 @@
-/* eslint-disable require-jsdoc, max-len, @typescript-eslint/no-explicit-any */
+/* eslint-disable
+  require-jsdoc,
+  valid-jsdoc,
+  max-len,
+  @typescript-eslint/no-explicit-any,
+  @typescript-eslint/no-unused-vars
+*/
 
 import {onCall, HttpsError} from "firebase-functions/v2/https";
 import {onSchedule} from "firebase-functions/v2/scheduler";
@@ -6,10 +12,21 @@ import {setGlobalOptions} from "firebase-functions/v2";
 import * as admin from "firebase-admin";
 import {DateTime} from "luxon";
 
-
 setGlobalOptions({region: "europe-west1"});
+
 admin.initializeApp();
 const db = admin.firestore();
+
+/** -----------------------------
+ * Types
+ * ----------------------------*/
+type Role = "admin" | "user" | string;
+
+type UserDoc = {
+  name?: string;
+  email?: string;
+  role?: Role;
+};
 
 type ClassTemplate = {
   title: string;
@@ -24,14 +41,60 @@ type ClassTemplate = {
   isActive: boolean;
 };
 
+type ClassDoc = {
+  templateId: string;
+  title: string;
+  timezone: string;
+  startTime: admin.firestore.Timestamp;
+  endTime: admin.firestore.Timestamp;
+  coachId: string;
+  coachName: string;
+  capacity: number;
+  bookedCount: number;
+  location: string;
+  status: "scheduled" | "cancelled";
+  createdAt: admin.firestore.FieldValue | admin.firestore.Timestamp;
+  updatedAt?: admin.firestore.FieldValue | admin.firestore.Timestamp;
+};
+
+type BookingDoc = {
+  classId: string;
+  userId: string;
+  userName: string;
+  status: "booked" | "cancelled";
+  createdAt: admin.firestore.FieldValue | admin.firestore.Timestamp;
+  cancelledAt?: admin.firestore.FieldValue | admin.firestore.Timestamp;
+  attended?: boolean;
+  checkedInAt?: admin.firestore.FieldValue | admin.firestore.Timestamp;
+  checkedInBy?: string;
+};
+
+/** -----------------------------
+ * Helpers
+ * ----------------------------*/
+function requireAuth(request: Parameters<typeof onCall>[0] extends never ? never : any) {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
+  return request.auth.uid as string;
+}
+
+function requireString(value: unknown, field: string): string {
+  const v = typeof value === "string" ? value.trim() : "";
+  if (!v) throw new HttpsError("invalid-argument", `${field} required`);
+  return v;
+}
+
+
 function hhmmToParts(hhmm: string) {
   const [h, m] = (hhmm || "").split(":").map((x) => Number(x));
-  return {hour: Number.isFinite(h) ? h : 0, minute: Number.isFinite(m) ? m : 0};
+  return {
+    hour: Number.isFinite(h) ? h : 0,
+    minute: Number.isFinite(m) ? m : 0,
+  };
 }
 
 function toJsDayOfWeek(luxonWeekday: number) {
   // luxon: 1=Mon..7=Sun
-  // we use: 0=Sun..6=Sat
+  // ours:  0=Sun..6=Sat
   return luxonWeekday === 7 ? 0 : luxonWeekday;
 }
 
@@ -40,6 +103,13 @@ function classIdFor(templateId: string, start: DateTime) {
   return `${templateId}_${start.toFormat("yyyy-LL-dd")}_${start.toFormat("HHmm")}`;
 }
 
+function bookingIdFor(classId: string, userId: string) {
+  return `${classId}_${userId}`;
+}
+
+/** -----------------------------
+ * Class generation
+ * ----------------------------*/
 async function generateRange(daysAhead: number) {
   const nowUtc = DateTime.utc();
 
@@ -50,7 +120,7 @@ async function generateRange(daysAhead: number) {
 
   const templates = templatesSnap.docs.map((d) => ({
     id: d.id,
-    ...(d.data() as any),
+    ...(d.data() as ClassTemplate),
   })) as Array<{ id: string } & ClassTemplate>;
 
   const created: string[] = [];
@@ -63,10 +133,8 @@ async function generateRange(daysAhead: number) {
     for (let i = 0; i <= daysAhead; i++) {
       const day = nowUtc.plus({days: i}).setZone(tz);
 
-      // match template dayOfWeek
-      const dow = toJsDayOfWeek(day.weekday); // 0..6
+      const dow = toJsDayOfWeek(day.weekday);
       if (dow !== t.dayOfWeek) continue;
-
 
       const start = day.set({hour, minute, second: 0, millisecond: 0});
       const end = start.plus({minutes: t.durationMinutes || 60});
@@ -74,7 +142,7 @@ async function generateRange(daysAhead: number) {
       const id = classIdFor(t.id, start);
       const ref = db.collection("classes").doc(id);
 
-      const payload = {
+      const payload: ClassDoc = {
         templateId: t.id,
         title: t.title,
         timezone: tz,
@@ -90,11 +158,9 @@ async function generateRange(daysAhead: number) {
       };
 
       try {
-        // create() fails if doc exists (perfect for idempotent generation)
-        await ref.create(payload);
+        await ref.create(payload); // idempotent: fails if exists
         created.push(id);
-      } catch (e: any) {
-        // ALREADY_EXISTS -> skip
+      } catch {
         skipped.push(id);
       }
     }
@@ -103,10 +169,6 @@ async function generateRange(daysAhead: number) {
   return {createdCount: created.length, skippedCount: skipped.length};
 }
 
-/**
- * Scheduled job: generates the next 28 days of classes.
- * Requires Blaze plan (because scheduler).
- */
 export const generateClassOccurrencesDaily = onSchedule(
   {schedule: "0 2 * * *", timeZone: "Europe/London"},
   async () => {
@@ -115,67 +177,57 @@ export const generateClassOccurrencesDaily = onSchedule(
   }
 );
 
-/**
- * Callable: manually generate (useful while building).
- * Call from admin UI.
- */
 export const generateClassOccurrences = onCall(async (request) => {
-  if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
+  requireAuth(request);
+
+  // Optional: admin only (uncomment if you want)
+  // await requireAdmin(uid);
 
   const daysAhead =
     typeof request.data?.daysAhead === "number" ? request.data.daysAhead : 28;
 
   try {
-    const result = await generateRange(daysAhead);
-    return result;
+    return await generateRange(daysAhead);
   } catch (err: any) {
-    // This is the bit that will turn your mystery "internal" into actionable info in logs
     console.error("generateClassOccurrences failed", err?.message, err?.stack, err);
-    throw new HttpsError(
-      "internal",
-      err?.message || "generateRange failed",
-      {stack: err?.stack}
-    );
+    throw new HttpsError("internal", err?.message || "generateRange failed");
   }
 });
 
+/** -----------------------------
+ * Booking
+ * ----------------------------*/
 export const bookClass = onCall(async (request) => {
-  if (!request.auth) {
-    throw new HttpsError("unauthenticated", "Login required.");
-  }
-
-  const uid = request.auth.uid;
-  const {classId} = request.data;
-
-  if (!classId) {
-    throw new HttpsError("invalid-argument", "classId required");
-  }
+  const uid = requireAuth(request);
+  const classId = requireString(request.data?.classId, "classId");
 
   const classRef = db.collection("classes").doc(classId);
-  const bookingRef = db.collection("bookings").doc(`${classId}_${uid}`);
+  const bookingRef = db.collection("bookings").doc(bookingIdFor(classId, uid));
   const userRef = db.collection("users").doc(uid);
 
   return db.runTransaction(async (tx) => {
-    const classSnap = await tx.get(classRef);
-    if (!classSnap.exists) {
-      throw new HttpsError("not-found", "Class not found");
+    const [classSnap, existingBookingSnap, userSnap] = await Promise.all([
+      tx.get(classRef),
+      tx.get(bookingRef),
+      tx.get(userRef),
+    ]);
+
+    if (!classSnap.exists) throw new HttpsError("not-found", "Class not found");
+
+    const classData = classSnap.data() as Partial<ClassDoc>;
+    const capacity = Number(classData.capacity ?? 0);
+    const bookedCount = Number(classData.bookedCount ?? 0);
+
+    if (capacity <= 0) throw new HttpsError("failed-precondition", "Class has no capacity set");
+    if (bookedCount >= capacity) throw new HttpsError("failed-precondition", "Class is full");
+
+    if (existingBookingSnap.exists) {
+      const b = existingBookingSnap.data() as Partial<BookingDoc>;
+      if (b.status === "booked") throw new HttpsError("already-exists", "Already booked");
+      // if cancelled, we allow re-book (overwrite below)
     }
 
-    const classData = classSnap.data()!;
-    const capacity = classData.capacity || 0;
-    const bookedCount = classData.bookedCount || 0;
-
-    if (bookedCount >= capacity) {
-      throw new HttpsError("failed-precondition", "Class is full");
-    }
-
-    const existingBooking = await tx.get(bookingRef);
-    if (existingBooking.exists && existingBooking.data()?.status === "booked") {
-      throw new HttpsError("already-exists", "Already booked");
-    }
-
-    const userSnap = await tx.get(userRef);
-    const userName = userSnap.data()?.name || "Member";
+    const userName = (userSnap.data() as UserDoc | undefined)?.name || "Member";
 
     tx.set(bookingRef, {
       classId,
@@ -183,7 +235,7 @@ export const bookClass = onCall(async (request) => {
       userName,
       status: "booked",
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
+    } satisfies BookingDoc);
 
     tx.update(classRef, {
       bookedCount: admin.firestore.FieldValue.increment(1),
@@ -195,33 +247,34 @@ export const bookClass = onCall(async (request) => {
 });
 
 export const cancelBooking = onCall(async (request) => {
-  if (!request.auth) {
-    throw new HttpsError("unauthenticated", "Login required.");
-  }
-
-  const uid = request.auth.uid;
-  const {classId} = request.data;
-
-  if (!classId) {
-    throw new HttpsError("invalid-argument", "classId required");
-  }
+  const uid = requireAuth(request);
+  const classId = requireString(request.data?.classId, "classId");
 
   const classRef = db.collection("classes").doc(classId);
-  const bookingRef = db.collection("bookings").doc(`${classId}_${uid}`);
+  const bookingRef = db.collection("bookings").doc(bookingIdFor(classId, uid));
 
   return db.runTransaction(async (tx) => {
-    const bookingSnap = await tx.get(bookingRef);
-    if (!bookingSnap.exists || bookingSnap.data()?.status !== "booked") {
-      throw new HttpsError("not-found", "No active booking found");
-    }
+    const [bookingSnap, classSnap] = await Promise.all([
+      tx.get(bookingRef),
+      tx.get(classRef),
+    ]);
+
+    if (!bookingSnap.exists) throw new HttpsError("not-found", "No booking found");
+
+    const booking = bookingSnap.data() as BookingDoc;
+    if (booking.status !== "booked") throw new HttpsError("failed-precondition", "No active booking found");
+
+    const classData = classSnap.exists ? (classSnap.data() as Partial<ClassDoc>) : {};
+    const bookedCount = Number(classData.bookedCount ?? 0);
 
     tx.update(bookingRef, {
       status: "cancelled",
       cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
+    // Guard against negatives
     tx.update(classRef, {
-      bookedCount: admin.firestore.FieldValue.increment(-1),
+      bookedCount: admin.firestore.FieldValue.increment(bookedCount > 0 ? -1 : 0),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
@@ -229,45 +282,104 @@ export const cancelBooking = onCall(async (request) => {
   });
 });
 
+/** -----------------------------
+ * Admin check-in
+ * ----------------------------*/
 export const checkInBooking = onCall(async (request) => {
-  if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
+  const callerUid = requireAuth(request);
+  await requireAdmin(callerUid);
 
-  const callerUid = request.auth.uid;
-  const classId = String(request.data?.classId || "");
-  const userId = String(request.data?.userId || "");
+  // Accept either bookingId OR (classId + userId)
+  const bookingIdFromPayload = typeof request.data?.bookingId === "string" ? request.data.bookingId.trim() : "";
+  const classId = typeof request.data?.classId === "string" ? request.data.classId.trim() : "";
+  const userId = typeof request.data?.userId === "string" ? request.data.userId.trim() : "";
+
+  const bookingId =
+    bookingIdFromPayload ||
+    (classId && userId ? bookingIdFor(classId, userId) : "");
+
+  if (!bookingId) {
+    throw new HttpsError("invalid-argument", "bookingId OR (classId and userId) required.");
+  }
+
   const attended = Boolean(request.data?.attended);
-
-  if (!classId || !userId) {
-    throw new HttpsError("invalid-argument", "classId and userId required.");
-  }
-
-  // ✅ Role gate (admin for now)
-  const callerUserSnap = await db.collection("users").doc(callerUid).get();
-  const role = callerUserSnap.data()?.role;
-  if (role !== "admin") {
-    throw new HttpsError("permission-denied", "Admin only.");
-  }
-
-  const bookingId = `${classId}_${userId}`;
   const bookingRef = db.collection("bookings").doc(bookingId);
 
-  await db.runTransaction(async (tx) => {
-    const snap = await tx.get(bookingRef);
-    if (!snap.exists) throw new HttpsError("not-found", "Booking not found.");
+  try {
+    await db.runTransaction(async (tx) => {
+      const snap = await tx.get(bookingRef);
+      if (!snap.exists) throw new HttpsError("not-found", "Booking not found.");
 
-    const data = snap.data() as any;
+      const data = snap.data() as BookingDoc;
 
-    // only allow check-in if booking is active
-    if (data.status !== "booked") {
-      throw new HttpsError("failed-precondition", "Not an active booking.");
-    }
+      if (data.status !== "booked") {
+        throw new HttpsError("failed-precondition", "Not an active booking.");
+      }
 
-    tx.update(bookingRef, {
-      attended,
-      checkedInAt: admin.firestore.FieldValue.serverTimestamp(),
-      checkedInBy: callerUid,
+      tx.update(bookingRef, {
+        attended,
+        checkedInAt: admin.firestore.FieldValue.serverTimestamp(),
+        checkedInBy: callerUid,
+      });
     });
-  });
 
-  return { ok: true };
+    return {ok: true};
+  } catch (err: any) {
+    console.error("checkInBooking failed", err?.message, err?.stack, err);
+    throw err instanceof HttpsError ?
+      err :
+      new HttpsError("internal", err?.message || "Check-in failed");
+  }
+});
+
+async function requireAdmin(uid: string): Promise<UserDoc> {
+  const snap = await db.collection("users").doc(uid).get();
+  const user = (snap.data() || {}) as UserDoc;
+  if (user.role !== "admin") {
+    throw new HttpsError("permission-denied", "Admin only.");
+  }
+  return user;
+}
+
+/**
+ * Admin-only: return roster for a class.
+ * Includes only active bookings (status === "booked").
+ */
+export const getClassRoster = onCall(async (request) => {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Login required.");
+  }
+
+  const callerUid = request.auth.uid;
+  await requireAdmin(callerUid);
+
+  const classId = String(request.data?.classId || "").trim();
+  if (!classId) {
+    throw new HttpsError("invalid-argument", "classId required.");
+  }
+
+  // Only active bookings in the roster
+  const snap = await db
+    .collection("bookings")
+    .where("classId", "==", classId)
+    .where("status", "==", "booked")
+    .get();
+
+  const attendees = snap.docs.map((d) => d.data() as BookingDoc);
+
+  const checkedInCount = attendees.filter((b) => b.attended === true).length;
+
+  return {
+    classId,
+    total: attendees.length,
+    checkedInCount,
+    attendees: attendees
+      .map((b) => ({
+        userId: b.userId,
+        userName: b.userName,
+        attended: Boolean(b.attended),
+        checkedInAt: b.checkedInAt ?? null,
+      }))
+      .sort((a, b) => a.userName.localeCompare(b.userName)),
+  };
 });
