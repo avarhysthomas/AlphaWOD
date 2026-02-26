@@ -8,6 +8,9 @@ import Login from './pages/Login';
 import Signup from './pages/Signup';
 import UserSplash from './pages/UserSplash';
 import UserLogWorkout from './pages/UserLogWorkout';
+import AdminTemplates from './pages/AdminTemplates';
+import Schedule from './pages/Schedule';
+import ClassRoster from './pages/ClassRoster';
 
 import { Dumbbell, NotebookPen} from 'lucide-react';
 import { useAuth } from './context/AuthContext';
@@ -32,16 +35,17 @@ const App = () => {
               <Route path="/home" element={<HomeScreen />} />
               <Route path="/display" element={<WODDisplay />} />
               <Route path="/editor" element={<WODEditor />} />
+              <Route path="/templates" element={<AdminTemplates />} />
+              <Route path="/schedule" element={<Schedule />} />
+               <Route path="/admin/classes/:classId" element={<ClassRoster />} />
             </>
           )}
 
           {/* User Routes */}
           {role === 'user' && (
             <>
-             <Route path="/home" element={<UserSplash />} />
-              <Route path="/show" element={<AlphaFITHub />} />
-              <Route path="/log" element={<UserLogWorkout />} />
-
+             <Route path="/display" element={<WODDisplay />} />
+             <Route path="/schedule" element={<Schedule />} />
             </>
           )}
         </Routes>
