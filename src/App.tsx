@@ -118,7 +118,6 @@ export default function App() {
     return <div className="text-white text-center mt-20">Loading...</div>;
 
   const isAuthed = !!user;
-  const isAdmin = appUser?.role === "admin";
 
   return (
     <Routes>
