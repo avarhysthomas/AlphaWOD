@@ -25,7 +25,7 @@ const Signup = () => {
         role: 'user'
       });
 
-      navigate('/home');
+      navigate('/schedule');
     } catch (err: any) {
       setError(err.message);
     }
@@ -72,7 +72,7 @@ const Signup = () => {
           Sign Up
         </button>
 
-        <p className="text-sm mt-4">Already have an account? <a href="/" className="text-blue-400 underline">Log in</a></p>
+        <p className="text-sm mt-4">Already have an account? <a href="/login" className="text-blue-400 underline">Log in</a></p>
       </form>
     </div>
   );

@@ -14,7 +14,7 @@ const Login = () => {
     e.preventDefault();
     try {
       await signInWithEmailAndPassword(auth, email, password);
-      navigate('/home');
+      navigate("/schedule", { replace: true });
     } catch (err: any) {
       setError(err.message);
     }
@@ -27,7 +27,7 @@ const Login = () => {
 
         {error && <p className="text-red-500 text-sm">{error}</p>}
 
-        <input
+        <input  
           type="email"
           placeholder="Email"
           className="w-full p-2 rounded bg-neutral-800 text-white"

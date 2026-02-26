@@ -292,9 +292,9 @@ export default function Schedule() {
   }
 
   return (
-    <div className="min-h-screen bg-black text-white p-6">
+    <div className="min-h-screen bg-black text-white p-6 overflow-x-hidden">
       <div className="max-w-5xl mx-auto">
-        <div className="min-h-screen flex flex-col bg-black text-white overflow-x-hidden">
+        <div className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-5xl font-extrabold uppercase tracking-widest">
               Schedule
@@ -344,9 +344,9 @@ export default function Schedule() {
 
                     return (
                       <div
-                        key={id}
-                        className="rounded-2xl border border-neutral-800 bg-neutral-900/40 p-5 flex items-center justify-between gap-4"
-                      >
+                          key={id}
+                          className="rounded-2xl border border-neutral-800 bg-neutral-900/40 p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4"
+                        >
                         <div className="min-w-0">
                           <div className="flex items-center gap-3">
                             <div className="font-semibold">
@@ -374,12 +374,12 @@ export default function Schedule() {
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-2 shrink-0">
+                        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 shrink-0 w-full sm:w-auto">
                           {/* ✅ Admin-only roster button */}
                           {isAdmin ? (
                             <button
                               onClick={() => navigate(`/admin/classes/${id}`)}
-                              className="px-5 py-2 rounded-lg border border-sky-500/60 text-sky-200 font-semibold hover:bg-white/5"
+                              className="px-5 py-2 w-full sm:w-auto rounded-lg border border-sky-500/60 text-sky-200 font-semibold hover:bg-white/5"
                             >
                               Roster
                             </button>
@@ -389,7 +389,7 @@ export default function Schedule() {
                             <button
                               onClick={() => handleCancel(id)}
                               disabled={busyClassId === id}
-                              className="px-5 py-2 rounded-lg border border-yellow-500/70 text-yellow-100 font-semibold disabled:opacity-50"
+                              className="px-5 py-2 w-full sm:w-auto rounded-lg border border-yellow-500/70 text-yellow-100 font-semibold disabled:opacity-50"
                             >
                               {busyClassId === id ? "Cancelling…" : "Cancel"}
                             </button>
@@ -397,7 +397,7 @@ export default function Schedule() {
                             <button
                               onClick={() => handleBook(id)}
                               disabled={busyClassId === id || full}
-                              className="px-5 py-2 rounded-lg border border-emerald-500/60 text-emerald-100 font-semibold disabled:opacity-40"
+                              className="px-5 py-2 w-full sm:w-auto rounded-lg border border-emerald-500/60 text-emerald-100 font-semibold disabled:opacity-40"
                             >
                               {busyClassId === id ? "Booking…" : "Book"}
                             </button>
