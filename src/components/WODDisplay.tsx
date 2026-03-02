@@ -218,8 +218,10 @@ const WODDisplay = () => {
               <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-6">
                 <div className="flex items-start justify-between gap-6">
                   <div className="min-w-0">
-                    <h1 className="text-3xl sm:text-5xl xl:text-6xl 2xl:text-7xl leading-[0.9] font-heading uppercase tracking-widest text-white/90">
-                      Zero Alpha Made - Zero Alpha Fit.
+                    <h1 className="mt-2 text-4xl sm:text-5xl font-heading uppercase tracking-widest text-white/90">
+                      Zero Alpha Made
+                      <br />
+                      Zero Alpha Fit.
                     </h1>
 
                     {wod.sessionType === "Strength" ? (
