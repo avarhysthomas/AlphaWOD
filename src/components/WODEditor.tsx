@@ -14,6 +14,26 @@ type StrengthRow = {
   repRange: string;
 };
 
+type Movement = {
+  id: string;
+  name: string;
+  target?: string;
+  notes?: string;
+};
+
+type Station = {
+  id: string;
+  title: string;
+  movements: Movement[];
+};
+
+function makeId() {
+  // crypto.randomUUID is supported in modern browsers; fallback keeps it safe
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? (crypto as any).randomUUID()
+    : `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
 function clampInt(n: number, min: number, max: number) {
   if (!Number.isFinite(n)) return min;
   return Math.max(min, Math.min(max, Math.floor(n)));
@@ -32,11 +52,11 @@ function formatSeconds(total: number) {
 }
 
 function normaliseMovements(raw: any): string[] {
-  if (!Array.isArray(raw)) return [""];
-  const out = raw
+  // kept for legacy fields in old docs
+  if (!Array.isArray(raw)) return [];
+  return raw
     .map((m) => {
       if (typeof m === "string") return m;
-      // legacy object format { partner1, partner2 } or { movement }
       if (m && typeof m === "object") {
         const v = m.partner1 ?? m.movement ?? "";
         return String(v);
@@ -45,8 +65,55 @@ function normaliseMovements(raw: any): string[] {
     })
     .map((s) => s.trim())
     .filter(Boolean);
+}
 
-  return out.length ? out : [""];
+function normaliseStations(rawStations: any, rawMovements: any): Station[] {
+  // Preferred: stations[] exists
+  if (Array.isArray(rawStations) && rawStations.length) {
+    const stations: Station[] = rawStations.map((s: any, i: number) => {
+      const title = String(s?.title ?? `Station ${i + 1}`).trim();
+      const rawMs = Array.isArray(s?.movements) ? s.movements : [];
+      const movements: Movement[] = rawMs
+        .map((m: any) => ({
+          id: String(m?.id ?? makeId()),
+          name: String(m?.name ?? "").trim(),
+          target: String(m?.target ?? "").trim() || undefined,
+          notes: String(m?.notes ?? "").trim() || undefined,
+        }))
+        .filter((m: Movement) => m.name.length > 0 || m.target || m.notes);
+
+      return {
+        id: String(s?.id ?? makeId()),
+        title,
+        movements: movements.length ? movements : [{ id: makeId(), name: "" }],
+      };
+    });
+
+    return stations.length
+      ? stations
+      : [{ id: makeId(), title: "Station 1", movements: [{ id: makeId(), name: "" }] }];
+  }
+
+  // Legacy fallback: movements: string[]
+  const legacy = normaliseMovements(rawMovements);
+  if (legacy.length) {
+    return [
+      {
+        id: makeId(),
+        title: "Station 1",
+        movements: legacy.map((name) => ({ id: makeId(), name })),
+      },
+    ];
+  }
+
+  // Default
+  return [{ id: makeId(), title: "Station 1", movements: [{ id: makeId(), name: "" }] }];
+}
+
+function flattenStationMovements(stations: Station[]): string[] {
+  return (stations || [])
+    .flatMap((s) => (s.movements || []).map((m) => String(m.name ?? "").trim()))
+    .filter((n) => n.length > 0);
 }
 
 function normaliseStrength(raw: any): StrengthRow[] {
@@ -86,8 +153,10 @@ const WODEditor = () => {
     // station controlled
     controlStationIndex: 0,
 
-    // movements as strings
-    movements: [""] as string[],
+    // Stations -> Movements
+    stations: [
+      { id: makeId(), title: "Station 1", movements: [{ id: makeId(), name: "" }] },
+    ] as Station[],
 
     notes: "",
 
@@ -116,11 +185,31 @@ const WODEditor = () => {
     [totalWorkSeconds, restSeconds, roundsNum]
   );
 
-  const cleanedMovements = useMemo(() => {
-    return (formData.movements || [])
-      .map((m) => String(m ?? "").trim()) // ✅ safe
-      .filter((m) => m.length > 0);
-  }, [formData.movements]);
+  const cleanedStations = useMemo(() => {
+    const stations = (formData.stations || []).map((s) => ({
+      ...s,
+      title: String(s.title ?? "").trim(),
+      movements: (s.movements || []).map((m) => ({
+        ...m,
+        name: String(m.name ?? "").trim(),
+        target: String((m as any).target ?? "").trim(), // "" if empty
+        notes: String((m as any).notes ?? "").trim(),   // "" if empty
+      })),
+    }));
+
+    // keep at least one station + one movement input
+    if (!stations.length) {
+      return [{ id: makeId(), title: "Station 1", movements: [{ id: makeId(), name: "" }] }];
+    }
+
+    return stations.map((s, idx) => ({
+      ...s,
+      title: s.title || `Station ${idx + 1}`,
+      movements: s.movements.length ? s.movements : [{ id: makeId(), name: "" }],
+    }));
+  }, [formData.stations]);
+
+  const flattenedMovements = useMemo(() => flattenStationMovements(cleanedStations), [cleanedStations]);
 
   // --- load existing session when date/time changes ---
   useEffect(() => {
@@ -158,7 +247,7 @@ const WODEditor = () => {
           rounds: toInt(existing.rounds, 1),
           restBetweenRoundsSeconds: toInt(existing.restBetweenRoundsSeconds, 0),
           controlStationIndex: clampInt(toInt(existing.controlStationIndex, 0), 0, 999),
-          movements: normaliseMovements(existing.movements),
+          stations: normaliseStations(existing.stations, existing.movements),
 
           // Strength
           strengthMovements: normaliseStrength(existing.strengthMovements),
@@ -215,8 +304,9 @@ const WODEditor = () => {
         // station controlled
         controlStationIndex: clampInt(toInt(formData.controlStationIndex, 0), 0, 999),
 
-        // ✅ always save string[]
-        movements: cleanedMovements,
+        // ✅ save stations (new) + movements (legacy flat list)
+        stations: cleanedStations,
+        movements: flattenedMovements,
       });
     } else {
       const cleanedStrength = (formData.strengthMovements || [])
@@ -247,10 +337,24 @@ const WODEditor = () => {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="max-w-xl mx-auto bg-neutral-900 p-6 pb-24 rounded-lg space-y-6 text-white">
+    <form
+      onSubmit={handleSubmit}
+      onKeyDown={(e) => {
+        // stop Enter from submitting the whole form (we use Enter to add movements)
+        if (e.key === "Enter") {
+          const el = e.target as HTMLElement;
+          const tag = el.tagName.toLowerCase();
+          const isTextArea = tag === "textarea";
+          if (!isTextArea) e.preventDefault();
+        }
+      }}
+      className="max-w-xl mx-auto bg-neutral-900 p-6 pb-24 rounded-lg space-y-6 text-white"
+    >
       <h1 className="text-3xl font-heading font-bold text-center uppercase tracking-widest">
         AlphaFIT Editor
       </h1>
+
+      <LogoutButton />
 
       {/* Workout name */}
       <div>
@@ -286,12 +390,12 @@ const WODEditor = () => {
           className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
         >
           <option value="AM">AM</option>
-          <option value="930AM">9:30 AM</option>
           <option value="PM">PM</option>
+          <option value="930AM">9:30AM</option>
         </select>
       </div>
 
-      {/* Type */}
+      {/* Session type */}
       <div>
         <label className="block text-sm font-medium text-white/80 mb-1">Session Type</label>
         <select
@@ -308,156 +412,121 @@ const WODEditor = () => {
       {/* HYROX */}
       {formData.sessionType === "HYROX" && (
         <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-white/80 mb-1">Style</label>
-            <select
-              name="wodType"
-              value={formData.wodType}
-              onChange={handleChange}
-              className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
-            >
-              <option value="AMRAP">AMRAP</option>
-              <option value="For Time">For Time</option>
-              <option value="EMOM">EMOM</option>
-              <option value="Chipper">Chipper</option>
-            </select>
-          </div>
+          <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 p-4 space-y-3">
+            <div className="text-sm font-semibold text-white/80">HYROX Settings</div>
 
-          <div>
-            <label className="block text-sm font-medium text-white/80 mb-1">People per group</label>
-            <input
-              type="number"
-              name="groupSize"
-              value={formData.groupSize}
-              onChange={handleChange}
-              className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
-              min={1}
-              max={50}
-            />
-          </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <div className="text-xs tracking-wider text-white/50 mb-1">WOD TYPE</div>
+                <select
+                  name="wodType"
+                  value={formData.wodType}
+                  onChange={handleChange}
+                  className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
+                >
+                  <option value="AMRAP">AMRAP</option>
+                  <option value="For Time">For Time</option>
+                  <option value="EMOM">EMOM</option>
+                  <option value="Chipper">Chipper</option>
+                </select>
+              </div>
 
-          {/* Timer mode toggle */}
-          <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 p-4">
-            <div className="text-sm font-semibold text-white/80 mb-3">Timer Mode</div>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setFormData((p) => ({ ...p, timerMode: "timed" }))}
-                className={`p-2 rounded border ${
-                  formData.timerMode === "timed"
-                    ? "bg-white text-black border-white"
-                    : "bg-neutral-800 text-white border-neutral-700"
-                }`}
-              >
-                Timed (Rounds)
-              </button>
-              <button
-                type="button"
-                onClick={() => setFormData((p) => ({ ...p, timerMode: "stationControlled" }))}
-                className={`p-2 rounded border ${
-                  formData.timerMode === "stationControlled"
-                    ? "bg-white text-black border-white"
-                    : "bg-neutral-800 text-white border-neutral-700"
-                }`}
-              >
-                Station Controlled
-              </button>
+              <div>
+                <div className="text-xs tracking-wider text-white/50 mb-1">GROUP SIZE</div>
+                <input
+                  type="number"
+                  name="groupSize"
+                  value={formData.groupSize}
+                  onChange={handleChange}
+                  className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
+                />
+              </div>
+
+              <div>
+                <div className="text-xs tracking-wider text-white/50 mb-1">TIMER MODE</div>
+                <select
+                  name="timerMode"
+                  value={formData.timerMode}
+                  onChange={handleChange}
+                  className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
+                >
+                  <option value="timed">Timed (Rounds)</option>
+                  <option value="stationControlled">Station Controlled</option>
+                </select>
+              </div>
             </div>
 
             {/* Timed settings */}
             {formData.timerMode === "timed" && (
-              <div className="mt-4 space-y-3">
-                <div className="grid grid-cols-3 gap-3">
+              <div className="space-y-3 pt-2">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                   <div>
-                    <label className="block text-xs uppercase tracking-widest text-white/50 mb-1">
-                      Minutes
-                    </label>
+                    <div className="text-xs tracking-wider text-white/50 mb-1">MINUTES</div>
                     <input
                       type="number"
                       name="roundMinutes"
                       value={formData.roundMinutes}
                       onChange={handleChange}
                       className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
-                      min={0}
-                      max={180}
                     />
                   </div>
+
                   <div>
-                    <label className="block text-xs uppercase tracking-widest text-white/50 mb-1">
-                      Seconds
-                    </label>
+                    <div className="text-xs tracking-wider text-white/50 mb-1">SECONDS</div>
                     <input
                       type="number"
                       name="roundSeconds"
                       value={formData.roundSeconds}
                       onChange={handleChange}
                       className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
-                      min={0}
-                      max={59}
                     />
                   </div>
+
                   <div>
-                    <label className="block text-xs uppercase tracking-widest text-white/50 mb-1">
-                      Rounds
-                    </label>
+                    <div className="text-xs tracking-wider text-white/50 mb-1">ROUNDS</div>
                     <input
                       type="number"
                       name="rounds"
                       value={formData.rounds}
                       onChange={handleChange}
                       className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
-                      min={1}
-                      max={99}
                     />
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-xs uppercase tracking-widest text-white/50 mb-1">
-                    Rest between rounds (sec)
-                  </label>
+                  <div className="text-xs tracking-wider text-white/50 mb-1">REST BETWEEN ROUNDS (SEC)</div>
                   <input
                     type="number"
                     name="restBetweenRoundsSeconds"
                     value={formData.restBetweenRoundsSeconds}
                     onChange={handleChange}
                     className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
-                    min={0}
-                    max={600}
                   />
                 </div>
 
-                <div className="rounded-xl border border-neutral-800 bg-neutral-900/40 p-3">
-                  <div className="text-xs uppercase tracking-widest text-white/50">
-                    Total session time
-                  </div>
-                  <div className="mt-1 text-2xl font-bold text-white">
-                    {formatSeconds(totalSessionSeconds)}
-                  </div>
-                  <div className="mt-1 text-sm text-white/60">
-                    Work: {formatSeconds(totalWorkSeconds)}
-                    {restSeconds > 0 ? ` • Rest: ${formatSeconds(restSeconds * Math.max(0, roundsNum - 1))}` : ""}
-                  </div>
+                <div className="rounded-xl border border-neutral-800 bg-neutral-950/60 p-4">
+                  <div className="text-xs tracking-wider text-white/50">TOTAL SESSION TIME</div>
+                  <div className="text-3xl font-bold mt-1">{formatSeconds(totalSessionSeconds)}</div>
+                  <div className="text-sm text-white/60 mt-1">Work: {formatSeconds(totalWorkSeconds)}</div>
                 </div>
               </div>
             )}
 
-            {/* Station controlled settings */}
+            {/* Station Controlled settings */}
             {formData.timerMode === "stationControlled" && (
-              <div className="mt-4">
-                <label className="block text-xs uppercase tracking-widest text-white/50 mb-1">
-                  Control station
-                </label>
+              <div className="space-y-2 pt-2">
+                <div className="text-xs tracking-wider text-white/50">CONTROLLED STATION</div>
                 <select
                   name="controlStationIndex"
                   value={formData.controlStationIndex}
                   onChange={handleChange}
                   className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
                 >
-                  {cleanedMovements.length === 0 ? (
+                  {flattenedMovements.length === 0 ? (
                     <option value={0}>Add movements first</option>
                   ) : (
-                    cleanedMovements.map((m, i) => (
+                    flattenedMovements.map((m, i) => (
                       <option key={i} value={i}>
                         {i + 1}. {m}
                       </option>
@@ -468,33 +537,169 @@ const WODEditor = () => {
             )}
           </div>
 
-          {/* Movements */}
-          <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 p-4 space-y-3">
-            <div className="text-sm font-semibold text-white/80">Movements</div>
+          {/* Stations */}
+          <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 p-4 space-y-4">
+            <div className="text-sm font-semibold text-white/80">Stations</div>
 
-            {formData.movements.map((m, idx) => (
-              <input
-                key={idx}
-                type="text"
-                value={m}
-                onChange={(e) => {
-                  const updated = [...formData.movements];
-                  updated[idx] = e.target.value;
-                  setFormData((p) => ({ ...p, movements: updated }));
-                }}
-                placeholder={`Movement ${idx + 1}`}
-                className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
-              />
+            {(formData.stations || []).map((station, sIdx) => (
+              <div
+                key={station.id}
+                className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-3 space-y-3"
+              >
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={station.title}
+                    onChange={(e) => {
+                      const title = e.target.value;
+                      setFormData((p: any) => ({
+                        ...p,
+                        stations: (p.stations || []).map((s: Station) =>
+                          s.id === station.id ? { ...s, title } : s
+                        ),
+                      }));
+                    }}
+                    placeholder={`Station ${sIdx + 1} title`}
+                    className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
+                  />
+
+                  <button
+                    type="button"
+                    className="text-xs text-white/70 underline shrink-0"
+                    onClick={() => {
+                      setFormData((p: any) => ({
+                        ...p,
+                        stations: (p.stations || []).filter((s: Station) => s.id !== station.id),
+                      }));
+                    }}
+                    disabled={(formData.stations || []).length <= 1}
+                    title={(formData.stations || []).length <= 1 ? "Keep at least one station" : "Remove station"}
+                  >
+                    Remove
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  {(station.movements || []).map((mv, mIdx) => (
+                    <div key={mv.id} className="grid grid-cols-1 md:grid-cols-12 gap-2">
+                      <input
+                        type="text"
+                        value={mv.name}
+                        onChange={(e) => {
+                          const name = e.target.value;
+                          setFormData((p: any) => ({
+                            ...p,
+                            stations: (p.stations || []).map((s: Station) =>
+                              s.id === station.id
+                                ? {
+                                    ...s,
+                                    movements: (s.movements || []).map((m: Movement) =>
+                                      m.id === mv.id ? { ...m, name } : m
+                                    ),
+                                  }
+                                : s
+                            ),
+                          }));
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            setFormData((p: any) => ({
+                              ...p,
+                              stations: (p.stations || []).map((s: Station) =>
+                                s.id === station.id
+                                  ? { ...s, movements: [...(s.movements || []), { id: makeId(), name: "" }] }
+                                  : s
+                              ),
+                            }));
+                          }
+                        }}
+                        placeholder={`Movement ${mIdx + 1}`}
+                        className="md:col-span-7 w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
+                      />
+
+                      <input
+                        type="text"
+                        value={(mv as any).target ?? ""}
+                        onChange={(e) => {
+                          const target = e.target.value;
+                          setFormData((p: any) => ({
+                            ...p,
+                            stations: (p.stations || []).map((s: Station) =>
+                              s.id === station.id
+                                ? {
+                                    ...s,
+                                    movements: (s.movements || []).map((m: Movement) =>
+                                      m.id === mv.id ? { ...(m as any), target } : m
+                                    ),
+                                  }
+                                : s
+                            ),
+                          }));
+                        }}
+                        placeholder="Target (e.g. 12 cals / 10 reps)"
+                        className="md:col-span-4 w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
+                      />
+
+                      <button
+                        type="button"
+                        className="md:col-span-1 text-xs text-white/70 underline"
+                        onClick={() => {
+                          setFormData((p: any) => ({
+                            ...p,
+                            stations: (p.stations || []).map((s: Station) =>
+                              s.id === station.id
+                                ? { ...s, movements: (s.movements || []).filter((m: Movement) => m.id !== mv.id) }
+                                : s
+                            ),
+                          }));
+                        }}
+                        disabled={(station.movements || []).length <= 1}
+                        title={(station.movements || []).length <= 1 ? "Keep at least one movement" : "Remove movement"}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  className="text-sm underline text-white/80"
+                  onClick={() =>
+                    setFormData((p: any) => ({
+                      ...p,
+                      stations: (p.stations || []).map((s: Station) =>
+                        s.id === station.id
+                          ? { ...s, movements: [...(s.movements || []), { id: makeId(), name: "" }] }
+                          : s
+                      ),
+                    }))
+                  }
+                >
+                  + Add Movement
+                </button>
+              </div>
             ))}
 
             <button
               type="button"
               className="text-sm underline text-white/80"
               onClick={() =>
-                setFormData((p) => ({ ...p, movements: [...p.movements, ""] }))
+                setFormData((p: any) => ({
+                  ...p,
+                  stations: [
+                    ...(p.stations || []),
+                    {
+                      id: makeId(),
+                      title: `Station ${(p.stations || []).length + 1}`,
+                      movements: [{ id: makeId(), name: "" }],
+                    },
+                  ],
+                }))
               }
             >
-              + Add Movement
+              + Add Station
             </button>
           </div>
         </div>
@@ -521,7 +726,7 @@ const WODEditor = () => {
               <input
                 type="text"
                 value={row.percent}
-                placeholder="% of 1RM (e.g. 75 or 75-80)"
+                placeholder="%"
                 onChange={(e) => {
                   const updated = [...formData.strengthMovements];
                   updated[idx] = { ...updated[idx], percent: e.target.value };
@@ -532,7 +737,7 @@ const WODEditor = () => {
               <input
                 type="text"
                 value={row.repRange}
-                placeholder="Rep Range (e.g. 6-8)"
+                placeholder="Rep range"
                 onChange={(e) => {
                   const updated = [...formData.strengthMovements];
                   updated[idx] = { ...updated[idx], repRange: e.target.value };
@@ -553,7 +758,7 @@ const WODEditor = () => {
               }))
             }
           >
-            + Add Station
+            + Add Strength Row
           </button>
         </div>
       )}
@@ -565,16 +770,18 @@ const WODEditor = () => {
           name="notes"
           value={formData.notes}
           onChange={handleChange}
+          rows={4}
+          className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
           placeholder="Coaching notes / scaling / reminders..."
-          className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white min-h-[90px]"
         />
       </div>
 
-      <button type="submit" className="bg-white text-black px-4 py-2 rounded w-full font-bold">
+      <button
+        type="submit"
+        className="w-full py-3 rounded bg-white text-black font-semibold hover:bg-white/90"
+      >
         Save Session
       </button>
-
-      <LogoutButton />
     </form>
   );
 };

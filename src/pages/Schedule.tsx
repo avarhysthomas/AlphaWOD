@@ -16,6 +16,7 @@ import {
 } from "firebase/firestore";
 import { db } from "../firebase";
 import { useAuth } from "../context/AuthContext";
+import LogoutButton from "../components/LogoutButton";
 
 type ClassDoc = {
   title: string;
@@ -460,6 +461,8 @@ export default function Schedule() {
           )}
         </div>
       </div>
+      <LogoutButton />
     </div>
+    
   );
 }

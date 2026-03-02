@@ -7,6 +7,19 @@ type SessionKey = "AM" | "PM" | "930AM";
 type TimerMode = "timed" | "stationControlled";
 type Phase = "WORK" | "REST" | "FINISHED";
 
+type Movement = {
+  id?: string;
+  name: string;
+  target?: string;
+  notes?: string;
+};
+
+type Station = {
+  id?: string;
+  title: string;
+  movements: Movement[];
+};
+
 const WODDisplay = () => {
   const [wod, setWod] = useState<any>(null);
   const [selectedDate, setSelectedDate] = useState<string>("");
@@ -75,14 +88,24 @@ const WODDisplay = () => {
     return typeof n === "number" && n > 0 ? n : null;
   }, [wod?.groupSize]);
 
-  const movementsList: string[] = useMemo(() => {
-    return normalizeMovements(wod?.movements);
-  }, [wod?.movements]);
+  /**
+   * NEW: stations-aware normalization (with legacy fallback to old movements[])
+   */
+  const stations: Station[] = useMemo(() => {
+    return normalizeStations(wod?.stations, wod?.movements);
+  }, [wod?.stations, wod?.movements]);
+
+  const stationCount = stations.length;
 
   const controlStationIndex: number | null = useMemo(() => {
     const v = wod?.controlStationIndex;
     return typeof v === "number" && v >= 0 ? v : null;
   }, [wod?.controlStationIndex]);
+
+  const controlStationTitle: string | null = useMemo(() => {
+    if (controlStationIndex == null) return null;
+    return stations[controlStationIndex]?.title ?? null;
+  }, [controlStationIndex, stations]);
 
   const roundDurationSeconds: number | null = useMemo(() => {
     const v = wod?.roundDurationSeconds;
@@ -195,13 +218,12 @@ const WODDisplay = () => {
               <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-6">
                 <div className="flex items-start justify-between gap-6">
                   <div className="min-w-0">
-                    <h1 className="text-6xl sm:text-7xl font-heading uppercase tracking-widest text-white">
-                      AlphaFIT
+                    <h1 className="text-3xl sm:text-5xl xl:text-6xl 2xl:text-7xl leading-[0.9] font-heading uppercase tracking-widest text-white/90">
+                      Zero Alpha Made - Zero Alpha Fit.
                     </h1>
 
                     {wod.sessionType === "Strength" ? (
-                      <div className="mt-2 text-4xl sm:text-5xl font-bold italic tracking-tight text-white/90">
-                      </div>
+                      <div className="mt-2 text-4xl sm:text-5xl font-bold italic tracking-tight text-white/90" />
                     ) : (
                       <div className="mt-2 text-4xl sm:text-5xl font-bold italic tracking-tight text-white/90">
                         {dayName || ""}
@@ -209,60 +231,44 @@ const WODDisplay = () => {
                     )}
 
                     {wod.wodName ? (
-                      <div className="mt-3 text-xl text-white/70">
-                        {wod.wodName}
-                      </div>
+                      <div className="mt-3 text-xl text-white/70">{wod.wodName}</div>
                     ) : null}
-                  </div>
-
-                  <div className="hidden sm:block">
-                    <img
-                      src="/ZERO-ALPHA.png"
-                      alt="Zero Alpha Fitness Logo"
-                      className="h-20 object-contain opacity-90"
-                    />
                   </div>
                 </div>
 
                 <div className="mt-6 space-y-4">
-
-                {/* HERO MODULE */}
-                <div>
-                  {wod.sessionType === "HYROX" ? (
-                    timerMode === "timed" ? (
-                      roundDurationSeconds && rounds ? (
-                        <RoundTimer
-                          roundDurationSeconds={roundDurationSeconds}
-                          rounds={rounds}
-                          restBetweenRoundsSeconds={restBetweenRoundsSeconds}
-                        />
+                  {/* HERO MODULE */}
+                  <div>
+                    {wod.sessionType === "HYROX" ? (
+                      timerMode === "timed" ? (
+                        roundDurationSeconds && rounds ? (
+                          <RoundTimer
+                            roundDurationSeconds={roundDurationSeconds}
+                            rounds={rounds}
+                            restBetweenRoundsSeconds={restBetweenRoundsSeconds}
+                          />
+                        ) : (
+                          <div className="rounded-2xl border border-neutral-800 bg-neutral-900/40 p-6">
+                            <div className="text-xs uppercase tracking-[0.35em] text-white/60 font-semibold">
+                              Timer not configured
+                            </div>
+                            <div className="mt-2 text-white/80">
+                              Set minutes/seconds + rounds in the editor.
+                            </div>
+                          </div>
+                        )
                       ) : (
-                        <div className="rounded-2xl border border-neutral-800 bg-neutral-900/40 p-6">
-                          <div className="text-xs uppercase tracking-[0.35em] text-white/60 font-semibold">
-                            Timer not configured
-                          </div>
-                          <div className="mt-2 text-white/80">
-                            Set minutes/seconds + rounds in the editor.
-                          </div>
-                        </div>
+                        <ControlStationHero
+                          controlIndex={controlStationIndex}
+                          total={stationCount}
+                          controlName={controlStationTitle}
+                        />
                       )
                     ) : (
-                      <ControlStationHero
-                        controlIndex={controlStationIndex}
-                        total={movementsList.length}
-                        controlName={
-                          controlStationIndex != null ? movementsList[controlStationIndex] : null
-                        }
-                      />
-                    )
-                  ) : (
-                    <StrengthOverview
-                      title={strengthTitle}
-                      movements={wod.strengthMovements || []}
-                    />
-                  )}
+                      <StrengthOverview title={strengthTitle} movements={wod.strengthMovements || []} />
+                    )}
+                  </div>
                 </div>
-              </div>
               </div>
 
               {/* RIGHT: Session Plan */}
@@ -274,7 +280,7 @@ const WODDisplay = () => {
                   <div className="text-sm text-white/60">
                     {wod.sessionType === "Strength"
                       ? `${wod?.strengthMovements?.length ?? 0} stations`
-                      : `${movementsList.length} stations`}
+                      : `${stationCount} stations`}
                   </div>
                 </div>
 
@@ -293,19 +299,18 @@ const WODDisplay = () => {
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                      {movementsList.map((name: string, index: number) => {
+                      {stations.map((s: Station, index: number) => {
                         const isControl =
                           timerMode === "stationControlled" &&
                           controlStationIndex != null &&
                           index === controlStationIndex;
 
                         return (
-                          <StationCard
-                            key={index}
-                            title={`${index + 1}. ${name}`}
-                            subtitle={isControl ? "CONTROL STATION" : null}
-                            icon="flame"
-                            emphasis={isControl ? "control" : "none"}
+                          <HyroxStationCard
+                            key={s.id ?? index}
+                            index={index}
+                            station={s}
+                            isControl={isControl}
                           />
                         );
                       })}
@@ -381,47 +386,72 @@ function MetaPill({ label, value }: { label: string; value?: string }) {
   return (
     <div className="rounded-xl border border-neutral-800 bg-neutral-900/40 px-3 py-2">
       <div className="text-xs uppercase tracking-widest text-white/50">{label}</div>
-      <div className="text-base font-semibold text-white/90 truncate">
-        {value || "—"}
-      </div>
+      <div className="text-base font-semibold text-white/90 truncate">{value || "—"}</div>
     </div>
   );
 }
 
-function StationCard({
-  title,
-  subtitle,
-  icon,
-  emphasis = "none",
+/**
+ * NEW: HYROX station card that shows movements inside the station
+ */
+function HyroxStationCard({
+  index,
+  station,
+  isControl,
 }: {
-  title: string;
-  subtitle: string | null;
-  icon: "flame" | "dumbbell";
-  emphasis?: "none" | "control";
+  index: number;
+  station: Station;
+  isControl: boolean;
 }) {
-  const Icon = icon === "flame" ? Flame : Dumbbell;
+  const border = isControl
+    ? "border-sky-400 shadow-[0_0_30px_rgba(56,189,248,0.18)]"
+    : "border-neutral-800";
 
-  const border =
-    emphasis === "control"
-      ? "border-sky-400 shadow-[0_0_30px_rgba(56,189,248,0.18)]"
-      : "border-neutral-800";
+  const badge = isControl ? "text-sky-300" : "text-white/70";
+  const iconColor = isControl ? "text-sky-300" : "text-yellow-400";
 
-  const badge = emphasis === "control" ? "text-sky-300" : "text-white/70";
-  const iconColor = emphasis === "control" ? "text-sky-300" : "text-yellow-400";
+  const title = (station.title || `Station ${index + 1}`).trim();
+  const movements = (station.movements || []).filter((m) => String(m?.name ?? "").trim().length > 0);
 
   return (
     <div className={`rounded-2xl border ${border} bg-neutral-900/40 p-4`}>
       <div className="flex items-start gap-3">
         <div className="rounded-xl border border-neutral-700 bg-neutral-950 p-2">
-          <Icon className={`h-5 w-5 ${iconColor}`} />
+          <Flame className={`h-5 w-5 ${iconColor}`} />
         </div>
-        <div className="min-w-0">
+
+        <div className="min-w-0 w-full">
           <div className="text-xl font-bold text-white/95 leading-snug">
-            {title}
+            {index + 1}. {title}
           </div>
-          {subtitle ? (
-            <div className={`mt-1 text-sm font-semibold ${badge}`}>{subtitle}</div>
-          ) : null}
+
+          {isControl ? <div className={`mt-1 text-sm font-semibold ${badge}`}>CONTROL STATION</div> : null}
+
+          <div className="mt-3 space-y-2">
+            {movements.length ? (
+              movements.map((m, i) => {
+                const name = String(m.name ?? "").trim();
+                const target = String(m.target ?? "").trim();
+                const notes = String(m.notes ?? "").trim();
+
+                return (
+                  <div key={m.id ?? i} className="rounded-xl border border-neutral-800 bg-neutral-950/40 px-3 py-2">
+                    <div className="text-sm font-semibold text-white/85 leading-snug">
+                      {name || "—"}
+                    </div>
+                    {(target || notes) ? (
+                      <div className="mt-1 text-xs text-white/55">
+                        {target ? <span className="mr-2">Target: {target}</span> : null}
+                        {notes ? <span>• {notes}</span> : null}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })
+            ) : (
+              <div className="text-sm text-white/50">No movements added.</div>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -430,21 +460,13 @@ function StationCard({
 
 /* ------------------------- Strength ------------------------- */
 
-function StrengthOverview({
-  title,
-  movements,
-}: {
-  title: string;
-  movements: any[];
-}) {
+function StrengthOverview({ title, movements }: { title: string; movements: any[] }) {
   return (
     <div className="w-full rounded-2xl border border-neutral-800 bg-neutral-950 p-6">
       <div className="text-xs uppercase tracking-[0.35em] text-white/60 font-semibold">
         Strength Block
       </div>
-      <div className="mt-2 text-5xl font-extrabold tracking-tight text-white">
-        {title}
-      </div>
+      <div className="mt-2 text-5xl font-extrabold tracking-tight text-white">{title}</div>
 
       <div className="mt-5 grid grid-cols-2 gap-3">
         <MetaPill label="Stations" value={`${movements.length || 0}`} />
@@ -490,8 +512,8 @@ function StrengthStationCard({
           </div>
 
           <div className="mt-2 text-lg font-semibold text-white/80">
-            {pct ? `${pct}% of 1RM` : "—"}
-            {rr ? ` • ${rr} reps` : ""}
+            {pct ? `${pct}` : "—"}
+            {rr ? ` • ${rr}` : ""}
           </div>
         </div>
 
@@ -505,7 +527,45 @@ function StrengthStationCard({
 
 /* ------------------------- HYROX - Station Controlled (no ring) ------------------------- */
 
-function ControlStationHero({ controlIndex, total, controlName, }: { controlIndex: number | null; total: number; controlName: string | null; }) { const has = controlIndex != null && total > 0 && !!controlName; return ( <div className="w-full rounded-2xl border border-sky-400/60 bg-sky-500/5 p-6 shadow-[0_0_40px_rgba(56,189,248,0.10)]"> <div className="flex items-center justify-between"> <div className="text-xs uppercase tracking-[0.35em] text-sky-300 font-semibold"> Control Station </div> <div className="text-xs uppercase tracking-[0.25em] text-white/60"> STATION CONTROL </div> </div> <div className="mt-4"> <div className="text-6xl font-extrabold text-white leading-none"> {has ? `${controlIndex! + 1}/${total}` : "—"} </div> <div className="mt-3 text-3xl font-bold text-white/90"> {has ? controlName : "Pick a control station in the editor"} </div> <div className="mt-4 rounded-xl border border-neutral-800 bg-neutral-950/40 p-4"> <div className="text-sm text-white/70"> Use this station as the pace setter. </div> <div className="mt-1 text-sm text-white/50"> Move on when the group completes the target here. </div> </div> </div> </div> ); }
+function ControlStationHero({
+  controlIndex,
+  total,
+  controlName,
+}: {
+  controlIndex: number | null;
+  total: number;
+  controlName: string | null;
+}) {
+  const has = controlIndex != null && total > 0 && !!controlName;
+
+  return (
+    <div className="w-full rounded-2xl border border-sky-400/60 bg-sky-500/5 p-6 shadow-[0_0_40px_rgba(56,189,248,0.10)]">
+      <div className="flex items-center justify-between">
+        <div className="text-xs uppercase tracking-[0.35em] text-sky-300 font-semibold">
+          Control Station
+        </div>
+        <div className="text-xs uppercase tracking-[0.25em] text-white/60">
+          STATION CONTROL
+        </div>
+      </div>
+
+      <div className="mt-4">
+        <div className="text-6xl font-extrabold text-white leading-none">
+          {has ? `${controlIndex! + 1}/${total}` : "—"}
+        </div>
+        <div className="mt-3 text-3xl font-bold text-white/90">
+          {has ? controlName : "Pick a control station in the editor"}
+        </div>
+        <div className="mt-4 rounded-xl border border-neutral-800 bg-neutral-950/40 p-4">
+          <div className="text-sm text-white/70">Use this station as the pace setter.</div>
+          <div className="mt-1 text-sm text-white/50">
+            Move on when the group completes the target here.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /* ------------------------- HYROX - Timed rounds timer ------------------------- */
 
@@ -634,7 +694,7 @@ function RoundTimer({
 
       <div className="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-auto">
         <div className="text-7xl font-extrabold tracking-tight text-white">
-          {secondsToClock(remaining)}
+          {formatSeconds(remaining)}
         </div>
 
         <div className={`mt-2 text-sm uppercase tracking-[0.25em] ${labelColor}`}>
@@ -736,45 +796,90 @@ function Ring({
   );
 }
 
-/* ------------------------- helpers ------------------------- */
+/* ------------------------- Helpers ------------------------- */
 
-function normalizeMovements(movements: any): string[] {
-  if (!movements) return [];
-
-  // New schema: string[]
-  if (Array.isArray(movements) && movements.every((x) => typeof x === "string")) {
-    return movements.map((s) => s.trim()).filter(Boolean);
-  }
-
-  // Old schema: [{partner1}] => use partner1 as movement name
-  if (Array.isArray(movements) && movements.every((x) => x && typeof x === "object")) {
-    return movements
-      .map((m: any) => (m?.partner1 ?? m?.movement ?? "").toString().trim())
-      .filter(Boolean);
-  }
-
-  return [];
-}
-
-function parseDurationToSeconds(duration: any): number | null {
-  if (!duration) return null;
-  if (typeof duration === "number") return Math.max(0, Math.floor(duration * 60));
-  if (typeof duration !== "string") return null;
-
-  const s = duration.trim();
-  if (/^\d+$/.test(s)) return Math.max(0, parseInt(s, 10) * 60);
-
-  if (/^\d{1,2}:\d{2}$/.test(s)) {
-    const [m, sec] = s.split(":").map((x) => parseInt(x, 10));
-    if (Number.isFinite(m) && Number.isFinite(sec)) return m * 60 + sec;
-  }
-
-  return null;
-}
-
-function secondsToClock(totalSeconds: number): string {
-  const s = Math.max(0, Math.floor(totalSeconds));
+function formatSeconds(total: number) {
+  const s = Math.max(0, Math.floor(total));
   const m = Math.floor(s / 60);
   const r = s % 60;
   return `${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}`;
+}
+
+function parseDurationToSeconds(duration: any): number | null {
+  if (!duration || typeof duration !== "string") return null;
+  const s = duration.trim();
+  if (!s) return null;
+
+  // supports "MM:SS"
+  const parts = s.split(":").map((p) => p.trim());
+  if (parts.length === 2) {
+    const mm = Number(parts[0]);
+    const ss = Number(parts[1]);
+    if (Number.isFinite(mm) && Number.isFinite(ss)) return mm * 60 + ss;
+  }
+
+  // supports "12m", "45s", "12m30s"
+  const m = s.match(/(\d+)\s*m/i);
+  const sec = s.match(/(\d+)\s*s/i);
+  const mins = m ? Number(m[1]) : 0;
+  const secs = sec ? Number(sec[1]) : 0;
+  const total = mins * 60 + secs;
+  return total > 0 ? total : null;
+}
+
+function normalizeMovements(raw: any): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((m) => {
+      if (typeof m === "string") return m;
+      if (m && typeof m === "object") {
+        const v = m.partner1 ?? m.movement ?? "";
+        return String(v);
+      }
+      return String(m ?? "");
+    })
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function normalizeStations(rawStations: any, rawMovements: any): Station[] {
+  // Preferred: stations[] exists
+  if (Array.isArray(rawStations) && rawStations.length) {
+    const stations: Station[] = rawStations.map((s: any, i: number) => {
+      const title = String(s?.title ?? `Station ${i + 1}`).trim();
+      const rawMs = Array.isArray(s?.movements) ? s.movements : [];
+
+      const movements: Movement[] = rawMs
+        .map((m: any) => ({
+          id: m?.id,
+          name: String(m?.name ?? "").trim(),
+          target: String(m?.target ?? "").trim() || undefined,
+          notes: String(m?.notes ?? "").trim() || undefined,
+        }))
+        .filter((m: { name: string | any[]; target: any; notes: any; }) => m.name.length > 0 || m.target || m.notes);
+
+      return {
+        id: s?.id,
+        title: title || `Station ${i + 1}`,
+        movements,
+      };
+    });
+
+    // Ensure at least 1 station
+    return stations.length ? stations : [{ title: "Station 1", movements: [] }];
+  }
+
+  // Legacy fallback: movements: string[]
+  const legacy = normalizeMovements(rawMovements);
+  if (legacy.length) {
+    return [
+      {
+        title: "Station 1",
+        movements: legacy.map((name) => ({ name })),
+      },
+    ];
+  }
+
+  // Default
+  return [{ title: "Station 1", movements: [] }];
 }
