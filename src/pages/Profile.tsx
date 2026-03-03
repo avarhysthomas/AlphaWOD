@@ -264,8 +264,8 @@ export default function Profile() {
           <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
             <StatPill label="Streak" value={currentStreak} icon={<Flame className="h-4 w-4" />} />
             <StatPill label="Longest" value={longestStreak} icon={<Trophy className="h-4 w-4" />} />
-            <StatPill label="This month" value={monthCount} icon={<CheckCircle2 className="h-4 w-4" />} />
-            <StatPill label="Total" value={totalCheckIns} icon={<CheckCircle2 className="h-4 w-4" />} />
+            <StatPill label="Classes this month" value={monthCount} icon={<CheckCircle2 className="h-4 w-4" />} />
+            <StatPill label="Total Classes" value={totalCheckIns} icon={<CheckCircle2 className="h-4 w-4" />} />
           </div>
 
           <div className="mt-6 grid gap-6 sm:grid-cols-[160px_1fr]">
