@@ -22,6 +22,7 @@ import Leaderboard from "./pages/Leaderboard";
 
 import { Dumbbell, NotebookPen, CalendarDays } from "lucide-react";
 import { useAuth } from "./context/AuthContext";
+import Profile from "./pages/Profile";
 
 
 /** ---------- Route guards ---------- */
@@ -154,6 +155,8 @@ export default function App() {
           </RequireAuth>
         }
       />
+
+      <Route path="/profile" element={<RequireAuth><Profile /></RequireAuth>} />
 
       {/* Admin-only area (with bottom nav) */}
       <Route

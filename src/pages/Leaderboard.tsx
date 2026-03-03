@@ -3,6 +3,8 @@ import {getFunctions, httpsCallable} from "firebase/functions";
 import {Crown, Medal, Star, Trophy, RefreshCw, Calendar} from "lucide-react";
 import {useAuth} from "../context/AuthContext";
 import {useNavigate} from "react-router-dom";
+import { collection, documentId, getDocs, query, where } from "firebase/firestore";
+import { db } from "../firebase";
 
 type LeaderboardRow = {
   userId: string;
@@ -32,6 +34,27 @@ function addMonthsUTC(monthKey: string, delta: number) {
   const base = new Date(Date.UTC(y, m - 1, 1));
   base.setUTCMonth(base.getUTCMonth() + delta);
   return monthKeyUTC(base);
+}
+
+type UserProfile = {
+  name?: string;
+  photoURL?: string;
+};
+
+async function fetchUserProfiles(uids: string[]) {
+  const map = new Map<string, UserProfile>();
+  const unique = Array.from(new Set(uids.filter(Boolean)));
+  if (!unique.length) return map;
+
+  // Firestore "in" query limit is 10
+  for (let i = 0; i < unique.length; i += 10) {
+    const chunk = unique.slice(i, i + 10);
+    const q = query(collection(db, "users"), where(documentId(), "in", chunk));
+    const snap = await getDocs(q);
+    snap.forEach((d) => map.set(d.id, d.data() as UserProfile));
+  }
+
+  return map;
 }
 
 function InitialsAvatar({name}:{name:string}) {
@@ -171,18 +194,36 @@ export default function Leaderboard() {
   const [err, setErr] = useState<string | null>(null);
 
   async function load() {
-    setLoading(true);
-    setErr(null);
-    try {
-      const res = await getMonthlyLeaderboard({monthKey, limit: 200});
-      setRows(res.data?.rows || []);
-    } catch (e: any) {
-      console.error(e);
-      setErr(e?.message || "Failed to load leaderboard");
-    } finally {
-      setLoading(false);
-    }
+  setLoading(true);
+  setErr(null);
+
+  try {
+    const res = await getMonthlyLeaderboard({ monthKey, limit: 200 });
+    const baseRows: LeaderboardRow[] = res.data?.rows || [];
+
+    // Pull profiles for everyone on this leaderboard
+    const uids = baseRows.map((r) => r.userId);
+    const profiles = await fetchUserProfiles(uids);
+
+    const merged = baseRows.map((r) => {
+      const p = profiles.get(r.userId);
+
+      return {
+        ...r,
+        // Your Firestore uses `name`, so prefer that
+        name: p?.name ?? r.name ?? "Member",
+        photoURL: p?.photoURL ?? r.photoURL,
+      };
+    });
+
+    setRows(merged);
+  } catch (e: any) {
+    console.error(e);
+    setErr(e?.message || "Failed to load leaderboard");
+  } finally {
+    setLoading(false);
   }
+}
 
   useEffect(() => {
     void load();

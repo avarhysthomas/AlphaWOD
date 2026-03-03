@@ -17,7 +17,7 @@ import {
 import { db } from "../firebase";
 import { useAuth } from "../context/AuthContext";
 import LogoutButton from "../components/LogoutButton";
-import {Trophy} from "lucide-react";
+import {Trophy, UserRoundSearch} from "lucide-react";
 
 type ClassDoc = {
   title: string;
@@ -342,6 +342,14 @@ export default function Schedule() {
             >
               <Trophy className="h-4 w-4" />
               Board of Fame
+            </button>
+
+            <button
+              onClick={()=>navigate("/profile")}
+              className="inline-flex items-center gap-2 rounded-xl border border-neutral-800 bg-neutral-950 px-4 py-2 text-sm font-semibold text-white/80 hover:bg-neutral-900 ml-4"
+              title="View and edit your profile"
+            ><UserRoundSearch className="h-4 w-4" />
+              Profile
             </button>
           </div>
         </div>
