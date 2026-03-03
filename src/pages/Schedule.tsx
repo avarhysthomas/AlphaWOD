@@ -114,6 +114,31 @@ function fmtTime(d: Date, timeZone: string) {
   }).format(d);
 }
 
+/** Cancel close rule:
+ *  - cannot cancel within 60 minutes of class start
+ */
+const CANCEL_CUTOFF_MINUTES = 60;
+
+function computeCancelClosesAt(startTs?: Timestamp) {
+  const start = startTs?.toDate?.();
+  if (!start) return null;
+  return new Date(start.getTime() - CANCEL_CUTOFF_MINUTES * 60 * 1000);
+}
+
+function cancelStatus(startTs?: Timestamp) {
+  const start = startTs?.toDate?.();
+  if (!start) return { state: "unknown" as const };
+
+  const closes = computeCancelClosesAt(startTs);
+  const now = Date.now();
+
+  if (now >= start.getTime()) return { state: "started" as const, closes };
+  if (closes && now >= closes.getTime()) return { state: "closed" as const, closes };
+
+  return { state: "open" as const, closes, msLeft: closes ? closes.getTime() - now : 0 };
+}
+
+
 /** Next calendar week (Mon 00:00 -> Mon 00:00) in local time */
 function startOfWeekMonday(d: Date) {
   const x = new Date(d);
@@ -124,11 +149,23 @@ function startOfWeekMonday(d: Date) {
   return x;
 }
 
-function thisCalendarWeekWindow(now = new Date()) {
-  const from = startOfWeekMonday(now);
+function scheduleWindowWithSaturdayCutover(now = new Date()) {
+  const thisMon = startOfWeekMonday(now);
+
+  // Cutover time: Saturday 10:00 of the current week
+  const cutover = new Date(thisMon);
+  cutover.setDate(cutover.getDate() + 5); // Monday + 5 days = Saturday
+  cutover.setHours(10, 0, 0, 0);
+
+  const showNextWeek = now.getTime() >= cutover.getTime();
+
+  const from = new Date(thisMon);
+  if (showNextWeek) from.setDate(from.getDate() + 7); // next Monday
+
   const to = new Date(from);
   to.setDate(to.getDate() + 7);
-  return { from, to };
+
+  return { from, to, showNextWeek };
 }
 
 export default function Schedule() {
@@ -150,8 +187,8 @@ export default function Schedule() {
     return () => unsub();
   }, [auth]);
 
-  // ✅ fixed window: next calendar week only
-  const windowLocal = useMemo(() => thisCalendarWeekWindow(new Date()), []);
+  // Next calendar week only
+  const windowLocal = useMemo(() => scheduleWindowWithSaturdayCutover(new Date()), []);
 
   // live classes feed for next calendar week
   useEffect(() => {
@@ -231,7 +268,7 @@ export default function Schedule() {
 
         const classData = classSnap.data() as ClassDoc;
 
-        // ✅ Enforce booking close rules server-side (transaction)
+        //Enforce booking close rules server-side (transaction)
         const bs = bookingStatus(classData.startTime);
         if (bs.state === "closed" || bs.state === "started") {
           const err: any = new Error("Booking closed");
@@ -309,6 +346,14 @@ export default function Schedule() {
 
         if (!classSnap.exists()) throw new Error("Class not found");
 
+          const classData = classSnap.data() as ClassDoc;
+          const cs = cancelStatus(classData.startTime);
+          if (cs.state === "closed" || cs.state === "started") {
+            const err: any = new Error("Cancellation closed");
+            err.code = "cancel-closed";
+            throw err;
+          }
+
         tx.update(bookingRef, { status: "cancelled", cancelledAt: serverTimestamp() });
         tx.update(classRef, { bookedCount: increment(-1) });
       });
@@ -316,6 +361,8 @@ export default function Schedule() {
       console.error("Cancel failed:", e);
       if (e?.code === "no-booking" || e?.message === "No active booking found") return alert("No active booking found");
       alert(e?.message || "Cancel failed");
+      if (e?.code === "cancel-closed" || e?.message === "Cancellation closed")
+      return alert("Too late to cancel — cancellations close 1 hour before class.");
     } finally {
       setBusyClassId(null);
     }
@@ -334,7 +381,7 @@ export default function Schedule() {
         <div className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-6xl sm:text-7xl font-heading uppercase tracking-widest text-white">Schedule</h1>
-            <div className="text-white/60 mt-1">This week • {weekLabel}</div>
+            <div className="text-white/60 mt-1"> {windowLocal.showNextWeek ? "Next week" : "This week"} • {weekLabel} </div>
             <button
               onClick={()=>navigate("/leaderboard")}
               className="inline-flex items-center gap-2 rounded-xl border border-neutral-800 bg-neutral-950 px-4 py-2 text-sm font-semibold text-white/80 hover:bg-neutral-900"
@@ -385,6 +432,9 @@ export default function Schedule() {
                     const bs = bookingStatus(data.startTime);
                     const bookingClosed = bs.state === "closed" || bs.state === "started";
 
+                    const cs = cancelStatus(data.startTime);
+                    const cancelClosed = cs.state === "closed" || cs.state === "started";
+
                     return (
                       <div
                         key={id}
@@ -427,6 +477,18 @@ export default function Schedule() {
                                 Booking closed
                               </span>
                             ) : null}
+
+                            {booked && !cancelClosed && cs.msLeft != null ? (
+                              <span className="text-xs font-semibold tracking-wide uppercase rounded-full px-2 py-0.5 border border-yellow-500/40 bg-yellow-500/10 text-yellow-100">
+                                Cancel closes in {fmtRemaining(cs.msLeft)}
+                              </span>
+                            ) : null}
+
+                            {booked && cancelClosed ? (
+                              <span className="text-xs font-semibold tracking-wide uppercase rounded-full px-2 py-0.5 border border-white/10 bg-white/5 text-white/40">
+                                Cancellation closed
+                              </span>
+                            ) : null}
                           </div>
 
                           <div className="text-sm text-white/60 mt-2">
@@ -445,13 +507,20 @@ export default function Schedule() {
                           ) : null}
 
                           {booked ? (
-                            <button
-                              onClick={() => handleCancel(id)}
-                              disabled={busyClassId === id}
-                              className="px-5 py-2 w-full sm:w-auto rounded-xl border border-yellow-500/60 text-yellow-100 font-semibold disabled:opacity-50"
-                            >
-                              {busyClassId === id ? "Cancelling…" : "Cancel"}
-                            </button>
+                          <button
+                            onClick={() => handleCancel(id)}
+                            disabled={busyClassId === id || cancelClosed}
+                            className={`
+                              px-5 py-2 w-full sm:w-auto rounded-xl border font-semibold disabled:opacity-40
+                              ${
+                                cancelClosed
+                                  ? "border-white/10 bg-white/5 text-white/30 cursor-not-allowed"
+                                  : "border-yellow-500/60 text-yellow-100 hover:bg-white/5"
+                              }
+                            `}
+                          >
+                            {cancelClosed ? "Too late" : busyClassId === id ? "Cancelling…" : "Cancel"}
+                          </button>
                           ) : (
                             <button
                               onClick={() => handleBook(id)}
