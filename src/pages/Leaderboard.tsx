@@ -381,9 +381,9 @@ export default function Leaderboard() {
                       <div className="w-12 text-center text-sm font-extrabold text-white/80">
                         #{rank}
                       </div>
-                      <div className="hidden sm:block">
-                        <div className="h-10 w-10 rounded-full border border-neutral-800 bg-neutral-900/40 grid place-items-center overflow-hidden">
-                          {r.photoURL ? (
+                      <div>
+                        <div className="h-10 w-10 rounded-full border border-neutral-800 bg-neutral-900/40 grid place-items-center overflow-hidden shrink-0">
+                        {r.photoURL ? (
                             <img
                               src={r.photoURL}
                               alt=""
