@@ -5,11 +5,13 @@ import { getAuth } from "firebase/auth";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { db } from "../firebase";
 import { checkInBooking } from "../service/checkin";
+import UserAvatar from "../components/UserAvatar";
 
 type BookingRow = {
   userId: string;
   name?: string;
   email?: string;
+  photoURL?: string;
   attended?: boolean;
   checkedInAt?: any;
 };
@@ -20,19 +22,6 @@ type RosterResponse = {
   checkedInCount: number;
   attendees: BookingRow[];
 };
-
-function initials(nameOrEmail?: string) {
-  if (!nameOrEmail) return "?";
-  const s = nameOrEmail.trim();
-  if (!s) return "?";
-
-  // If it's an email, use first char before @
-  if (s.includes("@")) return s[0].toUpperCase();
-
-  const parts = s.split(/\s+/).filter(Boolean);
-  if (parts.length === 1) return parts[0][0].toUpperCase();
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-}
 
 export default function ClassRoster() {
   const { classId } = useParams<{ classId: string }>();
@@ -110,6 +99,7 @@ export default function ClassRoster() {
               ...r,
               name: u?.name ?? r.name,
               email: u?.email ?? r.email,
+              photoURL: u?.photoURL ?? r.photoURL,
             };
 
             if (!merged.name) merged.name = "Member";
@@ -294,12 +284,12 @@ export default function ClassRoster() {
                   >
                     <div className="flex items-center gap-4">
                       <div
-                        className={`
-                          w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg
-                          ${isIn ? "bg-emerald-500 text-black" : "bg-white/10 text-white"}
-                        `}
+                        className={[
+                          "shrink-0 rounded-full p-[2px] border",
+                          isIn ? "border-emerald-500/70" : "border-white/10",
+                        ].join(" ")}
                       >
-                        {initials(r.name || r.email)}
+                        <UserAvatar name={r.name ?? "Member"} photoURL={r.photoURL} size={48} />
                       </div>
 
                       <div className="min-w-0">

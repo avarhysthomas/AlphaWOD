@@ -5,6 +5,7 @@ import {useAuth} from "../context/AuthContext";
 import {useNavigate} from "react-router-dom";
 import { collection, documentId, getDocs, query, where } from "firebase/firestore";
 import { db } from "../firebase";
+import UserAvatar from "../components/UserAvatar";
 
 type LeaderboardRow = {
   userId: string;
@@ -55,35 +56,6 @@ async function fetchUserProfiles(uids: string[]) {
   }
 
   return map;
-}
-
-function InitialsAvatar({name}:{name:string}) {
-  const initials = (name || "M")
-    .split(" ")
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((s) => s[0]?.toUpperCase())
-    .join("");
-
-  return (
-    <div className="h-12 w-12 rounded-full border border-neutral-800 bg-neutral-900/40 grid place-items-center">
-      <span className="text-sm font-extrabold tracking-wide text-white/80">{initials || "M"}</span>
-    </div>
-  );
-}
-
-function Avatar({row}:{row:LeaderboardRow}) {
-  if (row.photoURL) {
-    return (
-      <img
-        src={row.photoURL}
-        alt=""
-        className="h-12 w-12 rounded-full object-cover border border-neutral-800"
-        referrerPolicy="no-referrer"
-      />
-    );
-  }
-  return <InitialsAvatar name={row.name || "Member"} />;
 }
 
 function PodiumCard({
@@ -147,7 +119,7 @@ function PodiumCard({
       </div>
 
       <div className="relative mt-4 flex items-center gap-3">
-        <Avatar row={row} />
+        <UserAvatar name={row.name || "Member"} photoURL={row.photoURL} size={48} />    
         <div className="min-w-0">
           <div className="truncate text-lg font-extrabold text-white/90">
             {row.name || "Member"} {isMe ? <span className="text-white/50">(you)</span> : null}
@@ -381,28 +353,13 @@ export default function Leaderboard() {
                       <div className="w-12 text-center text-sm font-extrabold text-white/80">
                         #{rank}
                       </div>
-                      <div>
-                        <div className="h-10 w-10 rounded-full border border-neutral-800 bg-neutral-900/40 grid place-items-center overflow-hidden shrink-0">
-                        {r.photoURL ? (
-                            <img
-                              src={r.photoURL}
-                              alt=""
-                              className="h-full w-full object-cover"
-                              referrerPolicy="no-referrer"
-                            />
-                          ) : (
-                            <span className="text-xs font-extrabold text-white/70">
-                              {(r.name || "M")
-                                .split(" ")
-                                .filter(Boolean)
-                                .slice(0, 2)
-                                .map((s) => s[0]?.toUpperCase())
-                                .join("")}
-                            </span>
-                          )}
-                        </div>
+                      <div className="shrink-0">
+                        <UserAvatar
+                          name={r.name || "Member"}
+                          photoURL={r.photoURL}
+                          size={40}
+                        />
                       </div>
-
                       <div className="min-w-0">
                         <div className="truncate text-sm font-semibold text-white/90">
                           {r.name || "Member"} {isMe ? <span className="text-white/50">(you)</span> : null}
