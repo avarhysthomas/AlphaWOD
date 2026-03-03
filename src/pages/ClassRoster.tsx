@@ -311,14 +311,6 @@ export default function ClassRoster() {
               >
                 {bulkBusy ? "Working…" : "Uncheck all"}
               </button>
-
-              <button
-                onClick={loadRoster}
-                className="text-sm underline text-white/70"
-                disabled={loadingRoster || bulkBusy}
-              >
-                {loadingRoster ? "Loading..." : "Refresh"}
-              </button>
             </div>
 
               <button onClick={loadRoster} className="text-sm underline text-white/70" disabled={loadingRoster || bulkBusy}>
