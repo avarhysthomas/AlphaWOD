@@ -261,13 +261,31 @@ export default function Profile() {
           </div>
 
           {/* Stats */}
-          <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <StatPill label="Streak" value={currentStreak} icon={<Flame className="h-4 w-4" />} />
-            <StatPill label="Longest" value={longestStreak} icon={<Trophy className="h-4 w-4" />} />
-            <StatPill label="Classes this month" value={monthCount} icon={<CheckCircle2 className="h-4 w-4" />} />
-            <StatPill label="Total Classes" value={totalCheckIns} icon={<CheckCircle2 className="h-4 w-4" />} />
-          </div>
+            <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <StatPill
+                label="Streak"
+                value={currentStreak}
+                icon={<Flame className="h-4 w-4 text-orange-400" />}
+            />
 
+            <StatPill
+                label="Longest"
+                value={longestStreak}
+                icon={<Trophy className="h-4 w-4 text-yellow-400" />}
+            />
+
+            <StatPill
+                label="Months Classes"
+                value={monthCount}
+                icon={<CheckCircle2 className="h-4 w-4 text-blue-400" />}
+            />
+
+            <StatPill
+                label="Total Classes"
+                value={totalCheckIns}
+                icon={<CheckCircle2 className="h-4 w-4 text-emerald-400" />}
+            />
+            </div>
           <div className="mt-6 grid gap-6 sm:grid-cols-[160px_1fr]">
             {/* Avatar */}
             <div className="flex flex-col items-center sm:items-start gap-3">
