@@ -248,35 +248,68 @@ export default function Leaderboard() {
 
         {/* Podium */}
         <div className="mt-8">
+        <div className="mb-3 text-sm font-semibold text-white/80">Podium</div>
 
-          {!top1 ? (
+        {!top1 ? (
             <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-6 text-sm text-white/60">
-              No check-ins yet for this month.
+            No check-ins yet for this month.
             </div>
-          ) : (
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3 md:items-end">
-              {/* 2nd */}
-              {top2 ? (
+        ) : (
+            <>
+            {/* Mobile: stacked podium tiers (still 1 column, but visually tiered) */}
+            <div className="md:hidden space-y-4">
+            {/* #1 */}
+            <div className="mx-0">
+                <PodiumCard place={1} row={top1} isMe={Boolean(user?.uid && top1.userId === user.uid)} />
+            </div>
+
+            {/* #2 */}
+            {top2 ? (
+                <div className="mx-3">
                 <PodiumCard place={2} row={top2} isMe={Boolean(user?.uid && top2.userId === user.uid)} />
-              ) : (
-                <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-6 min-h-[190px] text-white/40 flex items-center justify-center">
-                  No #2 yet
                 </div>
-              )}
+            ) : (
+                <div className="mx-3 rounded-2xl border border-neutral-800 bg-neutral-950 p-6 text-white/40 flex items-center justify-center">
+                No #2 yet
+                </div>
+            )}
 
-              {/* 1st */}
-              <PodiumCard place={1} row={top1} isMe={Boolean(user?.uid && top1.userId === user.uid)} />
-
-              {/* 3rd */}
-              {top3 ? (
+            {/* #3 */}
+            {top3 ? (
+                <div className="mx-6">
                 <PodiumCard place={3} row={top3} isMe={Boolean(user?.uid && top3.userId === user.uid)} />
-              ) : (
-                <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-6 min-h-[170px] text-white/40 flex items-center justify-center">
-                  No #3 yet
                 </div>
-              )}
+            ) : (
+                <div className="mx-6 rounded-2xl border border-neutral-800 bg-neutral-950 p-6 text-white/40 flex items-center justify-center">
+                No #3 yet
+                </div>
+            )}
             </div>
-          )}
+
+            {/* Desktop+: 2,1,3 */}
+            <div className="hidden md:grid md:grid-cols-3 md:items-end gap-4">
+                {top2 ? (
+                <PodiumCard place={2} row={top2} isMe={Boolean(user?.uid && top2.userId === user.uid)} />
+                ) : (
+                <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-6 min-h-[200px] text-white/40 flex items-center justify-center">
+                    No #2 yet
+                </div>
+                )}
+
+                <div className="md:scale-[1.02] md:-translate-y-1">
+                <PodiumCard place={1} row={top1} isMe={Boolean(user?.uid && top1.userId === user.uid)} />
+                </div>
+
+                {top3 ? (
+                <PodiumCard place={3} row={top3} isMe={Boolean(user?.uid && top3.userId === user.uid)} />
+                ) : (
+                <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-6 min-h-[180px] text-white/40 flex items-center justify-center">
+                    No #3 yet
+                </div>
+                )}
+            </div>
+            </>
+        )}
         </div>
 
         {/* Everyone else */}
