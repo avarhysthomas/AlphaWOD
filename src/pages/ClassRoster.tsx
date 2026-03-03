@@ -6,6 +6,7 @@ import { getFunctions, httpsCallable } from "firebase/functions";
 import { db } from "../firebase";
 import { checkInBooking } from "../service/checkin";
 import UserAvatar from "../components/UserAvatar";
+import { collection, documentId, getDocs, query, where } from "firebase/firestore";
 
 type BookingRow = {
   userId: string;
@@ -22,6 +23,27 @@ type RosterResponse = {
   checkedInCount: number;
   attendees: BookingRow[];
 };
+
+type UserProfile = {
+  name?: string;
+  email?: string;
+  photoURL?: string;
+};
+
+async function fetchUserProfiles(uids: string[]) {
+  const map = new Map<string, UserProfile>();
+  const unique = Array.from(new Set(uids.filter(Boolean)));
+  if (!unique.length) return map;
+
+  for (let i = 0; i < unique.length; i += 10) {
+    const chunk = unique.slice(i, i + 10);
+    const q = query(collection(db, "users"), where(documentId(), "in", chunk));
+    const snap = await getDocs(q);
+    snap.forEach((d) => map.set(d.id, d.data() as UserProfile));
+  }
+
+  return map;
+}
 
 export default function ClassRoster() {
   const { classId } = useParams<{ classId: string }>();
@@ -89,31 +111,21 @@ export default function ClassRoster() {
       const attendees = data.attendees || [];
 
       // Enrich from /users so roster shows real names/emails
-      const enriched = await Promise.all(
-        attendees.map(async (r) => {
-          try {
-            const userSnap = await getDoc(doc(db, "users", r.userId));
-            const u: any = userSnap.exists() ? userSnap.data() : null;
+      // Enrich from /users in batches (MUCH faster than one getDoc per attendee)
+    const profiles = await fetchUserProfiles(attendees.map((a) => a.userId));
 
-            const merged: BookingRow = {
-              ...r,
-              name: u?.name ?? r.name,
-              email: u?.email ?? r.email,
-              photoURL: u?.photoURL ?? r.photoURL,
-            };
+    const enriched: BookingRow[] = attendees.map((r) => {
+      const u = profiles.get(r.userId);
 
-            if (!merged.name) merged.name = "Member";
-            if (!merged.email) merged.email = "";
+      const merged: BookingRow = {
+        ...r,
+        name: u?.name ?? r.name ?? "Member",
+        email: u?.email ?? r.email ?? "",
+        photoURL: u?.photoURL ?? r.photoURL,
+      };
 
-            return merged;
-          } catch {
-            const merged: BookingRow = { ...r };
-            if (!merged.name) merged.name = "Member";
-            if (!merged.email) merged.email = "";
-            return merged;
-          }
-        })
-      );
+      return merged;
+    });
 
       setRows(enriched);
       setServerCounts({
