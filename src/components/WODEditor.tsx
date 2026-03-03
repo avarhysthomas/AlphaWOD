@@ -154,14 +154,18 @@ const WODEditor = () => {
     controlStationIndex: 0,
 
     // Stations -> Movements
-    stations: [
-      { id: makeId(), title: "Station 1", movements: [{ id: makeId(), name: "" }] },
-    ] as Station[],
+    stations: [{ id: makeId(), title: "Station 1", movements: [{ id: makeId(), name: "" }] }] as Station[],
 
     notes: "",
 
-    // Strength
+    // Strength rows
     strengthMovements: [{ movement: "", percent: "", repRange: "" }] as StrengthRow[],
+
+    // ✅ NEW Strength meta for display tiles
+    strengthGoal: "Quality reps",
+    strengthLoad: "% of 1RM",
+    strengthRange: "Hit target reps",
+    strengthCue: "Clean reps with full ROM. Quality over Quantity.",
   });
 
   // --- computed timing (Timed mode) ---
@@ -193,7 +197,7 @@ const WODEditor = () => {
         ...m,
         name: String(m.name ?? "").trim(),
         target: String((m as any).target ?? "").trim(), // "" if empty
-        notes: String((m as any).notes ?? "").trim(),   // "" if empty
+        notes: String((m as any).notes ?? "").trim(), // "" if empty
       })),
     }));
 
@@ -251,6 +255,12 @@ const WODEditor = () => {
 
           // Strength
           strengthMovements: normaliseStrength(existing.strengthMovements),
+
+          // ✅ NEW Strength meta
+          strengthGoal: String(existing.strengthGoal ?? "Quality reps"),
+          strengthLoad: String(existing.strengthLoad ?? "% of 1RM"),
+          strengthRange: String(existing.strengthRange ?? "Hit target reps"),
+          strengthCue: String(existing.strengthCue ?? ""),
         }));
       } catch (e) {
         console.error("Failed to load existing session", e);
@@ -319,6 +329,12 @@ const WODEditor = () => {
 
       Object.assign(sessionPayload, {
         strengthMovements: cleanedStrength,
+
+        // ✅ NEW Strength meta
+        strengthGoal: String(formData.strengthGoal ?? "").trim(),
+        strengthLoad: String(formData.strengthLoad ?? "").trim(),
+        strengthRange: String(formData.strengthRange ?? "").trim(),
+        strengthCue: String(formData.strengthCue ?? "").trim(),
       });
     }
 
@@ -495,7 +511,9 @@ const WODEditor = () => {
                 </div>
 
                 <div>
-                  <div className="text-xs tracking-wider text-white/50 mb-1">REST BETWEEN ROUNDS (SEC)</div>
+                  <div className="text-xs tracking-wider text-white/50 mb-1">
+                    REST BETWEEN ROUNDS (SEC)
+                  </div>
                   <input
                     type="number"
                     name="restBetweenRoundsSeconds"
@@ -508,7 +526,9 @@ const WODEditor = () => {
                 <div className="rounded-xl border border-neutral-800 bg-neutral-950/60 p-4">
                   <div className="text-xs tracking-wider text-white/50">TOTAL SESSION TIME</div>
                   <div className="text-3xl font-bold mt-1">{formatSeconds(totalSessionSeconds)}</div>
-                  <div className="text-sm text-white/60 mt-1">Work: {formatSeconds(totalWorkSeconds)}</div>
+                  <div className="text-sm text-white/60 mt-1">
+                    Work: {formatSeconds(totalWorkSeconds)}
+                  </div>
                 </div>
               </div>
             )}
@@ -707,8 +727,57 @@ const WODEditor = () => {
 
       {/* Strength */}
       {formData.sessionType === "Strength" && (
-        <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 p-4 space-y-3">
-          <div className="text-sm font-semibold text-white/80">Strength Stations</div>
+        <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 p-4 space-y-4">
+          <div className="text-sm font-semibold text-white/80">Strength Block</div>
+
+          {/* ✅ NEW editable meta fields */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <div className="text-xs tracking-wider text-white/50 mb-1">GOAL</div>
+              <input
+                type="text"
+                name="strengthGoal"
+                value={formData.strengthGoal}
+                onChange={handleChange}
+                className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
+              />
+            </div>
+
+            <div>
+              <div className="text-xs tracking-wider text-white/50 mb-1">LOAD</div>
+              <input
+                type="text"
+                name="strengthLoad"
+                value={formData.strengthLoad}
+                onChange={handleChange}
+                className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
+              />
+            </div>
+
+            <div>
+              <div className="text-xs tracking-wider text-white/50 mb-1">RANGE</div>
+              <input
+                type="text"
+                name="strengthRange"
+                value={formData.strengthRange}
+                onChange={handleChange}
+                className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
+              />
+            </div>
+          </div>
+
+          <div>
+            <div className="text-xs tracking-wider text-white/50 mb-1">COACHES NOTES</div>
+            <textarea
+              name="strengthCue"
+              value={formData.strengthCue}
+              onChange={handleChange}
+              rows={3}
+              className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
+            />
+          </div>
+
+          <div className="text-sm font-semibold text-white/80 pt-2">Strength Stations</div>
 
           {formData.strengthMovements.map((row, idx) => (
             <div key={idx} className="grid grid-cols-1 gap-2">
@@ -726,7 +795,7 @@ const WODEditor = () => {
               <input
                 type="text"
                 value={row.percent}
-                placeholder="%"
+                placeholder="Load"
                 onChange={(e) => {
                   const updated = [...formData.strengthMovements];
                   updated[idx] = { ...updated[idx], percent: e.target.value };
@@ -762,24 +831,7 @@ const WODEditor = () => {
           </button>
         </div>
       )}
-
-      {/* Notes */}
-      <div>
-        <label className="block text-sm font-medium text-white/80 mb-1">Notes</label>
-        <textarea
-          name="notes"
-          value={formData.notes}
-          onChange={handleChange}
-          rows={4}
-          className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
-          placeholder="Coaching notes / scaling / reminders..."
-        />
-      </div>
-
-      <button
-        type="submit"
-        className="w-full py-3 rounded bg-white text-black font-semibold hover:bg-white/90"
-      >
+      <button type="submit" className="w-full py-3 rounded bg-white text-black font-semibold hover:bg-white/90">
         Save Session
       </button>
     </form>

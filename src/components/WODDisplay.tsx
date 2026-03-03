@@ -267,7 +267,7 @@ const WODDisplay = () => {
                         />
                       )
                     ) : (
-                      <StrengthOverview title={strengthTitle} movements={wod.strengthMovements || []} />
+                      <StrengthOverview title={strengthTitle} movements={wod.strengthMovements || []}  goal={wod?.strengthGoal} load={wod?.strengthLoad} range={wod?.strengthRange} cue={wod?.strengthCue}/>
                     )}
                   </div>
                 </div>
@@ -462,7 +462,26 @@ function HyroxStationCard({
 
 /* ------------------------- Strength ------------------------- */
 
-function StrengthOverview({ title, movements }: { title: string; movements: any[] }) {
+function StrengthOverview({
+  title,
+  movements,
+  goal,
+  load,
+  range,
+  cue,
+}: {
+  title: string;
+  movements: any[];
+  goal?: string;
+  load?: string;
+  range?: string;
+  cue?: string;
+}) {
+  const goalText = (goal ?? "Quality reps").trim() || "Quality reps";
+  const loadText = (load ?? "% of 1RM").trim() || "% of 1RM";
+  const rangeText = (range ?? "Hit target reps").trim() || "Hit target reps";
+  const cueText = (cue ?? "").trim();
+
   return (
     <div className="w-full rounded-2xl border border-neutral-800 bg-neutral-950 p-6">
       <div className="text-xs uppercase tracking-[0.35em] text-white/60 font-semibold">
@@ -472,17 +491,19 @@ function StrengthOverview({ title, movements }: { title: string; movements: any[
 
       <div className="mt-5 grid grid-cols-2 gap-3">
         <MetaPill label="Stations" value={`${movements.length || 0}`} />
-        <MetaPill label="Goal" value="Quality reps" />
-        <MetaPill label="Load" value="% of 1RM" />
-        <MetaPill label="Range" value="Hit target reps" />
+        <MetaPill label="Goal" value={goalText} />
+        <MetaPill label="Load" value={loadText} />
+        <MetaPill label="Range" value={rangeText} />
       </div>
 
-      <div className="mt-4 rounded-xl border border-neutral-800 bg-neutral-900/40 p-4">
-        <div className="text-sm font-semibold text-white/80">Coaching cue</div>
-        <div className="mt-1 text-sm text-white/60">
-          Keep reps crisp. Stop before form breaks. Move up only if all reps look the same.
+      {cueText ? (
+        <div className="mt-4 rounded-xl border border-neutral-800 bg-neutral-900/40 p-4">
+          <div className="text-sm font-semibold text-white/80">Coaches Notes</div>
+          <div className="mt-1 text-sm text-white/60 whitespace-pre-wrap">
+            {cueText}
+          </div>
         </div>
-      </div>
+      ) : null}
     </div>
   );
 }

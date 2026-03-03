@@ -18,9 +18,11 @@ import Signup from "./pages/Signup";
 import AdminTemplates from "./pages/AdminTemplates";
 import Schedule from "./pages/Schedule";
 import ClassRoster from "./pages/ClassRoster";
+import Leaderboard from "./pages/Leaderboard";
 
 import { Dumbbell, NotebookPen, CalendarDays } from "lucide-react";
 import { useAuth } from "./context/AuthContext";
+
 
 /** ---------- Route guards ---------- */
 
@@ -139,6 +141,16 @@ export default function App() {
             <RequireMember>
               <Schedule />
             </RequireMember>
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/leaderboard"
+        element={
+          <RequireAuth>
+            <RequireMember>
+              <Leaderboard />
+            </RequireMember>  
           </RequireAuth>
         }
       />

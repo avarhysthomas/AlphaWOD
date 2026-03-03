@@ -69,6 +69,15 @@ type BookingDoc = {
   checkedInBy?: string;
 };
 
+type LeaderboardUserDoc = {
+  userId: string;
+  name: string;
+  email: string;
+  attendedCount: number;
+  updatedAt: admin.firestore.FieldValue | admin.firestore.Timestamp;
+};
+
+
 /** -----------------------------
  * Helpers
  * ----------------------------*/
@@ -82,7 +91,6 @@ function requireString(value: unknown, field: string): string {
   if (!v) throw new HttpsError("invalid-argument", `${field} required`);
   return v;
 }
-
 
 function hhmmToParts(hhmm: string) {
   const [h, m] = (hhmm || "").split(":").map((x) => Number(x));
@@ -105,6 +113,12 @@ function classIdFor(templateId: string, start: DateTime) {
 
 function bookingIdFor(classId: string, userId: string) {
   return `${classId}_${userId}`;
+}
+
+function monthKeyFromDate(d: Date) {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  return `${y}-${m}`; // e.g. "2026-03"
 }
 
 /** -----------------------------
@@ -290,45 +304,104 @@ export const checkInBooking = onCall(async (request) => {
   await requireAdmin(callerUid);
 
   // Accept either bookingId OR (classId + userId)
-  const bookingIdFromPayload = typeof request.data?.bookingId === "string" ? request.data.bookingId.trim() : "";
-  const classId = typeof request.data?.classId === "string" ? request.data.classId.trim() : "";
-  const userId = typeof request.data?.userId === "string" ? request.data.userId.trim() : "";
+  const bookingIdFromPayload =
+    typeof request.data?.bookingId === "string" ? request.data.bookingId.trim() : "";
+  const classId =
+    typeof request.data?.classId === "string" ? request.data.classId.trim() : "";
+  const userIdFromPayload =
+    typeof request.data?.userId === "string" ? request.data.userId.trim() : "";
 
   const bookingId =
     bookingIdFromPayload ||
-    (classId && userId ? bookingIdFor(classId, userId) : "");
+    (classId && userIdFromPayload ? bookingIdFor(classId, userIdFromPayload) : "");
 
   if (!bookingId) {
     throw new HttpsError("invalid-argument", "bookingId OR (classId and userId) required.");
   }
 
-  const attended = Boolean(request.data?.attended);
+  const nextAttended = Boolean(request.data?.attended);
   const bookingRef = db.collection("bookings").doc(bookingId);
 
   try {
-    await db.runTransaction(async (tx) => {
-      const snap = await tx.get(bookingRef);
-      if (!snap.exists) throw new HttpsError("not-found", "Booking not found.");
+    const result = await db.runTransaction(async (tx) => {
+      const bookingSnap = await tx.get(bookingRef);
+      if (!bookingSnap.exists) throw new HttpsError("not-found", "Booking not found.");
 
-      const data = snap.data() as BookingDoc;
+      const booking = bookingSnap.data() as BookingDoc;
 
-      if (data.status !== "booked") {
+      if (booking.status !== "booked") {
         throw new HttpsError("failed-precondition", "Not an active booking.");
       }
 
+      // If attended isn't changing, we still allow updating checkedInBy timestamp if you want,
+      // but leaderboard should not change.
+      const prevAttended = booking.attended === true;
+      if (prevAttended === nextAttended) {
+        tx.update(bookingRef, {
+          checkedInBy: callerUid,
+          // keep a fresh timestamp if you like
+          checkedInAt: prevAttended ? admin.firestore.FieldValue.serverTimestamp() : booking.checkedInAt ?? null,
+        });
+        return {ok: true, leaderboardChanged: false};
+      }
+
+      // We need the class to determine which month to count it in
+      const classRef = db.collection("classes").doc(booking.classId);
+      const classSnap = await tx.get(classRef);
+      if (!classSnap.exists) throw new HttpsError("not-found", "Class not found.");
+
+      const classDoc = classSnap.data() as ClassDoc;
+      const classStart = classDoc.startTime.toDate(); // Timestamp -> Date (UTC-based under the hood)
+      const monthKey = monthKeyFromDate(classStart);
+
+      const delta = nextAttended ? 1 : -1;
+
+      const lbUserRef = db
+        .collection("leaderboards")
+        .doc(monthKey)
+        .collection("users")
+        .doc(booking.userId);
+
+      // Read current leaderboard doc so we can clamp at >= 0
+      const lbSnap = await tx.get(lbUserRef);
+      const current = lbSnap.exists ?
+        Number((lbSnap.data() as Partial<LeaderboardUserDoc>).attendedCount ?? 0) :
+        0;
+
+      const nextCount = Math.max(0, current + delta);
+
+      // Read user profile info for nicer leaderboard display
+      const userRef = db.collection("users").doc(booking.userId);
+      const userSnap = await tx.get(userRef);
+      const u = (userSnap.data() || {}) as UserDoc;
+
+      // Update booking
       tx.update(bookingRef, {
-        attended,
-        checkedInAt: admin.firestore.FieldValue.serverTimestamp(),
+        attended: nextAttended,
+        checkedInAt: nextAttended ? admin.firestore.FieldValue.serverTimestamp() : null,
         checkedInBy: callerUid,
       });
+
+      // Update leaderboard (merge so name/email can refresh)
+      tx.set(
+        lbUserRef,
+        {
+          userId: booking.userId,
+          name: u.name ?? booking.userName ?? "Member",
+          email: u.email ?? "",
+          attendedCount: nextCount,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        } satisfies LeaderboardUserDoc,
+        {merge: true}
+      );
+
+      return {ok: true, leaderboardChanged: true, monthKey, attendedCount: nextCount};
     });
 
-    return {ok: true};
+    return result;
   } catch (err: any) {
     console.error("checkInBooking failed", err?.message, err?.stack, err);
-    throw err instanceof HttpsError ?
-      err :
-      new HttpsError("internal", err?.message || "Check-in failed");
+    throw err instanceof HttpsError ? err : new HttpsError("internal", err?.message || "Check-in failed");
   }
 });
 
@@ -382,4 +455,64 @@ export const getClassRoster = onCall(async (request) => {
       }))
       .sort((a, b) => a.userName.localeCompare(b.userName)),
   };
+});
+
+/**
+ * Monthly Leaderboard Generation
+ */
+export const getMonthlyLeaderboard = onCall(async (request) => {
+  requireAuth(request);
+
+  const monthKey =
+    typeof request.data?.monthKey === "string" && request.data.monthKey.trim() ?
+      request.data.monthKey.trim() :
+      monthKeyFromDate(new Date());
+
+  const limit =
+    typeof request.data?.limit === "number" && request.data.limit > 0 ?
+      Math.min(500, Math.floor(request.data.limit)) :
+      200;
+
+  // 1) Fetch all users (or only users with role === "user")
+  const usersSnap = await db
+    .collection("users")
+    .get();
+
+  const allUsers = usersSnap.docs.map((d) => ({
+    userId: d.id,
+    name: String((d.data() as any)?.name || "Member"),
+    email: String((d.data() as any)?.email || ""),
+    photoURL: String((d.data() as any)?.photoURL || ""),
+  }));
+
+  // 2) Fetch leaderboard entries for this month
+  const lbSnap = await db
+    .collection("leaderboards")
+    .doc(monthKey)
+    .collection("users")
+    .get();
+
+  const counts = new Map<string, number>();
+  lbSnap.forEach((doc) => {
+    const data = doc.data() as any;
+    counts.set(doc.id, Number(data.attendedCount || 0));
+  });
+
+  // 3) Merge so everyone appears, default 0
+  const rows = allUsers
+    .map((u) => ({
+      userId: u.userId,
+      name: u.name,
+      email: u.email,
+      photoURL: u.photoURL,
+      attendedCount: counts.get(u.userId) ?? 0,
+    }))
+    .sort((a, b) => {
+      const diff = (b.attendedCount || 0) - (a.attendedCount || 0);
+      if (diff !== 0) return diff;
+      return a.name.localeCompare(b.name);
+    })
+    .slice(0, limit);
+
+  return {monthKey, total: rows.length, rows};
 });
