@@ -26,6 +26,15 @@ type UserDoc = {
   name?: string;
   email?: string;
   role?: Role;
+  photoURL?: string;
+  stats?: {
+    totalCheckIns?: number;
+    monthCheckIns?: Record<string, number>;
+    currentStreak?: number;
+    longestStreak?: number;
+    lastCheckInDate?: string; // YYYY-MM-DD (Europe/London)
+    updatedAt?: admin.firestore.FieldValue | admin.firestore.Timestamp;
+  };
 };
 
 type ClassTemplate = {
@@ -119,6 +128,18 @@ function monthKeyFromDate(d: Date) {
   const y = d.getUTCFullYear();
   const m = String(d.getUTCMonth() + 1).padStart(2, "0");
   return `${y}-${m}`; // e.g. "2026-03"
+}
+
+function ukDateKeyNow() {
+  return DateTime.now().setZone("Europe/London").toFormat("yyyy-LL-dd");
+}
+
+function ukYesterdayKeyNow() {
+  return DateTime.now().setZone("Europe/London").minus({days: 1}).toFormat("yyyy-LL-dd");
+}
+
+function ukMonthKeyFromDate(d: Date) {
+  return DateTime.fromJSDate(d, {zone: "Europe/London"}).toFormat("yyyy-LL"); // YYYY-MM
 }
 
 /** -----------------------------
@@ -351,8 +372,10 @@ export const checkInBooking = onCall(async (request) => {
       if (!classSnap.exists) throw new HttpsError("not-found", "Class not found.");
 
       const classDoc = classSnap.data() as ClassDoc;
-      const classStart = classDoc.startTime.toDate(); // Timestamp -> Date (UTC-based under the hood)
-      const monthKey = monthKeyFromDate(classStart);
+      const classStart = classDoc.startTime.toDate();
+
+      // Use UK month bucket (matches your gym reality)
+      const monthKey = ukMonthKeyFromDate(classStart);
 
       const delta = nextAttended ? 1 : -1;
 
@@ -375,6 +398,51 @@ export const checkInBooking = onCall(async (request) => {
       const userSnap = await tx.get(userRef);
       const u = (userSnap.data() || {}) as UserDoc;
 
+      // ---- Tier 1 Stats: totals + streaks (UK local day key) ----
+      const today = ukDateKeyNow();
+      const yesterday = ukYesterdayKeyNow();
+
+      const existingStats = (u.stats || {}) as any;
+      const prevTotal = Number(existingStats.totalCheckIns ?? 0);
+      const prevMonth = Number((existingStats.monthCheckIns || {})[monthKey] ?? 0);
+
+      let nextTotal = prevTotal;
+      let nextMonth = prevMonth;
+
+      let currentStreak = Number(existingStats.currentStreak ?? 0);
+      let longestStreak = Number(existingStats.longestStreak ?? 0);
+      let lastCheckInDate = typeof existingStats.lastCheckInDate === "string" ? existingStats.lastCheckInDate : "";
+
+      // delta = +1 when checking in, -1 when unchecking
+      if (delta === 1) {
+        // counts
+        nextTotal = prevTotal + 1;
+        nextMonth = prevMonth + 1;
+
+        // streak
+        if (lastCheckInDate === today) {
+          // idempotent-ish: shouldn't happen because we gate on attended change,
+          // but safe if data gets weird.
+        } else if (lastCheckInDate === yesterday) {
+          currentStreak = currentStreak + 1;
+        } else {
+          currentStreak = 1;
+        }
+
+        longestStreak = Math.max(longestStreak, currentStreak);
+        lastCheckInDate = today;
+      }
+
+      if (delta === -1) {
+        // counts (clamped)
+        nextTotal = Math.max(0, prevTotal - 1);
+        nextMonth = Math.max(0, prevMonth - 1);
+
+        // Quick-win behavior:
+        // we do NOT recompute streak on uncheck (rare edge case).
+        // If you ever need perfect streak correctness, we’ll add a nightly recompute job.
+      }
+
       // Update booking
       tx.update(bookingRef, {
         attended: nextAttended,
@@ -392,6 +460,22 @@ export const checkInBooking = onCall(async (request) => {
           attendedCount: nextCount,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         } satisfies LeaderboardUserDoc,
+        {merge: true}
+      );
+
+      // Write user stats (merge)
+      tx.set(
+        userRef,
+        {
+          stats: {
+            totalCheckIns: nextTotal,
+            monthCheckIns: {[monthKey]: nextMonth},
+            currentStreak,
+            longestStreak,
+            lastCheckInDate: lastCheckInDate || null,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+        },
         {merge: true}
       );
 

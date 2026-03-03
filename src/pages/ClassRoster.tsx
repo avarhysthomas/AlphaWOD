@@ -217,8 +217,39 @@ export default function ClassRoster() {
     }
   }
 
+    // ----- Bulk uncheck -----
+  async function uncheckAll() {
+    const user = auth.currentUser;
+    if (!user) return alert("Log in first.");
+    if (!classId) return;
+
+    const toUncheck = rows.filter((r) => r.attended === true);
+    if (toUncheck.length === 0) return;
+
+    try {
+      setBulkBusy(true);
+
+      const results = await Promise.allSettled(
+        toUncheck.map((r) => checkInBooking({ classId, userId: r.userId, attended: false }))
+      );
+
+      const failed = results.filter((x) => x.status === "rejected").length;
+      await loadRoster();
+
+      if (failed > 0) {
+        alert(`Unchecked ${toUncheck.length - failed}/${toUncheck.length}. ${failed} failed — try again or refresh.`);
+      }
+    } catch (e: any) {
+      console.error("Bulk uncheck error:", e);
+      alert(e?.message ?? "Bulk uncheck failed");
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
   const progressPct = totalShown ? Math.round((checkedInShown / totalShown) * 100) : 0;
   const canBulkCheckIn = !loadingRoster && !bulkBusy && rows.some((r) => r.attended !== true);
+  const canBulkUncheck = !loadingRoster && !bulkBusy && rows.some((r) => r.attended === true);
 
   return (
     <div className="min-h-screen bg-black text-white p-6">
@@ -254,6 +285,7 @@ export default function ClassRoster() {
             <div className="text-xl font-semibold">Attendees</div>
 
             <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3">
               <button
                 onClick={checkInAll}
                 disabled={!canBulkCheckIn}
@@ -264,8 +296,30 @@ export default function ClassRoster() {
                       : "border-white/10 bg-white/[0.03] text-white/40"
                   }`}
               >
-                {bulkBusy ? "Checking in…" : "Check in all"}
+                {bulkBusy ? "Working…" : "Check in all"}
               </button>
+
+              <button
+                onClick={uncheckAll}
+                disabled={!canBulkUncheck}
+                className={`rounded-xl border px-4 py-2 text-sm font-semibold transition
+                  ${
+                    canBulkUncheck
+                      ? "border-red-500/40 bg-red-500/10 text-red-200 hover:bg-red-500/15"
+                      : "border-white/10 bg-white/[0.03] text-white/40"
+                  }`}
+              >
+                {bulkBusy ? "Working…" : "Uncheck all"}
+              </button>
+
+              <button
+                onClick={loadRoster}
+                className="text-sm underline text-white/70"
+                disabled={loadingRoster || bulkBusy}
+              >
+                {loadingRoster ? "Loading..." : "Refresh"}
+              </button>
+            </div>
 
               <button onClick={loadRoster} className="text-sm underline text-white/70" disabled={loadingRoster || bulkBusy}>
                 {loadingRoster ? "Loading..." : "Refresh"}
