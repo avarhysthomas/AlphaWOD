@@ -258,7 +258,7 @@ export default function ClassRoster() {
         <div className="rounded-3xl border border-neutral-800 bg-gradient-to-b from-neutral-950 to-black p-7 shadow-[0_0_40px_rgba(0,0,0,0.6)]">
           <div className="flex items-start justify-between gap-6">
             <div className="min-w-0">
-              <h1 className="text-6xl sm:text-7xl font-heading uppercase tracking-widest text-white">{classTitle}</h1>
+              <h1 className="font-heading uppercase text-white break-words leading-[0.9] text-4xl tracking-[0.25em] sm:text-6xl sm:tracking-widest"> {classTitle} </h1>
               <div className="text-white/50 mt-2">{classMeta}</div>
             </div>
 
@@ -281,11 +281,10 @@ export default function ClassRoster() {
 
         {/* ATTENDEES */}
         <div className="rounded-3xl border border-neutral-800 bg-neutral-950 p-6">
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <div className="text-xl font-semibold">Attendees</div>
 
-            <div className="flex items-center gap-3">
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap gap-2 sm:ml-auto sm:items-center">
               <button
                 onClick={checkInAll}
                 disabled={!canBulkCheckIn}
@@ -311,9 +310,12 @@ export default function ClassRoster() {
               >
                 {bulkBusy ? "Working…" : "Uncheck all"}
               </button>
-            </div>
 
-              <button onClick={loadRoster} className="text-sm underline text-white/70" disabled={loadingRoster || bulkBusy}>
+              <button
+                onClick={loadRoster}
+                disabled={loadingRoster || bulkBusy}
+                className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-semibold text-white/70 hover:bg-white/[0.06] disabled:text-white/40"
+              >
                 {loadingRoster ? "Loading..." : "Refresh"}
               </button>
             </div>
@@ -340,7 +342,7 @@ export default function ClassRoster() {
                       ${isBusy ? "opacity-60" : "hover:border-white/20 hover:bg-white/[0.05] hover:-translate-y-[1px]"}
                     `}
                   >
-                    <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-4 min-w-0">
                       <div
                         className={[
                           "shrink-0 rounded-full p-[2px] border",
@@ -350,7 +352,7 @@ export default function ClassRoster() {
                         <UserAvatar name={r.name ?? "Member"} photoURL={r.photoURL} size={48} />
                       </div>
 
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
                         <div className="font-semibold truncate text-white">{r.name ?? "Member"}</div>
                         <div className="text-xs text-white/50 truncate">{r.email ?? ""}</div>
                       </div>
