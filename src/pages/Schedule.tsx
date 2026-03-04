@@ -513,23 +513,24 @@ export default function Schedule() {
                         className="
                         group relative overflow-hidden rounded-2xl
                         border border-white/10
-                        bg-gradient-to-br from-white/[0.08] via-white/[0.03] to-transparent backdrop-blur-sm
+                        bg-gradient-to-br from-white/[0.10] via-white/[0.04] to-white/[0.01] backdrop-blur-md
                         shadow-[0_8px_30px_rgba(0,0,0,0.6)]
                         p-5
                         flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4
                         transition
                         hover:border-white/20
-                        hover:from-white/[0.10]
-                        hover:via-white/[0.05]
-                        hover:-translate-y-[1px]
+                        hover:shadow-[0_10px_40px_rgba(0,0,0,0.8)]
+                        hover:from-white/[0.12]
+                        hover:via-white/[0.06]
+                        hover:-translate-y-[2px]
                       "
                       >
                         {/* left stripe */}
                         <div className={`absolute left-0 top-0 h-full w-[4px] ${meta.stripe}`} />
 
                         <div className="min-w-0 pl-2">
-                          <div className="flex items-start gap-4 flex-wrap">
-                            {/* icon */}
+                          {/* icon + title */}
+                          <div className="flex items-start gap-4">
                             <div
                               className={`
                                 shrink-0 h-10 w-10 rounded-xl border
@@ -546,15 +547,15 @@ export default function Schedule() {
                             </div>
 
                             <div className="min-w-0">
-                              <div className="flex items-center gap-3 flex-wrap">
-                                <span className="font-mono text-sm text-white/80">
-                                  {fmtTime(start, tz)}–{fmtTime(end, tz)}
-                                </span>
+                              {/* TITLE as headline */}
+                              <div className="text-xl font-heading tracking-widest text-white">
+                                {meta.label}
+                              </div>
 
-                                <span
-                                  className={`text-xs uppercase tracking-widest px-3 py-1 rounded-full border ${meta.pill}`}
-                                >
-                                  {meta.label}
+                              {/* time row */}
+                              <div className="mt-1 flex items-center gap-2 flex-wrap">
+                                <span className="font-mono text-sm text-white/70">
+                                  {fmtTime(start, tz)}–{fmtTime(end, tz)}
                                 </span>
 
                                 {isHot ? (
@@ -604,7 +605,7 @@ export default function Schedule() {
                                 Coach: {data.coachName || "—"} • {data.location || "—"}
                               </div>
 
-                              {/* capacity bar */}
+                          {/* capacity bar */}
                               <div className="mt-3">
                                 <div className="flex items-center justify-between text-xs text-white/50">
                                   <span>Capacity</span>
