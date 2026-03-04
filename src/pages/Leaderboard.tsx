@@ -219,44 +219,48 @@ export default function Leaderboard() {
             </h1>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 sm:justify-end">
             <button
                 onClick={()=> navigate("/schedule")}
                 className="inline-flex items-center gap-2 rounded-xl border border-neutral-800 bg-neutral-950 px-4 py-2 text-sm font-semibold text-white/80 hover:bg-neutral-900"
                 title="Schedule"
             >
-            <Calendar className="h-4 w-4" />
+                <Calendar className="h-4 w-4" />
                 Schedule
-            </button>
-            <button
-              className="rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm font-semibold text-white/80 hover:bg-neutral-900"
-              onClick={() => setMonthKey((mk) => addMonthsUTC(mk, -1))}
-            >
-              ← Prev
-            </button>
-            <button
-              className="rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm font-semibold text-white/80 hover:bg-neutral-900"
-              onClick={() => setMonthKey(monthKeyUTC(new Date()))}
-            >
-              This month
-            </button>
-            <button
-              className="rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm font-semibold text-white/80 hover:bg-neutral-900"
-              onClick={() => setMonthKey((mk) => addMonthsUTC(mk, 1))}
-            >
-              Next →
             </button>
 
             <button
-              className="ml-2 inline-flex items-center gap-2 rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm font-semibold text-white/80 hover:bg-neutral-900 disabled:opacity-50"
-              onClick={load}
-              disabled={loading}
-              title="Refresh"
+                className="rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm font-semibold text-white/80 hover:bg-neutral-900"
+                onClick={() => setMonthKey((mk) => addMonthsUTC(mk, -1))}
             >
-              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-              {loading ? "Loading…" : "Refresh"}
+                ← Prev
             </button>
-          </div>
+
+            <button
+                className="rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm font-semibold text-white/80 hover:bg-neutral-900"
+                onClick={() => setMonthKey(monthKeyUTC(new Date()))}
+            >
+                This month
+            </button>
+
+            <button
+                className="rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm font-semibold text-white/80 hover:bg-neutral-900"
+                onClick={() => setMonthKey((mk) => addMonthsUTC(mk, 1))}
+            >
+                Next →
+            </button>
+
+            <button
+                className="inline-flex items-center gap-2 rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm font-semibold text-white/80 hover:bg-neutral-900 disabled:opacity-50"
+                onClick={load}
+                disabled={loading}
+                title="Refresh"
+            >
+                <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+                {loading ? "Loading…" : "Refresh"}
+            </button>
+
+            </div>
         </div>
 
         {/* Podium */}
