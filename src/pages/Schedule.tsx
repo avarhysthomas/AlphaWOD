@@ -17,7 +17,7 @@ import {
 import { db } from "../firebase";
 import { useAuth } from "../context/AuthContext";
 import LogoutButton from "../components/LogoutButton";
-import {Trophy, UserRoundSearch} from "lucide-react";
+import {Trophy, UserIcon, Flame, Dumbbell, PersonStanding, Award, Activity } from "lucide-react";
 
 type ClassDoc = {
   title: string;
@@ -395,7 +395,7 @@ export default function Schedule() {
               onClick={()=>navigate("/profile")}
               className="inline-flex items-center gap-2 rounded-xl border border-neutral-800 bg-neutral-950 px-4 py-2 text-sm font-semibold text-white/80 hover:bg-neutral-900 ml-4"
               title="View and edit your profile"
-            ><UserRoundSearch className="h-4 w-4" />
+            ><UserIcon className="h-4 w-4" />
               Profile
             </button>
           </div>
@@ -410,7 +410,7 @@ export default function Schedule() {
             Object.entries(grouped).map(([dayLabel, items]) => (
               <div
                 key={dayLabel}
-                className="rounded-3xl border border-neutral-800 bg-neutral-950 p-6 shadow-[0_0_0_1px_rgba(255,255,255,0.03)]"
+                className=" rounded-3xl border border-white/10 bg-gradient-to-b from-white/[0.06] to-white/[0.02] p-6 shadow-[0_0_0_1px_rgba(255,255,255,0.06),0_20px_60px_rgba(0,0,0,0.55)]"
               >
                 <div className="flex items-center justify-between">
                   <h2 className="text-2xl font-bold tracking-wide">{dayLabel}</h2>
@@ -420,6 +420,74 @@ export default function Schedule() {
                 <div className="mt-4 grid gap-3">
                   {items.map(({ id, data }) => {
                     const tz = data.timezone || DEFAULT_TZ;
+
+                    function typeMeta(title?: string) {
+                    const t = (title || "").toLowerCase();
+
+                    if (t.includes("hyrox")) {
+                      return {
+                        label: "HYROX",
+                        // yellow vibe
+                        stripe: "bg-yellow-500/80",
+                        pill: "border-orange-500/30 bg-orange-500/10 text-orange-200",
+                        iconWrap: "border-orange-500/25 bg-orange-500/10 text-orange-200",
+                      };
+                    }
+
+                    if (t.includes("strength")) {
+                      return {
+                        label: "STRENGTH",
+                        stripe: "bg-sky-500/80",
+                        pill: "border-sky-500/30 bg-sky-500/10 text-sky-200",
+                        iconWrap: "border-sky-500/25 bg-sky-500/10 text-sky-200",
+                      };
+                    }
+
+                    if (t.includes("bags")) {
+                      return {
+                        label: "BAGS",
+                        stripe: "bg-red-500/80",
+                        pill: "border-red-500/30 bg-red-500/10 text-red-200",
+                        iconWrap: "border-red-500/25 bg-red-500/10 text-red-200",
+                      };
+                    }
+
+                    if (t.includes("yoga")) {
+                      return {
+                        label: "YOGA",
+                        stripe: "bg-teal-500/80",
+                        pill: "border-teal-500/30 bg-teal-500/10 text-teal-200",
+                        iconWrap: "border-teal-500/25 bg-teal-500/10 text-teal-200",
+                      };
+                    }
+
+                    if (t.includes("run club")) {
+                      return {
+                        label: "RUN CLUB",
+                        stripe: "bg-orange-500/80",
+                        pill: "border-orange-500/30 bg-orange-500/10 text-orange-200",
+                        iconWrap: "border-orange-500/25 bg-orange-500/10 text-orange-200",
+                      };
+                    }
+                    
+                    // default neutral
+                    return {
+                      label: (title || "SESSION").toUpperCase(),
+                      stripe: "bg-white/20",
+                      pill: "border-white/15 bg-white/5 text-white/80",
+                      iconWrap: "border-white/15 bg-white/5 text-white/80",
+                    };
+                  }
+
+                  function pct(bookedCount: number, capacity: number) {
+                    if (!capacity || capacity <= 0) return 0;
+                    return Math.max(0, Math.min(100, (bookedCount / capacity) * 100));
+                  }
+
+                  function hotClass(bookedCount: number, capacity: number) {
+                    if (!capacity || capacity <= 0) return false;
+                    return bookedCount / capacity >= 0.75;
+                  }
 
                     const start = data.startTime.toDate();
                     const end = data.endTime.toDate();
@@ -435,92 +503,153 @@ export default function Schedule() {
                     const cs = cancelStatus(data.startTime);
                     const cancelClosed = cs.state === "closed" || cs.state === "started";
 
+                    const meta = typeMeta(data.title);
+                    const percent = pct(bookedCount, capacity);
+                    const isHot = hotClass(bookedCount, capacity);
+
                     return (
                       <div
                         key={id}
                         className="
-                          group rounded-2xl border border-white/10 bg-white/[0.03] p-5
-                          flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4
-                          transition hover:border-white/20 hover:bg-white/[0.05] hover:-translate-y-[1px]
-                        "
+                        group relative overflow-hidden rounded-2xl
+                        border border-white/10
+                        bg-gradient-to-br from-white/[0.08] via-white/[0.03] to-transparent backdrop-blur-sm
+                        shadow-[0_8px_30px_rgba(0,0,0,0.6)]
+                        p-5
+                        flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4
+                        transition
+                        hover:border-white/20
+                        hover:from-white/[0.10]
+                        hover:via-white/[0.05]
+                        hover:-translate-y-[1px]
+                      "
                       >
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-3 flex-wrap">
-                            <span className="font-mono text-sm text-white/80">
-                              {fmtTime(start, tz)}–{fmtTime(end, tz)}
-                            </span>
+                        {/* left stripe */}
+                        <div className={`absolute left-0 top-0 h-full w-[4px] ${meta.stripe}`} />
 
-                            <span className="text-xs uppercase tracking-widest px-3 py-1 rounded-full border bg-white/5 border-white/15 text-white/80">
-                              {data.title}
-                            </span>
+                        <div className="min-w-0 pl-2">
+                          <div className="flex items-start gap-4 flex-wrap">
+                            {/* icon */}
+                            <div
+                              className={`
+                                shrink-0 h-10 w-10 rounded-xl border
+                                flex items-center justify-center
+                                ${meta.iconWrap}
+                              `}
+                              aria-hidden
+                            >
+                              {meta.label === "HYROX" && <Flame className="h-5 w-5" />}
+                              {meta.label === "STRENGTH" && <Dumbbell className="h-5 w-5" />}
+                              {meta.label === "BAGS" && <Award className="h-5 w-5" />}
+                              {meta.label === "YOGA" && <PersonStanding className="h-5 w-5" />}
+                              {meta.label === "RUN CLUB" && <Activity className="h-5 w-5" />}
+                            </div>
 
-                            {booked ? (
-                              <span className="text-xs font-semibold tracking-wide uppercase rounded-full px-2 py-0.5 border border-emerald-500/60 text-emerald-200">
-                                Booked
-                              </span>
-                            ) : null}
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-3 flex-wrap">
+                                <span className="font-mono text-sm text-white/80">
+                                  {fmtTime(start, tz)}–{fmtTime(end, tz)}
+                                </span>
 
-                            {!booked && full ? (
-                              <span className="text-xs font-semibold tracking-wide uppercase rounded-full px-2 py-0.5 border border-red-500/60 text-red-200">
-                                Full
-                              </span>
-                            ) : null}
+                                <span
+                                  className={`text-xs uppercase tracking-widest px-3 py-1 rounded-full border ${meta.pill}`}
+                                >
+                                  {meta.label}
+                                </span>
 
-                            {!booked && !full && bs.state === "open" && bs.msLeft != null ? (
-                              <span className="text-xs font-semibold tracking-wide uppercase rounded-full px-2 py-0.5 border border-amber-500/40 bg-amber-500/10 text-amber-200">
-                                Closes in {fmtRemaining(bs.msLeft)}
-                              </span>
-                            ) : null}
+                                {isHot ? (
+                                  <span className="text-xs font-semibold tracking-wide uppercase rounded-full px-2 py-0.5 border border-pink-500/40 bg-pink-500/10 text-pink-200">
+                                    🔥 Hot
+                                  </span>
+                                ) : null}
 
-                            {!booked && bookingClosed ? (
-                              <span className="text-xs font-semibold tracking-wide uppercase rounded-full px-2 py-0.5 border border-white/10 bg-white/5 text-white/40">
-                                Booking closed
-                              </span>
-                            ) : null}
+                                {booked ? (
+                                  <span className="text-xs font-semibold tracking-wide uppercase rounded-full px-2 py-0.5 border border-emerald-500/40 bg-emerald-500/10 text-emerald-200">
+                                    Booked
+                                  </span>
+                                ) : null}
 
-                            {booked && !cancelClosed && cs.msLeft != null ? (
-                              <span className="text-xs font-semibold tracking-wide uppercase rounded-full px-2 py-0.5 border border-yellow-500/40 bg-yellow-500/10 text-yellow-100">
-                                Cancel closes in {fmtRemaining(cs.msLeft)}
-                              </span>
-                            ) : null}
+                                {!booked && full ? (
+                                  <span className="text-xs font-semibold tracking-wide uppercase rounded-full px-2 py-0.5 border border-red-500/40 bg-red-500/10 text-red-200">
+                                    Full
+                                  </span>
+                                ) : null}
 
-                            {booked && cancelClosed ? (
-                              <span className="text-xs font-semibold tracking-wide uppercase rounded-full px-2 py-0.5 border border-white/10 bg-white/5 text-white/40">
-                                Cancellation closed
-                              </span>
-                            ) : null}
-                          </div>
+                                {!booked && !full && bs.state === "open" && bs.msLeft != null ? (
+                                  <span className="text-xs font-semibold tracking-wide uppercase rounded-full px-2 py-0.5 border border-amber-500/40 bg-amber-500/10 text-amber-200">
+                                    Closes in {fmtRemaining(bs.msLeft)}
+                                  </span>
+                                ) : null}
 
-                          <div className="text-sm text-white/60 mt-2">
-                            Coach: {data.coachName || "—"} • {data.location || "—"} • {bookedCount}/{capacity || "—"}
+                                {!booked && bookingClosed ? (
+                                  <span className="text-xs font-semibold tracking-wide uppercase rounded-full px-2 py-0.5 border border-white/10 bg-white/5 text-white/40">
+                                    Booking closed
+                                  </span>
+                                ) : null}
+
+                                {booked && !cancelClosed && cs.msLeft != null ? (
+                                  <span className="text-xs font-semibold tracking-wide uppercase rounded-full px-2 py-0.5 border border-yellow-500/40 bg-yellow-500/10 text-yellow-100">
+                                    Cancel closes in {fmtRemaining(cs.msLeft)}
+                                  </span>
+                                ) : null}
+
+                                {booked && cancelClosed ? (
+                                  <span className="text-xs font-semibold tracking-wide uppercase rounded-full px-2 py-0.5 border border-white/10 bg-white/5 text-white/40">
+                                    Cancellation closed
+                                  </span>
+                                ) : null}
+                              </div>
+
+                              <div className="text-sm text-white/60 mt-2">
+                                Coach: {data.coachName || "—"} • {data.location || "—"}
+                              </div>
+
+                              {/* capacity bar */}
+                              <div className="mt-3">
+                                <div className="flex items-center justify-between text-xs text-white/50">
+                                  <span>Capacity</span>
+                                  <span>
+                                    {bookedCount}/{capacity || "—"}
+                                  </span>
+                                </div>
+
+                                <div className="mt-2 h-2 w-full rounded-full bg-white/10 overflow-hidden">
+                                  <div
+                                    className="h-full rounded-full bg-white/40 transition-all"
+                                    style={{ width: `${percent}%` }}
+                                  />
+                                </div>
+                              </div>
+                            </div>
                           </div>
                         </div>
 
+                        {/* actions */}
                         <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 shrink-0 w-full sm:w-auto">
                           {isAdmin ? (
                             <button
                               onClick={() => navigate(`/admin/classes/${id}`)}
-                              className="px-5 py-2 w-full sm:w-auto rounded-xl border border-sky-500/50 text-sky-200 font-semibold hover:bg-white/5"
+                              className="px-5 py-2 w-full sm:w-auto rounded-xl border border-sky-500/40 bg-sky-500/10 text-sky-200 font-semibold hover:bg-sky-500/15"
                             >
                               Roster
                             </button>
                           ) : null}
 
                           {booked ? (
-                          <button
-                            onClick={() => handleCancel(id)}
-                            disabled={busyClassId === id || cancelClosed}
-                            className={`
-                              px-5 py-2 w-full sm:w-auto rounded-xl border font-semibold disabled:opacity-40
-                              ${
-                                cancelClosed
-                                  ? "border-white/10 bg-white/5 text-white/30 cursor-not-allowed"
-                                  : "border-yellow-500/60 text-yellow-100 hover:bg-white/5"
-                              }
-                            `}
-                          >
-                            {cancelClosed ? "Too late" : busyClassId === id ? "Cancelling…" : "Cancel"}
-                          </button>
+                            <button
+                              onClick={() => handleCancel(id)}
+                              disabled={busyClassId === id || cancelClosed}
+                              className={`
+                                px-5 py-2 w-full sm:w-auto rounded-xl border font-semibold disabled:opacity-40
+                                ${
+                                  cancelClosed
+                                    ? "border-white/10 bg-white/5 text-white/30 cursor-not-allowed"
+                                    : "border-yellow-500/40 bg-yellow-500/10 text-yellow-100 hover:bg-yellow-500/15"
+                                }
+                              `}
+                            >
+                              {cancelClosed ? "Too late" : busyClassId === id ? "Cancelling…" : "Cancel"}
+                            </button>
                           ) : (
                             <button
                               onClick={() => handleBook(id)}
@@ -530,7 +659,7 @@ export default function Schedule() {
                                 ${
                                   bookingClosed
                                     ? "border-white/10 bg-white/5 text-white/30 cursor-not-allowed"
-                                    : "border-emerald-500/50 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/15"
+                                    : "border-emerald-500/40 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/15"
                                 }
                               `}
                             >
