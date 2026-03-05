@@ -568,7 +568,7 @@ export default function ClassRoster() {
 
                         <button
                           onClick={() => setStatus(r.userId, "dip")}
-                          disabled={isBusy}
+                          disabled={isBusy || status === "checked_in"}
                           className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-200 hover:bg-red-500/15 disabled:text-white/40"
                         >
                           Dip
