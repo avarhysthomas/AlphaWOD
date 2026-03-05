@@ -70,12 +70,18 @@ type BookingDoc = {
   classId: string;
   userId: string;
   userName: string;
+
+  // booking lifecycle
   status: "booked" | "cancelled";
   createdAt: admin.firestore.FieldValue | admin.firestore.Timestamp;
   cancelledAt?: admin.firestore.FieldValue | admin.firestore.Timestamp;
-  attended?: boolean;
-  checkedInAt?: admin.firestore.FieldValue | admin.firestore.Timestamp;
-  checkedInBy?: string;
+  cancelledReason?: "user_cancelled" | "authorised_absence" | string;
+
+  // attendance (day-of)
+  attendanceStatus?: "none" | "checked_in" | "dip"; // NEW
+  attended?: boolean; // keep (used for leaderboard/stats)
+  checkedInAt?: admin.firestore.FieldValue | admin.firestore.Timestamp | null;
+  checkedInBy?: string | null;
 };
 
 type LeaderboardUserDoc = {
@@ -499,6 +505,206 @@ async function requireAdmin(uid: string): Promise<UserDoc> {
 }
 
 /**
+ * Admin check-in / dip / authorised absence
+ * - checked_in: uses your existing stats/leaderboard logic (delegates to checkInBooking)
+ * - dip: marks as no-show (does NOT change leaderboard/stats)
+ * - authorised_absence: cancels booking and frees capacity (does NOT change leaderboard/stats)
+ */
+export const markBookingStatus = onCall(async (request) => {
+  const callerUid = requireAuth(request);
+  await requireAdmin(callerUid);
+
+  const classId = requireString(request.data?.classId, "classId");
+  const userId = requireString(request.data?.userId, "userId");
+  const status = requireString(request.data?.status, "status") as
+    | "checked_in"
+    | "booked"
+    | "dip"
+    | "authorised_absence";
+
+  const bookingId = bookingIdFor(classId, userId);
+  const bookingRef = db.collection("bookings").doc(bookingId);
+  const classRef = db.collection("classes").doc(classId);
+
+  // Re-use your existing check-in logic for checked_in / booked (uncheck)
+  if (status === "checked_in" || status === "booked") {
+    const attended = status === "checked_in";
+    // call the internal logic by duplicating minimal parts, or just do it inline:
+    // easiest: run the same transaction shape as checkInBooking with attended toggling.
+    // But we already have checkInBooking callable; we can't call it directly here.
+    // So we inline a *light* version that preserves your leaderboard/stats behavior by copying your existing logic:
+
+    return db.runTransaction(async (tx) => {
+      const bookingSnap = await tx.get(bookingRef);
+      if (!bookingSnap.exists) throw new HttpsError("not-found", "Booking not found.");
+
+      const booking = bookingSnap.data() as BookingDoc;
+      if (booking.status !== "booked") throw new HttpsError("failed-precondition", "Not an active booking.");
+
+      const prevAttended = booking.attended === true;
+      const nextAttended = attended;
+
+      // If no change, just refresh metadata
+      if (prevAttended === nextAttended) {
+        tx.update(bookingRef, {
+          checkedInBy: callerUid,
+          checkedInAt: prevAttended ? admin.firestore.FieldValue.serverTimestamp() : booking.checkedInAt ?? null,
+          attendanceStatus: prevAttended ? "checked_in" : "none",
+        });
+        return {ok: true, kind: "attendance", changed: false};
+      }
+
+      // ---- Everything below is copied from your checkInBooking so leaderboard/stats stays correct ----
+      const classSnap = await tx.get(classRef);
+      if (!classSnap.exists) throw new HttpsError("not-found", "Class not found.");
+
+      const classDoc = classSnap.data() as ClassDoc;
+      const classStart = classDoc.startTime.toDate();
+      const monthKey = ukMonthKeyFromDate(classStart);
+
+      const delta = nextAttended ? 1 : -1;
+
+      const lbUserRef = db
+        .collection("leaderboards")
+        .doc(monthKey)
+        .collection("users")
+        .doc(booking.userId);
+
+      const lbSnap = await tx.get(lbUserRef);
+      const current = lbSnap.exists ? Number((lbSnap.data() as any)?.attendedCount ?? 0) : 0;
+      const nextCount = Math.max(0, current + delta);
+
+      const userRef = db.collection("users").doc(booking.userId);
+      const userSnap = await tx.get(userRef);
+      const u = (userSnap.data() || {}) as UserDoc;
+
+      const today = ukDateKeyNow();
+      const yesterday = ukYesterdayKeyNow();
+
+      const existingStats = (u.stats || {}) as any;
+      const prevTotal = Number(existingStats.totalCheckIns ?? 0);
+      const prevMonth = Number((existingStats.monthCheckIns || {})[monthKey] ?? 0);
+
+      let nextTotal = prevTotal;
+      let nextMonth = prevMonth;
+
+      let currentStreak = Number(existingStats.currentStreak ?? 0);
+      let longestStreak = Number(existingStats.longestStreak ?? 0);
+      let lastCheckInDate = typeof existingStats.lastCheckInDate === "string" ? existingStats.lastCheckInDate : "";
+
+      if (delta === 1) {
+        nextTotal = prevTotal + 1;
+        nextMonth = prevMonth + 1;
+
+        if (lastCheckInDate === today) {
+          // no-op
+        } else if (lastCheckInDate === yesterday) {
+          currentStreak = currentStreak + 1;
+        } else {
+          currentStreak = 1;
+        }
+
+        longestStreak = Math.max(longestStreak, currentStreak);
+        lastCheckInDate = today;
+      }
+
+      if (delta === -1) {
+        nextTotal = Math.max(0, prevTotal - 1);
+        nextMonth = Math.max(0, prevMonth - 1);
+        // streak not recomputed on uncheck (matches your current behaviour)
+      }
+
+      tx.update(bookingRef, {
+        attended: nextAttended,
+        attendanceStatus: nextAttended ? "checked_in" : "none",
+        checkedInAt: nextAttended ? admin.firestore.FieldValue.serverTimestamp() : null,
+        checkedInBy: callerUid,
+      });
+
+      tx.set(
+        lbUserRef,
+        {
+          userId: booking.userId,
+          name: u.name ?? booking.userName ?? "Member",
+          email: u.email ?? "",
+          attendedCount: nextCount,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        } satisfies LeaderboardUserDoc,
+        {merge: true}
+      );
+
+      tx.set(
+        userRef,
+        {
+          stats: {
+            totalCheckIns: nextTotal,
+            monthCheckIns: {[monthKey]: nextMonth},
+            currentStreak,
+            longestStreak,
+            lastCheckInDate: lastCheckInDate || null,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+        },
+        {merge: true}
+      );
+
+      return {ok: true, kind: "attendance", changed: true, monthKey, attendedCount: nextCount};
+    });
+  }
+
+  // Dip + Authorised absence do NOT affect leaderboard/stats
+  return db.runTransaction(async (tx) => {
+    const bookingSnap = await tx.get(bookingRef);
+    if (!bookingSnap.exists) throw new HttpsError("not-found", "Booking not found.");
+
+    const booking = bookingSnap.data() as BookingDoc;
+
+    if (booking.status !== "booked") {
+      throw new HttpsError("failed-precondition", "Not an active booking.");
+    }
+
+    if (status === "dip") {
+      tx.update(bookingRef, {
+        attendanceStatus: "dip",
+        attended: false,
+        checkedInAt: null,
+        checkedInBy: callerUid,
+      });
+
+      return {ok: true, kind: "dip"};
+    }
+
+    if (status === "authorised_absence") {
+      // cancel booking + free capacity
+      const classSnap = await tx.get(classRef);
+      if (!classSnap.exists) throw new HttpsError("not-found", "Class not found.");
+
+      const classData = classSnap.data() as Partial<ClassDoc>;
+      const bookedCount = Number(classData.bookedCount ?? 0);
+
+      tx.update(bookingRef, {
+        status: "cancelled",
+        cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
+        cancelledReason: "authorised_absence",
+        attendanceStatus: "none",
+        attended: false,
+        checkedInAt: null,
+        checkedInBy: null,
+      });
+
+      tx.update(classRef, {
+        bookedCount: admin.firestore.FieldValue.increment(bookedCount > 0 ? -1 : 0),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      return {ok: true, kind: "authorised_absence"};
+    }
+
+    throw new HttpsError("invalid-argument", "Invalid status.");
+  });
+});
+
+/**
  * Admin-only: return roster for a class.
  * Includes only active bookings (status === "booked").
  */
@@ -535,6 +741,7 @@ export const getClassRoster = onCall(async (request) => {
         userId: b.userId,
         userName: b.userName,
         attended: Boolean(b.attended),
+        attendanceStatus: b.attendanceStatus ?? (b.attended ? "checked_in" : "none"),
         checkedInAt: b.checkedInAt ?? null,
       }))
       .sort((a, b) => a.userName.localeCompare(b.userName)),
