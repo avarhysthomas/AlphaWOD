@@ -53,7 +53,7 @@ function computeBookingClosesAt(startTs?: Timestamp) {
   const closes = new Date(start);
   const hour = start.getHours();
 
-  if (hour === 6) {
+  if (hour === 5 || hour === 6) {
     closes.setDate(closes.getDate() - 1);
     closes.setHours(20, 30, 0, 0);
     return closes;
