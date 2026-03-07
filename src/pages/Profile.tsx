@@ -1,11 +1,11 @@
 // src/pages/Profile.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { getAuth, updateEmail, updateProfile } from "firebase/auth";
-import { useNavigate } from "react-router-dom";
 import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
 import { getDownloadURL, getStorage, ref, uploadBytes } from "firebase/storage";
 import { db } from "../firebase";
-import { Camera, Save, AlertTriangle, Calendar, Flame, Trophy, CheckCircle2 } from "lucide-react";
+import { Camera, Save, AlertTriangle, Flame, Trophy, CheckCircle2 } from "lucide-react";
+import UserTopNav from "../components/UserTopNav";
 
 type UserStats = {
   totalCheckIns?: number;
@@ -60,7 +60,6 @@ export default function Profile() {
   const auth = useMemo(() => getAuth(), []);
   const storage = useMemo(() => getStorage(), []);
   const user = auth.currentUser;
-  const navigate = useNavigate();
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -242,6 +241,7 @@ export default function Profile() {
 
   return (
     <div className="min-h-[calc(100vh-64px)] bg-black text-white">
+      <UserTopNav />
       <div className="mx-auto w-full max-w-3xl px-4 py-8">
         <div className="rounded-3xl border border-neutral-800 bg-neutral-950 p-6 sm:p-8">
           <div className="flex items-start justify-between gap-4">
@@ -249,15 +249,6 @@ export default function Profile() {
               <div className="text-xs uppercase tracking-[0.35em] text-white/60 font-semibold">Profile</div>
               <div className="mt-2 text-4xl sm:text-5xl font-heading tracking-wide">Your account</div>
             </div>
-
-            <button
-              onClick={() => navigate("/schedule")}
-              className="shrink-0 inline-flex items-center gap-2 rounded-xl border border-neutral-800 bg-neutral-950 px-4 py-2 text-sm font-semibold text-white/80 hover:bg-neutral-900"
-              title="Schedule"
-            >
-              <Calendar className="h-4 w-4" />
-              Schedule
-            </button>
           </div>
 
           {/* Stats */}

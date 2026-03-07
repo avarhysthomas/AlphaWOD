@@ -92,7 +92,6 @@ type LeaderboardUserDoc = {
   updatedAt: admin.firestore.FieldValue | admin.firestore.Timestamp;
 };
 
-
 /** -----------------------------
  * Helpers
  * ----------------------------*/
@@ -864,4 +863,65 @@ export const reconcileMonthlyLeaderboard = onCall(async (request) => {
     monthKey,
     rebuiltUsers: counts.size,
   };
+});
+
+export const getMonthlyDipLeaderboard = onCall(async (request) => {
+  requireAuth(request);
+
+  const monthKey =
+    typeof request.data?.monthKey === "string" && request.data.monthKey.trim() ?
+      request.data.monthKey.trim() :
+      monthKeyFromDate(new Date());
+
+  const limit =
+    typeof request.data?.limit === "number" && request.data.limit > 0 ?
+      Math.min(500, Math.floor(request.data.limit)) :
+      200;
+
+  const usersSnap = await db.collection("users").get();
+
+  const allUsers = usersSnap.docs.map((d) => ({
+    userId: d.id,
+    name: String((d.data() as any)?.name || "Member"),
+    email: String((d.data() as any)?.email || ""),
+    photoURL: String((d.data() as any)?.photoURL || ""),
+  }));
+
+  const bookingsSnap = await db.collection("bookings").get();
+  const counts = new Map<string, number>();
+
+  for (const doc of bookingsSnap.docs) {
+    const b = doc.data() as Partial<BookingDoc>;
+    if (!b.classId || !b.userId) continue;
+    if (b.attendanceStatus !== "dip") continue;
+
+    const classSnap = await db.collection("classes").doc(String(b.classId)).get();
+    if (!classSnap.exists) continue;
+
+    const classData = classSnap.data() as Partial<ClassDoc>;
+    const classStart = classData.startTime?.toDate?.();
+    if (!classStart) continue;
+
+    const bookingMonthKey = ukMonthKeyFromDate(classStart);
+    if (bookingMonthKey !== monthKey) continue;
+
+    counts.set(String(b.userId), (counts.get(String(b.userId)) || 0) + 1);
+  }
+
+  const rows = allUsers
+    .map((u) => ({
+      userId: u.userId,
+      name: u.name,
+      email: u.email,
+      photoURL: u.photoURL,
+      dipCount: counts.get(u.userId) ?? 0,
+    }))
+    .sort((a, b) => {
+      const diff = (b.dipCount || 0) - (a.dipCount || 0);
+      if (diff !== 0) return diff;
+      return a.name.localeCompare(b.name);
+    })
+    .slice(0, limit);
+
+  return {monthKey, total: rows.length, rows};
 });

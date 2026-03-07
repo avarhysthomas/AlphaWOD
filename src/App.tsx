@@ -12,7 +12,7 @@ import {
 import HomeScreen from "./components/HomeScreen";
 import WODEditor from "./components/WODEditor";
 import WODDisplay from "./components/WODDisplay";
-
+import DipLeaderboard from "./pages/DipLeaderboard";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import AdminTemplates from "./pages/AdminTemplates";
@@ -155,6 +155,8 @@ export default function App() {
           </RequireAuth>
         }
       />
+
+      <Route path="/board-of-shame" element={<RequireAuth><DipLeaderboard /></RequireAuth>} />
 
       <Route path="/profile" element={<RequireAuth><Profile /></RequireAuth>} />
 

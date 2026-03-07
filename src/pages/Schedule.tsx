@@ -17,7 +17,8 @@ import {
 import { db } from "../firebase";
 import { useAuth } from "../context/AuthContext";
 import LogoutButton from "../components/LogoutButton";
-import {Trophy, UserIcon, Flame, Dumbbell, PersonStanding, Award, Activity } from "lucide-react";
+import {Flame, Dumbbell, PersonStanding, Award, Activity } from "lucide-react";
+import UserTopNav from "../components/UserTopNav";
 
 type ClassDoc = {
   title: string;
@@ -115,27 +116,10 @@ function fmtTime(d: Date, timeZone: string) {
 }
 
 /** Cancel close rule:
- *  - cannot cancel within 60 minutes of class start
+ *  - cannot cancel after booking closes (same as booking close time)
  */
-const CANCEL_CUTOFF_MINUTES = 60;
-
-function computeCancelClosesAt(startTs?: Timestamp) {
-  const start = startTs?.toDate?.();
-  if (!start) return null;
-  return new Date(start.getTime() - CANCEL_CUTOFF_MINUTES * 60 * 1000);
-}
-
 function cancelStatus(startTs?: Timestamp) {
-  const start = startTs?.toDate?.();
-  if (!start) return { state: "unknown" as const };
-
-  const closes = computeCancelClosesAt(startTs);
-  const now = Date.now();
-
-  if (now >= start.getTime()) return { state: "started" as const, closes };
-  if (closes && now >= closes.getTime()) return { state: "closed" as const, closes };
-
-  return { state: "open" as const, closes, msLeft: closes ? closes.getTime() - now : 0 };
+  return bookingStatus(startTs);
 }
 
 
@@ -376,28 +360,13 @@ export default function Schedule() {
 }, [windowLocal.from, windowLocal.to]);
 
   return (
-    <div className="min-h-screen bg-black text-white p-6 overflow-x-hidden">
+    <div className="min-h-screen bg-black text-white p-6 overflow-x-hidden"> 
+    <UserTopNav />
       <div className="max-w-5xl mx-auto">
         <div className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-6xl sm:text-7xl font-heading uppercase tracking-widest text-white">Schedule</h1>
             <div className="text-white/60 mt-1"> {windowLocal.showNextWeek ? "Next week" : "This week"} • {weekLabel} </div>
-            <button
-              onClick={()=>navigate("/leaderboard")}
-              className="inline-flex items-center gap-2 rounded-xl border border-neutral-800 bg-neutral-950 px-4 py-2 text-sm font-semibold text-white/80 hover:bg-neutral-900"
-              title="View the Board of Fame"
-            >
-              <Trophy className="h-4 w-4" />
-              Board of Fame
-            </button>
-
-            <button
-              onClick={()=>navigate("/profile")}
-              className="inline-flex items-center gap-2 rounded-xl border border-neutral-800 bg-neutral-950 px-4 py-2 text-sm font-semibold text-white/80 hover:bg-neutral-900 ml-4"
-              title="View and edit your profile"
-            ><UserIcon className="h-4 w-4" />
-              Profile
-            </button>
           </div>
         </div>
 
