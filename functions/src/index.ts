@@ -362,12 +362,14 @@ export const checkInBooking = onCall(async (request) => {
 
       // If attended isn't changing, we still allow updating checkedInBy timestamp if you want,
       // but leaderboard should not change.
+      // If attended isn't changing, we still allow updating checkedInBy timestamp if you want,
+      // but leaderboard should not change.
       const prevAttended = booking.attended === true;
       if (prevAttended === nextAttended) {
         tx.update(bookingRef, {
           checkedInBy: callerUid,
-          // keep a fresh timestamp if you like
           checkedInAt: prevAttended ? admin.firestore.FieldValue.serverTimestamp() : booking.checkedInAt ?? null,
+          attendanceStatus: prevAttended ? "checked_in" : "none",
         });
         return {ok: true, leaderboardChanged: false};
       }
@@ -452,6 +454,7 @@ export const checkInBooking = onCall(async (request) => {
       // Update booking
       tx.update(bookingRef, {
         attended: nextAttended,
+        attendanceStatus: nextAttended ? "checked_in" : "none",
         checkedInAt: nextAttended ? admin.firestore.FieldValue.serverTimestamp() : null,
         checkedInBy: callerUid,
       });
@@ -525,61 +528,64 @@ export const markBookingStatus = onCall(async (request) => {
   const bookingId = bookingIdFor(classId, userId);
   const bookingRef = db.collection("bookings").doc(bookingId);
   const classRef = db.collection("classes").doc(classId);
+  const userRef = db.collection("users").doc(userId);
 
-  // Re-use your existing check-in logic for checked_in / booked (uncheck)
-  if (status === "checked_in" || status === "booked") {
-    const attended = status === "checked_in";
-    // call the internal logic by duplicating minimal parts, or just do it inline:
-    // easiest: run the same transaction shape as checkInBooking with attended toggling.
-    // But we already have checkInBooking callable; we can't call it directly here.
-    // So we inline a *light* version that preserves your leaderboard/stats behavior by copying your existing logic:
+  return db.runTransaction(async (tx) => {
+    const bookingSnap = await tx.get(bookingRef);
+    if (!bookingSnap.exists) throw new HttpsError("not-found", "Booking not found.");
 
-    return db.runTransaction(async (tx) => {
-      const bookingSnap = await tx.get(bookingRef);
-      if (!bookingSnap.exists) throw new HttpsError("not-found", "Booking not found.");
+    const booking = bookingSnap.data() as BookingDoc;
+    if (booking.status !== "booked") {
+      throw new HttpsError("failed-precondition", "Not an active booking.");
+    }
 
-      const booking = bookingSnap.data() as BookingDoc;
-      if (booking.status !== "booked") throw new HttpsError("failed-precondition", "Not an active booking.");
+    const classSnap = await tx.get(classRef);
+    if (!classSnap.exists) throw new HttpsError("not-found", "Class not found.");
 
-      const prevAttended = booking.attended === true;
-      const nextAttended = attended;
+    const classDoc = classSnap.data() as ClassDoc;
+    const classStart = classDoc.startTime.toDate();
+    const monthKey = ukMonthKeyFromDate(classStart);
 
-      // If no change, just refresh metadata
-      if (prevAttended === nextAttended) {
-        tx.update(bookingRef, {
-          checkedInBy: callerUid,
-          checkedInAt: prevAttended ? admin.firestore.FieldValue.serverTimestamp() : booking.checkedInAt ?? null,
-          attendanceStatus: prevAttended ? "checked_in" : "none",
-        });
-        return {ok: true, kind: "attendance", changed: false};
-      }
+    const userSnap = await tx.get(userRef);
+    const u = (userSnap.data() || {}) as UserDoc;
 
-      // ---- Everything below is copied from your checkInBooking so leaderboard/stats stays correct ----
-      const classSnap = await tx.get(classRef);
-      if (!classSnap.exists) throw new HttpsError("not-found", "Class not found.");
+    const lbUserRef = db
+      .collection("leaderboards")
+      .doc(monthKey)
+      .collection("users")
+      .doc(userId);
 
-      const classDoc = classSnap.data() as ClassDoc;
-      const classStart = classDoc.startTime.toDate();
-      const monthKey = ukMonthKeyFromDate(classStart);
+    const prevAttended = booking.attended === true;
+    const prevAttendanceStatus = booking.attendanceStatus ?? (prevAttended ? "checked_in" : "none");
 
-      const delta = nextAttended ? 1 : -1;
+    let nextAttended = prevAttended;
+    let nextAttendanceStatus: "none" | "checked_in" | "dip" = prevAttendanceStatus;
 
-      const lbUserRef = db
-        .collection("leaderboards")
-        .doc(monthKey)
-        .collection("users")
-        .doc(booking.userId);
+    if (status === "checked_in") {
+      nextAttended = true;
+      nextAttendanceStatus = "checked_in";
+    } else if (status === "booked") {
+      nextAttended = false;
+      nextAttendanceStatus = "none";
+    } else if (status === "dip") {
+      nextAttended = false;
+      nextAttendanceStatus = "dip";
+    } else if (status === "authorised_absence") {
+      nextAttended = false;
+      nextAttendanceStatus = "none";
+    } else {
+      throw new HttpsError("invalid-argument", "Invalid status.");
+    }
 
+    const delta = (nextAttended ? 1 : 0) - (prevAttended ? 1 : 0);
+
+    // Update leaderboard + user stats ONLY if attended changed
+    if (delta !== 0) {
       const lbSnap = await tx.get(lbUserRef);
-      const current = lbSnap.exists ? Number((lbSnap.data() as any)?.attendedCount ?? 0) : 0;
-      const nextCount = Math.max(0, current + delta);
-
-      const userRef = db.collection("users").doc(booking.userId);
-      const userSnap = await tx.get(userRef);
-      const u = (userSnap.data() || {}) as UserDoc;
-
-      const today = ukDateKeyNow();
-      const yesterday = ukYesterdayKeyNow();
+      const currentLb = lbSnap.exists ?
+        Number((lbSnap.data() as Partial<LeaderboardUserDoc>).attendedCount ?? 0) :
+        0;
+      const nextLb = Math.max(0, currentLb + delta);
 
       const existingStats = (u.stats || {}) as any;
       const prevTotal = Number(existingStats.totalCheckIns ?? 0);
@@ -590,7 +596,11 @@ export const markBookingStatus = onCall(async (request) => {
 
       let currentStreak = Number(existingStats.currentStreak ?? 0);
       let longestStreak = Number(existingStats.longestStreak ?? 0);
-      let lastCheckInDate = typeof existingStats.lastCheckInDate === "string" ? existingStats.lastCheckInDate : "";
+      let lastCheckInDate =
+        typeof existingStats.lastCheckInDate === "string" ? existingStats.lastCheckInDate : "";
+
+      const today = ukDateKeyNow();
+      const yesterday = ukYesterdayKeyNow();
 
       if (delta === 1) {
         nextTotal = prevTotal + 1;
@@ -611,23 +621,17 @@ export const markBookingStatus = onCall(async (request) => {
       if (delta === -1) {
         nextTotal = Math.max(0, prevTotal - 1);
         nextMonth = Math.max(0, prevMonth - 1);
-        // streak not recomputed on uncheck (matches your current behaviour)
+        // keeping your existing simple behavior:
+        // do not fully recompute streak on removal
       }
-
-      tx.update(bookingRef, {
-        attended: nextAttended,
-        attendanceStatus: nextAttended ? "checked_in" : "none",
-        checkedInAt: nextAttended ? admin.firestore.FieldValue.serverTimestamp() : null,
-        checkedInBy: callerUid,
-      });
 
       tx.set(
         lbUserRef,
         {
-          userId: booking.userId,
+          userId,
           name: u.name ?? booking.userName ?? "Member",
           email: u.email ?? "",
-          attendedCount: nextCount,
+          attendedCount: nextLb,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         } satisfies LeaderboardUserDoc,
         {merge: true}
@@ -647,40 +651,11 @@ export const markBookingStatus = onCall(async (request) => {
         },
         {merge: true}
       );
-
-      return {ok: true, kind: "attendance", changed: true, monthKey, attendedCount: nextCount};
-    });
-  }
-
-  // Dip + Authorised absence do NOT affect leaderboard/stats
-  return db.runTransaction(async (tx) => {
-    const bookingSnap = await tx.get(bookingRef);
-    if (!bookingSnap.exists) throw new HttpsError("not-found", "Booking not found.");
-
-    const booking = bookingSnap.data() as BookingDoc;
-
-    if (booking.status !== "booked") {
-      throw new HttpsError("failed-precondition", "Not an active booking.");
     }
 
-    if (status === "dip") {
-      tx.update(bookingRef, {
-        attendanceStatus: "dip",
-        attended: false,
-        checkedInAt: null,
-        checkedInBy: callerUid,
-      });
-
-      return {ok: true, kind: "dip"};
-    }
-
+    // Authorised absence = cancel booking + free spot
     if (status === "authorised_absence") {
-      // cancel booking + free capacity
-      const classSnap = await tx.get(classRef);
-      if (!classSnap.exists) throw new HttpsError("not-found", "Class not found.");
-
-      const classData = classSnap.data() as Partial<ClassDoc>;
-      const bookedCount = Number(classData.bookedCount ?? 0);
+      const bookedCount = Number(classDoc.bookedCount ?? 0);
 
       tx.update(bookingRef, {
         status: "cancelled",
@@ -697,10 +672,24 @@ export const markBookingStatus = onCall(async (request) => {
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
-      return {ok: true, kind: "authorised_absence"};
+      return {ok: true, kind: "authorised_absence", delta};
     }
 
-    throw new HttpsError("invalid-argument", "Invalid status.");
+    // booked / checked_in / dip stay as active bookings
+    tx.update(bookingRef, {
+      attendanceStatus: nextAttendanceStatus,
+      attended: nextAttended,
+      checkedInAt: nextAttended ? admin.firestore.FieldValue.serverTimestamp() : null,
+      checkedInBy: callerUid,
+    });
+
+    return {
+      ok: true,
+      kind: status,
+      delta,
+      prevAttendanceStatus,
+      nextAttendanceStatus,
+    };
   });
 });
 
@@ -806,4 +795,73 @@ export const getMonthlyLeaderboard = onCall(async (request) => {
     .slice(0, limit);
 
   return {monthKey, total: rows.length, rows};
+});
+
+export const reconcileMonthlyLeaderboard = onCall(async (request) => {
+  const callerUid = requireAuth(request);
+  await requireAdmin(callerUid);
+
+  const monthKey =
+    typeof request.data?.monthKey === "string" && request.data.monthKey.trim() ?
+      request.data.monthKey.trim() :
+      ukMonthKeyFromDate(new Date());
+
+  if (!/^\d{4}-\d{2}$/.test(monthKey)) {
+    throw new HttpsError("invalid-argument", "monthKey must be YYYY-MM");
+  }
+
+  const bookingsSnap = await db.collection("bookings").get();
+
+  const counts = new Map<string, number>();
+
+  for (const doc of bookingsSnap.docs) {
+    const b = doc.data() as Partial<BookingDoc>;
+    if (!b.classId || !b.userId) continue;
+
+    // only attended bookings count
+    if (b.attended !== true) continue;
+
+    const classSnap = await db.collection("classes").doc(String(b.classId)).get();
+    if (!classSnap.exists) continue;
+
+    const classData = classSnap.data() as Partial<ClassDoc>;
+    const classStart = classData.startTime?.toDate?.();
+    if (!classStart) continue;
+
+    const bookingMonthKey = ukMonthKeyFromDate(classStart);
+    if (bookingMonthKey !== monthKey) continue;
+
+    counts.set(String(b.userId), (counts.get(String(b.userId)) || 0) + 1);
+  }
+
+  const lbMonthRef = db.collection("leaderboards").doc(monthKey);
+  const existingSnap = await lbMonthRef.collection("users").get();
+
+  const batch = db.batch();
+
+  // clear old docs first
+  existingSnap.forEach((doc) => batch.delete(doc.ref));
+
+  // rebuild
+  for (const [userId, attendedCount] of counts.entries()) {
+    const userSnap = await db.collection("users").doc(userId).get();
+    const u = (userSnap.data() || {}) as UserDoc;
+
+    const ref = lbMonthRef.collection("users").doc(userId);
+    batch.set(ref, {
+      userId,
+      name: u.name ?? "Member",
+      email: u.email ?? "",
+      attendedCount,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    } satisfies LeaderboardUserDoc);
+  }
+
+  await batch.commit();
+
+  return {
+    ok: true,
+    monthKey,
+    rebuiltUsers: counts.size,
+  };
 });

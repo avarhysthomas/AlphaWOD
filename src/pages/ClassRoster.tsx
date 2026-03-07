@@ -1,20 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, getDoc, collection, documentId, getDocs, query, where } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { db } from "../firebase";
 import UserAvatar from "../components/UserAvatar";
-import { collection, documentId, getDocs, query, where } from "firebase/firestore";
 
-/**
- * Booking statuses
- * - booked: active booking
- * - checked_in: attended
- * - authorised_absence: told us, remove booking (we'll treat as removed; may not appear in roster)
- * - dip: booked and no-show
- */
 type BookingStatus = "booked" | "checked_in" | "authorised_absence" | "dip";
+
+type AttendanceStatus = "none" | "checked_in" | "dip";
 
 type BookingRow = {
   userId: string;
@@ -22,10 +16,9 @@ type BookingRow = {
   email?: string;
   photoURL?: string;
 
-  // New model
-  status?: BookingStatus;
-
-  // Backwards compatibility (while your callable still returns attended)
+  // legacy / transitional fields from backend
+  status?: string;
+  attendanceStatus?: AttendanceStatus;
   attended?: boolean;
   checkedInAt?: any;
 };
@@ -59,8 +52,8 @@ async function fetchUserProfiles(uids: string[]) {
 }
 
 function normalizeStatus(r: BookingRow): BookingStatus {
-  // If your backend hasn’t been updated yet, infer from attended boolean
-  if (r.status) return r.status;
+  if (r.attendanceStatus === "dip") return "dip";
+  if (r.attendanceStatus === "checked_in") return "checked_in";
   if (r.attended === true) return "checked_in";
   return "booked";
 }
@@ -69,15 +62,17 @@ function StatusPill({ status }: { status: BookingStatus }) {
   const base =
     "text-xs uppercase tracking-widest px-3 py-1 rounded-full border inline-flex items-center gap-2";
 
-  if (status === "checked_in")
+  if (status === "checked_in") {
     return <span className={`${base} border-emerald-500/60 text-emerald-200`}>Checked in</span>;
+  }
 
-  if (status === "dip")
+  if (status === "dip") {
     return <span className={`${base} border-red-500/50 text-red-200`}>Dip</span>;
+  }
 
-  // authorised_absence usually won’t show if booking is removed, but keep for completeness
-  if (status === "authorised_absence")
+  if (status === "authorised_absence") {
     return <span className={`${base} border-sky-500/50 text-sky-200`}>Auth abs</span>;
+  }
 
   return <span className={`${base} border-white/15 text-white/60`}>Booked</span>;
 }
@@ -98,7 +93,6 @@ export default function ClassRoster() {
   const [busyUserId, setBusyUserId] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
 
-  // Selection mode
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
 
@@ -113,7 +107,6 @@ export default function ClassRoster() {
 
   const clearSelected = useCallback(() => setSelected({}), []);
 
-  // ----- Load class header/meta -----
   useEffect(() => {
     if (!classId) return;
 
@@ -143,7 +136,6 @@ export default function ClassRoster() {
     })();
   }, [classId]);
 
-  // ----- Callable: get roster -----
   const loadRoster = useCallback(async () => {
     if (!classId) return;
 
@@ -155,7 +147,6 @@ export default function ClassRoster() {
 
       const res = await getRoster({ classId });
       const data = res.data;
-
       const attendees = data.attendees || [];
 
       const profiles = await fetchUserProfiles(attendees.map((a) => a.userId));
@@ -168,10 +159,9 @@ export default function ClassRoster() {
           name: u?.name ?? r.name ?? "Member",
           email: u?.email ?? r.email ?? "",
           photoURL: u?.photoURL ?? r.photoURL,
-          status:
-          r.status ??
-          (r as any).attendanceStatus ??
-          (r.attended === true ? "checked_in" : "booked"),
+          attendanceStatus:
+            r.attendanceStatus ??
+            ((r as any).status === "dip" ? "dip" : r.attended === true ? "checked_in" : "none"),
         };
       });
 
@@ -205,13 +195,12 @@ export default function ClassRoster() {
   const checkedInShown = serverCounts.checkedIn || localCheckedInCount;
   const totalShown = serverCounts.total || rows.length;
 
-  // Sort: checked-in first, then booked, then dip, then by name
   const sortedRows = useMemo(() => {
     const rank = (s: BookingStatus) => {
       if (s === "checked_in") return 0;
       if (s === "booked") return 1;
       if (s === "dip") return 2;
-      return 3; // authorised_absence
+      return 3;
     };
 
     const copy = [...rows];
@@ -226,12 +215,6 @@ export default function ClassRoster() {
     return copy;
   }, [rows]);
 
-  /**
-   * IMPORTANT:
-   * Your current backend service only supports attended true/false.
-   * We keep check-in working using the existing function.
-   * For "dip" and "authorised absence", we call a NEW callable ("markBookingStatus") that you’ll add next.
-   */
   async function setStatus(userId: string, next: BookingStatus) {
     const user = auth.currentUser;
     if (!user) return alert("Log in first.");
@@ -240,16 +223,11 @@ export default function ClassRoster() {
     try {
       setBusyUserId(userId);
 
-      // ✅ keep existing check-in working
       if (next === "checked_in" || next === "booked") {
         const attended = next === "checked_in";
-
-        // existing client service
-        // NOTE: you had: checkInBooking({ classId, userId, attended })
         const mod = await import("../service/checkin");
         await mod.checkInBooking({ classId, userId, attended });
       } else {
-        // 🚧 NEW callable to implement next (dip / authorised_absence)
         const functions = getFunctions(undefined, "europe-west1");
         const mark = httpsCallable(functions, "markBookingStatus");
         await mark({ classId, userId, status: next });
@@ -270,19 +248,17 @@ export default function ClassRoster() {
     }
   }
 
-  async function bulkSetStatus(next: BookingStatus) {
+  async function bulkSetStatus(next: BookingStatus, idsArg?: string[]) {
     const user = auth.currentUser;
     if (!user) return alert("Log in first.");
     if (!classId) return;
 
-    const ids = selectMode ? selectedIds : [];
-
+    const ids = idsArg ?? selectedIds;
     if (!ids.length) return;
 
     try {
       setBulkBusy(true);
 
-      // For check-in / uncheck, re-use existing service in parallel
       if (next === "checked_in" || next === "booked") {
         const attended = next === "checked_in";
         const mod = await import("../service/checkin");
@@ -298,7 +274,6 @@ export default function ClassRoster() {
           alert(`Updated ${ids.length - failed}/${ids.length}. ${failed} failed — try again or refresh.`);
         }
       } else {
-        // dip / authorised_absence via new callable
         const functions = getFunctions(undefined, "europe-west1");
         const mark = httpsCallable(functions, "markBookingStatus");
 
@@ -322,33 +297,32 @@ export default function ClassRoster() {
     }
   }
 
-  // Existing “check in all / uncheck all” still useful, but now we’ll drive it through status
   async function checkInAll() {
-    const toCheckIn = rows.filter((r) => normalizeStatus(r) !== "checked_in");
-    if (toCheckIn.length === 0) return;
-    setSelected(Object.fromEntries(toCheckIn.map((r) => [r.userId, true])));
-    setSelectMode(true);
-    await bulkSetStatus("checked_in");
+    const ids = rows
+      .filter((r) => normalizeStatus(r) !== "checked_in")
+      .map((r) => r.userId);
+
+    if (!ids.length) return;
+    await bulkSetStatus("checked_in", ids);
   }
 
   async function uncheckAll() {
-    const toUncheck = rows.filter((r) => normalizeStatus(r) === "checked_in");
-    if (toUncheck.length === 0) return;
-    setSelected(Object.fromEntries(toUncheck.map((r) => [r.userId, true])));
-    setSelectMode(true);
-    await bulkSetStatus("booked");
+    const ids = rows
+      .filter((r) => normalizeStatus(r) === "checked_in")
+      .map((r) => r.userId);
+
+    if (!ids.length) return;
+    await bulkSetStatus("booked", ids);
   }
 
   const progressPct = totalShown ? Math.round((checkedInShown / totalShown) * 100) : 0;
   const canBulkCheckIn = !loadingRoster && !bulkBusy && rows.some((r) => normalizeStatus(r) !== "checked_in");
   const canBulkUncheck = !loadingRoster && !bulkBusy && rows.some((r) => normalizeStatus(r) === "checked_in");
-
   const canBulkSelected = !loadingRoster && !bulkBusy && selectedIds.length > 0;
 
   return (
     <div className="min-h-screen bg-black text-white p-6">
       <div className="max-w-5xl mx-auto space-y-6">
-        {/* HERO HEADER */}
         <div className="rounded-3xl border border-neutral-800 bg-gradient-to-b from-neutral-950 to-black p-7 shadow-[0_0_40px_rgba(0,0,0,0.6)]">
           <div className="flex items-start justify-between gap-6">
             <div className="min-w-0">
@@ -375,7 +349,6 @@ export default function ClassRoster() {
           </div>
         </div>
 
-        {/* ATTENDEES */}
         <div className="rounded-3xl border border-neutral-800 bg-neutral-950 p-6">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <div className="text-xl font-semibold">Attendees</div>
@@ -395,12 +368,11 @@ export default function ClassRoster() {
               <button
                 onClick={checkInAll}
                 disabled={!canBulkCheckIn}
-                className={`rounded-xl border px-4 py-2 text-sm font-semibold transition
-                  ${
-                    canBulkCheckIn
-                      ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/15"
-                      : "border-white/10 bg-white/[0.03] text-white/40"
-                  }`}
+                className={`rounded-xl border px-4 py-2 text-sm font-semibold transition ${
+                  canBulkCheckIn
+                    ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/15"
+                    : "border-white/10 bg-white/[0.03] text-white/40"
+                }`}
               >
                 {bulkBusy ? "Working…" : "Check in all"}
               </button>
@@ -408,12 +380,11 @@ export default function ClassRoster() {
               <button
                 onClick={uncheckAll}
                 disabled={!canBulkUncheck}
-                className={`rounded-xl border px-4 py-2 text-sm font-semibold transition
-                  ${
-                    canBulkUncheck
-                      ? "border-red-500/40 bg-red-500/10 text-red-200 hover:bg-red-500/15"
-                      : "border-white/10 bg-white/[0.03] text-white/40"
-                  }`}
+                className={`rounded-xl border px-4 py-2 text-sm font-semibold transition ${
+                  canBulkUncheck
+                    ? "border-red-500/40 bg-red-500/10 text-red-200 hover:bg-red-500/15"
+                    : "border-white/10 bg-white/[0.03] text-white/40"
+                }`}
               >
                 {bulkBusy ? "Working…" : "Uncheck all"}
               </button>
@@ -428,7 +399,6 @@ export default function ClassRoster() {
             </div>
           </div>
 
-          {/* Bulk action bar (only in select mode) */}
           {selectMode && (
             <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.03] p-4 flex flex-col gap-3 sm:flex-row sm:items-center">
               <div className="text-sm text-white/70">
@@ -439,12 +409,11 @@ export default function ClassRoster() {
                 <button
                   onClick={() => bulkSetStatus("checked_in")}
                   disabled={!canBulkSelected}
-                  className={`rounded-xl border px-4 py-2 text-sm font-semibold transition
-                    ${
-                      canBulkSelected
-                        ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/15"
-                        : "border-white/10 bg-white/[0.03] text-white/40"
-                    }`}
+                  className={`rounded-xl border px-4 py-2 text-sm font-semibold transition ${
+                    canBulkSelected
+                      ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/15"
+                      : "border-white/10 bg-white/[0.03] text-white/40"
+                  }`}
                 >
                   Check in
                 </button>
@@ -452,12 +421,11 @@ export default function ClassRoster() {
                 <button
                   onClick={() => bulkSetStatus("authorised_absence")}
                   disabled={!canBulkSelected}
-                  className={`rounded-xl border px-4 py-2 text-sm font-semibold transition
-                    ${
-                      canBulkSelected
-                        ? "border-sky-500/40 bg-sky-500/10 text-sky-200 hover:bg-sky-500/15"
-                        : "border-white/10 bg-white/[0.03] text-white/40"
-                    }`}
+                  className={`rounded-xl border px-4 py-2 text-sm font-semibold transition ${
+                    canBulkSelected
+                      ? "border-sky-500/40 bg-sky-500/10 text-sky-200 hover:bg-sky-500/15"
+                      : "border-white/10 bg-white/[0.03] text-white/40"
+                  }`}
                 >
                   Authorised absence
                 </button>
@@ -465,12 +433,11 @@ export default function ClassRoster() {
                 <button
                   onClick={() => bulkSetStatus("dip")}
                   disabled={!canBulkSelected}
-                  className={`rounded-xl border px-4 py-2 text-sm font-semibold transition
-                    ${
-                      canBulkSelected
-                        ? "border-red-500/40 bg-red-500/10 text-red-200 hover:bg-red-500/15"
-                        : "border-white/10 bg-white/[0.03] text-white/40"
-                    }`}
+                  className={`rounded-xl border px-4 py-2 text-sm font-semibold transition ${
+                    canBulkSelected
+                      ? "border-red-500/40 bg-red-500/10 text-red-200 hover:bg-red-500/15"
+                      : "border-white/10 bg-white/[0.03] text-white/40"
+                  }`}
                 >
                   Dip
                 </button>
@@ -547,7 +514,6 @@ export default function ClassRoster() {
                       <span className="text-xs text-white/30 font-mono">{r.checkedInAt ? "✓" : ""}</span>
                     </div>
 
-                    {/* Actions (hidden in select mode) */}
                     {!selectMode && (
                       <div className="mt-3 grid grid-cols-3 gap-2">
                         <button
@@ -568,7 +534,7 @@ export default function ClassRoster() {
 
                         <button
                           onClick={() => setStatus(r.userId, "dip")}
-                          disabled={isBusy || status === "checked_in"}
+                          disabled={isBusy}
                           className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-200 hover:bg-red-500/15 disabled:text-white/40"
                         >
                           Dip

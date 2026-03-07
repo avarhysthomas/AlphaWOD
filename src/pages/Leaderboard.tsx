@@ -22,19 +22,25 @@ type LeaderboardResponse = {
   rows: LeaderboardRow[];
 };
 
-function monthKeyUTC(d: Date) {
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
-  return `${y}-${m}`;
+function monthKeyUK(d: Date) {
+  const fmt = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/London",
+    year: "numeric",
+    month: "2-digit",
+  });
+
+  const parts = fmt.formatToParts(d);
+  const year = parts.find((p) => p.type === "year")?.value ?? "0000";
+  const month = parts.find((p) => p.type === "month")?.value ?? "01";
+  return `${year}-${month}`;
 }
 
-function addMonthsUTC(monthKey: string, delta: number) {
+function addMonthsUK(monthKey: string, delta: number) {
   const [yStr, mStr] = monthKey.split("-");
   const y = Number(yStr);
   const m = Number(mStr);
-  const base = new Date(Date.UTC(y, m - 1, 1));
-  base.setUTCMonth(base.getUTCMonth() + delta);
-  return monthKeyUTC(base);
+  const base = new Date(Date.UTC(y, m - 1 + delta, 1));
+  return monthKeyUK(base);
 }
 
 type UserProfile = {
@@ -160,7 +166,7 @@ export default function Leaderboard() {
     [functions]
   );
 
-  const [monthKey, setMonthKey] = useState(() => monthKeyUTC(new Date()));
+  const [monthKey, setMonthKey] = useState(() => monthKeyUK(new Date()));
   const [rows, setRows] = useState<LeaderboardRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -231,21 +237,21 @@ export default function Leaderboard() {
 
             <button
                 className="rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm font-semibold text-white/80 hover:bg-neutral-900"
-                onClick={() => setMonthKey((mk) => addMonthsUTC(mk, -1))}
+                onClick={() => setMonthKey((mk) => addMonthsUK(mk, -1))}
             >
                 ← Prev
             </button>
 
             <button
                 className="rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm font-semibold text-white/80 hover:bg-neutral-900"
-                onClick={() => setMonthKey(monthKeyUTC(new Date()))}
+                onClick={() => setMonthKey(monthKeyUK(new Date()))}
             >
                 This month
             </button>
 
             <button
                 className="rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm font-semibold text-white/80 hover:bg-neutral-900"
-                onClick={() => setMonthKey((mk) => addMonthsUTC(mk, 1))}
+                onClick={() => setMonthKey((mk) => addMonthsUK(mk, 1))}
             >
                 Next →
             </button>
