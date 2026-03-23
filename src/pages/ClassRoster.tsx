@@ -1,6 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
-import { doc, getDoc, collection, documentId, getDocs, query, where } from "firebase/firestore";
+import {
+  doc,
+  getDoc,
+  collection,
+  documentId,
+  getDocs,
+  query,
+  where,
+  runTransaction,
+  serverTimestamp,
+  increment,
+} from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { db } from "../firebase";
@@ -21,6 +32,7 @@ type BookingRow = {
   attendanceStatus?: AttendanceStatus;
   attended?: boolean;
   checkedInAt?: any;
+  addedByAdmin?: boolean;
 };
 
 type RosterResponse = {
@@ -34,6 +46,14 @@ type UserProfile = {
   name?: string;
   email?: string;
   photoURL?: string;
+};
+
+type GymUser = {
+  id: string;
+  name?: string;
+  email?: string;
+  photoURL?: string;
+  role?: string;
 };
 
 async function fetchUserProfiles(uids: string[]) {
@@ -96,6 +116,12 @@ export default function ClassRoster() {
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
 
+  const [allUsers, setAllUsers] = useState<GymUser[]>([]);
+  const [showAddMemberModal, setShowAddMemberModal] = useState(false);
+  const [selectedUserId, setSelectedUserId] = useState("");
+  const [addingMember, setAddingMember] = useState(false);
+  const [addMemberError, setAddMemberError] = useState("");
+
   const selectedIds = useMemo(
     () => Object.entries(selected).filter(([, v]) => v).map(([id]) => id),
     [selected]
@@ -135,6 +161,23 @@ export default function ClassRoster() {
       setClassMeta([date, time, d.location].filter(Boolean).join(" • "));
     })();
   }, [classId]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const snap = await getDocs(collection(db, "users"));
+        const users: GymUser[] = snap.docs.map((d) => ({
+          id: d.id,
+          ...(d.data() as Omit<GymUser, "id">),
+        }));
+
+        users.sort((a, b) => (a.name ?? a.email ?? "").localeCompare(b.name ?? b.email ?? ""));
+        setAllUsers(users);
+      } catch (err) {
+        console.error("Failed to load users for add-member picker:", err);
+      }
+    })();
+  }, []);
 
   const loadRoster = useCallback(async () => {
     if (!classId) return;
@@ -214,6 +257,19 @@ export default function ClassRoster() {
     });
     return copy;
   }, [rows]);
+
+  const addableUsers = useMemo(() => {
+    const activeIds = new Set(
+      rows
+        .filter((r) => {
+          const status = normalizeStatus(r);
+          return status === "booked" || status === "checked_in";
+        })
+        .map((r) => r.userId)
+    );
+
+    return allUsers.filter((u) => !activeIds.has(u.id));
+  }, [allUsers, rows]);
 
   async function setStatus(userId: string, next: BookingStatus) {
     const user = auth.currentUser;
@@ -315,6 +371,80 @@ export default function ClassRoster() {
     await bulkSetStatus("booked", ids);
   }
 
+  async function handleAdminAddMember() {
+    if (!classId) return;
+
+    const selectedUser = addableUsers.find((u) => u.id === selectedUserId) ?? allUsers.find((u) => u.id === selectedUserId);
+
+    if (!selectedUser) {
+      setAddMemberError("Please select a member.");
+      return;
+    }
+
+    try {
+      setAddingMember(true);
+      setAddMemberError("");
+
+      const existingQ = query(
+        collection(db, "bookings"),
+        where("classId", "==", classId),
+        where("userId", "==", selectedUser.id)
+      );
+
+      const existingSnap = await getDocs(existingQ);
+
+      const hasActiveBooking = existingSnap.docs.some((d) => {
+        const data = d.data() as any;
+        return data.status === "booked" || data.status === "checked_in";
+      });
+
+      if (hasActiveBooking) {
+        throw new Error("This member is already booked onto this class.");
+      }
+
+      const classRef = doc(db, "classes", classId);
+      const bookingRef = doc(collection(db, "bookings"));
+
+      await runTransaction(db, async (tx) => {
+        const classSnap = await tx.get(classRef);
+
+        if (!classSnap.exists()) {
+          throw new Error("Class not found.");
+        }
+
+        const classData = classSnap.data();
+        const capacity = classData.capacity ?? 0;
+        const bookedCount = classData.bookedCount ?? 0;
+
+        if (capacity > 0 && bookedCount >= capacity) {
+          throw new Error("This class is already full.");
+        }
+
+        tx.set(bookingRef, {
+          classId,
+          userId: selectedUser.id,
+          userName: selectedUser.name ?? selectedUser.email ?? "Member",
+          status: "booked",
+          createdAt: serverTimestamp(),
+          addedByAdmin: true,
+        });
+
+        tx.update(classRef, {
+          bookedCount: increment(1),
+        });
+      });
+
+      setShowAddMemberModal(false);
+      setSelectedUserId("");
+      await loadRoster();
+    } catch (err: any) {
+      console.error("Admin add member error:", err);
+      setAddMemberError(err?.message ?? "Failed to add member.");
+    } finally {
+      setAddingMember(false);
+    }
+  }
+
   const progressPct = totalShown ? Math.round((checkedInShown / totalShown) * 100) : 0;
   const canBulkCheckIn = !loadingRoster && !bulkBusy && rows.some((r) => normalizeStatus(r) !== "checked_in");
   const canBulkUncheck = !loadingRoster && !bulkBusy && rows.some((r) => normalizeStatus(r) === "checked_in");
@@ -387,6 +517,18 @@ export default function ClassRoster() {
                 }`}
               >
                 {bulkBusy ? "Working…" : "Uncheck all"}
+              </button>
+
+              <button
+                onClick={() => {
+                  setAddMemberError("");
+                  setSelectedUserId("");
+                  setShowAddMemberModal(true);
+                }}
+                disabled={loadingRoster || bulkBusy}
+                className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm font-semibold text-amber-200 hover:bg-amber-500/15 disabled:text-white/40"
+              >
+                + Add member
               </button>
 
               <button
@@ -510,7 +652,14 @@ export default function ClassRoster() {
                     </div>
 
                     <div className="mt-4 flex items-center justify-between gap-3">
-                      <StatusPill status={status} />
+                      <div className="flex flex-wrap items-center gap-2">
+                        <StatusPill status={status} />
+                        {r.addedByAdmin && (
+                          <span className="text-[10px] uppercase tracking-widest px-2 py-1 rounded-full border border-amber-500/40 text-amber-200 bg-amber-500/10">
+                            Admin add
+                          </span>
+                        )}
+                      </div>
                       <span className="text-xs text-white/30 font-mono">{r.checkedInAt ? "✓" : ""}</span>
                     </div>
 
@@ -548,6 +697,69 @@ export default function ClassRoster() {
           )}
         </div>
       </div>
+
+      {showAddMemberModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-md rounded-3xl border border-neutral-800 bg-neutral-950 p-6 shadow-[0_0_40px_rgba(0,0,0,0.6)]">
+            <div className="mb-4">
+              <h2 className="text-xl font-semibold text-white">Add member to class</h2>
+              <p className="mt-1 text-sm text-white/50">
+                This bypasses the usual booking deadline and adds them as an admin exception.
+              </p>
+            </div>
+
+            <label className="mb-2 block text-sm font-semibold text-white/70">Select member</label>
+
+            <select
+              value={selectedUserId}
+              onChange={(e) => setSelectedUserId(e.target.value)}
+              disabled={addingMember}
+              className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-white outline-none focus:border-white/20"
+            >
+              <option value="">Choose a member...</option>
+              {addableUsers.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name ?? u.email ?? u.id}
+                </option>
+              ))}
+            </select>
+
+            {addableUsers.length === 0 && (
+              <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white/60">
+                No additional members available to add.
+              </div>
+            )}
+
+            {addMemberError ? (
+              <div className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+                {addMemberError}
+              </div>
+            ) : null}
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                onClick={() => {
+                  setShowAddMemberModal(false);
+                  setSelectedUserId("");
+                  setAddMemberError("");
+                }}
+                disabled={addingMember}
+                className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-semibold text-white/70 hover:bg-white/[0.06] disabled:text-white/40"
+              >
+                Cancel
+              </button>
+
+              <button
+                onClick={handleAdminAddMember}
+                disabled={addingMember || addableUsers.length === 0}
+                className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm font-semibold text-amber-200 hover:bg-amber-500/15 disabled:text-white/40"
+              >
+                {addingMember ? "Adding..." : "Add member"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
