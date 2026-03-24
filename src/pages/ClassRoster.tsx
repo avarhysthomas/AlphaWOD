@@ -8,9 +8,6 @@ import {
   getDocs,
   query,
   where,
-  runTransaction,
-  serverTimestamp,
-  increment,
 } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 import { getFunctions, httpsCallable } from "firebase/functions";
@@ -372,78 +369,39 @@ export default function ClassRoster() {
   }
 
   async function handleAdminAddMember() {
-    if (!classId) return;
+  if (!classId) return;
 
-    const selectedUser = addableUsers.find((u) => u.id === selectedUserId) ?? allUsers.find((u) => u.id === selectedUserId);
+  const selectedUser =
+    addableUsers.find((u) => u.id === selectedUserId) ??
+    allUsers.find((u) => u.id === selectedUserId);
 
-    if (!selectedUser) {
-      setAddMemberError("Please select a member.");
-      return;
-    }
-
-    try {
-      setAddingMember(true);
-      setAddMemberError("");
-
-      const existingQ = query(
-        collection(db, "bookings"),
-        where("classId", "==", classId),
-        where("userId", "==", selectedUser.id)
-      );
-
-      const existingSnap = await getDocs(existingQ);
-
-      const hasActiveBooking = existingSnap.docs.some((d) => {
-        const data = d.data() as any;
-        return data.status === "booked" || data.status === "checked_in";
-      });
-
-      if (hasActiveBooking) {
-        throw new Error("This member is already booked onto this class.");
-      }
-
-      const classRef = doc(db, "classes", classId);
-      const bookingRef = doc(collection(db, "bookings"));
-
-      await runTransaction(db, async (tx) => {
-        const classSnap = await tx.get(classRef);
-
-        if (!classSnap.exists()) {
-          throw new Error("Class not found.");
-        }
-
-        const classData = classSnap.data();
-        const capacity = classData.capacity ?? 0;
-        const bookedCount = classData.bookedCount ?? 0;
-
-        if (capacity > 0 && bookedCount >= capacity) {
-          throw new Error("This class is already full.");
-        }
-
-        tx.set(bookingRef, {
-          classId,
-          userId: selectedUser.id,
-          userName: selectedUser.name ?? selectedUser.email ?? "Member",
-          status: "booked",
-          createdAt: serverTimestamp(),
-          addedByAdmin: true,
-        });
-
-        tx.update(classRef, {
-          bookedCount: increment(1),
-        });
-      });
-
-      setShowAddMemberModal(false);
-      setSelectedUserId("");
-      await loadRoster();
-    } catch (err: any) {
-      console.error("Admin add member error:", err);
-      setAddMemberError(err?.message ?? "Failed to add member.");
-    } finally {
-      setAddingMember(false);
-    }
+  if (!selectedUser) {
+    setAddMemberError("Please select a member.");
+    return;
   }
+
+  try {
+    setAddingMember(true);
+    setAddMemberError("");
+
+    const functions = getFunctions(undefined, "europe-west1");
+    const adminAddBooking = httpsCallable(functions, "adminAddBooking");
+
+    await adminAddBooking({
+      classId,
+      userId: selectedUser.id,
+    });
+
+    setShowAddMemberModal(false);
+    setSelectedUserId("");
+    await loadRoster();
+  } catch (err: any) {
+    console.error("Admin add member error:", err);
+    setAddMemberError(err?.message ?? "Failed to add member.");
+  } finally {
+    setAddingMember(false);
+  }
+}
 
   const progressPct = totalShown ? Math.round((checkedInShown / totalShown) * 100) : 0;
   const canBulkCheckIn = !loadingRoster && !bulkBusy && rows.some((r) => normalizeStatus(r) !== "checked_in");

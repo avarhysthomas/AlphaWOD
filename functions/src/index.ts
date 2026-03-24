@@ -78,10 +78,15 @@ type BookingDoc = {
   cancelledReason?: "user_cancelled" | "authorised_absence" | string;
 
   // attendance (day-of)
-  attendanceStatus?: "none" | "checked_in" | "dip"; // NEW
-  attended?: boolean; // keep (used for leaderboard/stats)
+  attendanceStatus?: "none" | "checked_in" | "dip";
+  attended?: boolean;
   checkedInAt?: admin.firestore.FieldValue | admin.firestore.Timestamp | null;
   checkedInBy?: string | null;
+
+  // admin exception metadata
+  addedByAdmin?: boolean;
+  addedByAdminBy?: string;
+  addedByAdminAt?: admin.firestore.FieldValue | admin.firestore.Timestamp;
 };
 
 type LeaderboardUserDoc = {
@@ -315,6 +320,80 @@ export const cancelBooking = onCall(async (request) => {
     // Guard against negatives
     tx.update(classRef, {
       bookedCount: admin.firestore.FieldValue.increment(bookedCount > 0 ? -1 : 0),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    return {success: true};
+  });
+});
+
+export const adminAddBooking = onCall(async (request) => {
+  const callerUid = requireAuth(request);
+  await requireAdmin(callerUid);
+
+  const classId = requireString(request.data?.classId, "classId");
+  const userId = requireString(request.data?.userId, "userId");
+
+  const classRef = db.collection("classes").doc(classId);
+  const bookingRef = db.collection("bookings").doc(bookingIdFor(classId, userId));
+  const userRef = db.collection("users").doc(userId);
+
+  return db.runTransaction(async (tx) => {
+    const [classSnap, existingBookingSnap, userSnap] = await Promise.all([
+      tx.get(classRef),
+      tx.get(bookingRef),
+      tx.get(userRef),
+    ]);
+
+    if (!classSnap.exists) {
+      throw new HttpsError("not-found", "Class not found.");
+    }
+
+    if (!userSnap.exists) {
+      throw new HttpsError("not-found", "User not found.");
+    }
+
+    const classData = classSnap.data() as Partial<ClassDoc>;
+    const capacity = Number(classData.capacity ?? 0);
+    const bookedCount = Number(classData.bookedCount ?? 0);
+
+    if (capacity <= 0) {
+      throw new HttpsError("failed-precondition", "Class has no capacity set.");
+    }
+
+    if (bookedCount >= capacity) {
+      throw new HttpsError("failed-precondition", "Class is full.");
+    }
+
+    if (existingBookingSnap.exists) {
+      const b = existingBookingSnap.data() as Partial<BookingDoc>;
+
+      if (b.status === "booked") {
+        throw new HttpsError("already-exists", "Already booked.");
+      }
+      // If cancelled, allow overwrite / re-add
+    }
+
+    const userData = userSnap.data() as UserDoc;
+    const userName = userData.name || "Member";
+
+    tx.set(bookingRef, {
+      classId,
+      userId,
+      userName,
+      status: "booked",
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      attendanceStatus: "none",
+      attended: false,
+      checkedInAt: null,
+      checkedInBy: null,
+      addedByAdmin: true,
+      addedByAdminBy: callerUid,
+      addedByAdminAt: admin.firestore.FieldValue.serverTimestamp(),
+    } as any);
+
+    tx.update(classRef, {
+      bookedCount: admin.firestore.FieldValue.increment(1),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
