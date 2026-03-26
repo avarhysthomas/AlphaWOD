@@ -18,6 +18,7 @@ import { db } from "../firebase";
 import { Camera, Save, AlertTriangle, Flame, Trophy, CheckCircle2, Dumbbell, Activity, Calendar } from "lucide-react";
 import UserTopNav from "../components/UserTopNav";
 
+
 type UserStats = {
   totalCheckIns?: number;
   monthCheckIns?: Record<string, number>;
@@ -743,31 +744,6 @@ export default function Profile() {
               </div>
             </>
           )}
-        </div>
-
-        {/* Secondary card */}
-        <div className="mt-8 rounded-3xl border border-neutral-800 bg-neutral-950 p-6 sm:p-7">
-          <div className="text-xs font-semibold uppercase tracking-[0.35em] text-white/50">
-            Coming next
-          </div>
-          <div className="mt-2 text-2xl font-bold text-white/95">
-            Lifts & PB&apos;s
-          </div>
-          <div className="mt-3 max-w-2xl text-sm text-white/60">
-            Track strength numbers, Hyrox benchmarks, and bodyweight progress in one place.
-          </div>
-
-          <div className="mt-5 grid gap-3 sm:grid-cols-3">
-            <div className="rounded-2xl border border-neutral-800 bg-neutral-900/30 p-4 text-sm text-white/65">
-              Strength block history
-            </div>
-            <div className="rounded-2xl border border-neutral-800 bg-neutral-900/30 p-4 text-sm text-white/65">
-              Hyrox benchmark tracking
-            </div>
-            <div className="rounded-2xl border border-neutral-800 bg-neutral-900/30 p-4 text-sm text-white/65">
-              Weight & notes log
-            </div>
-          </div>
         </div>
       </div>
     </div>

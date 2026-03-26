@@ -1,9 +1,16 @@
 import React from "react";
 import { NavLink } from "react-router-dom";
-import { CalendarDays, User, Trophy, Flame } from "lucide-react";
+import {
+  CalendarDays,
+  User,
+  Trophy,
+  Flame,
+  Dumbbell,
+} from "lucide-react";
 
 const navItems = [
   { to: "/schedule", label: "Schedule", icon: CalendarDays },
+  { to: "/training", label: "Training", icon: Dumbbell },
   { to: "/profile", label: "Profile", icon: User },
   { to: "/leaderboard", label: "Board of Fame", icon: Trophy },
   { to: "/board-of-shame", label: "Board of Shame", icon: Flame },

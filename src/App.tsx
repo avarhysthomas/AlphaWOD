@@ -19,6 +19,9 @@ import AdminTemplates from "./pages/AdminTemplates";
 import Schedule from "./pages/Schedule";
 import ClassRoster from "./pages/ClassRoster";
 import Leaderboard from "./pages/Leaderboard";
+import Training from "./pages/Training";
+import TrainingCategory from "./pages/TrainingCategory";
+import TrainingMovement from "./pages/TrainingMovement";
 
 import { Dumbbell, NotebookPen, CalendarDays } from "lucide-react";
 import { useAuth } from "./context/AuthContext";
@@ -159,6 +162,10 @@ export default function App() {
       <Route path="/board-of-shame" element={<RequireAuth><DipLeaderboard /></RequireAuth>} />
 
       <Route path="/profile" element={<RequireAuth><Profile /></RequireAuth>} />
+
+      <Route path="/training" element={<Training />} />
+      <Route path="/training/:category" element={<TrainingCategory />} />
+      <Route path="/training/:category/:movementSlug" element={<TrainingMovement />} />
 
       {/* Admin-only area (with bottom nav) */}
       <Route
