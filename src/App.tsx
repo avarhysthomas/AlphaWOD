@@ -3,7 +3,6 @@ import React from "react";
 import {
   Routes,
   Route,
-  NavLink,
   Navigate,
   Outlet,
   useLocation,
@@ -22,8 +21,6 @@ import Leaderboard from "./pages/Leaderboard";
 import Training from "./pages/Training";
 import TrainingCategory from "./pages/TrainingCategory";
 import TrainingMovement from "./pages/TrainingMovement";
-
-import { Dumbbell, NotebookPen, CalendarDays } from "lucide-react";
 import { useAuth } from "./context/AuthContext";
 import Profile from "./pages/Profile";
 
@@ -69,48 +66,8 @@ function RequireMember({ children }: { children: React.ReactElement }) {
 
 function AdminLayout() {
   return (
-    <div className="min-h-screen flex flex-col bg-black text-white overflow-x-hidden">
-      <div className="flex-1 pb-16">
-        <Outlet />
-      </div>
-
-      <nav className="fixed bottom-0 left-0 right-0 bg-neutral-900 text-white flex justify-around items-center h-16 border-t border-neutral-700">
-        <NavLink
-          to="/schedule"
-          className={({ isActive }) =>
-            `text-sm flex flex-col items-center ${
-              isActive ? "text-white font-bold" : "text-gray-400"
-            }`
-          }
-        >
-          <CalendarDays className="h-6 w-6" />
-          <span className="text-xs">Schedule</span>
-        </NavLink>
-
-        <NavLink
-          to="/display"
-          className={({ isActive }) =>
-            `text-sm flex flex-col items-center ${
-              isActive ? "text-white font-bold" : "text-gray-400"
-            }`
-          }
-        >
-          <Dumbbell className="h-6 w-6" />
-          <span className="text-xs">Display</span>
-        </NavLink>
-
-        <NavLink
-          to="/editor"
-          className={({ isActive }) =>
-            `text-sm flex flex-col items-center ${
-              isActive ? "text-white font-bold" : "text-gray-400"
-            }`
-          }
-        >
-          <NotebookPen className="h-6 w-6" />
-          <span className="text-xs">Editor</span>
-        </NavLink>
-      </nav>
+    <div className="min-h-screen bg-black text-white overflow-x-hidden">
+      <Outlet />
     </div>
   );
 }

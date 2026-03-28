@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
 import { db } from "../firebase";
 import LogoutButton from "./LogoutButton";
+import UserTopNav from "./UserTopNav";
 
 type SessionType = "HYROX" | "Strength";
 type WodType = "AMRAP" | "For Time" | "EMOM" | "Chipper";
@@ -366,6 +367,7 @@ const WODEditor = () => {
       }}
       className="max-w-xl mx-auto bg-neutral-900 p-6 pb-24 rounded-lg space-y-6 text-white"
     >
+      <UserTopNav />
       <h1 className="text-3xl font-heading font-bold text-center uppercase tracking-widest">
         AlphaFIT Editor
       </h1>

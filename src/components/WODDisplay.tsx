@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "../firebase";
 import { Dumbbell, Flame, Sun, Moon } from "lucide-react";
+import UserTopNav from "./UserTopNav";
 
 type SessionKey = "AM" | "PM" | "930AM";
 type TimerMode = "timed" | "stationControlled";
@@ -154,6 +155,7 @@ const WODDisplay = () => {
 
   return (
     <div className="min-h-screen bg-black text-white">
+      <UserTopNav />
       <div className="mx-auto w-full max-w-[1400px] px-4 py-4">
         {/* TOP CONTROLS */}
         <div className="flex flex-wrap items-center gap-2 pb-3">
