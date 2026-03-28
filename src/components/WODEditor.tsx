@@ -6,7 +6,6 @@ import UserTopNav from "./UserTopNav";
 import {
   CalendarDays,
   Dumbbell,
-  TimerReset,
   Flame,
   Save,
   Plus,
