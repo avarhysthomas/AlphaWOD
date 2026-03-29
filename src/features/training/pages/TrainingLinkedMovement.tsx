@@ -12,9 +12,9 @@ import {
   query,
   where,
 } from "firebase/firestore";
-import { auth, db } from "../firebase";
-import { getMovementBySlug } from "../data/training";
-import UserTopNav from "../components/UserTopNav";
+import { auth, db } from "../../../firebase";
+import { getMovementBySlug } from "../../../lib/training";
+import UserTopNav from "../../../components/layout/UserTopNav";
 
 type TrainingLog = {
   id: string;

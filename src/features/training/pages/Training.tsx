@@ -4,8 +4,8 @@ import {
   ChevronRight,
   Dumbbell,
 } from "lucide-react";
-import { TRAINING_CATEGORIES } from "../data/training";
-import UserTopNav from "../components/UserTopNav";
+import { TRAINING_CATEGORIES } from "../../../lib/training";
+import UserTopNav from "../../../components/layout/UserTopNav";
 
 export default function Training() {
   return (

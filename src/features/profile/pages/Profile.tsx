@@ -14,9 +14,9 @@ import {
   Timestamp,
 } from "firebase/firestore";
 import { getDownloadURL, getStorage, ref, uploadBytes } from "firebase/storage";
-import { db } from "../firebase";
+import { db } from "../../../firebase";
 import { Camera, Save, AlertTriangle, Flame, Trophy, CheckCircle2, Dumbbell, Activity, Calendar } from "lucide-react";
-import UserTopNav from "../components/UserTopNav";
+import UserTopNav from "../../../components/layout/UserTopNav";
 
 
 type UserStats = {

@@ -8,21 +8,19 @@ import {
   useLocation,
 } from "react-router-dom";
 
-import HomeScreen from "./components/HomeScreen";
-import WODEditor from "./components/WODEditor";
-import WODDisplay from "./components/WODDisplay";
-import DipLeaderboard from "./pages/DipLeaderboard";
-import Login from "./pages/Login";
-import Signup from "./pages/Signup";
-import AdminTemplates from "./pages/AdminTemplates";
-import Schedule from "./pages/Schedule";
-import ClassRoster from "./pages/ClassRoster";
-import Leaderboard from "./pages/Leaderboard";
-import Training from "./pages/Training";
-import TrainingCategory from "./pages/TrainingCategory";
-import TrainingMovement from "./pages/TrainingMovement";
+import WODEditor from "./features/wod/pages/WODEditor";
+import WODDisplay from "./features/wod/pages/WODDisplay";
+import DipLeaderboard from "./features/leaderboard/pages/DipLeaderboard";
+import Login from "./features/auth/pages/Login";
+import Signup from "./features/auth/pages/Signup";
+import Schedule from "./features/bookings/pages/Schedule";
+import ClassRoster from "./features/bookings/pages/ClassRoster";
+import Leaderboard from "./features/leaderboard/pages/Leaderboard";
+import Training from "./features/training/pages/Training";
+import TrainingCategory from "./features/training/pages/TrainingCategory";
+import TrainingMovement from "./features/training/pages/TrainingMovement";
 import { useAuth } from "./context/AuthContext";
-import Profile from "./pages/Profile";
+import Profile from "./features/profile/pages/Profile";
 
 
 /** ---------- Route guards ---------- */
@@ -134,13 +132,9 @@ export default function App() {
           </RequireAuth>
         }
       >
-        {/* If you still want HomeScreen, keep it; otherwise you can delete this */}
-        <Route path="/home" element={<HomeScreen />} />
-
         {/* Admin pages */}
         <Route path="/display" element={<WODDisplay />} />
         <Route path="/editor" element={<WODEditor />} />
-        <Route path="/templates" element={<AdminTemplates />} />
         <Route path="/admin/classes/:classId" element={<ClassRoster />} />
       </Route>
 

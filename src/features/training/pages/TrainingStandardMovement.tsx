@@ -18,8 +18,8 @@ import {
   serverTimestamp,
   where,
 } from "firebase/firestore";
-import { auth, db } from "../firebase";
-import { getMovementBySlug } from "../data/training";
+import { auth, db } from "../../../firebase";
+import { getMovementBySlug } from "../../../lib/training";
 import {
   ResponsiveContainer,
   LineChart,
@@ -30,7 +30,7 @@ import {
   Tooltip,
   ReferenceDot,
 } from "recharts";
-import UserTopNav from "../components/UserTopNav";
+import UserTopNav from "../../../components/layout/UserTopNav";
 
 type TrainingLog = {
   id: string;

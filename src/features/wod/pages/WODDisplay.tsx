@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { doc, getDoc } from "firebase/firestore";
-import { db } from "../firebase";
+import { db } from "../../../firebase";
 import { Dumbbell, Flame, Sun, Moon } from "lucide-react";
-import UserTopNav from "./UserTopNav";
+import UserTopNav from "../../../components/layout/UserTopNav";
 
 type SessionKey = "AM" | "PM" | "930AM";
 type TimerMode = "timed" | "stationControlled";

@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
-import { db } from "../firebase";
-import LogoutButton from "./LogoutButton";
-import UserTopNav from "./UserTopNav";
+import { db } from "../../../firebase";
+import LogoutButton from "../../../components/ui/LogoutButton";
+import UserTopNav from "../../../components/layout/UserTopNav";
 import {
   CalendarDays,
   Dumbbell,

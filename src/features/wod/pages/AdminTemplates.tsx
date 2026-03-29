@@ -11,7 +11,7 @@ import {
 } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 import { getFunctions, httpsCallable } from "firebase/functions";
-import { db } from "../firebase";
+import { db } from "../../../firebase";
 
 type Template = {
   id: string;

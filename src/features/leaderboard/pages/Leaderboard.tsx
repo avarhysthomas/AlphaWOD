@@ -1,11 +1,11 @@
 import React, {useEffect, useMemo, useState} from "react";
 import {getFunctions, httpsCallable} from "firebase/functions";
 import {Crown, Medal, Star, Trophy, RefreshCw} from "lucide-react";
-import {useAuth} from "../context/AuthContext";
+import {useAuth} from "../../../context/AuthContext";
 import { collection, documentId, getDocs, query, where } from "firebase/firestore";
-import { db } from "../firebase";
-import UserAvatar from "../components/UserAvatar";
-import UserTopNav from "../components/UserTopNav";
+import { db } from "../../../firebase";
+import UserAvatar from "../../../components/ui/UserAvatar";
+import UserTopNav from "../../../components/layout/UserTopNav";
 
 type LeaderboardRow = {
   userId: string;

@@ -1,8 +1,8 @@
 import React from "react";
 import { Link, Navigate, useParams } from "react-router-dom";
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { getCategoryByKey } from "../data/training";
-import UserTopNav from "../components/UserTopNav";
+import { getCategoryByKey } from "../../../lib/training";
+import UserTopNav from "../../../components/layout/UserTopNav";
 
 export default function TrainingCategory() {
   const { category } = useParams<{ category: string }>();

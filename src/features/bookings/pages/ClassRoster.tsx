@@ -11,8 +11,9 @@ import {
 } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 import { getFunctions, httpsCallable } from "firebase/functions";
-import { db } from "../firebase";
-import UserAvatar from "../components/UserAvatar";
+import { db } from "../../../firebase";
+import UserAvatar from "../../../components/ui/UserAvatar";
+import UserTopNav from "../../../components/layout/UserTopNav";
 
 type BookingStatus = "booked" | "checked_in" | "authorised_absence" | "dip";
 
@@ -278,7 +279,7 @@ export default function ClassRoster() {
 
       if (next === "checked_in" || next === "booked") {
         const attended = next === "checked_in";
-        const mod = await import("../service/checkin");
+        const mod = await import("../services/checkin");
         await mod.checkInBooking({ classId, userId, attended });
       } else {
         const functions = getFunctions(undefined, "europe-west1");
@@ -314,7 +315,7 @@ export default function ClassRoster() {
 
       if (next === "checked_in" || next === "booked") {
         const attended = next === "checked_in";
-        const mod = await import("../service/checkin");
+        const mod = await import("../services/checkin");
 
         const results = await Promise.allSettled(
           ids.map((uid) => mod.checkInBooking({ classId, userId: uid, attended }))
@@ -410,6 +411,7 @@ export default function ClassRoster() {
 
   return (
     <div className="min-h-screen bg-black text-white p-6">
+      <UserTopNav />
       <div className="max-w-5xl mx-auto space-y-6">
         <div className="rounded-3xl border border-neutral-800 bg-gradient-to-b from-neutral-950 to-black p-7 shadow-[0_0_40px_rgba(0,0,0,0.6)]">
           <div className="flex items-start justify-between gap-6">

@@ -9,7 +9,7 @@ import {
   MonitorPlay,
   SquarePen,
 } from "lucide-react";
-import { useAuth } from "../context/AuthContext";
+import { useAuth } from "../../context/AuthContext";
 
 type NavItem = {
   to: string;

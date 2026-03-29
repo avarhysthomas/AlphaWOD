@@ -1,8 +1,8 @@
 import React from "react";
 import { useParams, Navigate } from "react-router-dom";
-import { getMovementBySlug } from "../data/training";
+import { getMovementBySlug } from "../../../lib/training";
 import TrainingStandardMovement from "./TrainingStandardMovement";
-import TrainingLinkedMovement from "./TrainingLinkedMovement";
+import TrainingLinkedMovement from "../pages/TrainingLinkedMovement";
 
 export default function TrainingMovement() {
   const { category, movementSlug } = useParams<{

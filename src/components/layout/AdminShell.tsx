@@ -1,6 +1,6 @@
 import { Outlet } from "react-router-dom";
-import { useAuth } from "../context/AuthContext";
-import UserTopNav from "../components/UserTopNav";
+import { useAuth } from "../../context/AuthContext";
+import UserTopNav from "./UserTopNav";
 
 export default function AdminShell() {
   const { appUser } = useAuth();

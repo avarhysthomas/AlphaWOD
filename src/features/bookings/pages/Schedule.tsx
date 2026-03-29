@@ -14,11 +14,11 @@ import {
   Timestamp,
   where,
 } from "firebase/firestore";
-import { db } from "../firebase";
-import { useAuth } from "../context/AuthContext";
-import LogoutButton from "../components/LogoutButton";
+import { db } from "../../../firebase";
+import { useAuth } from "../../../context/AuthContext";
+import LogoutButton from "../../../components/ui/LogoutButton";
 import {Flame, Dumbbell, PersonStanding, Award, Activity } from "lucide-react";
-import UserTopNav from "../components/UserTopNav";
+import UserTopNav from "../../../components/layout/UserTopNav";
 
 type ClassDoc = {
   title: string;
