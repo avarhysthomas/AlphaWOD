@@ -73,6 +73,20 @@ export const TRAINING_CATEGORIES: TrainingCategory[] = [
         unitOptions: ["kg", "reps"],
       },
       {
+        name: "Bent Over Row",
+        slug: "bent-over-row",
+        description: "Track upper-back strength and balance to pressing numbers.",
+        metricTypes: ["1RM", "3RM", "5RM", "Working Set", "Volume"],
+        unitOptions: ["kg", "reps"],
+      },
+      {
+        name: "Barbell Hip Thrust",
+        slug: "barbell-hip-thrust",
+        description: "Track glute strength and hip extension power.",
+        metricTypes: ["1RM", "3RM", "5RM", "Working Set", "Volume"],
+        unitOptions: ["kg", "reps"],
+      },
+      {
         name: "Pull Ups",
         slug: "pull-ups",
         description: "Track bodyweight pulling strength and endurance.",

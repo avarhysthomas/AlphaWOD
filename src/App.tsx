@@ -19,9 +19,12 @@ import Leaderboard from "./features/leaderboard/pages/Leaderboard";
 import Training from "./features/training/pages/Training";
 import TrainingCategory from "./features/training/pages/TrainingCategory";
 import TrainingMovement from "./features/training/pages/TrainingMovement";
-import { useAuth } from "./context/AuthContext";
 import Profile from "./features/profile/pages/Profile";
+import { useAuth } from "./context/AuthContext";
 
+import AdminInsights from "./features/admin/pages/AdminInsights";
+import AdminPerformance from "./features/admin/pages/AdminPerformance";
+import AdminMemberPerformance from "./features/admin/pages/AdminMemberPerformance";
 
 /** ---------- Route guards ---------- */
 
@@ -60,7 +63,7 @@ function RequireMember({ children }: { children: React.ReactElement }) {
   return children;
 }
 
-/** ---------- Layout (admin bottom nav) ---------- */
+/** ---------- Layout ---------- */
 
 function AdminLayout() {
   return (
@@ -92,7 +95,7 @@ export default function App() {
         element={isAuthed ? <Navigate to="/schedule" replace /> : <Signup />}
       />
 
-      {/* Member route: schedule only (admin + user) */}
+      {/* Member routes */}
       <Route
         path="/schedule"
         element={
@@ -103,26 +106,44 @@ export default function App() {
           </RequireAuth>
         }
       />
+
       <Route
         path="/leaderboard"
         element={
           <RequireAuth>
             <RequireMember>
               <Leaderboard />
-            </RequireMember>  
+            </RequireMember>
           </RequireAuth>
         }
       />
 
-      <Route path="/board-of-shame" element={<RequireAuth><DipLeaderboard /></RequireAuth>} />
+      <Route
+        path="/board-of-shame"
+        element={
+          <RequireAuth>
+            <DipLeaderboard />
+          </RequireAuth>
+        }
+      />
 
-      <Route path="/profile" element={<RequireAuth><Profile /></RequireAuth>} />
+      <Route
+        path="/profile"
+        element={
+          <RequireAuth>
+            <Profile />
+          </RequireAuth>
+        }
+      />
 
       <Route path="/training" element={<Training />} />
       <Route path="/training/:category" element={<TrainingCategory />} />
-      <Route path="/training/:category/:movementSlug" element={<TrainingMovement />} />
+      <Route
+        path="/training/:category/:movementSlug"
+        element={<TrainingMovement />}
+      />
 
-      {/* Admin-only area (with bottom nav) */}
+      {/* Admin-only area */}
       <Route
         element={
           <RequireAuth>
@@ -132,7 +153,9 @@ export default function App() {
           </RequireAuth>
         }
       >
-        {/* Admin pages */}
+        <Route path="/admin/insights" element={<AdminInsights />} />
+        <Route path="/admin/performance" element={<AdminPerformance />} />
+        <Route path="/admin/performance/:userId" element={<AdminMemberPerformance />} />
         <Route path="/display" element={<WODDisplay />} />
         <Route path="/editor" element={<WODEditor />} />
         <Route path="/admin/classes/:classId" element={<ClassRoster />} />

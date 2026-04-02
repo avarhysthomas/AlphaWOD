@@ -8,6 +8,8 @@ import {
   Dumbbell,
   MonitorPlay,
   SquarePen,
+  BarChart3,
+  Activity,
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 
@@ -28,6 +30,8 @@ const baseNavItems: NavItem[] = [
 ];
 
 const adminNavItems: NavItem[] = [
+  { to: "/admin/insights", label: "Insights", icon: BarChart3, adminOnly: true },
+  { to: "/admin/performance", label: "Performance", icon: Activity, adminOnly: true },
   { to: "/display", label: "Display", icon: MonitorPlay, adminOnly: true },
   { to: "/editor", label: "Editor", icon: SquarePen, adminOnly: true },
 ];

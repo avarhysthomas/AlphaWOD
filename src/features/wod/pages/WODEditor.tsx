@@ -3,6 +3,14 @@ import { doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
 import { db } from "../../../firebase";
 import LogoutButton from "../../../components/ui/LogoutButton";
 import UserTopNav from "../../../components/layout/UserTopNav";
+import {
+  CalendarDays,
+  Dumbbell,
+  Flame,
+  Save,
+  Plus,
+  Layers3,
+} from "lucide-react";
 
 type SessionType = "HYROX" | "Strength";
 type WodType = "AMRAP" | "For Time" | "EMOM" | "Chipper";
@@ -11,7 +19,7 @@ type TimerMode = "timed" | "stationControlled";
 
 type StrengthRow = {
   movement: string;
-  percent: string; // keep as string so you can write "75-80" if you want
+  percent: string;
   repRange: string;
 };
 
@@ -19,7 +27,6 @@ type Movement = {
   id: string;
   name: string;
   target?: string;
-  notes?: string;
 };
 
 type Station = {
@@ -29,7 +36,6 @@ type Station = {
 };
 
 function makeId() {
-  // crypto.randomUUID is supported in modern browsers; fallback keeps it safe
   return typeof crypto !== "undefined" && "randomUUID" in crypto
     ? (crypto as any).randomUUID()
     : `${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -53,7 +59,6 @@ function formatSeconds(total: number) {
 }
 
 function normaliseMovements(raw: any): string[] {
-  // kept for legacy fields in old docs
   if (!Array.isArray(raw)) return [];
   return raw
     .map((m) => {
@@ -69,7 +74,6 @@ function normaliseMovements(raw: any): string[] {
 }
 
 function normaliseStations(rawStations: any, rawMovements: any): Station[] {
-  // Preferred: stations[] exists
   if (Array.isArray(rawStations) && rawStations.length) {
     const stations: Station[] = rawStations.map((s: any, i: number) => {
       const title = String(s?.title ?? `Station ${i + 1}`).trim();
@@ -79,9 +83,8 @@ function normaliseStations(rawStations: any, rawMovements: any): Station[] {
           id: String(m?.id ?? makeId()),
           name: String(m?.name ?? "").trim(),
           target: String(m?.target ?? "").trim() || undefined,
-          notes: String(m?.notes ?? "").trim() || undefined,
         }))
-        .filter((m: Movement) => m.name.length > 0 || m.target || m.notes);
+        .filter((m: Movement) => m.name.length > 0 || m.target);
 
       return {
         id: String(s?.id ?? makeId()),
@@ -95,7 +98,6 @@ function normaliseStations(rawStations: any, rawMovements: any): Station[] {
       : [{ id: makeId(), title: "Station 1", movements: [{ id: makeId(), name: "" }] }];
   }
 
-  // Legacy fallback: movements: string[]
   const legacy = normaliseMovements(rawMovements);
   if (legacy.length) {
     return [
@@ -107,7 +109,6 @@ function normaliseStations(rawStations: any, rawMovements: any): Station[] {
     ];
   }
 
-  // Default
   return [{ id: makeId(), title: "Station 1", movements: [{ id: makeId(), name: "" }] }];
 }
 
@@ -131,45 +132,50 @@ function normaliseStrength(raw: any): StrengthRow[] {
   return out.length ? out : [{ movement: "", percent: "", repRange: "" }];
 }
 
+const inputClass =
+  "w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/25 focus:border-white/20 focus:bg-black";
+
+const labelClass =
+  "mb-2 block text-[11px] font-semibold uppercase tracking-[0.22em] text-white/44";
+
+const sectionCardClass =
+  "rounded-[24px] border border-white/10 bg-neutral-950/85 p-5 shadow-[0_16px_40px_rgba(0,0,0,0.28)] sm:p-6";
+
+const secondaryButtonClass =
+  "inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-semibold text-white/80 transition hover:border-white/20 hover:bg-white/[0.06] hover:text-white";
+
+const primaryButtonClass =
+  "inline-flex items-center justify-center gap-2 rounded-[20px] border border-white/15 bg-white px-6 py-3 text-sm font-semibold text-black transition hover:opacity-90";
+
+
 const WODEditor = () => {
   const [formData, setFormData] = useState({
     wodName: "",
     date: "",
     timeOfDay: "AM" as TimeOfDay,
-
     sessionType: "HYROX" as SessionType,
 
-    // HYROX
     wodType: "AMRAP" as WodType,
     groupSize: 4,
-
     timerMode: "timed" as TimerMode,
 
-    // timed settings
     roundMinutes: 12,
     roundSeconds: 0,
     rounds: 1,
     restBetweenRoundsSeconds: 0,
 
-    // station controlled
     controlStationIndex: 0,
 
-    // Stations -> Movements
     stations: [{ id: makeId(), title: "Station 1", movements: [{ id: makeId(), name: "" }] }] as Station[],
 
-    notes: "",
-
-    // Strength rows
     strengthMovements: [{ movement: "", percent: "", repRange: "" }] as StrengthRow[],
 
-    // ✅ NEW Strength meta for display tiles
-    strengthGoal: "Quality reps",
-    strengthLoad: "% of 1RM",
-    strengthRange: "Hit target reps",
-    strengthCue: "Clean reps with full ROM. Quality over Quantity.",
+    strengthGoal: "",
+    strengthLoad: "",
+    strengthRange: "",
+    strengthCue: "",
   });
 
-  // --- computed timing (Timed mode) ---
   const roundDurationSeconds = useMemo(() => {
     const m = clampInt(toInt(formData.roundMinutes, 0), 0, 180);
     const s = clampInt(toInt(formData.roundSeconds, 0), 0, 59);
@@ -197,12 +203,10 @@ const WODEditor = () => {
       movements: (s.movements || []).map((m) => ({
         ...m,
         name: String(m.name ?? "").trim(),
-        target: String((m as any).target ?? "").trim(), // "" if empty
-        notes: String((m as any).notes ?? "").trim(), // "" if empty
+        target: String((m as any).target ?? "").trim()
       })),
     }));
 
-    // keep at least one station + one movement input
     if (!stations.length) {
       return [{ id: makeId(), title: "Station 1", movements: [{ id: makeId(), name: "" }] }];
     }
@@ -216,7 +220,6 @@ const WODEditor = () => {
 
   const flattenedMovements = useMemo(() => flattenStationMovements(cleanedStations), [cleanedStations]);
 
-  // --- load existing session when date/time changes ---
   useEffect(() => {
     const loadExisting = async () => {
       if (!formData.date || !formData.timeOfDay) return;
@@ -230,20 +233,15 @@ const WODEditor = () => {
         const existing = data?.[formData.timeOfDay];
         if (!existing) return;
 
-        // derive mins/secs from stored roundDurationSeconds (if present)
         const storedRoundSeconds = toInt(existing.roundDurationSeconds, 0);
         const mins = storedRoundSeconds ? Math.floor(storedRoundSeconds / 60) : 0;
         const secs = storedRoundSeconds ? storedRoundSeconds % 60 : 0;
 
         setFormData((prev) => ({
           ...prev,
-
-          // keep selected date + timeOfDay as-is
           wodName: String(existing.wodName ?? ""),
           sessionType: (existing.sessionType as SessionType) ?? "HYROX",
-          notes: String(existing.notes ?? ""),
 
-          // HYROX
           wodType: (existing.wodType as WodType) ?? "AMRAP",
           groupSize: toInt(existing.groupSize, 4),
           timerMode: (existing.timerMode as TimerMode) ?? "timed",
@@ -254,10 +252,7 @@ const WODEditor = () => {
           controlStationIndex: clampInt(toInt(existing.controlStationIndex, 0), 0, 999),
           stations: normaliseStations(existing.stations, existing.movements),
 
-          // Strength
           strengthMovements: normaliseStrength(existing.strengthMovements),
-
-          // ✅ NEW Strength meta
           strengthGoal: String(existing.strengthGoal ?? "Quality reps"),
           strengthLoad: String(existing.strengthLoad ?? "% of 1RM"),
           strengthRange: String(existing.strengthRange ?? "Hit target reps"),
@@ -293,7 +288,6 @@ const WODEditor = () => {
     const sessionPayload: any = {
       wodName: String(formData.wodName ?? ""),
       sessionType: formData.sessionType,
-      notes: String(formData.notes ?? ""),
       createdAt: new Date(),
     };
 
@@ -304,18 +298,12 @@ const WODEditor = () => {
         wodType: formData.wodType,
         groupSize,
         timerMode: formData.timerMode,
-
-        // timed settings stored regardless (harmless)
         roundDurationSeconds,
         rounds: roundsNum,
         restBetweenRoundsSeconds: restSeconds,
         totalWorkSeconds,
         totalSessionSeconds,
-
-        // station controlled
         controlStationIndex: clampInt(toInt(formData.controlStationIndex, 0), 0, 999),
-
-        // ✅ save stations (new) + movements (legacy flat list)
         stations: cleanedStations,
         movements: flattenedMovements,
       });
@@ -330,8 +318,6 @@ const WODEditor = () => {
 
       Object.assign(sessionPayload, {
         strengthMovements: cleanedStrength,
-
-        // ✅ NEW Strength meta
         strengthGoal: String(formData.strengthGoal ?? "").trim(),
         strengthLoad: String(formData.strengthLoad ?? "").trim(),
         strengthRange: String(formData.strengthRange ?? "").trim(),
@@ -354,278 +340,418 @@ const WODEditor = () => {
   };
 
   return (
-    <form
-      onSubmit={handleSubmit}
-      onKeyDown={(e) => {
-        // stop Enter from submitting the whole form (we use Enter to add movements)
-        if (e.key === "Enter") {
-          const el = e.target as HTMLElement;
-          const tag = el.tagName.toLowerCase();
-          const isTextArea = tag === "textarea";
-          if (!isTextArea) e.preventDefault();
-        }
-      }}
-      className="max-w-xl mx-auto bg-neutral-900 p-6 pb-24 rounded-lg space-y-6 text-white"
-    >
+    <div className="min-h-screen bg-black text-white">
       <UserTopNav />
-      <h1 className="text-3xl font-heading font-bold text-center uppercase tracking-widest">
-        AlphaFIT Editor
-      </h1>
 
-      <LogoutButton />
-
-      {/* Workout name */}
-      <div>
-        <label className="block text-sm font-medium text-white/80 mb-1">Workout Name</label>
-        <input
-          type="text"
-          name="wodName"
-          value={formData.wodName}
-          onChange={handleChange}
-          className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
-        />
-      </div>
-
-      {/* Date */}
-      <div>
-        <label className="block text-sm font-medium text-white/80 mb-1">Date</label>
-        <input
-          type="date"
-          name="date"
-          value={formData.date}
-          onChange={handleChange}
-          className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
-        />
-      </div>
-
-      {/* Session key */}
-      <div>
-        <label className="block text-sm font-medium text-white/80 mb-1">Session</label>
-        <select
-          name="timeOfDay"
-          value={formData.timeOfDay}
-          onChange={handleChange}
-          className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
-        >
-          <option value="AM">AM</option>
-          <option value="PM">PM</option>
-          <option value="930AM">9:30AM</option>
-        </select>
-      </div>
-
-      {/* Session type */}
-      <div>
-        <label className="block text-sm font-medium text-white/80 mb-1">Session Type</label>
-        <select
-          name="sessionType"
-          value={formData.sessionType}
-          onChange={handleChange}
-          className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
-        >
-          <option value="HYROX">HYROX</option>
-          <option value="Strength">Strength</option>
-        </select>
-      </div>
-
-      {/* HYROX */}
-      {formData.sessionType === "HYROX" && (
-        <div className="space-y-4">
-          <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 p-4 space-y-3">
-            <div className="text-sm font-semibold text-white/80">HYROX Settings</div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <div>
-                <div className="text-xs tracking-wider text-white/50 mb-1">WOD TYPE</div>
-                <select
-                  name="wodType"
-                  value={formData.wodType}
-                  onChange={handleChange}
-                  className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
-                >
-                  <option value="AMRAP">AMRAP</option>
-                  <option value="For Time">For Time</option>
-                  <option value="EMOM">EMOM</option>
-                  <option value="Chipper">Chipper</option>
-                </select>
-              </div>
-
-              <div>
-                <div className="text-xs tracking-wider text-white/50 mb-1">GROUP SIZE</div>
-                <input
-                  type="number"
-                  name="groupSize"
-                  value={formData.groupSize}
-                  onChange={handleChange}
-                  className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
-                />
-              </div>
-
-              <div>
-                <div className="text-xs tracking-wider text-white/50 mb-1">TIMER MODE</div>
-                <select
-                  name="timerMode"
-                  value={formData.timerMode}
-                  onChange={handleChange}
-                  className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
-                >
-                  <option value="timed">Timed (Rounds)</option>
-                  <option value="stationControlled">Station Controlled</option>
-                </select>
-              </div>
+      <div className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6 lg:px-8">
+        <div className="space-y-6">
+          <section className="relative overflow-hidden rounded-[28px] border border-white/10 bg-neutral-950 px-6 py-7 shadow-[0_24px_60px_rgba(0,0,0,0.35)]">
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.06),transparent_28%),radial-gradient(circle_at_85%_10%,rgba(59,130,246,0.12),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.03),transparent_55%)]" />
+            <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] bg-[size:32px_32px] opacity-[0.06]" />
+            <div className="absolute -right-6 bottom-[-18px] select-none text-[82px] font-black uppercase tracking-[0.18em] text-white/[0.04] sm:text-[120px]">
+              EDIT
             </div>
 
-            {/* Timed settings */}
-            {formData.timerMode === "timed" && (
-              <div className="space-y-3 pt-2">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="relative flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.3em] text-white/72">
+                  <Layers3 className="h-3.5 w-3.5" />
+                  Admin Editor
+                </div>
+
+                <h1 className="mt-5 text-3xl font-heading uppercase tracking-[-0.04em] sm:text-4xl">
+                  AlphaFIT Editor
+                </h1>
+
+                <p className="mt-3 max-w-2xl text-sm leading-7 text-white/64">
+                  Build HYROX and Strength sessions, set the timing, define the flow, and publish programming cleanly.
+                </p>
+              </div>
+
+              <LogoutButton />
+            </div>
+          </section>
+
+          <form
+            onSubmit={handleSubmit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                const el = e.target as HTMLElement;
+                const tag = el.tagName.toLowerCase();
+                const isTextArea = tag === "textarea";
+                if (!isTextArea) e.preventDefault();
+              }
+            }}
+            className="space-y-6"
+          >
+            <section className={sectionCardClass}>
+              <div className="mb-5">
+                <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/42">
+                  <CalendarDays className="h-3.5 w-3.5" />
+                  Programming Details
+                </div>
+                <p className="mt-3 text-sm leading-6 text-white/60">
+                  Set the workout identity, date, session slot, and overall type.
+                </p>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className={labelClass}>Workout Name</label>
+                  <input
+                    type="text"
+                    name="wodName"
+                    value={formData.wodName}
+                    onChange={handleChange}
+                    className={inputClass}
+                  />
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2">
                   <div>
-                    <div className="text-xs tracking-wider text-white/50 mb-1">MINUTES</div>
+                    <label className={labelClass}>Date</label>
                     <input
-                      type="number"
-                      name="roundMinutes"
-                      value={formData.roundMinutes}
+                      type="date"
+                      name="date"
+                      value={formData.date}
                       onChange={handleChange}
-                      className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
+                      className={`${inputClass} [color-scheme:dark]`}
                     />
                   </div>
 
                   <div>
-                    <div className="text-xs tracking-wider text-white/50 mb-1">SECONDS</div>
-                    <input
-                      type="number"
-                      name="roundSeconds"
-                      value={formData.roundSeconds}
+                    <label className={labelClass}>Session</label>
+                    <select
+                      name="timeOfDay"
+                      value={formData.timeOfDay}
                       onChange={handleChange}
-                      className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
-                    />
-                  </div>
-
-                  <div>
-                    <div className="text-xs tracking-wider text-white/50 mb-1">ROUNDS</div>
-                    <input
-                      type="number"
-                      name="rounds"
-                      value={formData.rounds}
-                      onChange={handleChange}
-                      className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
-                    />
+                      className={inputClass}
+                    >
+                      <option value="AM">AM</option>
+                      <option value="PM">PM</option>
+                      <option value="930AM">9:30AM</option>
+                    </select>
                   </div>
                 </div>
 
                 <div>
-                  <div className="text-xs tracking-wider text-white/50 mb-1">
-                    REST BETWEEN ROUNDS (SEC)
-                  </div>
-                  <input
-                    type="number"
-                    name="restBetweenRoundsSeconds"
-                    value={formData.restBetweenRoundsSeconds}
+                  <label className={labelClass}>Session Type</label>
+                  <select
+                    name="sessionType"
+                    value={formData.sessionType}
                     onChange={handleChange}
-                    className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
-                  />
-                </div>
-
-                <div className="rounded-xl border border-neutral-800 bg-neutral-950/60 p-4">
-                  <div className="text-xs tracking-wider text-white/50">TOTAL SESSION TIME</div>
-                  <div className="text-3xl font-bold mt-1">{formatSeconds(totalSessionSeconds)}</div>
-                  <div className="text-sm text-white/60 mt-1">
-                    Work: {formatSeconds(totalWorkSeconds)}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Station Controlled settings */}
-            {formData.timerMode === "stationControlled" && (
-              <div className="space-y-2 pt-2">
-                <div className="text-xs tracking-wider text-white/50">CONTROLLED STATION</div>
-                <select
-                  name="controlStationIndex"
-                  value={formData.controlStationIndex}
-                  onChange={handleChange}
-                  className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
-                >
-                  {flattenedMovements.length === 0 ? (
-                    <option value={0}>Add movements first</option>
-                  ) : (
-                    flattenedMovements.map((m, i) => (
-                      <option key={i} value={i}>
-                        {i + 1}. {m}
-                      </option>
-                    ))
-                  )}
-                </select>
-              </div>
-            )}
-          </div>
-
-          {/* Stations */}
-          <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 p-4 space-y-4">
-            <div className="text-sm font-semibold text-white/80">Stations</div>
-
-            {(formData.stations || []).map((station, sIdx) => (
-              <div
-                key={station.id}
-                className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-3 space-y-3"
-              >
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    value={station.title}
-                    onChange={(e) => {
-                      const title = e.target.value;
-                      setFormData((p: any) => ({
-                        ...p,
-                        stations: (p.stations || []).map((s: Station) =>
-                          s.id === station.id ? { ...s, title } : s
-                        ),
-                      }));
-                    }}
-                    placeholder={`Station ${sIdx + 1} title`}
-                    className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
-                  />
-
-                  <button
-                    type="button"
-                    className="text-xs text-white/70 underline shrink-0"
-                    onClick={() => {
-                      setFormData((p: any) => ({
-                        ...p,
-                        stations: (p.stations || []).filter((s: Station) => s.id !== station.id),
-                      }));
-                    }}
-                    disabled={(formData.stations || []).length <= 1}
-                    title={(formData.stations || []).length <= 1 ? "Keep at least one station" : "Remove station"}
+                    className={inputClass}
                   >
-                    Remove
-                  </button>
+                    <option value="HYROX">HYROX</option>
+                    <option value="Strength">Strength</option>
+                  </select>
                 </div>
+              </div>
+            </section>
 
-                <div className="space-y-2">
-                  {(station.movements || []).map((mv, mIdx) => (
-                    <div key={mv.id} className="grid grid-cols-1 md:grid-cols-12 gap-2">
+            {formData.sessionType === "HYROX" && (
+              <div className="space-y-6">
+                <section className={sectionCardClass}>
+                  <div className="mb-5">
+                    <div className="inline-flex items-center gap-2 rounded-full border border-orange-400/20 bg-orange-400/10 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.24em] text-orange-100">
+                      <Flame className="h-3.5 w-3.5" />
+                      HYROX Settings
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                    <div>
+                      <label className={labelClass}>WOD Type</label>
+                      <select
+                        name="wodType"
+                        value={formData.wodType}
+                        onChange={handleChange}
+                        className={inputClass}
+                      >
+                        <option value="AMRAP">AMRAP</option>
+                        <option value="For Time">For Time</option>
+                        <option value="EMOM">EMOM</option>
+                        <option value="Chipper">Chipper</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className={labelClass}>Group Size</label>
                       <input
-                        type="text"
-                        value={mv.name}
-                        onChange={(e) => {
-                          const name = e.target.value;
-                          setFormData((p: any) => ({
-                            ...p,
-                            stations: (p.stations || []).map((s: Station) =>
-                              s.id === station.id
-                                ? {
-                                    ...s,
-                                    movements: (s.movements || []).map((m: Movement) =>
-                                      m.id === mv.id ? { ...m, name } : m
+                        type="number"
+                        name="groupSize"
+                        value={formData.groupSize}
+                        onChange={handleChange}
+                        className={inputClass}
+                      />
+                    </div>
+
+                    <div>
+                      <label className={labelClass}>Timer Mode</label>
+                      <select
+                        name="timerMode"
+                        value={formData.timerMode}
+                        onChange={handleChange}
+                        className={inputClass}
+                      >
+                        <option value="timed">Timed (Rounds)</option>
+                        <option value="stationControlled">Station Controlled</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {formData.timerMode === "timed" && (
+                    <div className="mt-5 space-y-4">
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                        <div>
+                          <label className={labelClass}>Minutes</label>
+                          <input
+                            type="number"
+                            name="roundMinutes"
+                            value={formData.roundMinutes}
+                            onChange={handleChange}
+                            className={inputClass}
+                          />
+                        </div>
+
+                        <div>
+                          <label className={labelClass}>Seconds</label>
+                          <input
+                            type="number"
+                            name="roundSeconds"
+                            value={formData.roundSeconds}
+                            onChange={handleChange}
+                            className={inputClass}
+                          />
+                        </div>
+
+                        <div>
+                          <label className={labelClass}>Rounds</label>
+                          <input
+                            type="number"
+                            name="rounds"
+                            value={formData.rounds}
+                            onChange={handleChange}
+                            className={inputClass}
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className={labelClass}>Rest Between Rounds (sec)</label>
+                        <input
+                          type="number"
+                          name="restBetweenRoundsSeconds"
+                          value={formData.restBetweenRoundsSeconds}
+                          onChange={handleChange}
+                          className={inputClass}
+                        />
+                      </div>
+
+                      <div className="rounded-[22px] border border-white/10 bg-black/40 p-5">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/40">
+                          Total Session Time
+                        </div>
+                        <div className="mt-2 text-3xl font-semibold tracking-[-0.03em]">
+                          {formatSeconds(totalSessionSeconds)}
+                        </div>
+                        <div className="mt-1 text-sm text-white/60">
+                          Work: {formatSeconds(totalWorkSeconds)}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {formData.timerMode === "stationControlled" && (
+                    <div className="mt-5">
+                      <label className={labelClass}>Controlled Station</label>
+                      <select
+                        name="controlStationIndex"
+                        value={formData.controlStationIndex}
+                        onChange={handleChange}
+                        className={inputClass}
+                      >
+                        {flattenedMovements.length === 0 ? (
+                          <option value={0}>Add movements first</option>
+                        ) : (
+                          flattenedMovements.map((m, i) => (
+                            <option key={i} value={i}>
+                              {i + 1}. {m}
+                            </option>
+                          ))
+                        )}
+                      </select>
+                    </div>
+                  )}
+                </section>
+
+                <section className={sectionCardClass}>
+                  <div className="mb-5 flex items-center justify-between gap-4">
+                    <div>
+                      <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/42">
+                        <Layers3 className="h-3.5 w-3.5" />
+                        Stations
+                      </div>
+                      <p className="mt-3 text-sm leading-6 text-white/60">
+                        Build each station and its movement targets.
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      className={secondaryButtonClass}
+                      onClick={() =>
+                        setFormData((p: any) => ({
+                          ...p,
+                          stations: [
+                            ...(p.stations || []),
+                            {
+                              id: makeId(),
+                              title: `Station ${(p.stations || []).length + 1}`,
+                              movements: [{ id: makeId(), name: "" }],
+                            },
+                          ],
+                        }))
+                      }
+                    >
+                      <Plus className="h-4 w-4" />
+                      Add Station
+                    </button>
+                  </div>
+
+                  <div className="space-y-4">
+                    {(formData.stations || []).map((station, sIdx) => (
+                      <div
+                        key={station.id}
+                        className="rounded-[22px] border border-white/10 bg-black/30 p-4 space-y-3"
+                      >
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={station.title}
+                            onChange={(e) => {
+                              const title = e.target.value;
+                              setFormData((p: any) => ({
+                                ...p,
+                                stations: (p.stations || []).map((s: Station) =>
+                                  s.id === station.id ? { ...s, title } : s
+                                ),
+                              }));
+                            }}
+                            placeholder={`Station ${sIdx + 1} title`}
+                            className={inputClass}
+                          />
+
+                          <button
+                            type="button"
+                            className={secondaryButtonClass}
+                            onClick={() => {
+                              setFormData((p: any) => ({
+                                ...p,
+                                stations: (p.stations || []).filter((s: Station) => s.id !== station.id),
+                              }));
+                            }}
+                            disabled={(formData.stations || []).length <= 1}
+                          >
+                            Remove
+                          </button>
+                        </div>
+
+                        <div className="space-y-2">
+                          {(station.movements || []).map((mv, mIdx) => (
+                            <div key={mv.id} className="grid grid-cols-1 gap-2 md:grid-cols-12">
+                              <input
+                                type="text"
+                                value={mv.name}
+                                onChange={(e) => {
+                                  const name = e.target.value;
+                                  setFormData((p: any) => ({
+                                    ...p,
+                                    stations: (p.stations || []).map((s: Station) =>
+                                      s.id === station.id
+                                        ? {
+                                            ...s,
+                                            movements: (s.movements || []).map((m: Movement) =>
+                                              m.id === mv.id ? { ...m, name } : m
+                                            ),
+                                          }
+                                        : s
                                     ),
+                                  }));
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    setFormData((p: any) => ({
+                                      ...p,
+                                      stations: (p.stations || []).map((s: Station) =>
+                                        s.id === station.id
+                                          ? {
+                                              ...s,
+                                              movements: [...(s.movements || []), { id: makeId(), name: "" }],
+                                            }
+                                          : s
+                                      ),
+                                    }));
                                   }
-                                : s
-                            ),
-                          }));
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.preventDefault();
+                                }}
+                                placeholder={`Movement ${mIdx + 1}`}
+                                className="md:col-span-7 w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-white outline-none transition placeholder:text-white/25 focus:border-white/20 focus:bg-black"
+                              />
+
+                              <input
+                                type="text"
+                                value={(mv as any).target ?? ""}
+                                onChange={(e) => {
+                                  const target = e.target.value;
+                                  setFormData((p: any) => ({
+                                    ...p,
+                                    stations: (p.stations || []).map((s: Station) =>
+                                      s.id === station.id
+                                        ? {
+                                            ...s,
+                                            movements: (s.movements || []).map((m: Movement) =>
+                                              m.id === mv.id ? { ...(m as any), target } : m
+                                            ),
+                                          }
+                                        : s
+                                    ),
+                                  }));
+                                }}
+                                placeholder="Target (e.g. 12 cals / 10 reps)"
+                                className="md:col-span-4 w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-white outline-none transition placeholder:text-white/25 focus:border-white/20 focus:bg-black"
+                              />
+
+                              <button
+                                type="button"
+                                className="md:col-span-1 rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-3 text-sm font-semibold text-white/70 transition hover:border-white/20 hover:bg-white/[0.06] hover:text-white disabled:opacity-40"
+                                onClick={() => {
+                                  setFormData((p: any) => ({
+                                    ...p,
+                                    stations: (p.stations || []).map((s: Station) =>
+                                      s.id === station.id
+                                        ? {
+                                            ...s,
+                                            movements: (s.movements || []).filter(
+                                              (m: Movement) => m.id !== mv.id
+                                            ),
+                                          }
+                                        : s
+                                    ),
+                                  }));
+                                }}
+                                disabled={(station.movements || []).length <= 1}
+                              >
+                                ×
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+
+                        <button
+                          type="button"
+                          className={secondaryButtonClass}
+                          onClick={() =>
                             setFormData((p: any) => ({
                               ...p,
                               stations: (p.stations || []).map((s: Station) =>
@@ -633,210 +759,168 @@ const WODEditor = () => {
                                   ? { ...s, movements: [...(s.movements || []), { id: makeId(), name: "" }] }
                                   : s
                               ),
-                            }));
+                            }))
                           }
-                        }}
-                        placeholder={`Movement ${mIdx + 1}`}
-                        className="md:col-span-7 w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
-                      />
+                        >
+                          <Plus className="h-4 w-4" />
+                          Add Movement
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              </div>
+            )}
 
-                      <input
-                        type="text"
-                        value={(mv as any).target ?? ""}
-                        onChange={(e) => {
-                          const target = e.target.value;
-                          setFormData((p: any) => ({
-                            ...p,
-                            stations: (p.stations || []).map((s: Station) =>
-                              s.id === station.id
-                                ? {
-                                    ...s,
-                                    movements: (s.movements || []).map((m: Movement) =>
-                                      m.id === mv.id ? { ...(m as any), target } : m
-                                    ),
-                                  }
-                                : s
-                            ),
-                          }));
-                        }}
-                        placeholder="Target (e.g. 12 cals / 10 reps)"
-                        className="md:col-span-4 w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
-                      />
-
-                      <button
-                        type="button"
-                        className="md:col-span-1 text-xs text-white/70 underline"
-                        onClick={() => {
-                          setFormData((p: any) => ({
-                            ...p,
-                            stations: (p.stations || []).map((s: Station) =>
-                              s.id === station.id
-                                ? { ...s, movements: (s.movements || []).filter((m: Movement) => m.id !== mv.id) }
-                                : s
-                            ),
-                          }));
-                        }}
-                        disabled={(station.movements || []).length <= 1}
-                        title={(station.movements || []).length <= 1 ? "Keep at least one movement" : "Remove movement"}
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
+            {formData.sessionType === "Strength" && (
+              <section className={sectionCardClass}>
+                <div className="mb-5">
+                  <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/42">
+                    <Dumbbell className="h-3.5 w-3.5" />
+                    Strength Block
+                  </div>
+                  <p className="mt-3 text-sm leading-6 text-white/60">
+                    Define the strength focus, coaching intent, and programmed rows.
+                  </p>
                 </div>
 
-                <button
-                  type="button"
-                  className="text-sm underline text-white/80"
-                  onClick={() =>
-                    setFormData((p: any) => ({
-                      ...p,
-                      stations: (p.stations || []).map((s: Station) =>
-                        s.id === station.id
-                          ? { ...s, movements: [...(s.movements || []), { id: makeId(), name: "" }] }
-                          : s
-                      ),
-                    }))
-                  }
-                >
-                  + Add Movement
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                    <div>
+                      <label className={labelClass}>Goal</label>
+                      <input
+                        type="text"
+                        name="strengthGoal"
+                        value={formData.strengthGoal}
+                        onChange={handleChange}
+                        className={inputClass}
+                      />
+                    </div>
+
+                    <div>
+                      <label className={labelClass}>Load</label>
+                      <input
+                        type="text"
+                        name="strengthLoad"
+                        value={formData.strengthLoad}
+                        onChange={handleChange}
+                        className={inputClass}
+                      />
+                    </div>
+
+                    <div>
+                      <label className={labelClass}>Range</label>
+                      <input
+                        type="text"
+                        name="strengthRange"
+                        value={formData.strengthRange}
+                        onChange={handleChange}
+                        className={inputClass}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className={labelClass}>Coaches Notes</label>
+                    <textarea
+                      name="strengthCue"
+                      value={formData.strengthCue}
+                      onChange={handleChange}
+                      rows={3}
+                      className={`${inputClass} resize-none`}
+                    />
+                  </div>
+
+                  <div className="space-y-3">
+                    {formData.strengthMovements.map((row, idx) => (
+                      <div
+                        key={idx}
+                        className="rounded-[22px] border border-white/10 bg-black/30 p-4"
+                      >
+                        <div className="mb-3 text-[11px] font-semibold uppercase tracking-[0.22em] text-white/40">
+                          Row {idx + 1}
+                        </div>
+
+                        <div className="grid gap-3 md:grid-cols-3">
+                          <input
+                            type="text"
+                            value={row.movement}
+                            placeholder="Movement"
+                            onChange={(e) => {
+                              const updated = [...formData.strengthMovements];
+                              updated[idx] = { ...updated[idx], movement: e.target.value };
+                              setFormData((p) => ({ ...p, strengthMovements: updated }));
+                            }}
+                            className={inputClass}
+                          />
+                          <input
+                            type="text"
+                            value={row.percent}
+                            placeholder="Load"
+                            onChange={(e) => {
+                              const updated = [...formData.strengthMovements];
+                              updated[idx] = { ...updated[idx], percent: e.target.value };
+                              setFormData((p) => ({ ...p, strengthMovements: updated }));
+                            }}
+                            className={inputClass}
+                          />
+                          <input
+                            type="text"
+                            value={row.repRange}
+                            placeholder="Rep range"
+                            onChange={(e) => {
+                              const updated = [...formData.strengthMovements];
+                              updated[idx] = { ...updated[idx], repRange: e.target.value };
+                              setFormData((p) => ({ ...p, strengthMovements: updated }));
+                            }}
+                            className={inputClass}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <button
+                    type="button"
+                    className={secondaryButtonClass}
+                    onClick={() =>
+                      setFormData((p) => ({
+                        ...p,
+                        strengthMovements: [
+                          ...p.strengthMovements,
+                          { movement: "", percent: "", repRange: "" },
+                        ],
+                      }))
+                    }
+                  >
+                    <Plus className="h-4 w-4" />
+                    Add Strength Row
+                  </button>
+                </div>
+              </section>
+            )}
+
+            <div className="sticky bottom-4 z-20 rounded-[24px] border border-white/10 bg-neutral-950/95 p-4 shadow-[0_20px_50px_rgba(0,0,0,0.4)] backdrop-blur-xl">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/40">
+                    Ready to publish
+                  </div>
+                  <div className="mt-1 text-sm text-white/60">
+                    Save this session for the selected date and slot.
+                  </div>
+                </div>
+
+                <button type="submit" className={primaryButtonClass}>
+                  <Save className="h-4 w-4" />
+                  Save Session
                 </button>
               </div>
-            ))}
-
-            <button
-              type="button"
-              className="text-sm underline text-white/80"
-              onClick={() =>
-                setFormData((p: any) => ({
-                  ...p,
-                  stations: [
-                    ...(p.stations || []),
-                    {
-                      id: makeId(),
-                      title: `Station ${(p.stations || []).length + 1}`,
-                      movements: [{ id: makeId(), name: "" }],
-                    },
-                  ],
-                }))
-              }
-            >
-              + Add Station
-            </button>
-          </div>
+            </div>
+          </form>
         </div>
-      )}
-
-      {/* Strength */}
-      {formData.sessionType === "Strength" && (
-        <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 p-4 space-y-4">
-          <div className="text-sm font-semibold text-white/80">Strength Block</div>
-
-          {/* ✅ NEW editable meta fields */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div>
-              <div className="text-xs tracking-wider text-white/50 mb-1">GOAL</div>
-              <input
-                type="text"
-                name="strengthGoal"
-                value={formData.strengthGoal}
-                onChange={handleChange}
-                className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
-              />
-            </div>
-
-            <div>
-              <div className="text-xs tracking-wider text-white/50 mb-1">LOAD</div>
-              <input
-                type="text"
-                name="strengthLoad"
-                value={formData.strengthLoad}
-                onChange={handleChange}
-                className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
-              />
-            </div>
-
-            <div>
-              <div className="text-xs tracking-wider text-white/50 mb-1">RANGE</div>
-              <input
-                type="text"
-                name="strengthRange"
-                value={formData.strengthRange}
-                onChange={handleChange}
-                className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
-              />
-            </div>
-          </div>
-
-          <div>
-            <div className="text-xs tracking-wider text-white/50 mb-1">COACHES NOTES</div>
-            <textarea
-              name="strengthCue"
-              value={formData.strengthCue}
-              onChange={handleChange}
-              rows={3}
-              className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
-            />
-          </div>
-
-          <div className="text-sm font-semibold text-white/80 pt-2">Strength Stations</div>
-
-          {formData.strengthMovements.map((row, idx) => (
-            <div key={idx} className="grid grid-cols-1 gap-2">
-              <input
-                type="text"
-                value={row.movement}
-                placeholder="Movement"
-                onChange={(e) => {
-                  const updated = [...formData.strengthMovements];
-                  updated[idx] = { ...updated[idx], movement: e.target.value };
-                  setFormData((p) => ({ ...p, strengthMovements: updated }));
-                }}
-                className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
-              />
-              <input
-                type="text"
-                value={row.percent}
-                placeholder="Load"
-                onChange={(e) => {
-                  const updated = [...formData.strengthMovements];
-                  updated[idx] = { ...updated[idx], percent: e.target.value };
-                  setFormData((p) => ({ ...p, strengthMovements: updated }));
-                }}
-                className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
-              />
-              <input
-                type="text"
-                value={row.repRange}
-                placeholder="Rep range"
-                onChange={(e) => {
-                  const updated = [...formData.strengthMovements];
-                  updated[idx] = { ...updated[idx], repRange: e.target.value };
-                  setFormData((p) => ({ ...p, strengthMovements: updated }));
-                }}
-                className="w-full p-2 rounded bg-neutral-800 border border-neutral-700 text-white"
-              />
-            </div>
-          ))}
-
-          <button
-            type="button"
-            className="text-sm underline text-white/80"
-            onClick={() =>
-              setFormData((p) => ({
-                ...p,
-                strengthMovements: [...p.strengthMovements, { movement: "", percent: "", repRange: "" }],
-              }))
-            }
-          >
-            + Add Strength Row
-          </button>
-        </div>
-      )}
-      <button type="submit" className="w-full py-3 rounded bg-white text-black font-semibold hover:bg-white/90">
-        Save Session
-      </button>
-    </form>
+      </div>
+    </div>
   );
 };
 
