@@ -181,12 +181,14 @@ export default function AdminInsights() {
                         data.topAttenders.map((user, index) => (
                           <div
                             key={user.id}
-                            className="group flex items-center justify-between gap-4 rounded-2xl border border-white/8 bg-white/[0.02] px-4 py-4 transition hover:border-white/15 hover:bg-white/[0.04]"
+                            className="group w-full overflow-hidden rounded-2xl border border-white/8 bg-white/[0.02] px-4 py-4 transition hover:border-white/15 hover:bg-white/[0.04]"
                           >
-                            <div className="flex items-center gap-4">
-                              <RankBadge index={index} />
+                            <div className="flex items-center gap-3 sm:gap-4 min-w-0">
+                              <div className="shrink-0">
+                                <RankBadge index={index} />
+                              </div>
 
-                              <div className="relative">
+                              <div className="relative shrink-0">
                                 <UserAvatar
                                   name={user.name || "Member"}
                                   photoURL={user.photoURL}
@@ -199,22 +201,22 @@ export default function AdminInsights() {
                                 ) : null}
                               </div>
 
-                              <div>
-                                <div className="text-sm font-medium text-white transition group-hover:text-amber-100">
+                              <div className="min-w-0 flex-1">
+                                <div className="truncate text-sm font-medium text-white transition group-hover:text-amber-100">
                                   {user.name || "Unnamed member"}
                                 </div>
-                                <div className="text-xs text-neutral-500">
+                                <div className="truncate text-xs text-neutral-500">
                                   {user.email || "No email"}
                                 </div>
                               </div>
-                            </div>
 
-                            <div className="text-right">
-                              <div className="text-lg font-semibold text-white">
-                                {user.stats?.monthCheckIns?.[data.monthKey] ?? 0}
-                              </div>
-                              <div className="text-[11px] uppercase tracking-[0.2em] text-neutral-500">
-                                check-ins
+                              <div className="shrink-0 pl-2 text-right">
+                                <div className="text-base font-semibold text-white sm:text-lg">
+                                  {user.stats?.monthCheckIns?.[data.monthKey] ?? 0}
+                                </div>
+                                <div className="text-[10px] uppercase tracking-[0.16em] text-neutral-500 sm:text-[11px] sm:tracking-[0.2em]">
+                                  check-ins
+                                </div>
                               </div>
                             </div>
                           </div>
@@ -231,35 +233,35 @@ export default function AdminInsights() {
                     ) : (
                       <div className="space-y-3">
                         {data.inactiveMembers.map((user) => (
-                          <div
-                            key={user.id}
-                            className="group flex items-center justify-between gap-4 rounded-2xl border border-white/8 bg-white/[0.02] px-4 py-4 transition hover:border-amber-400/20 hover:bg-white/[0.04]"
-                          >
-                            <div className="flex items-center gap-4">
-                              <div className="relative">
-                                <UserAvatar
-                                  name={user.name || "Member"}
-                                  photoURL={user.photoURL}
-                                  size={44}
-                                />
-                                <div className="absolute -right-1 -top-1 rounded-full border border-red-500/25 bg-red-500/10 p-1 text-red-300">
-                                  <ShieldAlert className="h-3 w-3" />
-                                </div>
-                              </div>
-
-                              <div>
-                                <div className="text-sm font-medium text-white transition group-hover:text-amber-100">
-                                  {user.name || "Unnamed member"}
-                                </div>
-                                <div className="mt-1 flex items-center gap-2 text-xs text-neutral-500">
-                                  <AlertTriangle className="h-3.5 w-3.5" />
-                                  Last check-in:{" "}
-                                  {user.stats?.lastCheckInDate || "Never"}
-                                </div>
+                        <div
+                          key={user.id}
+                          className="group w-full overflow-hidden rounded-2xl border border-white/8 bg-white/[0.02] px-4 py-4 transition hover:border-amber-400/20 hover:bg-white/[0.04]"
+                        >
+                          <div className="flex items-center gap-3 sm:gap-4 min-w-0">
+                            <div className="relative shrink-0">
+                              <UserAvatar
+                                name={user.name || "Member"}
+                                photoURL={user.photoURL}
+                                size={44}
+                              />
+                              <div className="absolute -right-1 -top-1 rounded-full border border-red-500/25 bg-red-500/10 p-1 text-red-300">
+                                <ShieldAlert className="h-3 w-3" />
                               </div>
                             </div>
 
-                            <div className="flex items-center gap-3">
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate text-sm font-medium text-white transition group-hover:text-amber-100">
+                                {user.name || "Unnamed member"}
+                              </div>
+                              <div className="mt-1 flex items-center gap-2 min-w-0 text-xs text-neutral-500">
+                                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                                <span className="truncate">
+                                  Last check-in: {user.stats?.lastCheckInDate || "Never"}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="hidden shrink-0 sm:flex items-center gap-3">
                               <div
                                 className={`rounded-full border px-3 py-1 text-xs font-medium ${getAttentionBadge(
                                   user.stats?.lastCheckInDate
@@ -270,6 +272,18 @@ export default function AdminInsights() {
                               <ChevronRight className="h-4 w-4 text-neutral-600 transition group-hover:text-amber-200" />
                             </div>
                           </div>
+
+                          <div className="mt-3 flex items-center justify-between sm:hidden">
+                            <div
+                              className={`rounded-full border px-3 py-1 text-[11px] font-medium ${getAttentionBadge(
+                                user.stats?.lastCheckInDate
+                              )}`}
+                            >
+                              Needs attention
+                            </div>
+                            <ChevronRight className="h-4 w-4 text-neutral-600 transition group-hover:text-amber-200" />
+                          </div>
+                        </div>
                         ))}
                       </div>
                     )}
