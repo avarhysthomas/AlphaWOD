@@ -7,9 +7,11 @@ type Props = {
 
 export default function AdminSectionCard({ title, children }: Props) {
   return (
-    <section className="rounded-3xl border border-neutral-800 bg-neutral-950 p-6">
-      <div className="text-sm font-semibold text-white">{title}</div>
-      <div className="mt-5">{children}</div>
+    <section className="min-w-0 overflow-hidden rounded-[1.75rem] border border-white/10 bg-neutral-950 p-4 sm:rounded-3xl sm:p-6">
+      <div className="text-sm font-semibold text-white sm:text-[15px]">
+        {title}
+      </div>
+      <div className="mt-4 min-w-0 sm:mt-5">{children}</div>
     </section>
   );
 }

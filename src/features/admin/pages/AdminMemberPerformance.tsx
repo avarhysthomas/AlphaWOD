@@ -79,7 +79,7 @@ function RankBadge({ index }: { index: number }) {
 
   return (
     <div
-      className={`inline-flex h-8 w-8 items-center justify-center rounded-full border text-xs font-semibold ${styles}`}
+      className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-xs font-semibold sm:h-9 sm:w-9 ${styles}`}
     >
       {rank}
     </div>
@@ -122,37 +122,37 @@ export default function AdminMemberPerformance() {
       <div className="min-h-screen bg-black text-white">
         <UserTopNav />
 
-        <div className="overflow-x-hidden px-4 py-6 sm:px-6 lg:px-8">
+        <div className="overflow-x-hidden px-3 py-5 sm:px-6 lg:px-8">
           <div className="mx-auto max-w-7xl">
             <Link
               to="/admin/performance"
               className="inline-flex items-center gap-2 text-sm text-neutral-400 transition hover:text-white"
             >
-              <ArrowLeft className="h-4 w-4" />
+              <ArrowLeft className="h-4 w-4 shrink-0" />
               Back to performance
             </Link>
 
             {loading ? (
-              <div className="mt-8 rounded-3xl border border-white/10 bg-neutral-950 p-6 text-neutral-400">
+              <div className="mt-6 rounded-3xl border border-white/10 bg-neutral-950 p-6 text-neutral-400 sm:mt-8">
                 Loading athlete data...
               </div>
             ) : !data?.user ? (
-              <div className="mt-8 rounded-3xl border border-white/10 bg-neutral-950 p-6 text-neutral-400">
+              <div className="mt-6 rounded-3xl border border-white/10 bg-neutral-950 p-6 text-neutral-400 sm:mt-8">
                 Athlete not found.
               </div>
             ) : (
               <>
-                <div className="relative mt-6 overflow-hidden rounded-[2rem] border border-white/10 bg-neutral-950 p-6 sm:p-8">
+                <div className="relative mt-6 overflow-hidden rounded-[1.75rem] border border-white/10 bg-neutral-950 p-4 sm:rounded-[2rem] sm:p-8">
                   <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(245,158,11,0.12),transparent_30%),radial-gradient(circle_at_bottom_right,rgba(59,130,246,0.10),transparent_28%)]" />
                   <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-amber-400/40 to-transparent" />
 
                   <div className="relative z-10 flex min-w-0 flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-                    <div className="flex min-w-0 items-center gap-4">
+                    <div className="flex min-w-0 items-center gap-3 sm:gap-4">
                       <div className="relative shrink-0">
                         <UserAvatar
                           name={data.user.name || "Athlete"}
                           photoURL={data.user.photoURL}
-                          size={72}
+                          size={64}
                         />
                         <div className="absolute -bottom-1 -right-1 rounded-full border border-amber-400/30 bg-amber-400/10 p-1.5 text-amber-200">
                           <Shield className="h-3.5 w-3.5" />
@@ -160,12 +160,12 @@ export default function AdminMemberPerformance() {
                       </div>
 
                       <div className="min-w-0 flex-1">
-                        <div className="inline-flex items-center gap-2 rounded-full border border-amber-500/20 bg-amber-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.28em] text-amber-200">
-                          <Activity className="h-3.5 w-3.5" />
+                        <div className="inline-flex items-center gap-2 rounded-full border border-amber-500/20 bg-amber-500/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] text-amber-200 sm:text-[11px] sm:tracking-[0.28em]">
+                          <Activity className="h-3.5 w-3.5 shrink-0" />
                           Athlete Profile
                         </div>
 
-                        <h1 className="mt-3 truncate text-3xl font-heading uppercase tracking-tight sm:text-4xl">
+                        <h1 className="mt-3 truncate text-2xl font-heading tracking-tight sm:text-4xl">
                           {data.user.name || "Unnamed athlete"}
                         </h1>
 
@@ -187,39 +187,39 @@ export default function AdminMemberPerformance() {
                       </div>
                     </div>
 
-                    <div className="grid w-full grid-cols-2 gap-3 sm:grid-cols-4 lg:w-auto">
-                      <div className="rounded-2xl border border-white/10 bg-black/40 px-4 py-3 backdrop-blur">
-                        <div className="text-[11px] uppercase tracking-[0.25em] text-neutral-500">
+                    <div className="grid w-full grid-cols-2 gap-3 lg:w-auto lg:min-w-[420px] lg:grid-cols-4">
+                      <div className="rounded-2xl border border-white/10 bg-black/40 px-3 py-3 backdrop-blur sm:px-4">
+                        <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 sm:text-[11px] sm:tracking-[0.25em]">
                           Logs
                         </div>
-                        <div className="mt-2 text-2xl font-semibold text-white">
+                        <div className="mt-2 text-xl font-semibold text-white sm:text-2xl">
                           {data.totalLogs}
                         </div>
                       </div>
 
-                      <div className="rounded-2xl border border-white/10 bg-black/40 px-4 py-3 backdrop-blur">
-                        <div className="text-[11px] uppercase tracking-[0.25em] text-neutral-500">
+                      <div className="rounded-2xl border border-white/10 bg-black/40 px-3 py-3 backdrop-blur sm:px-4">
+                        <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 sm:text-[11px] sm:tracking-[0.25em]">
                           Current streak
                         </div>
-                        <div className="mt-2 text-2xl font-semibold text-white">
+                        <div className="mt-2 text-xl font-semibold text-white sm:text-2xl">
                           {data.user.stats?.currentStreak ?? 0}
                         </div>
                       </div>
 
-                      <div className="rounded-2xl border border-white/10 bg-black/40 px-4 py-3 backdrop-blur">
-                        <div className="text-[11px] uppercase tracking-[0.25em] text-neutral-500">
+                      <div className="rounded-2xl border border-white/10 bg-black/40 px-3 py-3 backdrop-blur sm:px-4">
+                        <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 sm:text-[11px] sm:tracking-[0.25em]">
                           Longest streak
                         </div>
-                        <div className="mt-2 text-2xl font-semibold text-white">
+                        <div className="mt-2 text-xl font-semibold text-white sm:text-2xl">
                           {data.user.stats?.longestStreak ?? 0}
                         </div>
                       </div>
 
-                      <div className="rounded-2xl border border-white/10 bg-black/40 px-4 py-3 backdrop-blur">
-                        <div className="text-[11px] uppercase tracking-[0.25em] text-neutral-500">
+                      <div className="rounded-2xl border border-white/10 bg-black/40 px-3 py-3 backdrop-blur sm:px-4">
+                        <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 sm:text-[11px] sm:tracking-[0.25em]">
                           Check-ins
                         </div>
-                        <div className="mt-2 text-2xl font-semibold text-white">
+                        <div className="mt-2 text-xl font-semibold text-white sm:text-2xl">
                           {data.user.stats?.totalCheckIns ?? 0}
                         </div>
                       </div>
@@ -227,7 +227,7 @@ export default function AdminMemberPerformance() {
                   </div>
                 </div>
 
-                <div className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4 [&>*]:min-w-0">
                   <AdminKpiCard label="Total Logs" value={data.totalLogs} />
                   <AdminKpiCard
                     label="Current Streak"
@@ -243,7 +243,7 @@ export default function AdminMemberPerformance() {
                   />
                 </div>
 
-                <div className="mt-8 grid gap-6 lg:grid-cols-2">
+                <div className="mt-6 grid gap-6 lg:mt-8 lg:grid-cols-2 [&>*]:min-w-0">
                   <AdminSectionCard title="Most Logged Categories">
                     <div className="space-y-3">
                       {data.categoryCounts.length === 0 ? (
@@ -254,12 +254,10 @@ export default function AdminMemberPerformance() {
                         data.categoryCounts.slice(0, 6).map((item, index) => (
                           <div
                             key={item.label}
-                            className="w-full overflow-hidden rounded-2xl border border-white/8 bg-white/[0.02] px-4 py-4"
+                            className="w-full overflow-hidden rounded-2xl border border-white/8 bg-white/[0.02] px-3 py-3 sm:px-4 sm:py-4"
                           >
                             <div className="flex min-w-0 items-center gap-3 sm:gap-4">
-                              <div className="shrink-0">
-                                <RankBadge index={index} />
-                              </div>
+                              <RankBadge index={index} />
 
                               <div className="flex min-w-0 flex-1 items-center gap-2">
                                 <Flame className="h-4 w-4 shrink-0 text-neutral-500" />
@@ -268,7 +266,7 @@ export default function AdminMemberPerformance() {
                                 </span>
                               </div>
 
-                              <div className="shrink-0 pl-2 text-base font-semibold text-white sm:text-lg">
+                              <div className="shrink-0 pl-1 text-base font-semibold text-white sm:pl-2 sm:text-lg">
                                 {item.count}
                               </div>
                             </div>
@@ -288,12 +286,10 @@ export default function AdminMemberPerformance() {
                         data.metricCounts.slice(0, 6).map((item, index) => (
                           <div
                             key={item.label}
-                            className="w-full overflow-hidden rounded-2xl border border-white/8 bg-white/[0.02] px-4 py-4"
+                            className="w-full overflow-hidden rounded-2xl border border-white/8 bg-white/[0.02] px-3 py-3 sm:px-4 sm:py-4"
                           >
                             <div className="flex min-w-0 items-center gap-3 sm:gap-4">
-                              <div className="shrink-0">
-                                <RankBadge index={index} />
-                              </div>
+                              <RankBadge index={index} />
 
                               <div className="flex min-w-0 flex-1 items-center gap-2">
                                 <Target className="h-4 w-4 shrink-0 text-neutral-500" />
@@ -302,7 +298,7 @@ export default function AdminMemberPerformance() {
                                 </span>
                               </div>
 
-                              <div className="shrink-0 pl-2 text-base font-semibold text-white sm:text-lg">
+                              <div className="shrink-0 pl-1 text-base font-semibold text-white sm:pl-2 sm:text-lg">
                                 {item.count}
                               </div>
                             </div>
@@ -313,18 +309,18 @@ export default function AdminMemberPerformance() {
                   </AdminSectionCard>
                 </div>
 
-                <div className="mt-8">
+                <div className="mt-6 sm:mt-8">
                   <AdminSectionCard title="Log History">
                     <div className="mb-5 flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                       <div className="text-sm text-neutral-400">
                         Filter this athlete’s training history by category.
                       </div>
 
-                      <div className="relative w-full sm:w-auto">
+                      <div className="relative w-full sm:w-auto sm:min-w-[220px]">
                         <select
                           value={categoryFilter}
                           onChange={(e) => setCategoryFilter(e.target.value)}
-                          className="w-full appearance-none rounded-2xl border border-white/10 bg-neutral-900 px-4 py-3 pr-10 text-sm text-white outline-none transition focus:border-amber-400/20 sm:w-auto"
+                          className="w-full appearance-none rounded-2xl border border-white/10 bg-neutral-900 px-4 py-3 pr-10 text-sm text-white outline-none transition focus:border-amber-400/20"
                         >
                           <option value="all">All categories</option>
                           {data.categoryCounts.map((item) => (
@@ -338,7 +334,51 @@ export default function AdminMemberPerformance() {
                       </div>
                     </div>
 
-                    <div className="overflow-x-auto">
+                    {/* Mobile cards */}
+                    <div className="space-y-3 sm:hidden">
+                      {filteredLogs.length === 0 ? (
+                        <div className="rounded-2xl border border-white/8 bg-white/[0.02] px-4 py-8 text-center text-sm text-neutral-500">
+                          No logs found for this filter.
+                        </div>
+                      ) : (
+                        filteredLogs.map((log) => (
+                          <div
+                            key={log.id}
+                            className="rounded-2xl border border-white/8 bg-white/[0.02] p-4"
+                          >
+                            <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-white">
+                              <Dumbbell className="h-4 w-4 shrink-0 text-neutral-500" />
+                              <span className="truncate">{log.metricLabel}</span>
+                            </div>
+
+                            <div className="mt-3 flex flex-wrap items-center gap-2">
+                              <span
+                                className={`inline-flex rounded-full border px-3 py-1 text-xs font-medium capitalize ${getCategoryPill(
+                                  log.category
+                                )}`}
+                              >
+                                {log.category || "—"}
+                              </span>
+                              <span className="text-sm text-white">
+                                {formatLogValue(log)}
+                              </span>
+                            </div>
+
+                            <div className="mt-3 space-y-1 text-xs text-neutral-400">
+                              <div>Log date: {log.date || "—"}</div>
+                              <div>Created: {formatCreatedAt(log.createdAt)}</div>
+                            </div>
+
+                            <div className="mt-3 rounded-xl border border-white/8 bg-black/20 px-3 py-2 text-sm text-neutral-400">
+                              {log.notes?.trim() || "—"}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+
+                    {/* Desktop table */}
+                    <div className="hidden overflow-x-auto sm:block">
                       <table className="w-full min-w-[900px] border-separate border-spacing-y-2">
                         <thead>
                           <tr className="text-left text-[11px] uppercase tracking-[0.22em] text-neutral-500">
@@ -358,9 +398,9 @@ export default function AdminMemberPerformance() {
                               className="group rounded-2xl bg-neutral-950 text-sm transition hover:bg-neutral-900"
                             >
                               <td className="rounded-l-2xl border-y border-l border-white/6 px-4 py-4 text-white">
-                                <div className="flex items-center gap-2">
+                                <div className="flex min-w-0 items-center gap-2">
                                   <Dumbbell className="h-4 w-4 shrink-0 text-neutral-500" />
-                                  <span>{log.metricLabel}</span>
+                                  <span className="truncate">{log.metricLabel}</span>
                                 </div>
                               </td>
 
@@ -387,7 +427,9 @@ export default function AdminMemberPerformance() {
                               </td>
 
                               <td className="rounded-r-2xl border-y border-r border-white/6 px-4 py-4 text-neutral-400">
-                                {log.notes?.trim() || "—"}
+                                <div className="max-w-[280px] truncate">
+                                  {log.notes?.trim() || "—"}
+                                </div>
                               </td>
                             </tr>
                           ))}
@@ -408,10 +450,10 @@ export default function AdminMemberPerformance() {
                   </AdminSectionCard>
                 </div>
 
-                <div className="mt-8 grid gap-4 lg:grid-cols-3">
-                  <div className="rounded-[1.75rem] border border-white/10 bg-neutral-950 p-5">
-                    <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.28em] text-neutral-500">
-                      <Trophy className="h-4 w-4 text-amber-300" />
+                <div className="mt-6 grid gap-4 lg:mt-8 lg:grid-cols-3 [&>*]:min-w-0">
+                  <div className="rounded-[1.5rem] border border-white/10 bg-neutral-950 p-4 sm:rounded-[1.75rem] sm:p-5">
+                    <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-neutral-500 sm:text-[11px] sm:tracking-[0.28em]">
+                      <Trophy className="h-4 w-4 shrink-0 text-amber-300" />
                       Coach Note
                     </div>
                     <p className="mt-3 text-sm leading-6 text-neutral-400">
@@ -420,9 +462,9 @@ export default function AdminMemberPerformance() {
                     </p>
                   </div>
 
-                  <div className="rounded-[1.75rem] border border-white/10 bg-neutral-950 p-5">
-                    <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.28em] text-neutral-500">
-                      <Activity className="h-4 w-4 text-sky-300" />
+                  <div className="rounded-[1.5rem] border border-white/10 bg-neutral-950 p-4 sm:rounded-[1.75rem] sm:p-5">
+                    <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-neutral-500 sm:text-[11px] sm:tracking-[0.28em]">
+                      <Activity className="h-4 w-4 shrink-0 text-sky-300" />
                       Next Upgrade
                     </div>
                     <p className="mt-3 text-sm leading-6 text-neutral-400">
@@ -431,9 +473,9 @@ export default function AdminMemberPerformance() {
                     </p>
                   </div>
 
-                  <div className="rounded-[1.75rem] border border-white/10 bg-neutral-950 p-5">
-                    <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.28em] text-neutral-500">
-                      <Target className="h-4 w-4 text-red-300" />
+                  <div className="rounded-[1.5rem] border border-white/10 bg-neutral-950 p-4 sm:rounded-[1.75rem] sm:p-5">
+                    <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-neutral-500 sm:text-[11px] sm:tracking-[0.28em]">
+                      <Target className="h-4 w-4 shrink-0 text-red-300" />
                       Future Insight
                     </div>
                     <p className="mt-3 text-sm leading-6 text-neutral-400">
