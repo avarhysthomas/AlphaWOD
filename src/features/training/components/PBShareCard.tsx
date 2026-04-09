@@ -1,5 +1,5 @@
 import React from "react";
-import { Trophy, Sparkles } from "lucide-react";
+import { Sparkles } from "lucide-react";
 
 type PBShareCardProps = {
   athleteName?: string;
@@ -11,6 +11,20 @@ type PBShareCardProps = {
   categoryLabel?: string;
 };
 
+function splitMovementLabel(input: string) {
+  const words = input.trim().split(/\s+/);
+
+  if (words.length <= 2) {
+    return [input];
+  }
+
+  const midpoint = Math.ceil(words.length / 2);
+  return [
+    words.slice(0, midpoint).join(" "),
+    words.slice(midpoint).join(" "),
+  ];
+}
+
 export default function PBShareCard({
   athleteName,
   movement,
@@ -20,92 +34,91 @@ export default function PBShareCard({
   dateLabel,
   categoryLabel = "Zero Alpha Performance",
 }: PBShareCardProps) {
+  const movementLines = splitMovementLabel(movement);
+
   return (
     <div
-      className="relative w-[1080px] h-[1920px] overflow-hidden"
-      style={{ background: "transparent" }}
+      className="relative w-[720px] overflow-hidden rounded-[40px] border border-white/12 bg-black/60 p-10 shadow-[0_24px_60px_rgba(0,0,0,0.45)] backdrop-blur-xl"
+      style={{ background: "rgba(0,0,0,0.58)" }}
     >
-      {/* transparent canvas */}
-      <div className="absolute inset-0 pointer-events-none">
-        <div className="absolute top-[140px] left-[90px] h-[280px] w-[280px] rounded-full bg-sky-500/15 blur-3xl" />
-        <div className="absolute bottom-[180px] right-[80px] h-[320px] w-[320px] rounded-full bg-blue-500/10 blur-3xl" />
-      </div>
+      {/* background layers */}
+      <div className="absolute inset-0 rounded-[40px] bg-[linear-gradient(180deg,rgba(255,255,255,0.045),transparent_24%),radial-gradient(circle_at_top_right,rgba(59,130,246,0.10),transparent_32%)]" />
 
-      {/* floating badge */}
-      <div className="absolute top-[120px] left-[80px] inline-flex items-center gap-3 rounded-full border border-white/15 bg-black/45 px-7 py-4 backdrop-blur-xl">
-        <Sparkles className="h-6 w-6 text-white" />
-        <span className="text-[26px] font-semibold uppercase tracking-[0.28em] text-white/85">
-          New PB
-        </span>
-      </div>
+      <img
+        src="/ZERO-ALPHA.png"
+        alt=""
+        className="pointer-events-none absolute left-1/2 top-1/2 w-[360px] -translate-x-1/2 -translate-y-1/2 select-none opacity-[0.045]"
+      />
 
-      {/* main sticker */}
-      <div className="absolute left-[80px] right-[80px] top-[300px] rounded-[48px] border border-white/12 bg-black/55 p-12 shadow-[0_40px_120px_rgba(0,0,0,0.4)] backdrop-blur-2xl">
-        <div className="absolute inset-0 rounded-[48px] bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.16),transparent_25%),linear-gradient(135deg,rgba(255,255,255,0.04),transparent_55%)]" />
+      <div className="relative">
+        {/* badge */}
+        <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 py-2">
+          <Sparkles className="h-4 w-4 text-white" />
+          <span className="text-[12px] font-semibold uppercase tracking-[0.2em] text-white/72">
+            New PB
+          </span>
+        </div>
 
-        <div className="relative">
-          <div className="flex items-start justify-between gap-8">
-            <div>
-              <div className="inline-flex items-center gap-3 rounded-full border border-white/10 bg-white/[0.04] px-5 py-3">
-                <Trophy className="h-6 w-6 text-white" />
-                <span className="text-[22px] font-semibold uppercase tracking-[0.22em] text-white/70">
-                  {categoryLabel}
-                </span>
-              </div>
+        {/* category */}
+        <div className="mt-5 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/38">
+          {categoryLabel}
+        </div>
 
-              <h1 className="mt-10 max-w-[760px] text-[128px] font-black uppercase leading-[0.88] tracking-[-0.06em] text-white">
-                {movement}
-              </h1>
+        {/* movement */}
+        <h1 className="mt-4 text-[72px] font-black uppercase leading-[0.9] tracking-[-0.055em] text-white">
+          {movementLines.map((line, index) => (
+            <span key={`${line}-${index}`} className="block">
+              {line}
+            </span>
+          ))}
+        </h1>
 
-              <div className="mt-10 inline-flex items-center rounded-full border border-sky-400/25 bg-sky-400/10 px-6 py-3 text-[28px] font-semibold uppercase tracking-[0.22em] text-sky-100">
-                {metricType}
-              </div>
+        {/* accent + metric */}
+        <div className="mt-5 flex items-center gap-4">
+          <div className="h-[2px] w-14 rounded-full bg-sky-400/70" />
+          <div className="inline-flex items-center rounded-full border border-sky-400/20 bg-sky-400/10 px-4 py-2 text-[14px] font-semibold uppercase tracking-[0.2em] text-sky-100">
+            {metricType}
+          </div>
+        </div>
+
+        {/* result */}
+        <div className="mt-8 flex items-end justify-between gap-6">
+          <div className="flex items-end leading-none">
+            <span className="text-[76px] font-black tracking-[-0.065em] text-white">
+              {value}
+            </span>
+            {unit ? (
+              <span className="ml-2 pb-[8px] text-[26px] font-semibold text-white/65">
+                {unit}
+              </span>
+            ) : null}
+          </div>
+
+          <div className="text-right text-[11px] font-semibold uppercase tracking-[0.22em] text-white/35">
+            Result
+          </div>
+        </div>
+
+        {/* footer */}
+        <div className="mt-8 flex items-end justify-between gap-6 border-t border-white/10 pt-5">
+          <div className="min-w-0">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/35">
+              Athlete
             </div>
-
-            <div className="rounded-[32px] border border-white/10 bg-black/35 px-8 py-7 text-right">
-              <div className="text-[22px] font-semibold uppercase tracking-[0.24em] text-white/40">
-                Result
-              </div>
-              <div className="mt-4 text-[86px] font-black leading-none tracking-[-0.05em] text-white">
-                {value}
-                {unit ? (
-                  <span className="ml-3 text-[42px] font-semibold text-white/70">
-                    {unit}
-                  </span>
-                ) : null}
-              </div>
+            <div className="mt-1 truncate text-[16px] font-semibold text-white/80">
+              {athleteName || "AlphaFIT Athlete"}
             </div>
           </div>
 
-          <div className="mt-16 h-px bg-gradient-to-r from-transparent via-white/12 to-transparent" />
-
-          <div className="mt-12 flex items-end justify-between gap-8">
-            <div>
-              <div className="text-[22px] font-semibold uppercase tracking-[0.22em] text-white/38">
-                Athlete
-              </div>
-              <div className="mt-3 text-[44px] font-semibold tracking-[-0.03em] text-white">
-                {athleteName || "AlphaFIT Athlete"}
-              </div>
+          <div className="shrink-0 text-right">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/35">
+              Logged
             </div>
-
-            <div className="text-right">
-              <div className="text-[22px] font-semibold uppercase tracking-[0.22em] text-white/38">
-                Logged
-              </div>
-              <div className="mt-3 text-[36px] font-semibold tracking-[-0.03em] text-white">
-                {dateLabel || "Today"}
-              </div>
+            <div className="mt-1 text-[16px] font-semibold text-white/80">
+              {dateLabel || "Today"}
             </div>
           </div>
         </div>
-      </div>
-
-      {/* bottom brand */}
-      <div className="absolute bottom-[120px] left-1/2 -translate-x-1/2 rounded-full border border-white/10 bg-black/40 px-8 py-4 backdrop-blur-xl">
-        <span className="text-[24px] font-semibold uppercase tracking-[0.32em] text-white/55">
-          ZERO ALPHA
-        </span>
       </div>
     </div>
   );

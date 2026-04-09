@@ -1,0 +1,294 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.76);
+  backdrop-filter: blur(14px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.modal {
+  width: min(92vw, 760px);
+  max-height: min(92vh, 980px);
+  overflow: auto;
+  border-radius: 32px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(180deg, rgba(14, 14, 16, 0.98), rgba(8, 8, 10, 0.98));
+  box-shadow:
+    0 30px 80px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  padding: 24px;
+  color: #ffffff;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.copy {
+  min-width: 0;
+}
+
+.title {
+  margin: 0;
+  font-size: clamp(2rem, 3vw, 2.75rem);
+  line-height: 0.95;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+}
+
+.subtitle {
+  margin: 10px 0 0;
+  max-width: 420px;
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 1.05rem;
+  line-height: 1.45;
+}
+
+.closeButton {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  color: #ffffff;
+  border-radius: 999px;
+  padding: 14px 22px;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+  transition:
+    transform 0.2s ease,
+    background 0.2s ease,
+    border-color 0.2s ease;
+  flex-shrink: 0;
+}
+
+.closeButton:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.previewSection {
+  margin-bottom: 20px;
+}
+
+.previewLabel {
+  margin: 0 0 12px;
+  text-align: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.previewFrame {
+  position: relative;
+  overflow: hidden;
+  border-radius: 28px;
+  padding: 20px 14px;
+  background:
+    radial-gradient(circle at top left, rgba(0, 140, 255, 0.08), transparent 35%),
+    radial-gradient(circle at top right, rgba(0, 88, 255, 0.06), transparent 32%),
+    rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.previewStage {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 280px;
+  overflow: hidden;
+}
+
+.previewStage::before {
+  content: "";
+  position: absolute;
+  inset: 20% 24%;
+  background: radial-gradient(
+    circle,
+    rgba(0, 120, 255, 0.12) 0%,
+    rgba(0, 120, 255, 0.05) 35%,
+    transparent 72%
+  );
+  filter: blur(34px);
+  pointer-events: none;
+}
+
+.previewScale {
+  position: relative;
+  z-index: 1;
+  transform: scale(0.52);
+  transform-origin: center;
+  filter: drop-shadow(0 20px 32px rgba(0, 0, 0, 0.5));
+}
+
+.exportSurface {
+  display: inline-flex;
+  background: transparent;
+}
+
+.actions {
+  display: flex;
+  gap: 12px;
+}
+
+.primaryButton,
+.secondaryButton {
+  flex: 1;
+  min-height: 62px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 750;
+  cursor: pointer;
+  transition:
+    transform 0.2s ease,
+    opacity 0.2s ease,
+    background 0.2s ease,
+    border-color 0.2s ease;
+}
+
+.primaryButton:disabled,
+.secondaryButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.primaryButton {
+  border: none;
+  background: #f3f3f3;
+  color: #050505;
+}
+
+.primaryButton:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.secondaryButton {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  color: #ffffff;
+}
+
+.secondaryButton:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+@media (max-width: 640px) {
+  .backdrop {
+    align-items: stretch;
+    justify-content: stretch;
+    padding: 8px;
+  }
+
+  .modal {
+    width: 100%;
+    max-height: none;
+    min-height: 100dvh;
+    border-radius: 24px;
+    padding: 16px;
+  }
+
+  .header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+
+  .title {
+    font-size: 2.1rem;
+  }
+
+  .subtitle {
+    margin-top: 6px;
+    max-width: none;
+    font-size: 0.95rem;
+    line-height: 1.35;
+  }
+
+  .closeButton {
+    align-self: flex-start;
+    padding: 12px 18px;
+  }
+
+  .previewSection {
+    margin-bottom: 14px;
+  }
+
+  .previewLabel {
+    margin-bottom: 10px;
+    font-size: 0.72rem;
+    letter-spacing: 0.16em;
+  }
+
+  .previewFrame {
+    border-radius: 22px;
+    padding: 10px 8px;
+  }
+
+  .previewStage {
+    min-height: 190px;
+  }
+
+  .previewStage::before {
+    inset: 28% 28%;
+    filter: blur(24px);
+  }
+
+  .previewScale {
+    transform: scale(0.29);
+    transform-origin: center;
+    filter: drop-shadow(0 16px 26px rgba(0, 0, 0, 0.44));
+  }
+
+  .actions {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .primaryButton,
+  .secondaryButton {
+    min-height: 54px;
+    font-size: 0.98rem;
+  }
+}
+
+@media (max-width: 390px) {
+  .modal {
+    padding: 14px;
+  }
+
+  .title {
+    font-size: 1.9rem;
+  }
+
+  .subtitle {
+    font-size: 0.9rem;
+  }
+
+  .previewStage {
+    min-height: 170px;
+  }
+
+  .previewScale {
+    transform: scale(0.25);
+  }
+
+  .primaryButton,
+  .secondaryButton {
+    min-height: 52px;
+  }
+}
