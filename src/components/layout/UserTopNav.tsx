@@ -1,6 +1,7 @@
 import React from "react";
 import { NavLink } from "react-router-dom";
 import {
+  LayoutDashboard,
   CalendarDays,
   User,
   Trophy,
@@ -22,6 +23,7 @@ type NavItem = {
 };
 
 const baseNavItems: NavItem[] = [
+  { to: "/dashboard", label: "Home", icon: LayoutDashboard },
   { to: "/schedule", label: "Schedule", icon: CalendarDays },
   { to: "/training", label: "Training", icon: Dumbbell },
   { to: "/profile", label: "Profile", icon: User },

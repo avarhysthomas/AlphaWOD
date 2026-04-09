@@ -13,6 +13,7 @@ import WODDisplay from "./features/wod/pages/WODDisplay";
 import DipLeaderboard from "./features/leaderboard/pages/DipLeaderboard";
 import Login from "./features/auth/pages/Login";
 import Signup from "./features/auth/pages/Signup";
+import Dashboard from "./features/dashboard/pages/Dashboard";
 import Schedule from "./features/bookings/pages/Schedule";
 import ClassRoster from "./features/bookings/pages/ClassRoster";
 import Leaderboard from "./features/leaderboard/pages/Leaderboard";
@@ -46,7 +47,7 @@ function RequireAdmin({ children }: { children: React.ReactElement }) {
   if (loading)
     return <div className="text-white text-center mt-20">Loading...</div>;
   if (appUser?.role !== "admin")
-    return <Navigate to="/schedule" replace state={{ from: location }} />;
+    return <Navigate to="/dashboard" replace state={{ from: location }} />;
 
   return children;
 }
@@ -88,14 +89,25 @@ export default function App() {
       {/* Public */}
       <Route
         path="/"
-        element={isAuthed ? <Navigate to="/schedule" replace /> : <Login />}
+        element={isAuthed ? <Navigate to="/dashboard" replace /> : <Login />}
       />
       <Route
         path="/signup"
-        element={isAuthed ? <Navigate to="/schedule" replace /> : <Signup />}
+        element={isAuthed ? <Navigate to="/dashboard" replace /> : <Signup />}
       />
 
       {/* Member routes */}
+      <Route
+        path="/dashboard"
+        element={
+          <RequireAuth>
+            <RequireMember>
+              <Dashboard />
+            </RequireMember>
+          </RequireAuth>
+        }
+      />
+
       <Route
         path="/schedule"
         element={
@@ -164,7 +176,7 @@ export default function App() {
       {/* Catch-all */}
       <Route
         path="*"
-        element={<Navigate to={isAuthed ? "/schedule" : "/"} replace />}
+        element={<Navigate to={isAuthed ? "/dashboard" : "/"} replace />}
       />
     </Routes>
   );
