@@ -45,7 +45,7 @@ export default function PBShareCard({
       <div className="absolute inset-0 rounded-[40px] bg-[linear-gradient(180deg,rgba(255,255,255,0.045),transparent_24%),radial-gradient(circle_at_top_right,rgba(59,130,246,0.10),transparent_32%)]" />
 
       <div
-        className="pointer-events-none absolute left-1/2 top-[58%] h-[400px] w-[600px] -translate-x-1/2 -translate-y-1/2 select-none opacity-[0.09] bg-contain bg-center bg-no-repeat"
+        className="pointer-events-none absolute left-1/2 top-[58%] h-[400px] w-[600px] -translate-x-1/2 -translate-y-1/2 select-none opacity-[0.15] bg-contain bg-center bg-no-repeat"
         style={{ backgroundImage: "url('/ZERO-ALPHA.png')" }}
       />
 
