@@ -8,7 +8,7 @@ import {
   BarChart3,
   CheckCircle2,
   Plus,
-  Share2,
+  Share,
 } from "lucide-react";
 import {
   addDoc,
@@ -1239,7 +1239,7 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
                     onClick={() => setShareOpen(true)}
                     className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-semibold text-white transition hover:border-white/20 hover:bg-white/[0.06]"
                   >
-                    <Share2 className="h-4 w-4" />
+                    <Share className="h-4 w-4" />
                     Share PB
                   </button>
                 ) : null}
@@ -1343,7 +1343,7 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
                           }}
                           className="rounded-full border border-white/10 bg-white/[0.04] p-2 text-white/60 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
                         >
-                          <Share2 className="h-4 w-4" />
+                          <Share className="h-4 w-4" />
                         </button>
 
                         <div className="text-2xl font-semibold tracking-[-0.03em] text-white">

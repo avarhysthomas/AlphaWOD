@@ -257,38 +257,7 @@ export const TRAINING_CATEGORIES: TrainingCategory[] = [
       metricTypes: ["For Time"],
       unitOptions: ["mm:ss", "seconds"],
       pageMode: "standard",
-    },
-    {
-      name: "Aerobic Power / Threshold",
-      slug: "aerobic-power-threshold",
-      description:
-        "2km time trial benchmark linked to your 2km Run result.",
-      metricTypes: ["Time Trial"],
-      unitOptions: ["mm:ss", "seconds"],
-      pageMode: "linked",
-      linkedMovementSlugs: ["2km-run"],
-      linkedCategoryKeys: ["engine"],
-    },
-    {
-      name: "Anaerobic Power",
-      slug: "anaerobic-power",
-      description:
-        "30-second Assault Bike test measured by total calories.",
-      metricTypes: ["Test Piece"],
-      unitOptions: ["cals"],
-      pageMode: "standard",
-    },
-    {
-      name: "Max Strength / Force Production",
-      slug: "max-strength-force-production",
-      description:
-        "1RM or 3RM Back Squat and Flat Bench, linked to your strength benchmarks.",
-      metricTypes: ["1RM", "3RM"],
-      unitOptions: ["kg"],
-      pageMode: "linked",
-      linkedMovementSlugs: ["back-squat", "flat-bench"],
-      linkedCategoryKeys: ["strength"],
-    },
+    }
   ],
 }
 ];

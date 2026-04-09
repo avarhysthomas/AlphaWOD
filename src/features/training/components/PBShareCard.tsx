@@ -47,7 +47,7 @@ export default function PBShareCard({
       <img
         src="/ZERO-ALPHA.png"
         alt=""
-        className="pointer-events-none absolute left-1/2 top-1/2 w-[360px] -translate-x-1/2 -translate-y-1/2 select-none opacity-[0.045]"
+        className="pointer-events-none absolute left-1/2 top-[58%] w-[380px] -translate-x-1/2 -translate-y-1/2 select-none opacity-[0.15] mix-blend-soft-light"
       />
 
       <div className="relative">
