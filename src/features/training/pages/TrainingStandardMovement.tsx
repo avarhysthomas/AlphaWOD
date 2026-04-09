@@ -8,6 +8,7 @@ import {
   BarChart3,
   CheckCircle2,
   Plus,
+  Share2,
 } from "lucide-react";
 import {
   addDoc,
@@ -20,6 +21,7 @@ import {
 } from "firebase/firestore";
 import { auth, db } from "../../../firebase";
 import { getMovementBySlug } from "../../../lib/training";
+import PBShareModal from "../../training/components/PBShareModal";
 import {
   ResponsiveContainer,
   LineChart,
@@ -444,6 +446,24 @@ function CustomTooltip({
   );
 }
 
+function isBetterPerformance(args: {
+  categoryKey?: string | null;
+  nextValue: number;
+  currentBestValue: number | null;
+}) {
+  const { categoryKey, nextValue, currentBestValue } = args;
+
+  if (currentBestValue === null) return true;
+
+  // engine = lower is better
+  if (categoryKey === "engine") {
+    return nextValue < currentBestValue;
+  }
+
+  // everything else = higher is better
+  return nextValue > currentBestValue;
+}
+
 export default function TrainingStandardMovement() {
   const { category, movementSlug } = useParams<{
     category: string;
@@ -473,6 +493,16 @@ export default function TrainingStandardMovement() {
   const [activeMetricFilter, setActiveMetricFilter] = useState(
     movement?.metricTypes[0] ?? ""
     );
+
+  const [shareOpen, setShareOpen] = useState(false);
+  const [isNewPB, setIsNewPB] = useState(false);
+  const [sharePayload, setSharePayload] = useState<{
+    movement: string;
+    metricType: string;
+    value: string;
+    unit?: string;
+    dateLabel?: string;
+  } | null>(null);
 
 const movementLogs = useMemo(() => {
   if (!selectedCategory || !movement) return [];
@@ -676,41 +706,71 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
   }, [selectedCategory, movement]);
 
   async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  e.preventDefault();
 
-    const user = auth.currentUser;
+  const user = auth.currentUser;
 
-    if (!user || !selectedCategory || !movement) return;
-    if (!value.trim() || !date.trim()) return;
+  if (!user || !selectedCategory || !movement) return;
+  if (!value.trim() || !date.trim()) return;
 
-    try {
-      setIsSaving(true);
-      setSaved(false);
+  try {
+    setIsSaving(true);
+    setSaved(false);
+    setIsNewPB(false);
 
-      const logsRef = collection(db, "users", user.uid, "trainingLogs");
+    const submittedValue = value.trim();
+    const submittedUnit = effectiveUnit;
+    const parsedSubmittedValue = parseChartValue(submittedValue, submittedUnit);
 
-      await addDoc(logsRef, {
-        userId: user.uid,
-        category: selectedCategory.key,
-        movementSlug: movement.slug,
-        movementName: movement.name,
-        metricType,
-        value: value.trim(),
-        unit: effectiveUnit,
-        reps: reps.trim(),
-        date,
-        notes: notes.trim(),
-        createdAt: serverTimestamp(),
+    const currentBestParsed =
+      bestLog ? parseChartValue(bestLog.value, bestLog.unit) : null;
+
+    const nextIsPB =
+      parsedSubmittedValue !== null &&
+      isBetterPerformance({
+        categoryKey: selectedCategory.key,
+        nextValue: parsedSubmittedValue,
+        currentBestValue: currentBestParsed,
       });
 
-      resetForm();
-      setSaved(true);
-    } catch (error) {
-      console.error("Error saving training log:", error);
-    } finally {
-      setIsSaving(false);
+    const logsRef = collection(db, "users", user.uid, "trainingLogs");
+
+    await addDoc(logsRef, {
+      userId: user.uid,
+      category: selectedCategory.key,
+      movementSlug: movement.slug,
+      movementName: movement.name,
+      metricType,
+      value: submittedValue,
+      unit: submittedUnit,
+      reps: reps.trim(),
+      date,
+      notes: notes.trim(),
+      createdAt: serverTimestamp(),
+    });
+
+    setIsNewPB(Boolean(nextIsPB));
+
+    if (nextIsPB) {
+      setSharePayload({
+        movement: movement.name,
+        metricType,
+        value: submittedValue,
+        unit: submittedUnit,
+        dateLabel: prettyDate(date),
+      });
+    } else {
+      setSharePayload(null);
     }
+
+    resetForm();
+    setSaved(true);
+  } catch (error) {
+    console.error("Error saving training log:", error);
+  } finally {
+    setIsSaving(false);
   }
+}
 
   if (!selectedCategory || !movement) {
     return <Navigate to="/training" replace />;
@@ -1156,23 +1216,34 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
                 />
                 </label>
 
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
                 <button
-                    type="submit"
-                    disabled={isSaving}
-                    className={`inline-flex items-center gap-2 rounded-[22px] px-5 py-3.5 text-sm font-semibold transition hover:translate-y-[-1px] hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60 ${accent.button}`}
+                  type="submit"
+                  disabled={isSaving}
+                  className={`inline-flex items-center gap-2 rounded-[22px] px-5 py-3.5 text-sm font-semibold transition hover:translate-y-[-1px] hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60 ${accent.button}`}
                 >
-                    <Plus className="h-4 w-4" />
-                    {isSaving ? "Saving..." : "Save log"}
+                  <Plus className="h-4 w-4" />
+                  {isSaving ? "Saving..." : "Save log"}
                 </button>
 
                 {saved ? (
-                    <div className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-2 text-sm font-medium text-emerald-100">
-                    < CheckCircle2 className="h-4 w-4" />
-                    Log saved
-                    </div>
+                  <div className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-2 text-sm font-medium text-emerald-100">
+                    <CheckCircle2 className="h-4 w-4" />
+                    {isNewPB ? "PB logged" : "Log saved"}
+                  </div>
                 ) : null}
-                </div>
+
+                {saved && isNewPB && sharePayload ? (
+                  <button
+                    type="button"
+                    onClick={() => setShareOpen(true)}
+                    className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-semibold text-white transition hover:border-white/20 hover:bg-white/[0.06]"
+                  >
+                    <Share2 className="h-4 w-4" />
+                    Share PB
+                  </button>
+                ) : null}
+              </div>
 
                 </div>
             </form>
@@ -1256,23 +1327,43 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
                           ) : null}
                         </div>
 
-                        <div className="shrink-0 text-left sm:text-right">
-                          <div className="text-2xl font-semibold tracking-[-0.03em] text-white">
-                            {isTimeDisplay(log.unit, selectedCategory.key, movement.name) ? (
+                        <div className="shrink-0 text-left sm:text-right flex flex-col items-end gap-2">
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSharePayload({
+                              movement: movement.name,
+                              metricType: log.metricType,
+                              value: log.value,
+                              unit: log.unit,
+                              dateLabel: prettyDate(log.date),
+                            });
+                            setShareOpen(true);
+                          }}
+                          className="rounded-full border border-white/10 bg-white/[0.04] p-2 text-white/60 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
+                        >
+                          <Share2 className="h-4 w-4" />
+                        </button>
+
+                        <div className="text-2xl font-semibold tracking-[-0.03em] text-white">
+                          {isTimeDisplay(log.unit, selectedCategory.key, movement.name) ? (
                             formatDisplayValue(log.value, log.unit, selectedCategory.key, movement.name)
-                            ) : (
+                          ) : (
                             <>
-                                {log.value}{" "}
-                                <span className="text-sm font-medium text-white/52">
+                              {log.value}{" "}
+                              <span className="text-sm font-medium text-white/52">
                                 {log.unit}
-                                </span>
+                              </span>
                             </>
-                            )}
-                          </div>
-                          <div className="mt-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/38">
-                            {prettyDate(log.date)}
-                          </div>
+                          )}
                         </div>
+
+                        <div className="mt-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/38">
+                          {prettyDate(log.date)}
+                        </div>
+
+                      </div>
                       </div>
                     </div>
                   );
@@ -1281,6 +1372,16 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
             </div>
           </section>
         </div>
+        <PBShareModal
+          open={shareOpen && !!sharePayload}
+          onClose={() => setShareOpen(false)}
+          athleteName={auth.currentUser?.displayName || "AlphaFIT Athlete"}
+          movement={sharePayload?.movement || movement.name}
+          metricType={sharePayload?.metricType || metricType}
+          value={sharePayload?.value || value}
+          unit={sharePayload?.unit || effectiveUnit}
+          dateLabel={sharePayload?.dateLabel || prettyDate(date)}
+        />
       </div>
     </div>
   );
