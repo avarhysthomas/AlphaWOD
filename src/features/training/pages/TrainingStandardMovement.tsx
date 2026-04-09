@@ -875,25 +875,28 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
                         : "Select a metric type to view progress."}
                     </p>
                     <div className="mt-5 flex flex-wrap gap-2">
-                    {metricFilterOptions.map((option) => {
+                      {metricFilterOptions.map((option) => {
                         const isActive = activeMetricFilter === option;
 
                         return (
-                        <button
+                          <button
                             key={option}
                             type="button"
-                            onClick={() => setActiveMetricFilter(option)}
+                            onClick={() => {
+                              setActiveMetricFilter(option);
+                              setMetricType(option);
+                            }}
                             className={[
-                            "rounded-full border px-4 py-2 text-sm font-semibold transition",
-                            isActive
+                              "rounded-full border px-4 py-2 text-sm font-semibold transition",
+                              isActive
                                 ? `${accent.badgeGlow}`
                                 : "border-white/10 bg-white/[0.03] text-white/65 hover:border-white/15 hover:bg-white/[0.05] hover:text-white",
                             ].join(" ")}
-                        >
+                          >
                             {option}
-                        </button>
+                          </button>
                         );
-                    })}
+                      })}
                     </div>
                 </div>
 
