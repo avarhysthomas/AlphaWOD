@@ -11,8 +11,8 @@
 }
 
 .modal {
-  width: min(92vw, 760px);
-  max-height: min(92vh, 980px);
+  width: min(90vw, 640px);
+  max-height: min(88vh, 860px);
   overflow: auto;
   border-radius: 32px;
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -21,8 +21,13 @@
   box-shadow:
     0 30px 80px rgba(0, 0, 0, 0.6),
     inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  padding: 24px;
+  padding: 20px;
   color: #ffffff;
+}
+
+.pbModal {
+  width: min(88vw, 560px);
+  max-height: min(84vh, 760px);
 }
 
 .header {
@@ -30,7 +35,24 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 18px;
+  margin-bottom: 14px;
+}
+
+.sessionHeader {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pbHeader {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pbCloseButton {
+  padding: 10px 16px;
+  font-size: 0.9rem;
 }
 
 .copy {
@@ -45,12 +67,38 @@
   letter-spacing: -0.04em;
 }
 
+.sessionTitleLine {
+  display: block;
+  font-family: 'Anton', sans-serif;
+  font-size: clamp(2.5rem, 5vw, 4.75rem);
+  line-height: 0.88;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.sessionTitleLine + .sessionTitleLine {
+  margin-top: 0.04em;
+}
+
+.pbTitleLine {
+  display: block;
+  font-family: 'Anton', sans-serif;
+  font-size: clamp(2rem, 4vw, 3.25rem);
+  line-height: 0.9;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.pbTitleLine + .pbTitleLine {
+  margin-top: 0.03em;
+}
+
 .subtitle {
-  margin: 10px 0 0;
-  max-width: 420px;
+  margin: 8px 0 0;
+  max-width: 360px;
   color: rgba(255, 255, 255, 0.62);
-  font-size: 1.05rem;
-  line-height: 1.45;
+  font-size: 0.98rem;
+  line-height: 1.35;
 }
 
 .closeButton {
@@ -93,8 +141,8 @@
 .previewFrame {
   position: relative;
   overflow: hidden;
-  border-radius: 28px;
-  padding: 20px 14px;
+  border-radius: 24px;
+  padding: 14px 10px;
   background:
     radial-gradient(circle at top left, rgba(0, 140, 255, 0.08), transparent 35%),
     radial-gradient(circle at top right, rgba(0, 88, 255, 0.06), transparent 32%),
@@ -107,7 +155,7 @@
   display: flex;
   justify-content: center;
   align-items: center;
-  min-height: 280px;
+  min-height: 220px;
   overflow: hidden;
 }
 
@@ -128,7 +176,7 @@
 .previewScale {
   position: relative;
   z-index: 1;
-  transform: scale(0.52);
+  transform: scale(0.42);
   transform-origin: center;
   filter: drop-shadow(0 20px 32px rgba(0, 0, 0, 0.5));
 }
@@ -138,9 +186,41 @@
   background: transparent;
 }
 
+.sessionPreviewStage {
+  min-height: auto;
+  padding: 8px 0 4px;
+}
+
+.sessionPreviewScale {
+  --session-preview-scale: 0.4;
+  position: relative;
+  z-index: 1;
+  width: calc(720px * var(--session-preview-scale));
+  height: calc(var(--session-card-height, 960px) * var(--session-preview-scale));
+}
+
+.sessionPreviewViewport {
+  width: 720px;
+  min-height: var(--session-card-height, 960px);
+  transform: scale(var(--session-preview-scale));
+  transform-origin: top left;
+  filter: drop-shadow(0 20px 32px rgba(0, 0, 0, 0.5));
+}
+
 .actions {
   display: flex;
   gap: 12px;
+  position: sticky;
+  bottom: -20px;
+  margin: 0 -20px -20px;
+  padding: 14px 20px 20px;
+  background: linear-gradient(
+    180deg,
+    rgba(8, 8, 10, 0),
+    rgba(8, 8, 10, 0.9) 26%,
+    rgba(8, 8, 10, 0.98)
+  );
+  backdrop-filter: blur(12px);
 }
 
 .primaryButton,
@@ -188,40 +268,58 @@
 
 @media (max-width: 640px) {
   .backdrop {
-    align-items: stretch;
-    justify-content: stretch;
-    padding: 8px;
+    align-items: center;
+    justify-content: center;
+    padding: 12px;
   }
 
   .modal {
-    width: 100%;
-    max-height: none;
-    min-height: 100dvh;
-    border-radius: 24px;
-    padding: 16px;
+    width: min(100%, 420px);
+    max-height: min(88dvh, 820px);
+    min-height: 0;
+    border-radius: 20px;
+    padding: 14px;
+  }
+
+  .pbModal {
+    width: min(100%, 380px);
+    max-height: min(82dvh, 720px);
   }
 
   .header {
     align-items: stretch;
     flex-direction: column;
-    gap: 10px;
-    margin-bottom: 14px;
+    gap: 8px;
+    margin-bottom: 12px;
   }
 
-  .title {
-    font-size: 2.1rem;
+  .sessionTitleLine {
+    font-size: 2.55rem;
+    line-height: 0.9;
+    letter-spacing: 0.03em;
+  }
+
+  .pbTitleLine {
+    font-size: 2.05rem;
+    line-height: 0.92;
+    letter-spacing: 0.035em;
+  }
+
+  .pbCloseButton {
+    padding: 10px 15px;
+    font-size: 0.85rem;
   }
 
   .subtitle {
-    margin-top: 6px;
+    margin-top: 4px;
     max-width: none;
-    font-size: 0.95rem;
-    line-height: 1.35;
+    font-size: 0.88rem;
+    line-height: 1.3;
   }
 
   .closeButton {
     align-self: flex-start;
-    padding: 12px 18px;
+    padding: 10px 16px;
   }
 
   .previewSection {
@@ -235,12 +333,12 @@
   }
 
   .previewFrame {
-    border-radius: 22px;
-    padding: 10px 8px;
+    border-radius: 18px;
+    padding: 8px 6px;
   }
 
   .previewStage {
-    min-height: 190px;
+    min-height: 170px;
   }
 
   .previewStage::before {
@@ -249,14 +347,30 @@
   }
 
   .previewScale {
-    transform: scale(0.29);
+    transform: scale(0.26);
     transform-origin: center;
+    filter: drop-shadow(0 16px 26px rgba(0, 0, 0, 0.44));
+  }
+
+  .sessionPreviewStage {
+    padding: 6px 0 2px;
+  }
+
+  .sessionPreviewScale {
+    width: calc(720px * var(--session-preview-scale));
+    height: calc(var(--session-card-height, 960px) * var(--session-preview-scale));
+  }
+
+  .sessionPreviewViewport {
     filter: drop-shadow(0 16px 26px rgba(0, 0, 0, 0.44));
   }
 
   .actions {
     flex-direction: column;
     gap: 10px;
+    bottom: -14px;
+    margin: 0 -14px -14px;
+    padding: 12px 14px 14px;
   }
 
   .primaryButton,
@@ -267,12 +381,16 @@
 }
 
 @media (max-width: 390px) {
-  .modal {
-    padding: 14px;
-  }
-
   .title {
     font-size: 1.9rem;
+  }
+
+  .sessionTitleLine {
+    font-size: 2.2rem;
+  }
+
+  .pbTitleLine {
+    font-size: 1.85rem;
   }
 
   .subtitle {

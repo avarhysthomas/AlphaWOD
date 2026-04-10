@@ -15,9 +15,6 @@ export type TrainingMovement = {
   description: string;
   metricTypes: string[];
   unitOptions: string[];
-  linkedMovementSlugs?: string[];
-  linkedCategoryKeys?: TrainingCategoryKey[];
-  pageMode?: "standard" | "linked";
 };
 
 export type TrainingCategory = {
@@ -256,7 +253,6 @@ export const TRAINING_CATEGORIES: TrainingCategory[] = [
         "3 rounds for time: 500m Run, 10 Zero Alphas, 10 KB Swing.",
       metricTypes: ["For Time"],
       unitOptions: ["mm:ss", "seconds"],
-      pageMode: "standard",
     }
   ],
 }

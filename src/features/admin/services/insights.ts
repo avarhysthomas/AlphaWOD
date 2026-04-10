@@ -29,28 +29,33 @@ export async function getInsightsSummary() {
   const users = await getAdminUsers();
   const monthKey = getMonthKey();
 
-  const members = users.filter((u) => u.role !== "admin");
+  const approvedMembers = users.filter(
+    (u) => u.role !== "admin" && u.approvalStatus !== "pending"
+  );
+  const pendingApprovals = users
+    .filter((u) => u.role !== "admin" && u.approvalStatus === "pending")
+    .sort((a, b) => (a.name ?? a.email ?? "").localeCompare(b.name ?? b.email ?? ""));
 
-  const totalMembers = members.length;
+  const totalMembers = approvedMembers.length;
 
-  const activeMembers = members.filter((u) => {
+  const activeMembers = approvedMembers.filter((u) => {
     return daysSince(u.stats?.lastCheckInDate) <= 30;
   }).length;
 
-  const monthCheckIns = members.reduce((sum, u) => {
+  const monthCheckIns = approvedMembers.reduce((sum, u) => {
     return sum + (u.stats?.monthCheckIns?.[monthKey] ?? 0);
   }, 0);
 
-  const totalCheckIns = members.reduce((sum, u) => {
+  const totalCheckIns = approvedMembers.reduce((sum, u) => {
     return sum + (u.stats?.totalCheckIns ?? 0);
   }, 0);
 
   const topStreakUser =
-    [...members].sort(
+    [...approvedMembers].sort(
       (a, b) => (b.stats?.currentStreak ?? 0) - (a.stats?.currentStreak ?? 0)
     )[0] ?? null;
 
-  const topAttenders = [...members]
+  const topAttenders = [...approvedMembers]
     .sort(
       (a, b) =>
         (b.stats?.monthCheckIns?.[monthKey] ?? 0) -
@@ -58,7 +63,7 @@ export async function getInsightsSummary() {
     )
     .slice(0, 8);
 
-  const inactiveMembers = members
+  const inactiveMembers = approvedMembers
     .filter((u) => daysSince(u.stats?.lastCheckInDate) > 14)
     .sort(
       (a, b) =>
@@ -74,7 +79,8 @@ export async function getInsightsSummary() {
     topStreakUser,
     topAttenders,
     inactiveMembers,
+    pendingApprovals,
     monthKey,
-    users: members,
+    users: approvedMembers,
   };
 }

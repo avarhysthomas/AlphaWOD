@@ -3,7 +3,26 @@
 @tailwind utilities;
 @import url('https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@300;500;700&display=swap');
 
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
 body {
   @apply bg-black text-white font-sans;
   font-family: 'Inter', sans-serif;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.auth-screen {
+  padding-top: max(1.25rem, env(safe-area-inset-top));
+  padding-bottom: max(1.25rem, env(safe-area-inset-bottom));
+}
+
+input,
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
 }

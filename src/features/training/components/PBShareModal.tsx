@@ -1,7 +1,8 @@
 import React, { useRef, useState } from "react";
-import * as htmlToImage from "html-to-image";
 import PBShareCard from "./PBShareCard";
 import styles from "../../../styles/PBShareModal.module.css";
+import { exportNodeToPng } from "../../../utils/shareExport";
+import type { TrainingCategoryKey } from "../../../lib/training";
 
 type PBShareModalProps = {
   open: boolean;
@@ -12,6 +13,7 @@ type PBShareModalProps = {
   value: string;
   unit?: string;
   dateLabel?: string;
+  categoryKey?: TrainingCategoryKey | null;
 };
 
 export default function PBShareModal({
@@ -23,6 +25,7 @@ export default function PBShareModal({
   value,
   unit,
   dateLabel,
+  categoryKey,
 }: PBShareModalProps) {
   const exportRef = useRef<HTMLDivElement | null>(null);
   const [isExporting, setIsExporting] = useState(false);
@@ -34,11 +37,8 @@ export default function PBShareModal({
 
     try {
       setIsExporting(true);
-
-      const dataUrl = await htmlToImage.toPng(exportRef.current, {
-        cacheBust: true,
-        pixelRatio: 2,
-        backgroundColor: "transparent",
+      const dataUrl = await exportNodeToPng(exportRef.current, {
+        logoOpacity: 0.22,
       });
 
       const response = await fetch(dataUrl);
@@ -72,25 +72,26 @@ export default function PBShareModal({
   return (
     <div className={styles.backdrop} onClick={onClose}>
       <div
-        className={styles.modal}
+        className={`${styles.modal} ${styles.pbModal}`}
         onClick={(event) => event.stopPropagation()}
         role="dialog"
         aria-modal="true"
         aria-labelledby="pb-share-title"
       >
-        <div className={styles.header}>
+        <div className={`${styles.header} ${styles.pbHeader}`}>
           <div className={styles.copy}>
             <h2 id="pb-share-title" className={styles.title}>
-              Share your stats!
+              <span className={styles.pbTitleLine}>Share your</span>
+              <span className={styles.pbTitleLine}>stats</span>
             </h2>
             <p className={styles.subtitle}>
-              Share your Zero Alpha PB card. Tag @zeroalphafitness.
+              Don't forget to tag @zeroalphafitness.
             </p>
           </div>
 
           <button
             type="button"
-            className={styles.closeButton}
+            className={`${styles.closeButton} ${styles.pbCloseButton}`}
             onClick={onClose}
           >
             Close
@@ -111,6 +112,7 @@ export default function PBShareModal({
                     value={value}
                     unit={unit}
                     dateLabel={dateLabel}
+                    categoryKey={categoryKey}
                   />
                 </div>
               </div>

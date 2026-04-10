@@ -12,6 +12,7 @@ type AdminUser = {
   email?: string;
   photoURL?: string;
   role?: string;
+  approvalStatus?: "approved" | "pending";
   stats?: {
     currentStreak?: number;
     longestStreak?: number;

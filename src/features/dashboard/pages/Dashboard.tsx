@@ -26,7 +26,11 @@ import {
   Zap,
   Trophy,
   Timer,
+  Share,
+  Sun,
+  Moon,
 } from "lucide-react";
+import SessionShareModal from "../../wod/components/SessionShareModal";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -70,6 +74,49 @@ type PBs = {
   backSquat: string | null;
   flatBench: string | null;
   run1km: string | null;
+};
+
+type SessionKey = "AM" | "PM";
+
+type SessionSharePayload = {
+  title: string;
+  subtitle?: string;
+  filename: string;
+  shareTitle: string;
+  shareText: string;
+  dateLabel: string;
+  sessionLabel: string;
+  sessionTimeLabel?: string;
+  sessionType: string;
+  sessionStyle: string;
+  sessionExtra?: string;
+  highlight: string;
+  highlightLabel: string;
+  stationsLabel: string;
+  coachNote?: string;
+  items: string[];
+};
+
+type DashboardSessionCard = {
+  key: SessionKey;
+  timeLabel: string;
+  title: string;
+  meta: string;
+  detail: string;
+  payload: SessionSharePayload | null;
+};
+
+type Movement = {
+  id?: string;
+  name: string;
+  target?: string;
+  notes?: string;
+};
+
+type Station = {
+  id?: string;
+  title: string;
+  movements: Movement[];
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -149,6 +196,214 @@ function formatSeconds(total: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
+function parseDurationToSeconds(duration: unknown): number | null {
+  if (!duration || typeof duration !== "string") return null;
+  const value = duration.trim();
+  if (!value) return null;
+
+  const parts = value.split(":").map((part) => part.trim());
+  if (parts.length === 2) {
+    const mm = Number(parts[0]);
+    const ss = Number(parts[1]);
+    if (Number.isFinite(mm) && Number.isFinite(ss)) return mm * 60 + ss;
+  }
+
+  const mins = value.match(/(\d+)\s*m/i);
+  const secs = value.match(/(\d+)\s*s/i);
+  const total = (mins ? Number(mins[1]) * 60 : 0) + (secs ? Number(secs[1]) : 0);
+  return total > 0 ? total : null;
+}
+
+function normalizeMovements(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+
+  return raw
+    .map((movement) => {
+      if (typeof movement === "string") return movement;
+      if (movement && typeof movement === "object") {
+        const value = (movement as { partner1?: string; movement?: string }).partner1
+          ?? (movement as { movement?: string }).movement
+          ?? "";
+        return String(value);
+      }
+      return String(movement ?? "");
+    })
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function normalizeStations(rawStations: unknown, rawMovements: unknown): Station[] {
+  if (Array.isArray(rawStations) && rawStations.length) {
+    return rawStations.map((station, index) => {
+      const s = station as {
+        id?: string;
+        title?: string;
+        movements?: Array<{ id?: string; name?: string; target?: string; notes?: string }>;
+      };
+
+      return {
+        id: s.id,
+        title: String(s.title ?? `Station ${index + 1}`).trim() || `Station ${index + 1}`,
+        movements: (Array.isArray(s.movements) ? s.movements : [])
+          .map((movement) => ({
+            id: movement.id,
+            name: String(movement.name ?? "").trim(),
+            target: String(movement.target ?? "").trim() || undefined,
+            notes: String(movement.notes ?? "").trim() || undefined,
+          }))
+          .filter((movement) => movement.name || movement.target || movement.notes),
+      };
+    });
+  }
+
+  const legacy = normalizeMovements(rawMovements);
+  if (legacy.length) {
+    return [
+      {
+        title: "Station 1",
+        movements: legacy.map((name) => ({ name })),
+      },
+    ];
+  }
+
+  return [];
+}
+
+function getSessionTimeLabel(sessionKey: SessionKey) {
+  return sessionKey === "AM" ? "6AM" : "6PM";
+}
+
+function getDashboardSessionPayload(
+  wod: any,
+  sessionKey: SessionKey,
+  dateKey: string
+): SessionSharePayload | null {
+  if (!wod) return null;
+
+  const selectedDate = new Date(dateKey);
+  if (Number.isNaN(selectedDate.getTime())) return null;
+
+  const dayName = selectedDate.toLocaleDateString("en-GB", { weekday: "long" });
+  const dateLabel = selectedDate.toLocaleDateString("en-GB", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  });
+  const sessionTimeLabel = getSessionTimeLabel(sessionKey);
+
+  if (wod.sessionType === "Strength") {
+    const movements = Array.isArray(wod.strengthMovements) ? wod.strengthMovements : [];
+    const items = movements
+      .map((movement: any) => {
+        const name = String(movement?.movement ?? "").trim();
+        const percent = String(movement?.percent ?? "").trim();
+        const repRange = String(movement?.repRange ?? "").trim();
+        const details = [percent, repRange].filter(Boolean).join(" • ");
+        return name ? `${name}${details ? ` • ${details}` : ""}` : "";
+      })
+      .filter(Boolean);
+
+    return {
+      title: wod.wodName?.trim() || "Strength",
+      subtitle: `${dayName} strength session`,
+      filename: `${dateKey}-${sessionKey.toLowerCase()}-session.png`,
+      shareTitle: `${sessionTimeLabel} session`,
+      shareText: `Today's ${sessionTimeLabel.toLowerCase()} session is live: ${wod.wodName?.trim() || "Strength session"}`,
+      dateLabel,
+      sessionLabel: sessionKey,
+      sessionTimeLabel,
+      sessionType: "STRENGTH",
+      sessionStyle: "STRENGTH",
+      sessionExtra: `${movements.length || 0} STATIONS`,
+      highlight: `${movements.length || 0}`,
+      highlightLabel: "Stations",
+      stationsLabel: `${movements.length || 0} strength stations`,
+      coachNote: String(wod?.strengthCue ?? "").trim() || undefined,
+      items,
+    };
+  }
+
+  const stations = normalizeStations(wod?.stations, wod?.movements);
+  const stationCount = stations.length;
+  const timerMode = wod?.timerMode === "stationControlled" ? "stationControlled" : "timed";
+  const groupSize = typeof wod?.groupSize === "number" && wod.groupSize > 0 ? wod.groupSize : null;
+  const roundsRaw = wod?.rounds;
+  const rounds =
+    typeof roundsRaw === "number" && roundsRaw >= 1
+      ? roundsRaw
+      : typeof roundsRaw === "string" && roundsRaw.trim() && !Number.isNaN(Number(roundsRaw))
+      ? Math.max(1, Math.floor(Number(roundsRaw)))
+      : null;
+  const roundDurationSeconds =
+    typeof wod?.roundDurationSeconds === "number" && wod.roundDurationSeconds > 0
+      ? wod.roundDurationSeconds
+      : parseDurationToSeconds(wod?.duration);
+  const controlStationIndex =
+    typeof wod?.controlStationIndex === "number" && wod.controlStationIndex >= 0
+      ? wod.controlStationIndex
+      : null;
+  const controlStationTitle =
+    controlStationIndex != null ? stations[controlStationIndex]?.title ?? null : null;
+
+  const items = stations
+    .map((station, index) => {
+      const title = (station.title || `Station ${index + 1}`).trim();
+      const movementNames = station.movements
+        .map((movement) => String(movement.name ?? "").trim())
+        .filter(Boolean)
+        .slice(0, 2)
+        .join(" + ");
+      return movementNames ? `${title} • ${movementNames}` : title;
+    })
+    .filter(Boolean);
+
+  const highlight =
+    timerMode === "timed"
+      ? roundDurationSeconds && rounds
+        ? `${formatSeconds(roundDurationSeconds)} x ${rounds}`
+        : `${stationCount || 0}`
+      : controlStationIndex != null
+      ? `${controlStationIndex + 1}/${stationCount || 1}`
+      : `${stationCount || 0}`;
+
+  const highlightLabel =
+    timerMode === "timed"
+      ? "Timer"
+      : controlStationIndex != null
+      ? "Control"
+      : "Stations";
+
+  const sessionExtra =
+    wod.sessionType === "HYROX"
+      ? `${groupSize ? `GROUP OF ${groupSize}` : "GROUP"} | ${timerMode === "timed" ? "TIMED" : "STATION CONTROL"}`
+      : "—";
+
+  const stationsLabel =
+    timerMode === "timed"
+      ? `${stationCount || 0} stations • ${rounds || 1} rounds`
+      : controlStationTitle
+      ? `Control station: ${controlStationTitle}`
+      : `${stationCount || 0} stations`;
+
+  return {
+    title: wod.wodName?.trim() || `${dayName} Session`,
+    subtitle: `${dayName} HYROX session`,
+    filename: `${dateKey}-${sessionKey.toLowerCase()}-session.png`,
+    shareTitle: `${sessionTimeLabel} session`,
+    shareText: `Today's ${sessionTimeLabel.toLowerCase()} session is live: ${wod.wodName?.trim() || "HYROX session"}`,
+    dateLabel,
+    sessionLabel: sessionKey,
+    sessionTimeLabel,
+    sessionType: "HYROX",
+    sessionStyle: String(wod.wodType ?? "HYROX").toUpperCase(),
+    sessionExtra,
+    highlight,
+    highlightLabel,
+    stationsLabel,
+    items,
+  };
+}
+
 function typeMeta(title?: string) {
   const t = (title || "").toLowerCase();
   if (t.includes("hyrox"))
@@ -205,6 +460,9 @@ export default function Dashboard() {
   const [pbs, setPbs] = useState<PBs>({ backSquat: null, flatBench: null, run1km: null });
   const [bookedClasses, setBookedClasses] = useState<ClassWithId[]>([]);
   const [loadingClasses, setLoadingClasses] = useState(true);
+  const [todayProgramming, setTodayProgramming] = useState<Record<string, any> | null>(null);
+  const [sharePayload, setSharePayload] = useState<SessionSharePayload | null>(null);
+  const [shareOpen, setShareOpen] = useState(false);
 
   // Track auth user
   useEffect(() => {
@@ -316,6 +574,15 @@ export default function Dashboard() {
     return () => unsub();
   }, [user]);
 
+  useEffect(() => {
+    const todayRef = doc(db, "wods", todayKeyLondon());
+    return onSnapshot(
+      todayRef,
+      (snap) => setTodayProgramming(snap.exists() ? (snap.data() as Record<string, any>) : null),
+      (error) => console.error("Dashboard programming fetch error:", error)
+    );
+  }, []);
+
   const firstName = appUser?.name?.split(" ")[0] || appUser?.email?.split("@")[0] || "there";
 
   const todayKey = todayKeyLondon();
@@ -329,6 +596,30 @@ export default function Dashboard() {
   const thisMonthCount = stats?.monthCheckIns?.[monthKeyLondon()] ?? 0;
   const streak = stats?.currentStreak ?? 0;
   const total = stats?.totalCheckIns ?? 0;
+  const sessionCards: DashboardSessionCard[] = (["AM", "PM"] as SessionKey[]).map((key) => {
+    const payload = getDashboardSessionPayload(todayProgramming?.[key], key, todayKey);
+    const emptyLabel = key === "AM" ? "6AM" : "6PM";
+
+    if (!payload) {
+      return {
+        key,
+        timeLabel: emptyLabel,
+        title: "Coming soon",
+        meta: "Programming not published yet",
+        detail: "Check back later for today’s session.",
+        payload: null,
+      };
+    }
+
+    return {
+      key,
+      timeLabel: payload.sessionTimeLabel || emptyLabel,
+      title: payload.title,
+      meta: `${payload.sessionType} · ${payload.sessionStyle}`,
+      detail: payload.stationsLabel,
+      payload,
+    };
+  });
 
   return (
     <div className="min-h-screen bg-black text-white overflow-x-hidden">
@@ -407,6 +698,58 @@ export default function Dashboard() {
               })}
             </div>
           )}
+        </section>
+
+        <section>
+          <div className="flex items-center gap-2 mb-3">
+            <CalendarDays className="h-4 w-4 text-white/40" />
+            <h2 className="text-xs uppercase tracking-widest font-semibold text-white/40">
+              Today&apos;s programming
+            </h2>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            {sessionCards.map((session) => {
+              const Icon = session.key === "AM" ? Sun : Moon;
+
+              return (
+                <div
+                  key={session.key}
+                  className="rounded-[26px] border border-white/10 bg-gradient-to-br from-white/[0.09] via-white/[0.04] to-white/[0.02] p-4"
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/72">
+                      <Icon className="h-3 w-3" />
+                      {session.timeLabel}
+                    </div>
+                    {session.payload ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSharePayload(session.payload);
+                          setShareOpen(true);
+                        }}
+                        className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/82 transition hover:bg-white/[0.08]"
+                      >
+                        <Share className="h-3 w-3" />
+                        Share
+                      </button>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-4 text-2xl font-heading uppercase tracking-[-0.04em] leading-[0.92] text-white">
+                    {session.title}
+                  </div>
+                  <div className="mt-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-white/45">
+                    {session.meta}
+                  </div>
+                  <div className="mt-3 rounded-[18px] border border-white/8 bg-black/20 px-3 py-2.5 text-[13px] leading-snug text-white/68">
+                    {session.detail}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </section>
 
         {/* ── Quick Stats ─────────────────────────────────────── */}
@@ -521,6 +864,28 @@ export default function Dashboard() {
         </Link>
 
       </div>
+      {sharePayload ? (
+        <SessionShareModal
+          open={shareOpen}
+          onClose={() => setShareOpen(false)}
+          title={sharePayload.title}
+          subtitle={sharePayload.subtitle}
+          filename={sharePayload.filename}
+          shareTitle={sharePayload.shareTitle}
+          shareText={sharePayload.shareText}
+          dateLabel={sharePayload.dateLabel}
+          sessionLabel={sharePayload.sessionLabel}
+          sessionTimeLabel={sharePayload.sessionTimeLabel}
+          sessionType={sharePayload.sessionType}
+          sessionStyle={sharePayload.sessionStyle}
+          sessionExtra={sharePayload.sessionExtra}
+          highlight={sharePayload.highlight}
+          highlightLabel={sharePayload.highlightLabel}
+          stationsLabel={sharePayload.stationsLabel}
+          coachNote={sharePayload.coachNote}
+          items={sharePayload.items}
+        />
+      ) : null}
     </div>
   );
 }

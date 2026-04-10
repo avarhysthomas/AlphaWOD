@@ -13,6 +13,7 @@ export type AdminUser = {
   email?: string;
   photoURL?: string;
   role?: string;
+  approvalStatus?: "approved" | "pending";
   stats?: UserStats;
 };
 

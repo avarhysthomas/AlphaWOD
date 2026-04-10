@@ -21,11 +21,15 @@ const db = admin.firestore();
  * Types
  * ----------------------------*/
 type Role = "admin" | "user" | string;
+type ApprovalStatus = "approved" | "pending" | string;
 
 type UserDoc = {
   name?: string;
   email?: string;
   role?: Role;
+  approvalStatus?: ApprovalStatus;
+  approvedAt?: admin.firestore.FieldValue | admin.firestore.Timestamp;
+  approvedBy?: string;
   photoURL?: string;
   stats?: {
     totalCheckIns?: number;
@@ -244,6 +248,7 @@ export const generateClassOccurrences = onCall(async (request) => {
  * ----------------------------*/
 export const bookClass = onCall(async (request) => {
   const uid = requireAuth(request);
+  await requireApprovedMember(uid);
   const classId = requireString(request.data?.classId, "classId");
 
   const classRef = db.collection("classes").doc(classId);
@@ -293,6 +298,7 @@ export const bookClass = onCall(async (request) => {
 
 export const cancelBooking = onCall(async (request) => {
   const uid = requireAuth(request);
+  await requireApprovedMember(uid);
   const classId = requireString(request.data?.classId, "classId");
 
   const classRef = db.collection("classes").doc(classId);
@@ -353,6 +359,11 @@ export const adminAddBooking = onCall(async (request) => {
       throw new HttpsError("not-found", "User not found.");
     }
 
+    const userData = userSnap.data() as UserDoc;
+    if (userData.approvalStatus === "pending") {
+      throw new HttpsError("failed-precondition", "User must be approved before being added to a class.");
+    }
+
     const classData = classSnap.data() as Partial<ClassDoc>;
     const capacity = Number(classData.capacity ?? 0);
     const bookedCount = Number(classData.bookedCount ?? 0);
@@ -374,7 +385,6 @@ export const adminAddBooking = onCall(async (request) => {
       // If cancelled, allow overwrite / re-add
     }
 
-    const userData = userSnap.data() as UserDoc;
     const userName = userData.name || "Member";
 
     tx.set(bookingRef, {
@@ -582,6 +592,21 @@ async function requireAdmin(uid: string): Promise<UserDoc> {
   if (user.role !== "admin") {
     throw new HttpsError("permission-denied", "Admin only.");
   }
+  return user;
+}
+
+async function requireApprovedMember(uid: string): Promise<UserDoc> {
+  const snap = await db.collection("users").doc(uid).get();
+  const user = (snap.data() || {}) as UserDoc;
+
+  if (user.role === "admin") {
+    return user;
+  }
+
+  if (user.approvalStatus === "pending") {
+    throw new HttpsError("permission-denied", "Your account is awaiting admin approval.");
+  }
+
   return user;
 }
 
@@ -819,7 +844,8 @@ export const getClassRoster = onCall(async (request) => {
  * Monthly Leaderboard Generation
  */
 export const getMonthlyLeaderboard = onCall(async (request) => {
-  requireAuth(request);
+  const uid = requireAuth(request);
+  await requireApprovedMember(uid);
 
   const monthKey =
     typeof request.data?.monthKey === "string" && request.data.monthKey.trim() ?
@@ -841,7 +867,8 @@ export const getMonthlyLeaderboard = onCall(async (request) => {
     name: String((d.data() as any)?.name || "Member"),
     email: String((d.data() as any)?.email || ""),
     photoURL: String((d.data() as any)?.photoURL || ""),
-  }));
+    approvalStatus: String((d.data() as any)?.approvalStatus || "approved"),
+  })).filter((u) => u.approvalStatus !== "pending");
 
   // 2) Fetch leaderboard entries for this month
   const lbSnap = await db
@@ -924,6 +951,7 @@ export const reconcileMonthlyLeaderboard = onCall(async (request) => {
   for (const [userId, attendedCount] of counts.entries()) {
     const userSnap = await db.collection("users").doc(userId).get();
     const u = (userSnap.data() || {}) as UserDoc;
+    if (u.approvalStatus === "pending") continue;
 
     const ref = lbMonthRef.collection("users").doc(userId);
     batch.set(ref, {
@@ -945,7 +973,8 @@ export const reconcileMonthlyLeaderboard = onCall(async (request) => {
 });
 
 export const getMonthlyDipLeaderboard = onCall(async (request) => {
-  requireAuth(request);
+  const uid = requireAuth(request);
+  await requireApprovedMember(uid);
 
   const monthKey =
     typeof request.data?.monthKey === "string" && request.data.monthKey.trim() ?
@@ -964,7 +993,8 @@ export const getMonthlyDipLeaderboard = onCall(async (request) => {
     name: String((d.data() as any)?.name || "Member"),
     email: String((d.data() as any)?.email || ""),
     photoURL: String((d.data() as any)?.photoURL || ""),
-  }));
+    approvalStatus: String((d.data() as any)?.approvalStatus || "approved"),
+  })).filter((u) => u.approvalStatus !== "pending");
 
   const bookingsSnap = await db.collection("bookings").get();
   const counts = new Map<string, number>();
@@ -1003,4 +1033,30 @@ export const getMonthlyDipLeaderboard = onCall(async (request) => {
     .slice(0, limit);
 
   return {monthKey, total: rows.length, rows};
+});
+
+export const approveUserAccess = onCall(async (request) => {
+  const callerUid = requireAuth(request);
+  await requireAdmin(callerUid);
+
+  const userId = requireString(request.data?.userId, "userId");
+  const userRef = db.collection("users").doc(userId);
+  const snap = await userRef.get();
+
+  if (!snap.exists) {
+    throw new HttpsError("not-found", "User not found.");
+  }
+
+  const user = snap.data() as UserDoc;
+  if (user.role === "admin") {
+    throw new HttpsError("failed-precondition", "Admins do not require approval.");
+  }
+
+  await userRef.set({
+    approvalStatus: "approved",
+    approvedAt: admin.firestore.FieldValue.serverTimestamp(),
+    approvedBy: callerUid,
+  }, {merge: true});
+
+  return {ok: true};
 });

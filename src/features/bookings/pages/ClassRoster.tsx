@@ -52,6 +52,7 @@ type GymUser = {
   email?: string;
   photoURL?: string;
   role?: string;
+  approvalStatus?: "approved" | "pending";
 };
 
 async function fetchUserProfiles(uids: string[]) {
@@ -167,7 +168,7 @@ export default function ClassRoster() {
         const users: GymUser[] = snap.docs.map((d) => ({
           id: d.id,
           ...(d.data() as Omit<GymUser, "id">),
-        }));
+        })).filter((user) => user.approvalStatus !== "pending");
 
         users.sort((a, b) => (a.name ?? a.email ?? "").localeCompare(b.name ?? b.email ?? ""));
         setAllUsers(users);

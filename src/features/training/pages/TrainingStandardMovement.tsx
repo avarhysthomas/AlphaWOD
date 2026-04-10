@@ -2,13 +2,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useParams } from "react-router-dom";
 import {
   ChevronLeft,
-  TimerReset,
   Trophy,
-  Sparkles,
   BarChart3,
-  CheckCircle2,
-  Plus,
-  Share,
 } from "lucide-react";
 import {
   addDoc,
@@ -22,6 +17,8 @@ import {
 import { auth, db } from "../../../firebase";
 import { getMovementBySlug } from "../../../lib/training";
 import PBShareModal from "../../training/components/PBShareModal";
+import MovementHistorySection from "../components/MovementHistorySection";
+import MovementLogForm from "../components/MovementLogForm";
 import {
   ResponsiveContainer,
   LineChart,
@@ -33,6 +30,19 @@ import {
   ReferenceDot,
 } from "recharts";
 import UserTopNav from "../../../components/layout/UserTopNav";
+import {
+  formatChartValue,
+  formatDisplayValue,
+  getAccentClasses,
+  getSmartFormConfig,
+  isBetterPerformance,
+  isTimeDisplay,
+  parseChartValue,
+  prettyDate,
+  shortDate,
+  type FormFieldErrors,
+  validateTrainingLogForm,
+} from "../utils/movementHelpers";
 
 type TrainingLog = {
   id: string;
@@ -55,364 +65,6 @@ type ChartPoint = {
   metricType: string;
   isBest: boolean;
 };
-
-function prettyDate(dateString: string) {
-  try {
-    return new Intl.DateTimeFormat("en-GB", {
-      day: "numeric",
-      month: "short",
-      year: "numeric",
-    }).format(new Date(dateString));
-  } catch {
-    return dateString;
-  }
-}
-
-function isTimeDisplay(unit?: string, categoryKey?: string | null, movementName?: string) {
-  if (unit === "mm:ss" || unit === "seconds") return true;
-  return isTimeBasedMovement(categoryKey, movementName);
-}
-
-function formatDisplayValue(
-  rawValue: string,
-  unit?: string,
-  categoryKey?: string | null,
-  movementName?: string
-) {
-  if (isTimeDisplay(unit, categoryKey, movementName)) {
-    const parsed = parseChartValue(rawValue, unit);
-    if (parsed === null) return rawValue;
-    return formatSeconds(parsed);
-  }
-
-  return unit ? `${rawValue} ${unit}` : rawValue;
-}
-
-function shortDate(dateString: string) {
-  try {
-    return new Intl.DateTimeFormat("en-GB", {
-      day: "numeric",
-      month: "short",
-    }).format(new Date(dateString));
-  } catch {
-    return dateString;
-  }
-}
-
-function parseChartValue(rawValue: string, unit?: string) {
-  const value = rawValue.trim();
-
-  if (!value) return null;
-
-  // Handle mm:ss or m:ss
-  if (value.includes(":")) {
-    const parts = value.split(":").map((part) => part.trim());
-
-    if (parts.length === 2) {
-      const minutes = Number(parts[0]);
-      const seconds = Number(parts[1]);
-
-      if (Number.isFinite(minutes) && Number.isFinite(seconds)) {
-        return minutes * 60 + seconds;
-      }
-    }
-  }
-
-  // Plain numeric values
-  const parsed = Number(value);
-  if (Number.isFinite(parsed)) {
-    return parsed;
-  }
-
-  return null;
-}
-
-function formatSeconds(totalSeconds: number) {
-  const safe = Math.max(0, Math.round(totalSeconds));
-  const minutes = Math.floor(safe / 60);
-  const seconds = safe % 60;
-  return `${minutes}:${String(seconds).padStart(2, "0")}`;
-}
-
-function isTimeBasedMovement(categoryKey?: string | null, movementName?: string) {
-  if (categoryKey !== "engine") return false;
-
-  const name = movementName?.toLowerCase() ?? "";
-  return (
-    name.includes("run") ||
-    name.includes("row") ||
-    name.includes("ski") ||
-    name.includes("bike") ||
-    name.includes("time")
-  );
-}
-
-function formatChartValue(
-  value: number,
-  categoryKey?: string | null,
-  movementName?: string,
-  unit?: string
-) {
-  const useTime =
-    unit === "mm:ss" ||
-    unit === "seconds" ||
-    isTimeBasedMovement(categoryKey, movementName);
-
-  if (useTime) {
-    return formatSeconds(value);
-  }
-
-  if (Number.isInteger(value)) return String(value);
-  return value.toFixed(1);
-}
-
-function getSmartFormConfig(args: {
-  categoryKey?: string | null;
-  movementName?: string;
-  movementSlug?: string;
-  metricType: string;
-  unitOptions: string[];
-}) {
-  const { categoryKey, movementName, movementSlug, metricType, unitOptions } = args;
-
-  const metric = metricType.toLowerCase();
-  const movement = movementName?.toLowerCase() ?? "";
-  const slug = movementSlug ?? "";
-
-  const isTimeMetric =
-    metric.includes("time") ||
-    metric.includes("for time") ||
-    metric.includes("trial") ||
-    metric.includes("best time") ||
-    metric.includes("average time");
-
-  const isMaxRepsMetric = metric.includes("max reps") || metric.includes("max unbroken");
-  const isWeightedMetric = metric.includes("weighted");
-  const isVolumeMetric = metric.includes("volume");
-  const isCheckInMetric = metric.includes("check-in");
-
-  const isPersonal = categoryKey === "personal";
-  const isEngine = categoryKey === "engine";
-  const isPullUps = slug === "pull-ups";
-
-  let valueLabel = "Value";
-  let valuePlaceholder = "e.g. 100 or 1:42";
-  let showRepsField = categoryKey === "strength" || categoryKey === "power";
-  let repsLabel = "Reps";
-  let repsPlaceholder = "e.g. 3";
-  let showUnitSelector = true;
-  let lockedUnit: string | null = null;
-
-  if (isPersonal || isCheckInMetric) {
-    valueLabel = "Result";
-    valuePlaceholder = movement.includes("bodyweight")
-      ? "e.g. 62.4"
-      : movement.includes("resting hr")
-      ? "e.g. 58"
-      : movement.includes("body fat")
-      ? "e.g. 21.5"
-      : "Enter result";
-    showRepsField = false;
-    if (unitOptions.length === 1) {
-      showUnitSelector = false;
-      lockedUnit = unitOptions[0];
-    }
-  }
-
-  if (isEngine || isTimeMetric) {
-    valueLabel = "Time";
-    valuePlaceholder = "e.g. 4:30";
-    showRepsField = false;
-    if (unitOptions.includes("mm:ss")) {
-      showUnitSelector = false;
-      lockedUnit = "mm:ss";
-    } else if (unitOptions.length === 1) {
-      showUnitSelector = false;
-      lockedUnit = unitOptions[0];
-    }
-  }
-
-  if (isMaxRepsMetric) {
-    valueLabel = "Result";
-    valuePlaceholder = "e.g. 12";
-    showRepsField = false;
-
-    if (isPullUps || unitOptions.includes("reps")) {
-      showUnitSelector = false;
-      lockedUnit = "reps";
-    }
-  }
-
-  if (isWeightedMetric) {
-    valueLabel = "Load";
-    valuePlaceholder = "e.g. 10";
-    showRepsField = true;
-    repsLabel = "Reps";
-    repsPlaceholder = "e.g. 5";
-
-    if (unitOptions.includes("kg")) {
-      showUnitSelector = false;
-      lockedUnit = "kg";
-    }
-  }
-
-  if (isVolumeMetric) {
-    valueLabel = "Total";
-    valuePlaceholder = "e.g. 40";
-    showRepsField = false;
-
-    if (unitOptions.length === 1) {
-      showUnitSelector = false;
-      lockedUnit = unitOptions[0];
-    }
-  }
-
-  if (metric.includes("working set")) {
-    valueLabel = "Load";
-    valuePlaceholder = "e.g. 80";
-    showRepsField = true;
-    repsLabel = "Reps";
-    repsPlaceholder = "e.g. 8";
-
-    if (unitOptions.includes("kg")) {
-      showUnitSelector = false;
-      lockedUnit = "kg";
-    }
-  }
-
-  if (metric.includes("1rm") || metric.includes("3rm") || metric.includes("5rm")) {
-    valueLabel = "Load";
-    valuePlaceholder = "e.g. 100";
-    showRepsField = false;
-
-    if (unitOptions.includes("kg")) {
-      showUnitSelector = false;
-      lockedUnit = "kg";
-    }
-  }
-
-  if (movement.includes("assault bike") && metric.includes("test piece")) {
-    valueLabel = "Calories";
-    valuePlaceholder = "e.g. 18";
-    showRepsField = false;
-
-    if (unitOptions.includes("cals")) {
-      showUnitSelector = false;
-      lockedUnit = "cals";
-    }
-  }
-
-  return {
-    valueLabel,
-    valuePlaceholder,
-    showRepsField,
-    repsLabel,
-    repsPlaceholder,
-    showUnitSelector,
-    lockedUnit,
-  };
-}
-
-function getAccentClasses(categoryKey?: string | null) {
-  switch (categoryKey) {
-    case "strength":
-      return {
-        glow: "bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.14),transparent_24%)]",
-        softGlow:
-          "bg-[radial-gradient(circle_at_top_left,rgba(59,130,246,0.10),transparent_26%)]",
-        badge: "border-sky-400/20 bg-sky-400/10 text-sky-100",
-        badgeGlow:
-          "border-sky-400/30 bg-sky-400/12 text-sky-100 shadow-[0_0_14px_rgba(59,130,246,0.32)]",
-        button:
-          "border-sky-300/15 bg-white text-black shadow-[0_10px_30px_rgba(59,130,246,0.16)]",
-        line:
-          "bg-gradient-to-r from-transparent via-sky-300/20 to-transparent",
-        chartStroke: "#60a5fa",
-        chartGrid: "rgba(255,255,255,0.08)",
-        chartDot: "#dbeafe",
-      };
-    case "power":
-      return {
-        glow: "bg-[radial-gradient(circle_at_top_right,rgba(168,85,247,0.16),transparent_24%)]",
-        softGlow:
-          "bg-[radial-gradient(circle_at_top_left,rgba(217,70,239,0.10),transparent_26%)]",
-        badge: "border-fuchsia-400/20 bg-fuchsia-400/10 text-fuchsia-100",
-        badgeGlow:
-          "border-fuchsia-400/30 bg-fuchsia-400/12 text-fuchsia-100 shadow-[0_0_14px_rgba(168,85,247,0.32)]",
-        button:
-          "border-fuchsia-300/15 bg-white text-black shadow-[0_10px_30px_rgba(168,85,247,0.18)]",
-        line:
-          "bg-gradient-to-r from-transparent via-fuchsia-300/20 to-transparent",
-        chartStroke: "#d946ef",
-        chartGrid: "rgba(255,255,255,0.08)",
-        chartDot: "#fae8ff",
-      };
-    case "engine":
-      return {
-        glow: "bg-[radial-gradient(circle_at_top_right,rgba(249,115,22,0.16),transparent_24%)]",
-        softGlow:
-          "bg-[radial-gradient(circle_at_top_left,rgba(251,191,36,0.10),transparent_26%)]",
-        badge: "border-orange-400/20 bg-orange-400/10 text-orange-100",
-        badgeGlow:
-          "border-orange-400/30 bg-orange-400/12 text-orange-100 shadow-[0_0_14px_rgba(249,115,22,0.32)]",
-        button:
-          "border-orange-300/15 bg-white text-black shadow-[0_10px_30px_rgba(249,115,22,0.18)]",
-        line:
-          "bg-gradient-to-r from-transparent via-orange-300/20 to-transparent",
-        chartStroke: "#fb923c",
-        chartGrid: "rgba(255,255,255,0.08)",
-        chartDot: "#ffedd5",
-      };
-    case "personal":
-      return {
-        glow: "bg-[radial-gradient(circle_at_top_right,rgba(16,185,129,0.16),transparent_24%)]",
-        softGlow:
-          "bg-[radial-gradient(circle_at_top_left,rgba(20,184,166,0.10),transparent_26%)]",
-        badge: "border-emerald-400/20 bg-emerald-400/10 text-emerald-100",
-        badgeGlow:
-          "border-emerald-400/30 bg-emerald-400/12 text-emerald-100 shadow-[0_0_14px_rgba(16,185,129,0.32)]",
-        button:
-          "border-emerald-300/15 bg-white text-black shadow-[0_10px_30px_rgba(16,185,129,0.18)]",
-        line:
-          "bg-gradient-to-r from-transparent via-emerald-300/20 to-transparent",
-        chartStroke: "#34d399",
-        chartGrid: "rgba(255,255,255,0.08)",
-        chartDot: "#d1fae5",
-      };
-      case "zaps":
-        return {
-            glow: "bg-[radial-gradient(circle_at_top_right,rgba(245,158,11,0.16),transparent_24%)]",
-            softGlow:
-            "bg-[radial-gradient(circle_at_top_left,rgba(249,115,22,0.10),transparent_26%)]",
-            badge: "border-amber-400/20 bg-amber-400/10 text-amber-100",
-            badgeGlow:
-            "border-amber-400/30 bg-amber-400/12 text-amber-100 shadow-[0_0_14px_rgba(245,158,11,0.32)]",
-            button:
-            "border-amber-300/15 bg-white text-black shadow-[0_10px_30px_rgba(245,158,11,0.18)]",
-            line:
-            "bg-gradient-to-r from-transparent via-amber-300/20 to-transparent",
-            chartStroke: "#f59e0b",
-            chartGrid: "rgba(255,255,255,0.08)",
-            chartDot: "#fef3c7",
-        };
-    default:
-      return {
-        glow: "bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.06),transparent_24%)]",
-        softGlow:
-          "bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.05),transparent_26%)]",
-        badge: "border-white/10 bg-white/[0.06] text-white/80",
-        badgeGlow:
-          "border-white/15 bg-white/[0.08] text-white shadow-[0_0_14px_rgba(255,255,255,0.14)]",
-        button:
-          "border-white/10 bg-white text-black shadow-[0_10px_30px_rgba(255,255,255,0.08)]",
-        line:
-          "bg-gradient-to-r from-transparent via-white/15 to-transparent",
-        chartStroke: "#ffffff",
-        chartGrid: "rgba(255,255,255,0.08)",
-        chartDot: "#ffffff",
-      };
-  }
-}
 
 function CustomTooltip({
   active,
@@ -446,24 +98,6 @@ function CustomTooltip({
   );
 }
 
-function isBetterPerformance(args: {
-  categoryKey?: string | null;
-  nextValue: number;
-  currentBestValue: number | null;
-}) {
-  const { categoryKey, nextValue, currentBestValue } = args;
-
-  if (currentBestValue === null) return true;
-
-  // engine = lower is better
-  if (categoryKey === "engine") {
-    return nextValue < currentBestValue;
-  }
-
-  // everything else = higher is better
-  return nextValue > currentBestValue;
-}
-
 export default function TrainingStandardMovement() {
   const { category, movementSlug } = useParams<{
     category: string;
@@ -490,6 +124,8 @@ export default function TrainingStandardMovement() {
   const [reps, setReps] = useState("");
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [notes, setNotes] = useState("");
+  const [formErrors, setFormErrors] = useState<FormFieldErrors>({});
+  const [saveError, setSaveError] = useState("");
   const [activeMetricFilter, setActiveMetricFilter] = useState(
     movement?.metricTypes[0] ?? ""
     );
@@ -613,6 +249,8 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
     setReps("");
     setDate(new Date().toISOString().slice(0, 10));
     setNotes("");
+    setFormErrors({});
+    setSaveError("");
     }
 
   useEffect(() => {
@@ -634,6 +272,8 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
   setDate(new Date().toISOString().slice(0, 10));
   setNotes("");
   setSaved(false);
+  setFormErrors({});
+  setSaveError("");
   setActiveMetricFilter(movement?.metricTypes[0] ?? "");
 }, [
   selectedCategory?.key,
@@ -706,71 +346,90 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
   }, [selectedCategory, movement]);
 
   async function handleSubmit(e: React.FormEvent) {
-  e.preventDefault();
+    e.preventDefault();
 
-  const user = auth.currentUser;
+    const user = auth.currentUser;
 
-  if (!user || !selectedCategory || !movement) return;
-  if (!value.trim() || !date.trim()) return;
+    if (!user || !selectedCategory || !movement) return;
 
-  try {
-    setIsSaving(true);
-    setSaved(false);
-    setIsNewPB(false);
-
-    const submittedValue = value.trim();
-    const submittedUnit = effectiveUnit;
-    const parsedSubmittedValue = parseChartValue(submittedValue, submittedUnit);
-
-    const currentBestParsed =
-      bestLog ? parseChartValue(bestLog.value, bestLog.unit) : null;
-
-    const nextIsPB =
-      parsedSubmittedValue !== null &&
-      isBetterPerformance({
-        categoryKey: selectedCategory.key,
-        nextValue: parsedSubmittedValue,
-        currentBestValue: currentBestParsed,
-      });
-
-    const logsRef = collection(db, "users", user.uid, "trainingLogs");
-
-    await addDoc(logsRef, {
-      userId: user.uid,
-      category: selectedCategory.key,
-      movementSlug: movement.slug,
-      movementName: movement.name,
-      metricType,
-      value: submittedValue,
-      unit: submittedUnit,
-      reps: reps.trim(),
+    const nextErrors = validateTrainingLogForm({
+      value,
+      reps,
       date,
-      notes: notes.trim(),
-      createdAt: serverTimestamp(),
+      notes,
+      unit: effectiveUnit,
+      categoryKey: selectedCategory.key,
+      movementName: movement.name,
+      showRepsField: formConfig.showRepsField,
     });
 
-    setIsNewPB(Boolean(nextIsPB));
+    setFormErrors(nextErrors);
+    setSaveError("");
 
-    if (nextIsPB) {
-      setSharePayload({
-        movement: movement.name,
+    if (Object.keys(nextErrors).length > 0) {
+      setSaved(false);
+      return;
+    }
+
+    try {
+      setIsSaving(true);
+      setSaved(false);
+      setIsNewPB(false);
+
+      const submittedValue = value.trim();
+      const submittedUnit = effectiveUnit;
+      const parsedSubmittedValue = parseChartValue(submittedValue, submittedUnit);
+
+      const currentBestParsed =
+        bestLog ? parseChartValue(bestLog.value, bestLog.unit) : null;
+
+      const nextIsPB =
+        parsedSubmittedValue !== null &&
+        isBetterPerformance({
+          categoryKey: selectedCategory.key,
+          nextValue: parsedSubmittedValue,
+          currentBestValue: currentBestParsed,
+        });
+
+      const logsRef = collection(db, "users", user.uid, "trainingLogs");
+
+      await addDoc(logsRef, {
+        userId: user.uid,
+        category: selectedCategory.key,
+        movementSlug: movement.slug,
+        movementName: movement.name,
         metricType,
         value: submittedValue,
         unit: submittedUnit,
-        dateLabel: prettyDate(date),
+        reps: reps.trim(),
+        date,
+        notes: notes.trim(),
+        createdAt: serverTimestamp(),
       });
-    } else {
-      setSharePayload(null);
-    }
 
-    resetForm();
-    setSaved(true);
-  } catch (error) {
-    console.error("Error saving training log:", error);
-  } finally {
-    setIsSaving(false);
+      setIsNewPB(Boolean(nextIsPB));
+
+      if (nextIsPB) {
+        setSharePayload({
+          movement: movement.name,
+          metricType,
+          value: submittedValue,
+          unit: submittedUnit,
+          dateLabel: prettyDate(date),
+        });
+      } else {
+        setSharePayload(null);
+      }
+
+      resetForm();
+      setSaved(true);
+    } catch (error) {
+      console.error("Error saving training log:", error);
+      setSaveError("Could not save this log. Please try again.");
+    } finally {
+      setIsSaving(false);
+    }
   }
-}
 
   if (!selectedCategory || !movement) {
     return <Navigate to="/training" replace />;
@@ -1052,325 +711,63 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
         </section>
 
         <div className="grid gap-6 xl:grid-cols-[1.02fr_0.98fr]">
-          <section className="relative overflow-hidden rounded-[30px] border border-white/10 bg-neutral-950 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.35)] sm:p-6">
-            <div className={`absolute inset-0 ${accent.softGlow}`} />
-            <div className={`absolute inset-x-0 top-0 h-px ${accent.line}`} />
+          <MovementLogForm
+            movementName={movement.name}
+            metricTypes={movement.metricTypes}
+            unitOptions={movement.unitOptions}
+            metricType={metricType}
+            setMetricType={setMetricType}
+            unit={unit}
+            setUnit={setUnit}
+            effectiveUnit={effectiveUnit}
+            value={value}
+            setValue={setValue}
+            reps={reps}
+            setReps={setReps}
+            date={date}
+            setDate={setDate}
+            notes={notes}
+            setNotes={setNotes}
+            formConfig={formConfig}
+            formErrors={formErrors}
+            clearFieldError={(field) =>
+              setFormErrors((current) => ({ ...current, [field]: undefined }))
+            }
+            handleSubmit={handleSubmit}
+            isSaving={isSaving}
+            saved={saved}
+            isNewPB={isNewPB}
+            hasSharePayload={Boolean(sharePayload)}
+            onShare={() => setShareOpen(true)}
+            saveError={saveError}
+            loadError={loadError}
+            accent={accent}
+          />
 
-            <div className="relative mb-8 flex items-start justify-between gap-4">
-              <div>
-                <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/42">
-                  <Sparkles className="h-3.5 w-3.5" />
-                  Manual Log
-                </div>
-                <h2 className="text-2xl font-semibold tracking-[-0.03em]">
-                  Log {movement.name}
-                </h2>
-                <p className="mt-3 max-w-xl text-sm leading-7 text-white/62">
-                  Create a movement-specific entry with the right metric type,
-                  unit, and session detail.
-                </p>
-              </div>
-            </div>
-
-            {loadError ? (
-              <div className="relative mb-6 rounded-[22px] border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-100">
-                {loadError}
-              </div>
-            ) : null}
-
-            <form onSubmit={handleSubmit} className="relative space-y-6">
-              <div className={`grid gap-4 ${formConfig.showUnitSelector ? "sm:grid-cols-2" : "sm:grid-cols-1"}`}>
-                <label className="block">
-                    <span className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.22em] text-white/44">
-                    Metric Type
-                    </span>
-                    <select
-                    value={metricType}
-                    onChange={(e) => setMetricType(e.target.value)}
-                    className="w-full rounded-[22px] border border-white/10 bg-black px-4 py-3.5 text-sm text-white outline-none transition focus:border-white/20 focus:bg-neutral-950"
-                    >
-                    {movement.metricTypes.map((option) => (
-                        <option key={option} value={option}>
-                        {option}
-                        </option>
-                    ))}
-                    </select>
-                </label>
-
-                {formConfig.showUnitSelector ? (
-                    <label className="block">
-                    <span className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.22em] text-white/44">
-                        Unit
-                    </span>
-                    <select
-                        value={unit}
-                        onChange={(e) => setUnit(e.target.value)}
-                        className="w-full rounded-[22px] border border-white/10 bg-black px-4 py-3.5 text-sm text-white outline-none transition focus:border-white/20 focus:bg-neutral-950"
-                    >
-                        {movement.unitOptions.map((option) => (
-                        <option key={option} value={option}>
-                            {option}
-                        </option>
-                        ))}
-                    </select>
-                    </label>
-                ) : (
-                    <div className="block">
-                    <span className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.22em] text-white/44">
-                        Unit
-                    </span>
-                    <div className="flex h-[54px] items-center rounded-[22px] border border-white/10 bg-black px-4 text-sm font-medium text-white/80">
-                        {effectiveUnit || "Auto"}
-                    </div>
-                    </div>
-                )}
-                </div>
-
-              <div
-                className={`grid gap-4 ${
-                    formConfig.showRepsField ? "sm:grid-cols-3" : "sm:grid-cols-2"
-                }`}
-                >
-                <label className="block">
-                    <span className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.22em] text-white/44">
-                    {formConfig.valueLabel}
-                    </span>
-                    <input
-                    value={value}
-                    onChange={(e) => setValue(e.target.value)}
-                    placeholder={formConfig.valuePlaceholder}
-                    className="w-full rounded-[22px] border border-white/10 bg-black px-4 py-3.5 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-neutral-950"
-                    />
-                </label>
-
-                {formConfig.showRepsField ? (
-                    <label className="block">
-                    <span className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.22em] text-white/44">
-                        {formConfig.repsLabel}
-                    </span>
-                    <input
-                        value={reps}
-                        onChange={(e) => setReps(e.target.value)}
-                        placeholder={formConfig.repsPlaceholder}
-                        className="w-full rounded-[22px] border border-white/10 bg-black px-4 py-3.5 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-neutral-950"
-                    />
-                    </label>
-                ) : null}
-
-                <label className="block">
-                    <span className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.22em] text-white/44">
-                    Date
-                    </span>
-
-                    <div className="relative">
-                    <input
-                        type="date"
-                        value={date}
-                        onChange={(e) => setDate(e.target.value)}
-                        onClick={(e) => {
-                        const input = e.currentTarget as HTMLInputElement & {
-                            showPicker?: () => void;
-                        };
-                        input.showPicker?.();
-                        }}
-                        className="w-full rounded-[22px] border border-white/10 bg-black px-4 py-3.5 pr-12 text-sm text-white outline-none transition focus:border-white/20 focus:bg-neutral-950 [color-scheme:dark]"
-                    />
-
-                    <button
-                        type="button"
-                        onClick={(e) => {
-                        const input = e.currentTarget.previousElementSibling as
-                            | (HTMLInputElement & { showPicker?: () => void })
-                            | null;
-                        input?.showPicker?.();
-                        }}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full border border-white/10 bg-white/[0.03] p-2 text-white/55 transition hover:border-white/20 hover:bg-white/[0.06] hover:text-white"
-                        aria-label="Open calendar"
-                    >
-                        <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.8"
-                        className="h-4 w-4"
-                        >
-                        <path d="M8 2v4" />
-                        <path d="M16 2v4" />
-                        <rect x="3" y="4" width="18" height="18" rx="2" />
-                        <path d="M3 10h18" />
-                        </svg>
-                    </button>
-                    </div>
-                </label>
-                <label className="block">
-                <span className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.22em] text-white/44">
-                    Notes
-                </span>
-                <textarea
-                    value={notes}
-                    onChange={(e) => setNotes(e.target.value)}
-                    rows={5}
-                    placeholder="Optional notes..."
-                    className="w-full resize-none rounded-[22px] border border-white/10 bg-black px-4 py-3.5 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-neutral-950"
-                />
-                </label>
-
-                <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-                <button
-                  type="submit"
-                  disabled={isSaving}
-                  className={`inline-flex items-center gap-2 rounded-[22px] px-5 py-3.5 text-sm font-semibold transition hover:translate-y-[-1px] hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60 ${accent.button}`}
-                >
-                  <Plus className="h-4 w-4" />
-                  {isSaving ? "Saving..." : "Save log"}
-                </button>
-
-                {saved ? (
-                  <div className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-2 text-sm font-medium text-emerald-100">
-                    <CheckCircle2 className="h-4 w-4" />
-                    {isNewPB ? "PB logged" : "Log saved"}
-                  </div>
-                ) : null}
-
-                {saved && isNewPB && sharePayload ? (
-                  <button
-                    type="button"
-                    onClick={() => setShareOpen(true)}
-                    className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-semibold text-white transition hover:border-white/20 hover:bg-white/[0.06]"
-                  >
-                    <Share className="h-4 w-4" />
-                    Share PB
-                  </button>
-                ) : null}
-              </div>
-
-                </div>
-            </form>
-          </section>
-
-          <section className="relative overflow-hidden rounded-[30px] border border-white/10 bg-neutral-950 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.35)] sm:p-6">
-            <div className={`absolute inset-0 ${accent.glow}`} />
-            <div className={`absolute inset-x-0 top-0 h-px ${accent.line}`} />
-
-            <div className="relative mb-8 flex items-center justify-between gap-4">
-              <div>
-                <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/42">
-                  <TimerReset className="h-3.5 w-3.5" />
-                  History
-                </div>
-                <h2 className="text-2xl font-semibold tracking-[-0.03em]">
-                {activeMetricFilter
-                    ? `${movement.name} · ${activeMetricFilter}`
-                    : `${movement.name} History`}
-                </h2>
-                <p className="mt-3 text-sm leading-7 text-white/62">
-                {activeMetricFilter
-                    ? `Your latest ${activeMetricFilter} entries for this movement.`
-                    : "Your latest entries for this movement."}
-                </p>
-              </div>
-            </div>
-
-            <div className="relative space-y-4">
-              {filteredLogs.length === 0 ? (
-                <div className="rounded-[24px] border border-dashed border-white/10 bg-black/30 p-6 text-sm text-white/50">
-                  No logs yet for {movement.name}.
-                </div>
-              ) : (
-                filteredLogs.map((log, index) => {
-                  const isBest = bestLog?.id === log.id;
-
-                  return (
-                    <div
-                      key={log.id}
-                      className="group relative overflow-hidden rounded-[24px] border border-white/10 bg-black/35 p-5 transition duration-300 hover:-translate-y-0.5 hover:border-white/15 hover:bg-black/45"
-                    >
-                      <div
-                        className={`absolute inset-0 ${
-                          isBest
-                            ? accent.softGlow
-                            : "bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.04),transparent_24%)]"
-                        } opacity-70`}
-                      />
-
-                      <div className="relative flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <div className="text-lg font-semibold text-white">
-                              {log.metricType}
-                            </div>
-
-                            {isBest ? (
-                              <span
-                                className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.22em] ${accent.badgeGlow}`}
-                              >
-                                PB
-                              </span>
-                            ) : null}
-
-                            {index === 0 ? (
-                              <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.22em] text-white/50">
-                                Latest
-                              </span>
-                            ) : null}
-                          </div>
-
-                          <div className="mt-2 text-sm text-white/56">
-                            {log.reps ? `${log.reps} reps` : "Logged entry"}
-                          </div>
-
-                          {log.notes ? (
-                            <p className="mt-4 max-w-xl text-sm leading-7 text-white/64">
-                              {log.notes}
-                            </p>
-                          ) : null}
-                        </div>
-
-                        <div className="shrink-0 text-left sm:text-right flex flex-col items-end gap-2">
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSharePayload({
-                              movement: movement.name,
-                              metricType: log.metricType,
-                              value: log.value,
-                              unit: log.unit,
-                              dateLabel: prettyDate(log.date),
-                            });
-                            setShareOpen(true);
-                          }}
-                          className="rounded-full border border-white/10 bg-white/[0.04] p-2 text-white/60 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
-                        >
-                          <Share className="h-4 w-4" />
-                        </button>
-
-                        <div className="text-2xl font-semibold tracking-[-0.03em] text-white">
-                          {isTimeDisplay(log.unit, selectedCategory.key, movement.name) ? (
-                            formatDisplayValue(log.value, log.unit, selectedCategory.key, movement.name)
-                          ) : (
-                            <>
-                              {log.value}{" "}
-                              <span className="text-sm font-medium text-white/52">
-                                {log.unit}
-                              </span>
-                            </>
-                          )}
-                        </div>
-
-                        <div className="mt-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/38">
-                          {prettyDate(log.date)}
-                        </div>
-
-                      </div>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </section>
+          <MovementHistorySection
+            accent={accent}
+            movementName={movement.name}
+            activeMetricFilter={activeMetricFilter}
+            filteredLogs={filteredLogs}
+            bestLogId={bestLog?.id}
+            isTimeDisplay={(unitValue, movementNameValue) =>
+              isTimeDisplay(unitValue, selectedCategory.key, movementNameValue)
+            }
+            formatDisplayValue={(rawValue, unitValue, movementNameValue) =>
+              formatDisplayValue(rawValue, unitValue, selectedCategory.key, movementNameValue)
+            }
+            prettyDate={prettyDate}
+            onShareLog={(log) => {
+              setSharePayload({
+                movement: movement.name,
+                metricType: log.metricType,
+                value: log.value,
+                unit: log.unit,
+                dateLabel: prettyDate(log.date),
+              });
+              setShareOpen(true);
+            }}
+          />
         </div>
         <PBShareModal
           open={shareOpen && !!sharePayload}
@@ -1381,6 +778,7 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
           value={sharePayload?.value || value}
           unit={sharePayload?.unit || effectiveUnit}
           dateLabel={sharePayload?.dateLabel || prettyDate(date)}
+          categoryKey={selectedCategory?.key}
         />
       </div>
     </div>

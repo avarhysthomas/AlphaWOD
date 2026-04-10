@@ -9,6 +9,7 @@ type AppUser = {
   email?: string | null;
   name?: string;
   role?: "admin" | "user";
+  approvalStatus?: "approved" | "pending";
 };
 
 type AuthCtx = {
@@ -43,9 +44,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           email: u.email,
           name: data?.name,
           role: data?.role || "user",
+          approvalStatus: data?.approvalStatus === "pending" ? "pending" : "approved",
         });
       } catch {
-        setAppUser({ uid: u.uid, email: u.email, role: "user" });
+        setAppUser({ uid: u.uid, email: u.email, role: "user", approvalStatus: "approved" });
       } finally {
         setLoading(false);
       }

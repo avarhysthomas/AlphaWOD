@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "../../../firebase";
-import { Dumbbell, Flame, Sun, Moon } from "lucide-react";
+import { Dumbbell, Flame, Moon, Share, Sun } from "lucide-react";
 import UserTopNav from "../../../components/layout/UserTopNav";
+import SessionShareModal from "../components/SessionShareModal";
 
 type SessionKey = "AM" | "PM" | "930AM";
 type TimerMode = "timed" | "stationControlled";
@@ -26,6 +27,7 @@ const WODDisplay = () => {
   const [selectedDate, setSelectedDate] = useState<string>("");
   const [sessionKey, setSessionKey] = useState<SessionKey>("AM");
   const [loading, setLoading] = useState<boolean>(false);
+  const [shareOpen, setShareOpen] = useState(false);
 
   const selectedDateObj = useMemo(() => {
     if (!selectedDate) return null;
@@ -153,6 +155,123 @@ const WODDisplay = () => {
     return { type: wod.sessionType ?? "—", style: wod.wodType ?? "—", extra: "—" };
   }, [wod, groupSize, timerMode, strengthTitle]);
 
+  const sessionTimeLabel = useMemo(() => getSessionTimeLabel(sessionKey), [sessionKey]);
+
+  const sharePayload = useMemo(() => {
+    if (!wod || !selectedDateObj) return null;
+
+    const dateLabel = selectedDateObj.toLocaleDateString("en-GB", {
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+    });
+
+    if (wod.sessionType === "Strength") {
+      const movements = Array.isArray(wod.strengthMovements) ? wod.strengthMovements : [];
+      const items = movements
+        .map((movement: any) => {
+          const name = String(movement?.movement ?? "").trim();
+          const percent = String(movement?.percent ?? "").trim();
+          const repRange = String(movement?.repRange ?? "").trim();
+          const details = [percent, repRange].filter(Boolean).join(" • ");
+          return name ? `${name}${details ? ` • ${details}` : ""}` : "";
+        })
+        .filter(Boolean);
+
+      return {
+        title: wod.wodName?.trim() || strengthTitle,
+        subtitle: dayName ? `${dayName} strength session` : "Programmed strength session",
+        filename: `${selectedDate}-${sessionKey.toLowerCase()}-session.png`,
+        shareTitle: `${sessionTimeLabel} session`,
+        shareText: `Today's ${sessionTimeLabel.toLowerCase()} session is live: ${wod.wodName?.trim() || strengthTitle}`,
+        dateLabel,
+        sessionLabel: sessionKey,
+        sessionTimeLabel,
+        sessionType: sessionHeaderBits.type,
+        sessionStyle: sessionHeaderBits.style,
+        sessionExtra: sessionHeaderBits.extra,
+        highlight: `${movements.length || 0}`,
+        highlightLabel: "Stations",
+        stationsLabel: `${movements.length || 0} strength stations`,
+        coachNote: String(wod?.strengthCue ?? "").trim() || undefined,
+        items,
+      };
+    }
+
+    const items = stations
+      .map((station: Station, index: number) => {
+        const title = (station.title || `Station ${index + 1}`).trim();
+        const movementNames = station.movements
+          .map((movement) => String(movement.name ?? "").trim())
+          .filter(Boolean)
+          .slice(0, 2)
+          .join(" + ");
+
+        return movementNames ? `${title} • ${movementNames}` : title;
+      })
+      .filter(Boolean);
+
+    const highlight =
+      timerMode === "timed"
+        ? roundDurationSeconds && rounds
+          ? `${formatSeconds(roundDurationSeconds)} x ${rounds}`
+          : `${stationCount || 0}`
+        : controlStationIndex != null
+        ? `${controlStationIndex + 1}/${stationCount || 1}`
+        : `${stationCount || 0}`;
+
+    const highlightLabel =
+      timerMode === "timed"
+        ? "Timer"
+        : controlStationIndex != null
+        ? "Control"
+        : "Stations";
+
+    const formatLabel =
+      timerMode === "timed"
+        ? `${stationCount || 0} stations • ${rounds || 1} rounds`
+        : controlStationTitle
+        ? `Control station: ${controlStationTitle}`
+        : `${stationCount || 0} stations`;
+
+    return {
+      title: wod.wodName?.trim() || `${dayName || "Daily"} Session`,
+      subtitle: dayName ? `${dayName} HYROX session` : "Programmed HYROX session",
+      filename: `${selectedDate}-${sessionKey.toLowerCase()}-session.png`,
+      shareTitle: `${sessionTimeLabel} session`,
+      shareText: `Today's ${sessionTimeLabel.toLowerCase()} session is live: ${wod.wodName?.trim() || "HYROX session"}`,
+      dateLabel,
+      sessionLabel: sessionKey,
+      sessionTimeLabel,
+      sessionType: sessionHeaderBits.type,
+      sessionStyle: sessionHeaderBits.style,
+      sessionExtra: sessionHeaderBits.extra,
+      highlight,
+      highlightLabel,
+      stationsLabel: formatLabel,
+      coachNote: undefined,
+      items,
+    };
+  }, [
+    controlStationIndex,
+    controlStationTitle,
+    dayName,
+    roundDurationSeconds,
+    rounds,
+    selectedDate,
+    selectedDateObj,
+    sessionHeaderBits.extra,
+    sessionHeaderBits.style,
+    sessionHeaderBits.type,
+    sessionKey,
+    sessionTimeLabel,
+    stationCount,
+    stations,
+    strengthTitle,
+    timerMode,
+    wod,
+  ]);
+
   return (
     <div className="min-h-screen bg-black text-white">
       <UserTopNav />
@@ -195,6 +314,16 @@ const WODDisplay = () => {
           >
             PM <Moon className="inline ml-1 w-4 h-4" />
           </button>
+          {wod ? (
+            <button
+              type="button"
+              onClick={() => setShareOpen(true)}
+              className="ml-auto inline-flex items-center gap-2 rounded border border-neutral-700 bg-neutral-900 px-4 py-2 text-white transition hover:border-neutral-500"
+            >
+              <Share className="h-4 w-4" />
+              Share Session
+            </button>
+          ) : null}
         </div>
 
         {!selectedDate ? null : loading ? (
@@ -330,6 +459,28 @@ const WODDisplay = () => {
           </div>
         )}
       </div>
+      {sharePayload ? (
+        <SessionShareModal
+          open={shareOpen}
+          onClose={() => setShareOpen(false)}
+          title={sharePayload.title}
+          subtitle={sharePayload.subtitle}
+          filename={sharePayload.filename}
+          shareTitle={sharePayload.shareTitle}
+          shareText={sharePayload.shareText}
+          dateLabel={sharePayload.dateLabel}
+          sessionLabel={sharePayload.sessionLabel}
+          sessionTimeLabel={sharePayload.sessionTimeLabel}
+          sessionType={sharePayload.sessionType}
+          sessionStyle={sharePayload.sessionStyle}
+          sessionExtra={sharePayload.sessionExtra}
+          highlight={sharePayload.highlight}
+          highlightLabel={sharePayload.highlightLabel}
+          stationsLabel={sharePayload.stationsLabel}
+          coachNote={sharePayload.coachNote}
+          items={sharePayload.items}
+        />
+      ) : null}
     </div>
   );
 };
@@ -907,4 +1058,10 @@ function normalizeStations(rawStations: any, rawMovements: any): Station[] {
 
   // Default
   return [{ title: "Station 1", movements: [] }];
+}
+
+function getSessionTimeLabel(sessionKey: SessionKey) {
+  if (sessionKey === "AM") return "6AM";
+  if (sessionKey === "PM") return "6PM";
+  return "9:30AM";
 }

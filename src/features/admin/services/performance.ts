@@ -14,6 +14,7 @@ type AdminUserLite = {
   email?: string;
   photoURL?: string;
   role?: string;
+  approvalStatus?: "approved" | "pending";
 };
 
 export type TrainingLog = {
@@ -72,7 +73,7 @@ export async function getPerformanceSummary() {
   const memberLogs = logs
     .filter((log) => {
       const user = log.userId ? userMap.get(log.userId) : null;
-      return user?.role !== "admin";
+      return user?.role !== "admin" && user?.approvalStatus !== "pending";
     })
     .sort((a, b) => getCreatedAtMs(b.createdAt) - getCreatedAtMs(a.createdAt));
 

@@ -333,6 +333,7 @@ export default function Profile() {
               name: resolvedName || null,
               email: resolvedEmail || null,
               role: "user",
+              approvalStatus: "approved",
               photoURL: resolvedPhoto ?? null,
               createdAt: serverTimestamp(),
               updatedAt: serverTimestamp(),

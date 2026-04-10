@@ -2,8 +2,10 @@ import React, { useEffect, useState } from "react";
 import {
   Activity,
   AlertTriangle,
+  CheckCircle2,
   ChevronRight,
   Flame,
+  LoaderCircle,
   ShieldAlert,
   Trophy,
   Users,
@@ -12,6 +14,7 @@ import AdminOnly from "../../../components/guards/AdminOnly";
 import UserAvatar from "../../../components/ui/UserAvatar";
 import AdminKpiCard from "../components/AdminKpiCard";
 import AdminSectionCard from "../components/AdminSectionCard";
+import { approveUserAccess } from "../services/access";
 import { getInsightsSummary } from "../services/insights";
 import UserTopNav from "../../../components/layout/UserTopNav";
 
@@ -58,6 +61,8 @@ function getAttentionBadge(lastCheckInDate?: string) {
 export default function AdminInsights() {
   const [data, setData] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [approvingUserId, setApprovingUserId] = useState<string | null>(null);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -75,6 +80,33 @@ export default function AdminInsights() {
       alive = false;
     };
   }, []);
+
+  async function handleApprove(userId: string) {
+    try {
+      setApprovingUserId(userId);
+      setApprovalError(null);
+      await approveUserAccess(userId);
+      setData((current) => {
+        if (!current) return current;
+        const approvedUser =
+          current.pendingApprovals.find((user) => user.id === userId) ?? null;
+        const nextPending = current.pendingApprovals.filter((user) => user.id !== userId);
+
+        return {
+          ...current,
+          totalMembers: current.totalMembers + (approvedUser ? 1 : 0),
+          pendingApprovals: nextPending,
+          users: approvedUser
+            ? [...current.users, { ...approvedUser, approvalStatus: "approved" }]
+            : current.users,
+        };
+      });
+    } catch (err: any) {
+      setApprovalError(err?.message ?? "Failed to approve member.");
+    } finally {
+      setApprovingUserId(null);
+    }
+  }
 
   return (
     <AdminOnly>
@@ -105,7 +137,7 @@ export default function AdminInsights() {
                 </div>
 
                 {!loading && data ? (
-                  <div className="grid w-full grid-cols-2 gap-3 lg:w-auto lg:min-w-[420px] lg:grid-cols-4">
+                  <div className="grid w-full grid-cols-2 gap-3 lg:w-auto lg:min-w-[520px] lg:grid-cols-5">
                     <div className="rounded-2xl border border-white/10 bg-black/40 px-3 py-3 backdrop-blur sm:px-4">
                       <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 sm:text-[11px] sm:tracking-[0.25em]">
                         Members
@@ -141,6 +173,15 @@ export default function AdminInsights() {
                         {data.inactiveMembers.length}
                       </div>
                     </div>
+
+                    <div className="rounded-2xl border border-white/10 bg-black/40 px-3 py-3 backdrop-blur sm:px-4">
+                      <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 sm:text-[11px] sm:tracking-[0.25em]">
+                        Pending
+                      </div>
+                      <div className="mt-2 text-xl font-semibold text-white sm:text-2xl">
+                        {data.pendingApprovals.length}
+                      </div>
+                    </div>
                   </div>
                 ) : null}
               </div>
@@ -168,6 +209,70 @@ export default function AdminInsights() {
                     label="Total Check-ins"
                     value={data.totalCheckIns}
                   />
+                  <AdminKpiCard
+                    label="Pending Approvals"
+                    value={data.pendingApprovals.length}
+                  />
+                </div>
+
+                <div className="mt-6 lg:mt-8">
+                  <AdminSectionCard title="Pending Sign-up Approvals">
+                    {approvalError ? (
+                      <div className="mb-4 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                        {approvalError}
+                      </div>
+                    ) : null}
+
+                    {data.pendingApprovals.length === 0 ? (
+                      <div className="rounded-2xl border border-emerald-500/15 bg-emerald-500/5 px-4 py-5 text-sm text-emerald-300">
+                        No pending sign-up approvals right now.
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        {data.pendingApprovals.map((user) => {
+                          const isApproving = approvingUserId === user.id;
+
+                          return (
+                            <div
+                              key={user.id}
+                              className="flex flex-col gap-4 rounded-2xl border border-white/8 bg-white/[0.02] px-4 py-4 sm:flex-row sm:items-center sm:justify-between"
+                            >
+                              <div className="flex min-w-0 items-center gap-3">
+                                <UserAvatar
+                                  name={user.name || "Pending member"}
+                                  photoURL={user.photoURL}
+                                  size={44}
+                                />
+
+                                <div className="min-w-0">
+                                  <div className="truncate text-sm font-medium text-white sm:text-base">
+                                    {user.name || "Unnamed member"}
+                                  </div>
+                                  <div className="truncate text-xs text-neutral-500 sm:text-sm">
+                                    {user.email || "No email"}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={() => handleApprove(user.id)}
+                                disabled={isApproving}
+                                className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-500/15 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {isApproving ? (
+                                  <LoaderCircle className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <CheckCircle2 className="h-4 w-4" />
+                                )}
+                                {isApproving ? "Approving..." : "Approve access"}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </AdminSectionCard>
                 </div>
 
                 <div className="mt-6 grid gap-6 lg:mt-8 lg:grid-cols-2 [&>*]:min-w-0">

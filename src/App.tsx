@@ -12,6 +12,7 @@ import WODEditor from "./features/wod/pages/WODEditor";
 import WODDisplay from "./features/wod/pages/WODDisplay";
 import DipLeaderboard from "./features/leaderboard/pages/DipLeaderboard";
 import Login from "./features/auth/pages/Login";
+import PendingApproval from "./features/auth/pages/PendingApproval";
 import Signup from "./features/auth/pages/Signup";
 import Dashboard from "./features/dashboard/pages/Dashboard";
 import Schedule from "./features/bookings/pages/Schedule";
@@ -52,6 +53,20 @@ function RequireAdmin({ children }: { children: React.ReactElement }) {
   return children;
 }
 
+function RequireApproved({ children }: { children: React.ReactElement }) {
+  const { user, appUser, loading } = useAuth();
+  const location = useLocation();
+
+  if (loading)
+    return <div className="text-white text-center mt-20">Loading...</div>;
+  if (!user) return <Navigate to="/" replace state={{ from: location }} />;
+  if (appUser?.approvalStatus === "pending") {
+    return <Navigate to="/pending-approval" replace state={{ from: location }} />;
+  }
+
+  return children;
+}
+
 function RequireMember({ children }: { children: React.ReactElement }) {
   const { appUser, loading } = useAuth();
   const location = useLocation();
@@ -62,6 +77,12 @@ function RequireMember({ children }: { children: React.ReactElement }) {
     return <Navigate to="/" replace state={{ from: location }} />;
 
   return children;
+}
+
+function getAuthedHome(appUser: ReturnType<typeof useAuth>["appUser"]) {
+  if (appUser?.approvalStatus === "pending") return "/pending-approval";
+  if (appUser?.role === "admin") return "/admin/insights";
+  return "/dashboard";
 }
 
 /** ---------- Layout ---------- */
@@ -77,7 +98,7 @@ function AdminLayout() {
 /** ---------- App ---------- */
 
 export default function App() {
-  const { user, loading } = useAuth();
+  const { user, appUser, loading } = useAuth();
 
   if (loading)
     return <div className="text-white text-center mt-20">Loading...</div>;
@@ -89,11 +110,23 @@ export default function App() {
       {/* Public */}
       <Route
         path="/"
-        element={isAuthed ? <Navigate to="/dashboard" replace /> : <Login />}
+        element={isAuthed ? <Navigate to={getAuthedHome(appUser)} replace /> : <Login />}
       />
       <Route
         path="/signup"
-        element={isAuthed ? <Navigate to="/dashboard" replace /> : <Signup />}
+        element={isAuthed ? <Navigate to={getAuthedHome(appUser)} replace /> : <Signup />}
+      />
+      <Route
+        path="/pending-approval"
+        element={
+          <RequireAuth>
+            {appUser?.approvalStatus === "pending" ? (
+              <PendingApproval />
+            ) : (
+              <Navigate to={getAuthedHome(appUser)} replace />
+            )}
+          </RequireAuth>
+        }
       />
 
       {/* Member routes */}
@@ -101,9 +134,11 @@ export default function App() {
         path="/dashboard"
         element={
           <RequireAuth>
-            <RequireMember>
-              <Dashboard />
-            </RequireMember>
+            <RequireApproved>
+              <RequireMember>
+                <Dashboard />
+              </RequireMember>
+            </RequireApproved>
           </RequireAuth>
         }
       />
@@ -112,9 +147,11 @@ export default function App() {
         path="/schedule"
         element={
           <RequireAuth>
-            <RequireMember>
-              <Schedule />
-            </RequireMember>
+            <RequireApproved>
+              <RequireMember>
+                <Schedule />
+              </RequireMember>
+            </RequireApproved>
           </RequireAuth>
         }
       />
@@ -123,9 +160,11 @@ export default function App() {
         path="/leaderboard"
         element={
           <RequireAuth>
-            <RequireMember>
-              <Leaderboard />
-            </RequireMember>
+            <RequireApproved>
+              <RequireMember>
+                <Leaderboard />
+              </RequireMember>
+            </RequireApproved>
           </RequireAuth>
         }
       />
@@ -134,7 +173,9 @@ export default function App() {
         path="/board-of-shame"
         element={
           <RequireAuth>
-            <DipLeaderboard />
+            <RequireApproved>
+              <DipLeaderboard />
+            </RequireApproved>
           </RequireAuth>
         }
       />
@@ -143,7 +184,9 @@ export default function App() {
         path="/profile"
         element={
           <RequireAuth>
-            <Profile />
+            <RequireApproved>
+              <Profile />
+            </RequireApproved>
           </RequireAuth>
         }
       />
@@ -159,9 +202,11 @@ export default function App() {
       <Route
         element={
           <RequireAuth>
-            <RequireAdmin>
-              <AdminLayout />
-            </RequireAdmin>
+            <RequireApproved>
+              <RequireAdmin>
+                <AdminLayout />
+              </RequireAdmin>
+            </RequireApproved>
           </RequireAuth>
         }
       >
@@ -176,7 +221,7 @@ export default function App() {
       {/* Catch-all */}
       <Route
         path="*"
-        element={<Navigate to={isAuthed ? "/dashboard" : "/"} replace />}
+        element={<Navigate to={isAuthed ? getAuthedHome(appUser) : "/"} replace />}
       />
     </Routes>
   );
