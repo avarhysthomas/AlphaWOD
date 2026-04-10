@@ -717,7 +717,7 @@ export default function Dashboard() {
                   key={session.key}
                   className="rounded-[26px] border border-white/10 bg-gradient-to-br from-white/[0.09] via-white/[0.04] to-white/[0.02] p-4"
                 >
-                  <div className="flex items-start justify-between gap-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/72">
                       <Icon className="h-3 w-3" />
                       {session.timeLabel}
