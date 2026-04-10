@@ -81,7 +81,6 @@ function RequireMember({ children }: { children: React.ReactElement }) {
 
 function getAuthedHome(appUser: ReturnType<typeof useAuth>["appUser"]) {
   if (appUser?.approvalStatus === "pending") return "/pending-approval";
-  if (appUser?.role === "admin") return "/admin/insights";
   return "/dashboard";
 }
 
