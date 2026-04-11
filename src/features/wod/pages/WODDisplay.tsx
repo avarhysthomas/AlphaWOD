@@ -4,6 +4,7 @@ import { db } from "../../../firebase";
 import { Dumbbell, Flame, Moon, Share, Sun } from "lucide-react";
 import UserTopNav from "../../../components/layout/UserTopNav";
 import SessionShareModal from "../components/SessionShareModal";
+import { getDateInputValueInTimeZone } from "../../../utils/date";
 
 type SessionKey = "AM" | "PM" | "930AM";
 type TimerMode = "timed" | "stationControlled";
@@ -23,6 +24,7 @@ type Station = {
 };
 
 const WODDisplay = () => {
+  const timeZone = "Europe/London";
   const [wod, setWod] = useState<any>(null);
   const [selectedDate, setSelectedDate] = useState<string>("");
   const [sessionKey, setSessionKey] = useState<SessionKey>("AM");
@@ -65,9 +67,7 @@ const WODDisplay = () => {
   };
 
   useEffect(() => {
-    const today = new Date();
-    const isoToday = today.toISOString().split("T")[0];
-    setSelectedDate(isoToday);
+    setSelectedDate(getDateInputValueInTimeZone(new Date(), timeZone));
   }, []);
 
   useEffect(() => {

@@ -43,6 +43,7 @@ import {
   type FormFieldErrors,
   validateTrainingLogForm,
 } from "../utils/movementHelpers";
+import { getDateInputValueInTimeZone } from "../../../utils/date";
 
 type TrainingLog = {
   id: string;
@@ -99,6 +100,7 @@ function CustomTooltip({
 }
 
 export default function TrainingStandardMovement() {
+  const timeZone = "Europe/London";
   const { category, movementSlug } = useParams<{
     category: string;
     movementSlug: string;
@@ -122,7 +124,9 @@ export default function TrainingStandardMovement() {
   const [value, setValue] = useState("");
   const [unit, setUnit] = useState(defaultUnit);
   const [reps, setReps] = useState("");
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(() =>
+    getDateInputValueInTimeZone(new Date(), timeZone)
+  );
   const [notes, setNotes] = useState("");
   const [formErrors, setFormErrors] = useState<FormFieldErrors>({});
   const [saveError, setSaveError] = useState("");
@@ -247,7 +251,7 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
 
     setUnit(nextConfig.lockedUnit ?? movement?.unitOptions[0] ?? "");
     setReps("");
-    setDate(new Date().toISOString().slice(0, 10));
+    setDate(getDateInputValueInTimeZone(new Date(), timeZone));
     setNotes("");
     setFormErrors({});
     setSaveError("");
@@ -269,7 +273,7 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
 
   setUnit(nextConfig.lockedUnit ?? movement?.unitOptions[0] ?? "");
   setReps("");
-  setDate(new Date().toISOString().slice(0, 10));
+  setDate(getDateInputValueInTimeZone(new Date(), timeZone));
   setNotes("");
   setSaved(false);
   setFormErrors({});

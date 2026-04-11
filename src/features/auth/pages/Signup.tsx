@@ -2,11 +2,13 @@ import React, { useState } from "react";
 import { auth, db } from "../../../firebase";
 import { createUserWithEmailAndPassword } from "firebase/auth";
 import { doc, setDoc } from "firebase/firestore";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import AuthShell from "../components/AuthShell";
 
 const Signup = () => {
-  const [email, setEmail] = useState("");
+  const [searchParams] = useSearchParams();
+  const invitedEmail = searchParams.get("email")?.trim().toLowerCase() ?? "";
+  const [email, setEmail] = useState(invitedEmail);
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [error, setError] = useState("");
@@ -64,7 +66,7 @@ const Signup = () => {
           <span className="mb-2 block text-sm font-medium text-neutral-300">Full name</span>
           <input
             type="text"
-            placeholder="Ava Test"
+            placeholder=""
             autoComplete="name"
             className="w-full rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-white outline-none transition placeholder:text-neutral-500 focus:border-amber-400/40 focus:bg-white/[0.06]"
             value={name}
@@ -86,6 +88,12 @@ const Signup = () => {
             required
           />
         </label>
+
+        {invitedEmail ? (
+          <div className="rounded-2xl border border-emerald-500/15 bg-emerald-500/5 px-4 py-3 text-sm leading-6 text-emerald-100/90">
+            This email was prefilled from your invite. You can create your account with it here.
+          </div>
+        ) : null}
 
         <label className="block">
           <span className="mb-2 block text-sm font-medium text-neutral-300">Password</span>

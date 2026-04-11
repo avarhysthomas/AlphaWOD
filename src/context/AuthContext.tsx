@@ -3,14 +3,7 @@ import React, { createContext, useContext, useEffect, useState } from "react";
 import { onAuthStateChanged, User, getAuth } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "../firebase";
-
-type AppUser = {
-  uid: string;
-  email?: string | null;
-  name?: string;
-  role?: "admin" | "user";
-  approvalStatus?: "approved" | "pending";
-};
+import { AppUser, buildAppUser, buildSafePendingAppUser } from "./authUser";
 
 type AuthCtx = {
   user: User | null;
@@ -38,16 +31,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       try {
         const snap = await getDoc(doc(db, "users", u.uid));
-        const data: any = snap.exists() ? snap.data() : {};
-        setAppUser({
-          uid: u.uid,
-          email: u.email,
-          name: data?.name,
-          role: data?.role || "user",
-          approvalStatus: data?.approvalStatus === "pending" ? "pending" : "approved",
-        });
-      } catch {
-        setAppUser({ uid: u.uid, email: u.email, role: "user", approvalStatus: "approved" });
+        const data = snap.exists() ? snap.data() : {};
+        setAppUser(buildAppUser({ uid: u.uid, email: u.email }, data));
+      } catch (error) {
+        console.error("Failed to load app user profile:", error);
+        setAppUser(buildSafePendingAppUser({ uid: u.uid, email: u.email }));
       } finally {
         setLoading(false);
       }

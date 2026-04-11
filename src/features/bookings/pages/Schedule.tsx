@@ -344,9 +344,9 @@ export default function Schedule() {
     } catch (e: any) {
       console.error("Cancel failed:", e);
       if (e?.code === "no-booking" || e?.message === "No active booking found") return alert("No active booking found");
-      alert(e?.message || "Cancel failed");
       if (e?.code === "cancel-closed" || e?.message === "Cancellation closed")
-      return alert("Too late to cancel — cancellations close 1 hour before class.");
+        return alert("Too late to cancel — cancellations close 1 hour before class.");
+      alert(e?.message || "Cancel failed");
     } finally {
       setBusyClassId(null);
     }

@@ -14,7 +14,7 @@ import AdminOnly from "../../../components/guards/AdminOnly";
 import UserAvatar from "../../../components/ui/UserAvatar";
 import AdminKpiCard from "../components/AdminKpiCard";
 import AdminSectionCard from "../components/AdminSectionCard";
-import { approveUserAccess } from "../services/access";
+import { approveUserAccess, inviteMemberByEmail } from "../services/access";
 import { getInsightsSummary } from "../services/insights";
 import UserTopNav from "../../../components/layout/UserTopNav";
 
@@ -63,6 +63,10 @@ export default function AdminInsights() {
   const [loading, setLoading] = useState(true);
   const [approvingUserId, setApprovingUserId] = useState<string | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteLoading, setInviteLoading] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [inviteSuccess, setInviteSuccess] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -105,6 +109,26 @@ export default function AdminInsights() {
       setApprovalError(err?.message ?? "Failed to approve member.");
     } finally {
       setApprovingUserId(null);
+    }
+  }
+
+  async function handleInviteSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+
+    try {
+      setInviteLoading(true);
+      setInviteError(null);
+      setInviteSuccess(null);
+      const email = inviteEmail.trim().toLowerCase();
+
+      await inviteMemberByEmail(email);
+
+      setInviteSuccess(`Invite sent to ${email}.`);
+      setInviteEmail("");
+    } catch (err: any) {
+      setInviteError(err?.message ?? "Failed to send invite email.");
+    } finally {
+      setInviteLoading(false);
     }
   }
 
@@ -213,6 +237,54 @@ export default function AdminInsights() {
                     label="Pending Approvals"
                     value={data.pendingApprovals.length}
                   />
+                </div>
+
+                <div className="mt-6 lg:mt-8">
+                  <AdminSectionCard title="Invite New Member">
+                    <form onSubmit={handleInviteSubmit} className="space-y-4">
+                      <div className="max-w-xl">
+                        <label className="mb-2 block text-sm font-medium text-neutral-300">
+                          Email address
+                        </label>
+                        <div className="flex flex-col gap-3 sm:flex-row">
+                          <input
+                            type="email"
+                            value={inviteEmail}
+                            onChange={(e) => setInviteEmail(e.target.value)}
+                            placeholder="newmember@example.com"
+                            autoComplete="email"
+                            inputMode="email"
+                            required
+                            className="w-full rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-white outline-none transition placeholder:text-neutral-500 focus:border-amber-400/40 focus:bg-white/[0.06]"
+                          />
+                          <button
+                            type="submit"
+                            disabled={inviteLoading}
+                            className="rounded-2xl bg-[linear-gradient(135deg,#fde68a,#f59e0b)] px-5 py-3 font-semibold text-black transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-70"
+                          >
+                            {inviteLoading ? "Sending..." : "Send invite"}
+                          </button>
+                        </div>
+                      </div>
+
+                      {inviteSuccess ? (
+                        <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+                          {inviteSuccess}
+                        </div>
+                      ) : null}
+
+                      {inviteError ? (
+                        <div className="rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                          {inviteError}
+                        </div>
+                      ) : null}
+
+                      <p className="text-sm leading-6 text-neutral-400">
+                        This sends a sign-up link to the new member so they can create
+                        their own account before appearing in pending approvals.
+                      </p>
+                    </form>
+                  </AdminSectionCard>
                 </div>
 
                 <div className="mt-6 lg:mt-8">
