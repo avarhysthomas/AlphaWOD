@@ -186,6 +186,19 @@ export default function AdminPerformance() {
               <>
                 <div className="mt-6 grid gap-6 lg:mt-8 lg:grid-cols-2">
                   <AdminSectionCard title="Most Logged Metrics">
+                    <div className="mb-4 flex items-center justify-between gap-3">
+                      <p className="text-sm text-neutral-400">
+                        Open the most-used metrics fast, or browse the full library.
+                      </p>
+                      <Link
+                        to="/admin/performance/metrics"
+                        className="inline-flex shrink-0 items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white/70 transition hover:border-white/20 hover:bg-white/[0.06] hover:text-white"
+                      >
+                        View all
+                        <ChevronRight className="h-3.5 w-3.5" />
+                      </Link>
+                    </div>
+
                     <div className="space-y-3">
                       {data.topMetrics.length === 0 ? (
                         <div className="text-sm text-neutral-400">
@@ -193,14 +206,21 @@ export default function AdminPerformance() {
                         </div>
                       ) : (
                         data.topMetrics.map((item, index) => (
-                          <div
+                          <Link
                             key={`${item.label}-${index}`}
+                            to={
+                              item.movementSlug && item.metricType
+                                ? `/admin/performance/metric/${item.movementSlug}/${encodeURIComponent(
+                                    item.metricType
+                                  )}`
+                                : "#"
+                            }
                             className="group flex items-center justify-between gap-3 rounded-2xl border border-white/8 bg-white/[0.02] px-3 py-3 transition hover:border-white/15 hover:bg-white/[0.04] sm:gap-4 sm:px-4 sm:py-4"
                           >
                             <div className="flex min-w-0 items-center gap-3 sm:gap-4">
                               <RankBadge index={index} />
                               <div className="min-w-0">
-                                <div className="truncate text-sm font-medium text-white">
+                                <div className="truncate text-sm font-medium text-white transition group-hover:text-amber-100">
                                   {item.label}
                                 </div>
                                 <div className="mt-1 flex items-center gap-2 text-xs text-neutral-500">
@@ -210,15 +230,20 @@ export default function AdminPerformance() {
                               </div>
                             </div>
 
-                            <div className="shrink-0 text-right">
-                              <div className="text-lg font-semibold text-white">
-                                {item.count}
+                            <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+                              <div className="text-right">
+                                <div className="text-lg font-semibold text-white">
+                                  {item.count}
+                                </div>
+                                <div className="text-[10px] uppercase tracking-[0.18em] text-neutral-500 sm:text-[11px] sm:tracking-[0.2em]">
+                                  total
+                                </div>
                               </div>
-                              <div className="text-[10px] uppercase tracking-[0.18em] text-neutral-500 sm:text-[11px] sm:tracking-[0.2em]">
-                                total
-                              </div>
+                              {item.movementSlug && item.metricType ? (
+                                <ChevronRight className="h-4 w-4 shrink-0 text-neutral-600 transition group-hover:text-amber-200" />
+                              ) : null}
                             </div>
-                          </div>
+                          </Link>
                         ))
                       )}
                     </div>

@@ -8,6 +8,8 @@ import {
 import {
   addDoc,
   collection,
+  deleteDoc,
+  doc,
   onSnapshot,
   orderBy,
   query,
@@ -136,6 +138,7 @@ export default function TrainingStandardMovement() {
 
   const [shareOpen, setShareOpen] = useState(false);
   const [isNewPB, setIsNewPB] = useState(false);
+  const [deletingLogId, setDeletingLogId] = useState<string | null>(null);
   const [sharePayload, setSharePayload] = useState<{
     movement: string;
     metricType: string;
@@ -432,6 +435,45 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
       setSaveError("Could not save this log. Please try again.");
     } finally {
       setIsSaving(false);
+    }
+  }
+
+  async function handleDeleteLog(logId: string) {
+    const user = auth.currentUser;
+
+    if (!user) return;
+
+    const confirmed = window.confirm(
+      "Delete this metric entry? This can’t be undone."
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setDeletingLogId(logId);
+      setSaveError("");
+
+      await deleteDoc(doc(db, "users", user.uid, "trainingLogs", logId));
+
+      if (sharePayload && filteredLogs.some((log) => log.id === logId)) {
+        setShareOpen(false);
+        setSharePayload((current) => {
+          if (!current) return null;
+          const deletedLog = filteredLogs.find((log) => log.id === logId);
+          if (!deletedLog) return current;
+
+          return current.value === deletedLog.value &&
+            current.metricType === deletedLog.metricType &&
+            current.dateLabel === prettyDate(deletedLog.date)
+            ? null
+            : current;
+        });
+      }
+    } catch (error) {
+      console.error("Error deleting training log:", error);
+      setSaveError("Could not delete this log. Please try again.");
+    } finally {
+      setDeletingLogId(null);
     }
   }
 
@@ -754,6 +796,7 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
             activeMetricFilter={activeMetricFilter}
             filteredLogs={filteredLogs}
             bestLogId={bestLog?.id}
+            deletingLogId={deletingLogId}
             isTimeDisplay={(unitValue, movementNameValue) =>
               isTimeDisplay(unitValue, selectedCategory.key, movementNameValue)
             }
@@ -771,6 +814,7 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
               });
               setShareOpen(true);
             }}
+            onDeleteLog={handleDeleteLog}
           />
         </div>
         <PBShareModal

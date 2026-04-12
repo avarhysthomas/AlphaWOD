@@ -32,6 +32,15 @@ export type TrainingLog = {
   createdAt?: any;
 };
 
+export type TopMetricSummary = {
+  label: string;
+  count: number;
+  movementSlug?: string;
+  movementName?: string;
+  metricType?: string;
+  category?: string;
+};
+
 function formatMetricLabel(log: TrainingLog) {
   const movement = log.movementName || "Unknown movement";
   const metric = log.metricType || "";
@@ -83,11 +92,29 @@ export async function getPerformanceSummary() {
     memberLogs.map((log) => log.userId).filter(Boolean)
   ).size;
 
-  const movementCounts = memberLogs.reduce<Record<string, number>>((acc, log) => {
-    const key = formatMetricLabel(log);
-    acc[key] = (acc[key] ?? 0) + 1;
-    return acc;
-  }, {});
+  const movementCounts = memberLogs.reduce<Record<string, TopMetricSummary>>(
+    (acc, log) => {
+      const key = `${log.movementSlug || log.movementName || "unknown"}::${log.metricType || ""}`;
+      const existing = acc[key];
+
+      if (existing) {
+        existing.count += 1;
+        return acc;
+      }
+
+      acc[key] = {
+        label: formatMetricLabel(log),
+        count: 1,
+        movementSlug: log.movementSlug,
+        movementName: log.movementName,
+        metricType: log.metricType,
+        category: log.category,
+      };
+
+      return acc;
+    },
+    {}
+  );
 
   const categoryCounts = memberLogs.reduce<Record<string, number>>((acc, log) => {
     const key = log.category || "unknown";
@@ -102,12 +129,16 @@ export async function getPerformanceSummary() {
   }, {});
 
   const mostLoggedMetric =
-    Object.entries(movementCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "—";
+    Object.values(movementCounts).sort((a, b) => b.count - a.count)[0]?.label ?? "—";
 
-  const topMetrics = Object.entries(movementCounts)
-    .sort((a, b) => b[1] - a[1])
+  const topMetrics = Object.values(movementCounts)
+    .sort((a, b) => b.count - a.count)
     .slice(0, 8)
-    .map(([label, count]) => ({ label, count }));
+    .map((item) => ({ ...item }));
+
+  const allMetrics = Object.values(movementCounts)
+    .sort((a, b) => b.count - a.count)
+    .map((item) => ({ ...item }));
 
   const topCategories = Object.entries(categoryCounts)
     .sort((a, b) => b[1] - a[1])
@@ -144,6 +175,7 @@ export async function getPerformanceSummary() {
     athletesLogging,
     mostLoggedMetric,
     topMetrics,
+    allMetrics,
     topCategories,
     topLoggers,
     recentLogs,

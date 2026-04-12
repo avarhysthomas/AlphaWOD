@@ -1,5 +1,5 @@
 import React from "react";
-import { Share, TimerReset } from "lucide-react";
+import { Share, TimerReset, Trash2 } from "lucide-react";
 import type { AccentClasses } from "../utils/movementHelpers";
 
 type TrainingLog = {
@@ -18,10 +18,12 @@ type MovementHistorySectionProps = {
   activeMetricFilter: string;
   filteredLogs: TrainingLog[];
   bestLogId?: string | null;
+  deletingLogId?: string | null;
   isTimeDisplay: (unit?: string, movementName?: string) => boolean;
   formatDisplayValue: (value: string, unit?: string, movementName?: string) => string;
   prettyDate: (date: string) => string;
   onShareLog: (log: TrainingLog) => void;
+  onDeleteLog: (logId: string) => void;
 };
 
 export default function MovementHistorySection({
@@ -30,10 +32,12 @@ export default function MovementHistorySection({
   activeMetricFilter,
   filteredLogs,
   bestLogId,
+  deletingLogId,
   isTimeDisplay,
   formatDisplayValue,
   prettyDate,
   onShareLog,
+  onDeleteLog,
 }: MovementHistorySectionProps) {
   return (
     <section className="relative overflow-hidden rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(18,18,22,0.98),rgba(10,10,12,0.98))] p-5 shadow-[0_24px_60px_rgba(0,0,0,0.35)] sm:p-6">
@@ -65,6 +69,7 @@ export default function MovementHistorySection({
         ) : (
           filteredLogs.map((log, index) => {
             const isBest = bestLogId === log.id;
+            const isDeleting = deletingLogId === log.id;
 
             return (
               <div
@@ -109,13 +114,27 @@ export default function MovementHistorySection({
                   </div>
 
                   <div className="flex shrink-0 flex-col items-end gap-2 text-left sm:text-right">
-                    <button
-                      type="button"
-                      onClick={() => onShareLog(log)}
-                      className="rounded-full border border-white/10 bg-white/[0.04] p-2 text-white/60 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
-                    >
-                      <Share className="h-4 w-4" />
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => onShareLog(log)}
+                        disabled={isDeleting}
+                        className="rounded-full border border-white/10 bg-white/[0.04] p-2 text-white/60 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                        aria-label="Share entry"
+                      >
+                        <Share className="h-4 w-4" />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => onDeleteLog(log.id)}
+                        disabled={isDeleting}
+                        className="rounded-full border border-red-500/20 bg-red-500/10 p-2 text-red-200 transition hover:border-red-400/35 hover:bg-red-500/15 hover:text-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        aria-label="Delete entry"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
 
                     <div className="text-2xl font-semibold tracking-[-0.03em] text-white">
                       {isTimeDisplay(log.unit, movementName) ? (
@@ -128,7 +147,7 @@ export default function MovementHistorySection({
                     </div>
 
                     <div className="mt-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/38">
-                      {prettyDate(log.date)}
+                      {isDeleting ? "Deleting..." : prettyDate(log.date)}
                     </div>
                   </div>
                 </div>

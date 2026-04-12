@@ -27,6 +27,8 @@ import { useAuth } from "./context/AuthContext";
 import AdminInsights from "./features/admin/pages/AdminInsights";
 import AdminPerformance from "./features/admin/pages/AdminPerformance";
 import AdminMemberPerformance from "./features/admin/pages/AdminMemberPerformance";
+import AdminMetricPerformance from "./features/admin/pages/AdminMetricPerformance";
+import AdminMetricIndex from "./features/admin/pages/AdminMetricIndex";
 
 /** ---------- Route guards ---------- */
 
@@ -211,6 +213,11 @@ export default function App() {
       >
         <Route path="/admin/insights" element={<AdminInsights />} />
         <Route path="/admin/performance" element={<AdminPerformance />} />
+        <Route path="/admin/performance/metrics" element={<AdminMetricIndex />} />
+        <Route
+          path="/admin/performance/metric/:movementSlug/:metricType"
+          element={<AdminMetricPerformance />}
+        />
         <Route path="/admin/performance/:userId" element={<AdminMemberPerformance />} />
         <Route path="/display" element={<WODDisplay />} />
         <Route path="/editor" element={<WODEditor />} />
