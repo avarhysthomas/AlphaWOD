@@ -2,7 +2,6 @@ import {
   collection,
   collectionGroup,
   getDocs,
-  limit,
   orderBy,
   query,
 } from "firebase/firestore";
@@ -61,8 +60,7 @@ export async function getPerformanceSummary() {
     getDocs(
       query(
         collectionGroup(db, "trainingLogs"),
-        orderBy("createdAt", "desc"),
-        limit(250)
+        orderBy("createdAt", "desc")
       )
     ),
   ]);
