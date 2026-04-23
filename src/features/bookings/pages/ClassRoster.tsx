@@ -168,7 +168,7 @@ export default function ClassRoster() {
         const users: GymUser[] = snap.docs.map((d) => ({
           id: d.id,
           ...(d.data() as Omit<GymUser, "id">),
-        })).filter((user) => user.approvalStatus !== "pending");
+        })).filter((user) => user.approvalStatus !== "pending" && user.role !== "banned");
 
         users.sort((a, b) => (a.name ?? a.email ?? "").localeCompare(b.name ?? b.email ?? ""));
         setAllUsers(users);

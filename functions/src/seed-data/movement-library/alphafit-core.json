@@ -1,0 +1,2077 @@
+{
+  "gymKey": "alphafit",
+  "source": "alphafit-core-v2",
+  "movements": [
+    {
+      "slug": "back-squat",
+      "name": "Back Squat",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["squat"],
+      "equipment": ["barbell", "rack"],
+      "tags": ["lower-body", "compound"],
+      "sortOrder": 10
+    },
+    {
+      "slug": "front-squat",
+      "name": "Front Squat",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell", "rack"],
+      "tags": ["lower-body", "compound"],
+      "sortOrder": 20
+    },
+    {
+      "slug": "deadlift",
+      "name": "Deadlift",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell"],
+      "tags": ["posterior-chain", "compound"],
+      "sortOrder": 30
+    },
+    {
+      "slug": "flat-bench",
+      "name": "Flat Bench",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["bench press"],
+      "equipment": ["barbell", "bench"],
+      "tags": ["upper-body", "compound"],
+      "sortOrder": 40
+    },
+    {
+      "slug": "overhead-press",
+      "name": "Overhead Press",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["strict press", "OHP"],
+      "equipment": ["barbell"],
+      "tags": ["upper-body", "pressing"],
+      "sortOrder": 50
+    },
+    {
+      "slug": "bent-over-row",
+      "name": "Bent Over Row",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell"],
+      "tags": ["upper-body", "pulling"],
+      "sortOrder": 60
+    },
+    {
+      "slug": "barbell-hip-thrust",
+      "name": "Barbell Hip Thrust",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell", "bench"],
+      "tags": ["glutes", "posterior-chain"],
+      "sortOrder": 70
+    },
+    {
+      "slug": "pull-up",
+      "name": "Pull Up",
+      "category": "gymnastics",
+      "measurementTypes": ["reps", "load"],
+      "aliases": ["pull ups"],
+      "equipment": ["rig"],
+      "tags": ["upper-body", "bodyweight"],
+      "sortOrder": 80
+    },
+    {
+      "slug": "hang-power-clean",
+      "name": "Hang Power Clean",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell"],
+      "tags": ["olympic-lifting", "power"],
+      "sortOrder": 90
+    },
+    {
+      "slug": "trap-bar-deadlift",
+      "name": "Trap Bar Deadlift",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["trap-bar"],
+      "tags": ["lower-body", "power"],
+      "sortOrder": 100
+    },
+    {
+      "slug": "box-jump",
+      "name": "Box Jump",
+      "category": "conditioning",
+      "measurementTypes": ["reps", "distance", "seconds"],
+      "equipment": ["box"],
+      "tags": ["plyometric"],
+      "sortOrder": 110
+    },
+    {
+      "slug": "broad-jump",
+      "name": "Broad Jump",
+      "category": "conditioning",
+      "measurementTypes": ["reps", "distance"],
+      "tags": ["plyometric"],
+      "sortOrder": 120
+    },
+    {
+      "slug": "assault-bike",
+      "name": "Assault Bike",
+      "category": "engine",
+      "measurementTypes": ["cals", "seconds", "distance"],
+      "aliases": ["bike", "air bike"],
+      "equipment": ["bike"],
+      "tags": ["conditioning"],
+      "sortOrder": 130
+    },
+    {
+      "slug": "run",
+      "name": "Run",
+      "category": "engine",
+      "measurementTypes": ["distance", "seconds"],
+      "tags": ["conditioning", "cardio"],
+      "sortOrder": 140
+    },
+    {
+      "slug": "row",
+      "name": "Row",
+      "category": "engine",
+      "measurementTypes": ["distance", "seconds", "cals"],
+      "aliases": ["erg", "row erg"],
+      "equipment": ["rower"],
+      "tags": ["conditioning"],
+      "sortOrder": 150
+    },
+    {
+      "slug": "ski",
+      "name": "Ski",
+      "category": "engine",
+      "measurementTypes": ["distance", "seconds", "cals"],
+      "aliases": ["ski erg", "ski-erg"],
+      "equipment": ["ski erg"],
+      "tags": ["conditioning"],
+      "sortOrder": 160
+    },
+    {
+      "slug": "burpee",
+      "name": "Burpee",
+      "category": "conditioning",
+      "measurementTypes": ["reps", "seconds"],
+      "tags": ["bodyweight"],
+      "sortOrder": 170
+    },
+    {
+      "slug": "wall-ball",
+      "name": "Wall Ball",
+      "category": "conditioning",
+      "measurementTypes": ["reps"],
+      "aliases": ["wall balls"],
+      "equipment": ["wall ball"],
+      "tags": ["conditioning"],
+      "sortOrder": 180
+    },
+    {
+      "slug": "kettlebell-swing",
+      "name": "Kettlebell Swing",
+      "category": "conditioning",
+      "measurementTypes": ["reps", "load"],
+      "aliases": ["kb swing"],
+      "equipment": ["kettlebell"],
+      "tags": ["hinge"],
+      "sortOrder": 190
+    },
+    {
+      "slug": "thruster",
+      "name": "Thruster",
+      "category": "conditioning",
+      "measurementTypes": ["reps", "load"],
+      "equipment": ["barbell", "dumbbell"],
+      "tags": ["full-body"],
+      "sortOrder": 200
+    },
+    {
+      "slug": "devils-press",
+      "name": "Devil's Press",
+      "category": "conditioning",
+      "measurementTypes": ["reps", "load"],
+      "equipment": ["dumbbell"],
+      "tags": ["full-body"],
+      "sortOrder": 210
+    },
+    {
+      "slug": "sled-push",
+      "name": "Sled Push",
+      "category": "conditioning",
+      "measurementTypes": ["distance", "seconds", "load"],
+      "equipment": ["sled"],
+      "tags": ["lower-body"],
+      "sortOrder": 220
+    },
+    {
+      "slug": "farmers-carry",
+      "name": "Farmer's Carry",
+      "category": "conditioning",
+      "measurementTypes": ["distance", "seconds", "load"],
+      "equipment": ["dumbbell", "kettlebell"],
+      "tags": ["grip", "carry"],
+      "sortOrder": 230
+    },
+    {
+      "slug": "walking-lunge",
+      "name": "Walking Lunge",
+      "category": "conditioning",
+      "measurementTypes": ["reps", "distance", "load"],
+      "equipment": ["bodyweight", "dumbbell", "barbell"],
+      "tags": ["lower-body"],
+      "sortOrder": 240
+    },
+    {
+      "slug": "sled-pull",
+      "name": "Sled Pull",
+      "category": "conditioning",
+      "measurementTypes": ["distance", "seconds", "load"],
+      "equipment": ["sled"],
+      "tags": ["lower-body"],
+      "sortOrder": 260
+    },
+    {
+      "slug": "sumo-deadlift",
+      "name": "Sumo Deadlift",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell"],
+      "tags": ["posterior-chain", "compound", "lower-body"],
+      "sortOrder": 270
+    },
+    {
+      "slug": "romanian-deadlift",
+      "name": "Romanian Deadlift",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["RDL"],
+      "equipment": ["barbell"],
+      "tags": ["posterior-chain", "hinge"],
+      "sortOrder": 280
+    },
+    {
+      "slug": "stiff-leg-deadlift",
+      "name": "Stiff Leg Deadlift",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["SLDL"],
+      "equipment": ["barbell"],
+      "tags": ["posterior-chain", "hinge"],
+      "sortOrder": 290
+    },
+    {
+      "slug": "good-morning",
+      "name": "Good Morning",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell"],
+      "tags": ["posterior-chain", "hinge"],
+      "sortOrder": 300
+    },
+    {
+      "slug": "paused-squat",
+      "name": "Paused Squat",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell", "rack"],
+      "tags": ["lower-body", "compound"],
+      "sortOrder": 310
+    },
+    {
+      "slug": "box-squat",
+      "name": "Box Squat",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell", "rack", "box"],
+      "tags": ["lower-body", "compound"],
+      "sortOrder": 320
+    },
+    {
+      "slug": "barbell-lunge",
+      "name": "Barbell Lunge",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell"],
+      "tags": ["lower-body", "unilateral"],
+      "sortOrder": 330
+    },
+    {
+      "slug": "barbell-split-squat",
+      "name": "Barbell Split Squat",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell"],
+      "tags": ["lower-body", "unilateral"],
+      "sortOrder": 340
+    },
+    {
+      "slug": "bulgarian-split-squat",
+      "name": "Bulgarian Split Squat",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["rear foot elevated split squat", "RFESS"],
+      "equipment": ["barbell", "dumbbell", "bench"],
+      "tags": ["lower-body", "unilateral"],
+      "sortOrder": 350
+    },
+    {
+      "slug": "barbell-step-up",
+      "name": "Barbell Step Up",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell", "box"],
+      "tags": ["lower-body", "unilateral"],
+      "sortOrder": 360
+    },
+    {
+      "slug": "incline-bench",
+      "name": "Incline Bench",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["incline bench press"],
+      "equipment": ["barbell", "bench"],
+      "tags": ["upper-body", "compound", "pressing"],
+      "sortOrder": 370
+    },
+    {
+      "slug": "close-grip-bench",
+      "name": "Close Grip Bench",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["CGBP"],
+      "equipment": ["barbell", "bench"],
+      "tags": ["upper-body", "triceps", "pressing"],
+      "sortOrder": 380
+    },
+    {
+      "slug": "floor-press",
+      "name": "Floor Press",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell"],
+      "tags": ["upper-body", "pressing"],
+      "sortOrder": 390
+    },
+    {
+      "slug": "barbell-row-underhand",
+      "name": "Underhand Barbell Row",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["supinated row"],
+      "equipment": ["barbell"],
+      "tags": ["upper-body", "pulling"],
+      "sortOrder": 400
+    },
+    {
+      "slug": "pendlay-row",
+      "name": "Pendlay Row",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell"],
+      "tags": ["upper-body", "pulling"],
+      "sortOrder": 410
+    },
+    {
+      "slug": "barbell-shrug",
+      "name": "Barbell Shrug",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell"],
+      "tags": ["upper-body", "traps"],
+      "sortOrder": 420
+    },
+    {
+      "slug": "barbell-curl",
+      "name": "Barbell Curl",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell"],
+      "tags": ["upper-body", "biceps"],
+      "sortOrder": 430
+    },
+    {
+      "slug": "barbell-skullcrusher",
+      "name": "Barbell Skullcrusher",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["EZ bar skullcrusher", "lying tricep extension"],
+      "equipment": ["barbell", "bench"],
+      "tags": ["upper-body", "triceps"],
+      "sortOrder": 440
+    },
+    {
+      "slug": "barbell-upright-row",
+      "name": "Barbell Upright Row",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell"],
+      "tags": ["upper-body", "shoulders"],
+      "sortOrder": 450
+    },
+    {
+      "slug": "zercher-squat",
+      "name": "Zercher Squat",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell"],
+      "tags": ["lower-body", "compound"],
+      "sortOrder": 460
+    },
+    {
+      "slug": "hack-squat-barbell",
+      "name": "Barbell Hack Squat",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell"],
+      "tags": ["lower-body", "compound"],
+      "sortOrder": 470
+    },
+    {
+      "slug": "barbell-calf-raise",
+      "name": "Barbell Calf Raise",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell"],
+      "tags": ["lower-body", "calves"],
+      "sortOrder": 480
+    },
+    {
+      "slug": "power-clean",
+      "name": "Power Clean",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell"],
+      "tags": ["olympic-lifting", "power"],
+      "sortOrder": 490
+    },
+    {
+      "slug": "clean",
+      "name": "Clean",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["squat clean"],
+      "equipment": ["barbell"],
+      "tags": ["olympic-lifting", "power"],
+      "sortOrder": 500
+    },
+    {
+      "slug": "clean-and-jerk",
+      "name": "Clean & Jerk",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell"],
+      "tags": ["olympic-lifting", "power", "full-body"],
+      "sortOrder": 510
+    },
+    {
+      "slug": "snatch",
+      "name": "Snatch",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell"],
+      "tags": ["olympic-lifting", "power"],
+      "sortOrder": 520
+    },
+    {
+      "slug": "power-snatch",
+      "name": "Power Snatch",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell"],
+      "tags": ["olympic-lifting", "power"],
+      "sortOrder": 530
+    },
+    {
+      "slug": "hang-clean",
+      "name": "Hang Clean",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell"],
+      "tags": ["olympic-lifting", "power"],
+      "sortOrder": 540
+    },
+    {
+      "slug": "hang-snatch",
+      "name": "Hang Snatch",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell"],
+      "tags": ["olympic-lifting", "power"],
+      "sortOrder": 550
+    },
+    {
+      "slug": "hang-power-snatch",
+      "name": "Hang Power Snatch",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell"],
+      "tags": ["olympic-lifting", "power"],
+      "sortOrder": 560
+    },
+    {
+      "slug": "push-jerk",
+      "name": "Push Jerk",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell"],
+      "tags": ["olympic-lifting", "power", "pressing"],
+      "sortOrder": 570
+    },
+    {
+      "slug": "split-jerk",
+      "name": "Split Jerk",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell"],
+      "tags": ["olympic-lifting", "power", "pressing"],
+      "sortOrder": 580
+    },
+    {
+      "slug": "clean-pull",
+      "name": "Clean Pull",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell"],
+      "tags": ["olympic-lifting", "posterior-chain"],
+      "sortOrder": 590
+    },
+    {
+      "slug": "snatch-pull",
+      "name": "Snatch Pull",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell"],
+      "tags": ["olympic-lifting", "posterior-chain"],
+      "sortOrder": 600
+    },
+    {
+      "slug": "push-press",
+      "name": "Push Press",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["barbell"],
+      "tags": ["upper-body", "pressing", "power"],
+      "sortOrder": 610
+    },
+    {
+      "slug": "dumbbell-bench-press",
+      "name": "Dumbbell Bench Press",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["DB bench"],
+      "equipment": ["dumbbell", "bench"],
+      "tags": ["upper-body", "compound", "pressing"],
+      "sortOrder": 620
+    },
+    {
+      "slug": "dumbbell-incline-bench",
+      "name": "Dumbbell Incline Bench",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["DB incline"],
+      "equipment": ["dumbbell", "bench"],
+      "tags": ["upper-body", "pressing"],
+      "sortOrder": 630
+    },
+    {
+      "slug": "dumbbell-floor-press",
+      "name": "Dumbbell Floor Press",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["dumbbell"],
+      "tags": ["upper-body", "pressing"],
+      "sortOrder": 640
+    },
+    {
+      "slug": "dumbbell-overhead-press",
+      "name": "Dumbbell Overhead Press",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["DB press", "DB OHP"],
+      "equipment": ["dumbbell"],
+      "tags": ["upper-body", "pressing"],
+      "sortOrder": 650
+    },
+    {
+      "slug": "dumbbell-arnold-press",
+      "name": "Arnold Press",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["dumbbell"],
+      "tags": ["upper-body", "shoulders"],
+      "sortOrder": 660
+    },
+    {
+      "slug": "dumbbell-lateral-raise",
+      "name": "Lateral Raise",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["dumbbell"],
+      "tags": ["upper-body", "shoulders"],
+      "sortOrder": 670
+    },
+    {
+      "slug": "dumbbell-front-raise",
+      "name": "Front Raise",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["dumbbell"],
+      "tags": ["upper-body", "shoulders"],
+      "sortOrder": 680
+    },
+    {
+      "slug": "dumbbell-row",
+      "name": "Dumbbell Row",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["DB row", "single arm row"],
+      "equipment": ["dumbbell", "bench"],
+      "tags": ["upper-body", "pulling"],
+      "sortOrder": 690
+    },
+    {
+      "slug": "dumbbell-renegade-row",
+      "name": "Renegade Row",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["dumbbell"],
+      "tags": ["upper-body", "core", "pulling"],
+      "sortOrder": 700
+    },
+    {
+      "slug": "dumbbell-bicep-curl",
+      "name": "Dumbbell Bicep Curl",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["DB curl"],
+      "equipment": ["dumbbell"],
+      "tags": ["upper-body", "biceps"],
+      "sortOrder": 710
+    },
+    {
+      "slug": "dumbbell-hammer-curl",
+      "name": "Hammer Curl",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["dumbbell"],
+      "tags": ["upper-body", "biceps"],
+      "sortOrder": 720
+    },
+    {
+      "slug": "dumbbell-concentration-curl",
+      "name": "Concentration Curl",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["dumbbell"],
+      "tags": ["upper-body", "biceps"],
+      "sortOrder": 730
+    },
+    {
+      "slug": "dumbbell-tricep-kickback",
+      "name": "Tricep Kickback",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["dumbbell"],
+      "tags": ["upper-body", "triceps"],
+      "sortOrder": 740
+    },
+    {
+      "slug": "dumbbell-overhead-tricep-extension",
+      "name": "Dumbbell Overhead Tricep Extension",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["DB skull crusher"],
+      "equipment": ["dumbbell"],
+      "tags": ["upper-body", "triceps"],
+      "sortOrder": 750
+    },
+    {
+      "slug": "dumbbell-fly",
+      "name": "Dumbbell Fly",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["DB fly"],
+      "equipment": ["dumbbell", "bench"],
+      "tags": ["upper-body", "chest"],
+      "sortOrder": 760
+    },
+    {
+      "slug": "dumbbell-incline-fly",
+      "name": "Dumbbell Incline Fly",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["dumbbell", "bench"],
+      "tags": ["upper-body", "chest"],
+      "sortOrder": 770
+    },
+    {
+      "slug": "dumbbell-pullover",
+      "name": "Dumbbell Pullover",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["dumbbell", "bench"],
+      "tags": ["upper-body", "chest", "lat"],
+      "sortOrder": 780
+    },
+    {
+      "slug": "dumbbell-rdl",
+      "name": "Dumbbell RDL",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["DB Romanian deadlift"],
+      "equipment": ["dumbbell"],
+      "tags": ["posterior-chain", "hinge"],
+      "sortOrder": 790
+    },
+    {
+      "slug": "dumbbell-single-leg-rdl",
+      "name": "Single Leg RDL",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["SL RDL"],
+      "equipment": ["dumbbell"],
+      "tags": ["posterior-chain", "hinge", "unilateral"],
+      "sortOrder": 800
+    },
+    {
+      "slug": "dumbbell-goblet-squat",
+      "name": "Goblet Squat",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["dumbbell", "kettlebell"],
+      "tags": ["lower-body", "compound"],
+      "sortOrder": 810
+    },
+    {
+      "slug": "dumbbell-step-up",
+      "name": "Dumbbell Step Up",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["dumbbell", "box"],
+      "tags": ["lower-body", "unilateral"],
+      "sortOrder": 820
+    },
+    {
+      "slug": "dumbbell-lunge",
+      "name": "Dumbbell Lunge",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["dumbbell"],
+      "tags": ["lower-body", "unilateral"],
+      "sortOrder": 830
+    },
+    {
+      "slug": "dumbbell-split-squat",
+      "name": "Dumbbell Split Squat",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["dumbbell"],
+      "tags": ["lower-body", "unilateral"],
+      "sortOrder": 840
+    },
+    {
+      "slug": "dumbbell-hip-thrust",
+      "name": "Dumbbell Hip Thrust",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["dumbbell", "bench"],
+      "tags": ["glutes", "posterior-chain"],
+      "sortOrder": 850
+    },
+    {
+      "slug": "dumbbell-calf-raise",
+      "name": "Dumbbell Calf Raise",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["dumbbell"],
+      "tags": ["lower-body", "calves"],
+      "sortOrder": 860
+    },
+    {
+      "slug": "dumbbell-shrug",
+      "name": "Dumbbell Shrug",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["dumbbell"],
+      "tags": ["upper-body", "traps"],
+      "sortOrder": 870
+    },
+    {
+      "slug": "dumbbell-rear-delt-fly",
+      "name": "Rear Delt Fly",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["bent over lateral raise", "reverse fly"],
+      "equipment": ["dumbbell"],
+      "tags": ["upper-body", "shoulders", "pulling"],
+      "sortOrder": 880
+    },
+    {
+      "slug": "dumbbell-upright-row",
+      "name": "Dumbbell Upright Row",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["dumbbell"],
+      "tags": ["upper-body", "shoulders"],
+      "sortOrder": 890
+    },
+    {
+      "slug": "dumbbell-snatch",
+      "name": "Dumbbell Snatch",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["DB snatch"],
+      "equipment": ["dumbbell"],
+      "tags": ["full-body", "power"],
+      "sortOrder": 900
+    },
+    {
+      "slug": "dumbbell-clean",
+      "name": "Dumbbell Clean",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["DB clean"],
+      "equipment": ["dumbbell"],
+      "tags": ["full-body", "power"],
+      "sortOrder": 910
+    },
+    {
+      "slug": "dumbbell-push-press",
+      "name": "Dumbbell Push Press",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["dumbbell"],
+      "tags": ["upper-body", "pressing", "power"],
+      "sortOrder": 920
+    },
+    {
+      "slug": "kettlebell-goblet-squat",
+      "name": "Kettlebell Goblet Squat",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["KB goblet squat"],
+      "equipment": ["kettlebell"],
+      "tags": ["lower-body", "compound"],
+      "sortOrder": 930
+    },
+    {
+      "slug": "kettlebell-clean",
+      "name": "Kettlebell Clean",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["KB clean"],
+      "equipment": ["kettlebell"],
+      "tags": ["full-body", "power"],
+      "sortOrder": 940
+    },
+    {
+      "slug": "kettlebell-press",
+      "name": "Kettlebell Press",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["KB press", "KB overhead press"],
+      "equipment": ["kettlebell"],
+      "tags": ["upper-body", "pressing"],
+      "sortOrder": 950
+    },
+    {
+      "slug": "kettlebell-snatch",
+      "name": "Kettlebell Snatch",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["KB snatch"],
+      "equipment": ["kettlebell"],
+      "tags": ["full-body", "power"],
+      "sortOrder": 960
+    },
+    {
+      "slug": "kettlebell-rdl",
+      "name": "Kettlebell RDL",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["KB RDL"],
+      "equipment": ["kettlebell"],
+      "tags": ["posterior-chain", "hinge"],
+      "sortOrder": 970
+    },
+    {
+      "slug": "kettlebell-single-leg-rdl",
+      "name": "Kettlebell Single Leg RDL",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["KB SL RDL"],
+      "equipment": ["kettlebell"],
+      "tags": ["posterior-chain", "hinge", "unilateral"],
+      "sortOrder": 980
+    },
+    {
+      "slug": "kettlebell-row",
+      "name": "Kettlebell Row",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["KB row"],
+      "equipment": ["kettlebell"],
+      "tags": ["upper-body", "pulling"],
+      "sortOrder": 990
+    },
+    {
+      "slug": "kettlebell-windmill",
+      "name": "Kettlebell Windmill",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["KB windmill"],
+      "equipment": ["kettlebell"],
+      "tags": ["full-body", "core", "mobility"],
+      "sortOrder": 1000
+    },
+    {
+      "slug": "kettlebell-turkish-get-up",
+      "name": "Turkish Get Up",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["TGU", "KB TGU"],
+      "equipment": ["kettlebell"],
+      "tags": ["full-body", "core", "mobility"],
+      "sortOrder": 1010
+    },
+    {
+      "slug": "kettlebell-bottoms-up-press",
+      "name": "Bottoms Up Press",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["kettlebell"],
+      "tags": ["upper-body", "pressing", "stability"],
+      "sortOrder": 1020
+    },
+    {
+      "slug": "kettlebell-halo",
+      "name": "Kettlebell Halo",
+      "category": "conditioning",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["KB halo"],
+      "equipment": ["kettlebell"],
+      "tags": ["upper-body", "mobility"],
+      "sortOrder": 1030
+    },
+    {
+      "slug": "double-kettlebell-front-squat",
+      "name": "Double Kettlebell Front Squat",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["double KB front squat"],
+      "equipment": ["kettlebell"],
+      "tags": ["lower-body", "compound"],
+      "sortOrder": 1040
+    },
+    {
+      "slug": "double-kettlebell-clean-and-press",
+      "name": "Double Kettlebell Clean & Press",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["kettlebell"],
+      "tags": ["full-body", "power"],
+      "sortOrder": 1050
+    },
+    {
+      "slug": "kettlebell-swing-american",
+      "name": "American Kettlebell Swing",
+      "category": "conditioning",
+      "measurementTypes": ["reps", "load"],
+      "aliases": ["american KB swing"],
+      "equipment": ["kettlebell"],
+      "tags": ["hinge", "full-body"],
+      "sortOrder": 1060
+    },
+    {
+      "slug": "kettlebell-dead-clean",
+      "name": "Kettlebell Dead Clean",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["kettlebell"],
+      "tags": ["full-body", "power"],
+      "sortOrder": 1070
+    },
+    {
+      "slug": "kettlebell-sumo-deadlift",
+      "name": "Kettlebell Sumo Deadlift",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["kettlebell"],
+      "tags": ["posterior-chain", "compound"],
+      "sortOrder": 1080
+    },
+    {
+      "slug": "kettlebell-farmers-carry",
+      "name": "Kettlebell Farmer's Carry",
+      "category": "conditioning",
+      "measurementTypes": ["distance", "seconds", "load"],
+      "aliases": ["KB carry"],
+      "equipment": ["kettlebell"],
+      "tags": ["grip", "carry"],
+      "sortOrder": 1090
+    },
+    {
+      "slug": "kettlebell-overhead-carry",
+      "name": "Kettlebell Overhead Carry",
+      "category": "conditioning",
+      "measurementTypes": ["distance", "seconds", "load"],
+      "aliases": ["KB overhead walk"],
+      "equipment": ["kettlebell"],
+      "tags": ["carry", "stability"],
+      "sortOrder": 1100
+    },
+    {
+      "slug": "kettlebell-rack-carry",
+      "name": "Kettlebell Rack Carry",
+      "category": "conditioning",
+      "measurementTypes": ["distance", "seconds", "load"],
+      "equipment": ["kettlebell"],
+      "tags": ["carry", "stability"],
+      "sortOrder": 1110
+    },
+    {
+      "slug": "chin-up",
+      "name": "Chin Up",
+      "category": "gymnastics",
+      "measurementTypes": ["reps", "load"],
+      "equipment": ["rig"],
+      "tags": ["upper-body", "bodyweight", "pulling"],
+      "sortOrder": 1120
+    },
+    {
+      "slug": "ring-pull-up",
+      "name": "Ring Pull Up",
+      "category": "gymnastics",
+      "measurementTypes": ["reps", "load"],
+      "equipment": ["rings"],
+      "tags": ["upper-body", "bodyweight", "pulling"],
+      "sortOrder": 1130
+    },
+    {
+      "slug": "muscle-up",
+      "name": "Muscle Up",
+      "category": "gymnastics",
+      "measurementTypes": ["reps"],
+      "aliases": ["MU"],
+      "equipment": ["rig", "rings"],
+      "tags": ["upper-body", "bodyweight"],
+      "sortOrder": 1140
+    },
+    {
+      "slug": "bar-muscle-up",
+      "name": "Bar Muscle Up",
+      "category": "gymnastics",
+      "measurementTypes": ["reps"],
+      "aliases": ["BMU"],
+      "equipment": ["rig"],
+      "tags": ["upper-body", "bodyweight"],
+      "sortOrder": 1150
+    },
+    {
+      "slug": "ring-muscle-up",
+      "name": "Ring Muscle Up",
+      "category": "gymnastics",
+      "measurementTypes": ["reps"],
+      "aliases": ["RMU"],
+      "equipment": ["rings"],
+      "tags": ["upper-body", "bodyweight"],
+      "sortOrder": 1160
+    },
+    {
+      "slug": "toes-to-bar",
+      "name": "Toes to Bar",
+      "category": "gymnastics",
+      "measurementTypes": ["reps"],
+      "aliases": ["T2B", "TTB"],
+      "equipment": ["rig"],
+      "tags": ["core", "bodyweight"],
+      "sortOrder": 1170
+    },
+    {
+      "slug": "knees-to-elbow",
+      "name": "Knees to Elbow",
+      "category": "gymnastics",
+      "measurementTypes": ["reps"],
+      "aliases": ["K2E"],
+      "equipment": ["rig"],
+      "tags": ["core", "bodyweight"],
+      "sortOrder": 1180
+    },
+    {
+      "slug": "hanging-knee-raise",
+      "name": "Hanging Knee Raise",
+      "category": "gymnastics",
+      "measurementTypes": ["reps"],
+      "equipment": ["rig"],
+      "tags": ["core", "bodyweight"],
+      "sortOrder": 1190
+    },
+    {
+      "slug": "handstand-push-up",
+      "name": "Handstand Push Up",
+      "category": "gymnastics",
+      "measurementTypes": ["reps"],
+      "aliases": ["HSPU"],
+      "equipment": ["wall"],
+      "tags": ["upper-body", "bodyweight", "pressing"],
+      "sortOrder": 1200
+    },
+    {
+      "slug": "strict-handstand-push-up",
+      "name": "Strict Handstand Push Up",
+      "category": "gymnastics",
+      "measurementTypes": ["reps"],
+      "aliases": ["strict HSPU"],
+      "equipment": ["wall"],
+      "tags": ["upper-body", "bodyweight", "pressing"],
+      "sortOrder": 1210
+    },
+    {
+      "slug": "ring-dip",
+      "name": "Ring Dip",
+      "category": "gymnastics",
+      "measurementTypes": ["reps", "load"],
+      "equipment": ["rings"],
+      "tags": ["upper-body", "bodyweight", "pressing"],
+      "sortOrder": 1220
+    },
+    {
+      "slug": "parallel-bar-dip",
+      "name": "Bar Dip",
+      "category": "gymnastics",
+      "measurementTypes": ["reps", "load"],
+      "aliases": ["dip"],
+      "equipment": ["rig"],
+      "tags": ["upper-body", "bodyweight", "pressing"],
+      "sortOrder": 1230
+    },
+    {
+      "slug": "ring-row",
+      "name": "Ring Row",
+      "category": "gymnastics",
+      "measurementTypes": ["reps"],
+      "aliases": ["inverted row"],
+      "equipment": ["rings"],
+      "tags": ["upper-body", "bodyweight", "pulling"],
+      "sortOrder": 1240
+    },
+    {
+      "slug": "l-sit",
+      "name": "L-Sit",
+      "category": "gymnastics",
+      "measurementTypes": ["seconds", "reps"],
+      "equipment": ["rig", "parallettes"],
+      "tags": ["core", "bodyweight"],
+      "sortOrder": 1250
+    },
+    {
+      "slug": "handstand-hold",
+      "name": "Handstand Hold",
+      "category": "gymnastics",
+      "measurementTypes": ["seconds"],
+      "equipment": ["wall"],
+      "tags": ["bodyweight", "stability"],
+      "sortOrder": 1260
+    },
+    {
+      "slug": "rope-climb",
+      "name": "Rope Climb",
+      "category": "gymnastics",
+      "measurementTypes": ["reps"],
+      "equipment": ["rope"],
+      "tags": ["upper-body", "bodyweight"],
+      "sortOrder": 1270
+    },
+    {
+      "slug": "legless-rope-climb",
+      "name": "Legless Rope Climb",
+      "category": "gymnastics",
+      "measurementTypes": ["reps"],
+      "equipment": ["rope"],
+      "tags": ["upper-body", "bodyweight"],
+      "sortOrder": 1280
+    },
+    {
+      "slug": "push-up",
+      "name": "Push Up",
+      "category": "gymnastics",
+      "measurementTypes": ["reps", "load"],
+      "equipment": ["bodyweight"],
+      "tags": ["upper-body", "bodyweight", "pressing"],
+      "sortOrder": 1290
+    },
+    {
+      "slug": "pike-push-up",
+      "name": "Pike Push Up",
+      "category": "gymnastics",
+      "measurementTypes": ["reps"],
+      "equipment": ["bodyweight"],
+      "tags": ["upper-body", "bodyweight"],
+      "sortOrder": 1300
+    },
+    {
+      "slug": "air-squat",
+      "name": "Air Squat",
+      "category": "gymnastics",
+      "measurementTypes": ["reps", "seconds"],
+      "equipment": ["bodyweight"],
+      "tags": ["lower-body", "bodyweight"],
+      "sortOrder": 1310
+    },
+    {
+      "slug": "pistol-squat",
+      "name": "Pistol Squat",
+      "category": "gymnastics",
+      "measurementTypes": ["reps"],
+      "equipment": ["bodyweight"],
+      "tags": ["lower-body", "bodyweight", "unilateral"],
+      "sortOrder": 1320
+    },
+    {
+      "slug": "glute-bridge",
+      "name": "Glute Bridge",
+      "category": "gymnastics",
+      "measurementTypes": ["reps", "seconds"],
+      "equipment": ["bodyweight"],
+      "tags": ["glutes", "bodyweight"],
+      "sortOrder": 1330
+    },
+    {
+      "slug": "single-leg-glute-bridge",
+      "name": "Single Leg Glute Bridge",
+      "category": "gymnastics",
+      "measurementTypes": ["reps", "seconds"],
+      "equipment": ["bodyweight"],
+      "tags": ["glutes", "bodyweight", "unilateral"],
+      "sortOrder": 1340
+    },
+    {
+      "slug": "plank",
+      "name": "Plank",
+      "category": "gymnastics",
+      "measurementTypes": ["seconds"],
+      "equipment": ["bodyweight"],
+      "tags": ["core", "bodyweight"],
+      "sortOrder": 1350
+    },
+    {
+      "slug": "side-plank",
+      "name": "Side Plank",
+      "category": "gymnastics",
+      "measurementTypes": ["seconds"],
+      "equipment": ["bodyweight"],
+      "tags": ["core", "bodyweight"],
+      "sortOrder": 1360
+    },
+    {
+      "slug": "hollow-hold",
+      "name": "Hollow Hold",
+      "category": "gymnastics",
+      "measurementTypes": ["seconds"],
+      "equipment": ["bodyweight"],
+      "tags": ["core", "bodyweight"],
+      "sortOrder": 1370
+    },
+    {
+      "slug": "hollow-rock",
+      "name": "Hollow Rock",
+      "category": "gymnastics",
+      "measurementTypes": ["reps", "seconds"],
+      "equipment": ["bodyweight"],
+      "tags": ["core", "bodyweight"],
+      "sortOrder": 1380
+    },
+    {
+      "slug": "superman-hold",
+      "name": "Superman Hold",
+      "category": "gymnastics",
+      "measurementTypes": ["seconds", "reps"],
+      "equipment": ["bodyweight"],
+      "tags": ["core", "posterior-chain", "bodyweight"],
+      "sortOrder": 1390
+    },
+    {
+      "slug": "v-up",
+      "name": "V-Up",
+      "category": "gymnastics",
+      "measurementTypes": ["reps"],
+      "equipment": ["bodyweight"],
+      "tags": ["core", "bodyweight"],
+      "sortOrder": 1400
+    },
+    {
+      "slug": "sit-up",
+      "name": "Sit Up",
+      "category": "gymnastics",
+      "measurementTypes": ["reps", "seconds"],
+      "equipment": ["bodyweight"],
+      "tags": ["core", "bodyweight"],
+      "sortOrder": 1410
+    },
+    {
+      "slug": "ghd-sit-up",
+      "name": "GHD Sit Up",
+      "category": "gymnastics",
+      "measurementTypes": ["reps"],
+      "equipment": ["GHD"],
+      "tags": ["core", "bodyweight"],
+      "sortOrder": 1420
+    },
+    {
+      "slug": "ghd-hip-extension",
+      "name": "GHD Hip Extension",
+      "category": "gymnastics",
+      "measurementTypes": ["reps"],
+      "equipment": ["GHD"],
+      "tags": ["posterior-chain", "bodyweight"],
+      "sortOrder": 1430
+    },
+    {
+      "slug": "nordic-curl",
+      "name": "Nordic Curl",
+      "category": "gymnastics",
+      "measurementTypes": ["reps", "load"],
+      "aliases": ["nordic hamstring curl"],
+      "equipment": ["GHD", "bodyweight"],
+      "tags": ["posterior-chain", "bodyweight"],
+      "sortOrder": 1440
+    },
+    {
+      "slug": "box-jump-over",
+      "name": "Box Jump Over",
+      "category": "conditioning",
+      "measurementTypes": ["reps"],
+      "aliases": ["BJO"],
+      "equipment": ["box"],
+      "tags": ["plyometric"],
+      "sortOrder": 1450
+    },
+    {
+      "slug": "depth-jump",
+      "name": "Depth Jump",
+      "category": "conditioning",
+      "measurementTypes": ["reps"],
+      "equipment": ["box"],
+      "tags": ["plyometric"],
+      "sortOrder": 1460
+    },
+    {
+      "slug": "single-leg-box-jump",
+      "name": "Single Leg Box Jump",
+      "category": "conditioning",
+      "measurementTypes": ["reps"],
+      "equipment": ["box"],
+      "tags": ["plyometric", "unilateral"],
+      "sortOrder": 1470
+    },
+    {
+      "slug": "lateral-box-jump",
+      "name": "Lateral Box Jump",
+      "category": "conditioning",
+      "measurementTypes": ["reps"],
+      "equipment": ["box"],
+      "tags": ["plyometric"],
+      "sortOrder": 1480
+    },
+    {
+      "slug": "burpee-box-jump-over",
+      "name": "Burpee Box Jump Over",
+      "category": "conditioning",
+      "measurementTypes": ["reps", "seconds"],
+      "aliases": ["BBJO"],
+      "equipment": ["box"],
+      "tags": ["bodyweight", "plyometric"],
+      "sortOrder": 1490
+    },
+    {
+      "slug": "bar-facing-burpee",
+      "name": "Bar Facing Burpee",
+      "category": "conditioning",
+      "measurementTypes": ["reps", "seconds"],
+      "equipment": ["barbell"],
+      "tags": ["bodyweight"],
+      "sortOrder": 1500
+    },
+    {
+      "slug": "dumbbell-thruster",
+      "name": "Dumbbell Thruster",
+      "category": "conditioning",
+      "measurementTypes": ["reps", "load"],
+      "aliases": ["DB thruster"],
+      "equipment": ["dumbbell"],
+      "tags": ["full-body"],
+      "sortOrder": 1510
+    },
+    {
+      "slug": "kettlebell-thruster",
+      "name": "Kettlebell Thruster",
+      "category": "conditioning",
+      "measurementTypes": ["reps", "load"],
+      "aliases": ["KB thruster"],
+      "equipment": ["kettlebell"],
+      "tags": ["full-body"],
+      "sortOrder": 1520
+    },
+    {
+      "slug": "dumbbell-clean-and-press",
+      "name": "Dumbbell Clean & Press",
+      "category": "conditioning",
+      "measurementTypes": ["reps", "load"],
+      "aliases": ["DB clean and press"],
+      "equipment": ["dumbbell"],
+      "tags": ["full-body", "power"],
+      "sortOrder": 1530
+    },
+    {
+      "slug": "dumbbell-devils-press",
+      "name": "Dumbbell Devil's Press",
+      "category": "conditioning",
+      "measurementTypes": ["reps", "load"],
+      "aliases": ["devil's press"],
+      "equipment": ["dumbbell"],
+      "tags": ["full-body"],
+      "sortOrder": 1540
+    },
+    {
+      "slug": "sandbag-carry",
+      "name": "Sandbag Carry",
+      "category": "conditioning",
+      "measurementTypes": ["distance", "seconds", "load"],
+      "equipment": ["sandbag"],
+      "tags": ["carry", "full-body"],
+      "sortOrder": 1550
+    },
+    {
+      "slug": "sandbag-clean",
+      "name": "Sandbag Clean",
+      "category": "conditioning",
+      "measurementTypes": ["reps", "load"],
+      "equipment": ["sandbag"],
+      "tags": ["full-body", "power"],
+      "sortOrder": 1560
+    },
+    {
+      "slug": "sandbag-over-shoulder",
+      "name": "Sandbag Over Shoulder",
+      "category": "conditioning",
+      "measurementTypes": ["reps", "load"],
+      "equipment": ["sandbag"],
+      "tags": ["full-body", "power"],
+      "sortOrder": 1570
+    },
+    {
+      "slug": "yoke-carry",
+      "name": "Yoke Carry",
+      "category": "conditioning",
+      "measurementTypes": ["distance", "seconds", "load"],
+      "equipment": ["yoke"],
+      "tags": ["carry", "lower-body"],
+      "sortOrder": 1580
+    },
+    {
+      "slug": "plate-carry",
+      "name": "Plate Carry",
+      "category": "conditioning",
+      "measurementTypes": ["distance", "seconds", "load"],
+      "equipment": ["plate"],
+      "tags": ["carry"],
+      "sortOrder": 1590
+    },
+    {
+      "slug": "overhead-plate-carry",
+      "name": "Overhead Plate Carry",
+      "category": "conditioning",
+      "measurementTypes": ["distance", "seconds", "load"],
+      "equipment": ["plate"],
+      "tags": ["carry", "stability"],
+      "sortOrder": 1600
+    },
+    {
+      "slug": "double-dumbbell-farmers-carry",
+      "name": "Double Dumbbell Farmer's Carry",
+      "category": "conditioning",
+      "measurementTypes": ["distance", "seconds", "load"],
+      "equipment": ["dumbbell"],
+      "tags": ["grip", "carry"],
+      "sortOrder": 1610
+    },
+    {
+      "slug": "single-arm-overhead-carry",
+      "name": "Single Arm Overhead Carry",
+      "category": "conditioning",
+      "measurementTypes": ["distance", "seconds", "load"],
+      "equipment": ["dumbbell", "kettlebell"],
+      "tags": ["carry", "stability", "unilateral"],
+      "sortOrder": 1620
+    },
+    {
+      "slug": "suitcase-carry",
+      "name": "Suitcase Carry",
+      "category": "conditioning",
+      "measurementTypes": ["distance", "seconds", "load"],
+      "equipment": ["dumbbell", "kettlebell"],
+      "tags": ["carry", "core", "unilateral"],
+      "sortOrder": 1630
+    },
+    {
+      "slug": "waiter-carry",
+      "name": "Waiter Carry",
+      "category": "conditioning",
+      "measurementTypes": ["distance", "seconds", "load"],
+      "equipment": ["dumbbell", "kettlebell"],
+      "tags": ["carry", "stability", "unilateral"],
+      "sortOrder": 1640
+    },
+    {
+      "slug": "plate-ground-to-overhead",
+      "name": "Plate Ground to Overhead",
+      "category": "conditioning",
+      "measurementTypes": ["reps", "load"],
+      "aliases": ["plate G2OH"],
+      "equipment": ["plate"],
+      "tags": ["full-body"],
+      "sortOrder": 1650
+    },
+    {
+      "slug": "kettlebell-complex",
+      "name": "Kettlebell Complex",
+      "category": "conditioning",
+      "measurementTypes": ["reps", "load", "seconds"],
+      "equipment": ["kettlebell"],
+      "tags": ["full-body"],
+      "sortOrder": 1660
+    },
+    {
+      "slug": "sprint",
+      "name": "Sprint",
+      "category": "engine",
+      "measurementTypes": ["distance", "seconds"],
+      "tags": ["conditioning", "cardio", "power"],
+      "sortOrder": 1670
+    },
+    {
+      "slug": "shuttle-run",
+      "name": "Shuttle Run",
+      "category": "engine",
+      "measurementTypes": ["distance", "seconds", "reps"],
+      "tags": ["conditioning", "cardio"],
+      "sortOrder": 1680
+    },
+    {
+      "slug": "jump-rope",
+      "name": "Jump Rope",
+      "category": "engine",
+      "measurementTypes": ["reps", "seconds"],
+      "aliases": ["single unders", "SU"],
+      "equipment": ["jump rope"],
+      "tags": ["conditioning", "cardio"],
+      "sortOrder": 1690
+    },
+    {
+      "slug": "double-under",
+      "name": "Double Under",
+      "category": "engine",
+      "measurementTypes": ["reps", "seconds"],
+      "aliases": ["DU", "double unders"],
+      "equipment": ["jump rope"],
+      "tags": ["conditioning", "cardio"],
+      "sortOrder": 1700
+    },
+    {
+      "slug": "triple-under",
+      "name": "Triple Under",
+      "category": "engine",
+      "measurementTypes": ["reps"],
+      "equipment": ["jump rope"],
+      "tags": ["conditioning", "cardio"],
+      "sortOrder": 1710
+    },
+    {
+      "slug": "mountain-climber",
+      "name": "Mountain Climber",
+      "category": "conditioning",
+      "measurementTypes": ["reps", "seconds"],
+      "equipment": ["bodyweight"],
+      "tags": ["core", "conditioning"],
+      "sortOrder": 1720
+    },
+    {
+      "slug": "jumping-lunge",
+      "name": "Jumping Lunge",
+      "category": "conditioning",
+      "measurementTypes": ["reps", "seconds"],
+      "equipment": ["bodyweight"],
+      "tags": ["lower-body", "plyometric"],
+      "sortOrder": 1730
+    },
+    {
+      "slug": "jumping-squat",
+      "name": "Jumping Squat",
+      "category": "conditioning",
+      "measurementTypes": ["reps", "seconds"],
+      "equipment": ["bodyweight"],
+      "tags": ["lower-body", "plyometric"],
+      "sortOrder": 1740
+    },
+    {
+      "slug": "lateral-bound",
+      "name": "Lateral Bound",
+      "category": "conditioning",
+      "measurementTypes": ["reps", "distance"],
+      "equipment": ["bodyweight"],
+      "tags": ["plyometric", "lower-body"],
+      "sortOrder": 1750
+    },
+    {
+      "slug": "med-ball-clean",
+      "name": "Med Ball Clean",
+      "category": "conditioning",
+      "measurementTypes": ["reps", "load"],
+      "equipment": ["med ball"],
+      "tags": ["full-body", "power"],
+      "sortOrder": 1760
+    },
+    {
+      "slug": "med-ball-slam",
+      "name": "Med Ball Slam",
+      "category": "conditioning",
+      "measurementTypes": ["reps", "load"],
+      "equipment": ["med ball"],
+      "tags": ["full-body", "power"],
+      "sortOrder": 1770
+    },
+    {
+      "slug": "med-ball-wall-ball",
+      "name": "Med Ball Throw",
+      "category": "conditioning",
+      "measurementTypes": ["reps", "load"],
+      "equipment": ["med ball"],
+      "tags": ["full-body", "power"],
+      "sortOrder": 1780
+    },
+    {
+      "slug": "tire-flip",
+      "name": "Tire Flip",
+      "category": "conditioning",
+      "measurementTypes": ["reps", "distance"],
+      "equipment": ["tire"],
+      "tags": ["full-body", "power"],
+      "sortOrder": 1790
+    },
+    {
+      "slug": "battle-rope",
+      "name": "Battle Rope",
+      "category": "conditioning",
+      "measurementTypes": ["seconds", "reps"],
+      "equipment": ["battle rope"],
+      "tags": ["conditioning", "upper-body"],
+      "sortOrder": 1800
+    },
+    {
+      "slug": "band-pull-apart",
+      "name": "Band Pull Apart",
+      "category": "conditioning",
+      "measurementTypes": ["reps"],
+      "equipment": ["band"],
+      "tags": ["upper-body", "shoulders", "accessory"],
+      "sortOrder": 1810
+    },
+    {
+      "slug": "band-face-pull",
+      "name": "Band Face Pull",
+      "category": "conditioning",
+      "measurementTypes": ["reps"],
+      "equipment": ["band"],
+      "tags": ["upper-body", "shoulders", "accessory"],
+      "sortOrder": 1820
+    },
+    {
+      "slug": "cable-fly-low",
+      "name": "Cable Fly (Low to High)",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["cable crossover low"],
+      "equipment": ["cable"],
+      "tags": ["upper-body", "chest"],
+      "sortOrder": 1900
+    },
+    {
+      "slug": "cable-fly-high",
+      "name": "Cable Fly (High to Low)",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["cable crossover high"],
+      "equipment": ["cable"],
+      "tags": ["upper-body", "chest"],
+      "sortOrder": 1910
+    },
+    {
+      "slug": "cable-fly-neutral",
+      "name": "Cable Fly (Neutral)",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["cable crossover"],
+      "equipment": ["cable"],
+      "tags": ["upper-body", "chest"],
+      "sortOrder": 1920
+    },
+    {
+      "slug": "cable-chest-press",
+      "name": "Cable Chest Press",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["cable"],
+      "tags": ["upper-body", "chest", "pressing"],
+      "sortOrder": 1930
+    },
+    {
+      "slug": "cable-lat-pulldown",
+      "name": "Lat Pulldown",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["cable pulldown"],
+      "equipment": ["cable"],
+      "tags": ["upper-body", "pulling", "lat"],
+      "sortOrder": 1940
+    },
+    {
+      "slug": "cable-lat-pulldown-close-grip",
+      "name": "Close Grip Lat Pulldown",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["cable"],
+      "tags": ["upper-body", "pulling", "lat"],
+      "sortOrder": 1950
+    },
+    {
+      "slug": "cable-lat-pulldown-single-arm",
+      "name": "Single Arm Lat Pulldown",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["cable"],
+      "tags": ["upper-body", "pulling", "lat", "unilateral"],
+      "sortOrder": 1960
+    },
+    {
+      "slug": "cable-seated-row",
+      "name": "Cable Seated Row",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["seated cable row"],
+      "equipment": ["cable"],
+      "tags": ["upper-body", "pulling"],
+      "sortOrder": 1970
+    },
+    {
+      "slug": "cable-seated-row-wide-grip",
+      "name": "Cable Seated Row (Wide Grip)",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["cable"],
+      "tags": ["upper-body", "pulling"],
+      "sortOrder": 1980
+    },
+    {
+      "slug": "cable-single-arm-row",
+      "name": "Cable Single Arm Row",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["cable"],
+      "tags": ["upper-body", "pulling", "unilateral"],
+      "sortOrder": 1990
+    },
+    {
+      "slug": "cable-straight-arm-pulldown",
+      "name": "Cable Straight Arm Pulldown",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["cable pullover"],
+      "equipment": ["cable"],
+      "tags": ["upper-body", "lat"],
+      "sortOrder": 2000
+    },
+    {
+      "slug": "cable-face-pull",
+      "name": "Cable Face Pull",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["cable"],
+      "tags": ["upper-body", "shoulders", "pulling", "accessory"],
+      "sortOrder": 2010
+    },
+    {
+      "slug": "cable-lateral-raise",
+      "name": "Cable Lateral Raise",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["cable"],
+      "tags": ["upper-body", "shoulders"],
+      "sortOrder": 2020
+    },
+    {
+      "slug": "cable-front-raise",
+      "name": "Cable Front Raise",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["cable"],
+      "tags": ["upper-body", "shoulders"],
+      "sortOrder": 2030
+    },
+    {
+      "slug": "cable-rear-delt-fly",
+      "name": "Cable Rear Delt Fly",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["cable reverse fly"],
+      "equipment": ["cable"],
+      "tags": ["upper-body", "shoulders", "pulling"],
+      "sortOrder": 2040
+    },
+    {
+      "slug": "cable-upright-row",
+      "name": "Cable Upright Row",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["cable"],
+      "tags": ["upper-body", "shoulders"],
+      "sortOrder": 2050
+    },
+    {
+      "slug": "cable-overhead-press",
+      "name": "Cable Overhead Press",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["cable"],
+      "tags": ["upper-body", "pressing", "shoulders"],
+      "sortOrder": 2060
+    },
+    {
+      "slug": "cable-bicep-curl",
+      "name": "Cable Bicep Curl",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["cable curl"],
+      "equipment": ["cable"],
+      "tags": ["upper-body", "biceps"],
+      "sortOrder": 2070
+    },
+    {
+      "slug": "cable-hammer-curl",
+      "name": "Cable Hammer Curl",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["cable"],
+      "tags": ["upper-body", "biceps"],
+      "sortOrder": 2080
+    },
+    {
+      "slug": "cable-single-arm-curl",
+      "name": "Cable Single Arm Curl",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["cable"],
+      "tags": ["upper-body", "biceps", "unilateral"],
+      "sortOrder": 2090
+    },
+    {
+      "slug": "cable-incline-curl",
+      "name": "Cable Incline Curl",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["cable"],
+      "tags": ["upper-body", "biceps"],
+      "sortOrder": 2100
+    },
+    {
+      "slug": "cable-overhead-curl",
+      "name": "Cable Overhead Curl",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["high cable curl"],
+      "equipment": ["cable"],
+      "tags": ["upper-body", "biceps"],
+      "sortOrder": 2110
+    },
+    {
+      "slug": "cable-tricep-pushdown",
+      "name": "Cable Tricep Pushdown",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["tricep pushdown", "cable pushdown"],
+      "equipment": ["cable"],
+      "tags": ["upper-body", "triceps"],
+      "sortOrder": 2120
+    },
+    {
+      "slug": "cable-tricep-pushdown-rope",
+      "name": "Cable Tricep Pushdown (Rope)",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["rope pushdown"],
+      "equipment": ["cable"],
+      "tags": ["upper-body", "triceps"],
+      "sortOrder": 2130
+    },
+    {
+      "slug": "cable-overhead-tricep-extension",
+      "name": "Cable Overhead Tricep Extension",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["cable"],
+      "tags": ["upper-body", "triceps"],
+      "sortOrder": 2140
+    },
+    {
+      "slug": "cable-single-arm-tricep-pushdown",
+      "name": "Cable Single Arm Tricep Pushdown",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["cable"],
+      "tags": ["upper-body", "triceps", "unilateral"],
+      "sortOrder": 2150
+    },
+    {
+      "slug": "cable-tricep-kickback",
+      "name": "Cable Tricep Kickback",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["cable"],
+      "tags": ["upper-body", "triceps"],
+      "sortOrder": 2160
+    },
+    {
+      "slug": "cable-woodchop-high",
+      "name": "Cable Woodchop (High to Low)",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["cable chop"],
+      "equipment": ["cable"],
+      "tags": ["core", "rotational"],
+      "sortOrder": 2170
+    },
+    {
+      "slug": "cable-woodchop-low",
+      "name": "Cable Woodchop (Low to High)",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["cable lift"],
+      "equipment": ["cable"],
+      "tags": ["core", "rotational"],
+      "sortOrder": 2180
+    },
+    {
+      "slug": "cable-pallof-press",
+      "name": "Pallof Press",
+      "category": "strength",
+      "measurementTypes": ["load", "reps", "seconds"],
+      "equipment": ["cable"],
+      "tags": ["core", "anti-rotation"],
+      "sortOrder": 2190
+    },
+    {
+      "slug": "cable-crunch",
+      "name": "Cable Crunch",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["kneeling cable crunch"],
+      "equipment": ["cable"],
+      "tags": ["core"],
+      "sortOrder": 2200
+    },
+    {
+      "slug": "cable-russian-twist",
+      "name": "Cable Russian Twist",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["cable"],
+      "tags": ["core", "rotational"],
+      "sortOrder": 2210
+    },
+    {
+      "slug": "cable-pull-through",
+      "name": "Cable Pull Through",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["cable"],
+      "tags": ["posterior-chain", "hinge", "glutes"],
+      "sortOrder": 2220
+    },
+    {
+      "slug": "cable-kickback",
+      "name": "Cable Glute Kickback",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["cable donkey kick"],
+      "equipment": ["cable"],
+      "tags": ["glutes", "unilateral"],
+      "sortOrder": 2230
+    },
+    {
+      "slug": "cable-hip-abduction",
+      "name": "Cable Hip Abduction",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["cable"],
+      "tags": ["glutes", "lower-body", "unilateral"],
+      "sortOrder": 2240
+    },
+    {
+      "slug": "cable-hip-adduction",
+      "name": "Cable Hip Adduction",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["cable"],
+      "tags": ["lower-body", "unilateral"],
+      "sortOrder": 2250
+    },
+    {
+      "slug": "cable-romanian-deadlift",
+      "name": "Cable RDL",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "aliases": ["cable Romanian deadlift"],
+      "equipment": ["cable"],
+      "tags": ["posterior-chain", "hinge"],
+      "sortOrder": 2260
+    },
+    {
+      "slug": "cable-squat",
+      "name": "Cable Squat",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["cable"],
+      "tags": ["lower-body", "compound"],
+      "sortOrder": 2270
+    },
+    {
+      "slug": "cable-lunge",
+      "name": "Cable Lunge",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["cable"],
+      "tags": ["lower-body", "unilateral"],
+      "sortOrder": 2280
+    },
+    {
+      "slug": "cable-step-up",
+      "name": "Cable Step Up",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["cable", "box"],
+      "tags": ["lower-body", "unilateral"],
+      "sortOrder": 2290
+    },
+    {
+      "slug": "cable-calf-raise",
+      "name": "Cable Calf Raise",
+      "category": "strength",
+      "measurementTypes": ["load", "reps"],
+      "equipment": ["cable"],
+      "tags": ["lower-body", "calves"],
+      "sortOrder": 2300
+    }
+  ]
+}

@@ -1,0 +1,212 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function currentUserDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function currentUserExists() {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function isAdmin() {
+      return currentUserExists() &&
+        currentUserDoc().data.role == "admin";
+    }
+
+    function isApprovedMember() {
+      return currentUserExists() &&
+        currentUserDoc().data.approvalStatus == "approved" &&
+        currentUserDoc().data.role != "banned";
+    }
+
+    function isApprovedOrAdmin() {
+      return isApprovedMember() || isAdmin();
+    }
+
+    function isOwnUser(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function affectsOnly(allowedKeys) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(allowedKeys);
+    }
+
+    function isFeedReactionAdd() {
+      return request.resource.data.reactionCount == resource.data.reactionCount + 1 &&
+        request.resource.data.reactionUserIds.size() == resource.data.reactionUserIds.size() + 1 &&
+        request.resource.data.reactionUserIds.hasAll(resource.data.reactionUserIds) &&
+        request.resource.data.reactionUserIds.hasAll([request.auth.uid]);
+    }
+
+    function isFeedReactionRemove() {
+      return request.resource.data.reactionCount == resource.data.reactionCount - 1 &&
+        request.resource.data.reactionUserIds.size() == resource.data.reactionUserIds.size() - 1 &&
+        resource.data.reactionUserIds.hasAll(request.resource.data.reactionUserIds) &&
+        resource.data.reactionUserIds.hasAll([request.auth.uid]) &&
+        !request.resource.data.reactionUserIds.hasAny([request.auth.uid]);
+    }
+
+    function canAdjustBookedCount() {
+      return isApprovedMember() &&
+        affectsOnly(["bookedCount"]) &&
+        request.resource.data.bookedCount is int &&
+        resource.data.bookedCount is int &&
+        request.resource.data.bookedCount >= 0 &&
+        (
+          request.resource.data.bookedCount == resource.data.bookedCount + 1 ||
+          request.resource.data.bookedCount == resource.data.bookedCount - 1
+        );
+    }
+
+    match /users/{userId} {
+      allow read: if isOwnUser(userId) || isApprovedOrAdmin();
+
+      allow create: if isOwnUser(userId) &&
+        request.resource.data.role == "user" &&
+        request.resource.data.approvalStatus == "pending" &&
+        request.resource.data.email is string &&
+        request.resource.data.name is string;
+
+      allow update: if isAdmin() || (
+        isOwnUser(userId) &&
+        request.resource.data.role == resource.data.role &&
+        request.resource.data.approvalStatus == resource.data.approvalStatus &&
+        affectsOnly(["name", "email", "photoURL", "updatedAt", "stats"])
+      );
+
+      allow delete: if false;
+
+      match /trainingLogs/{logId} {
+        allow read: if isOwnUser(userId) || isAdmin();
+        allow write: if isOwnUser(userId) || isAdmin();
+      }
+    }
+
+    match /{path=**}/trainingLogs/{logId} {
+      allow read: if isSignedIn() &&
+        (
+          request.auth.uid == resource.data.userId ||
+          isAdmin()
+        );
+
+      allow create: if isSignedIn() &&
+        (
+          request.auth.uid == request.resource.data.userId ||
+          isAdmin()
+        );
+
+      allow update: if isSignedIn() &&
+        (
+          request.auth.uid == resource.data.userId &&
+          request.resource.data.userId == resource.data.userId ||
+          isAdmin()
+        );
+
+      allow delete: if isSignedIn() &&
+        (
+          request.auth.uid == resource.data.userId ||
+          isAdmin()
+        );
+    }
+
+    match /workoutSessions/{workoutId} {
+      allow read: if isApprovedOrAdmin() &&
+        (
+          resource.data.userId == request.auth.uid ||
+          resource.data.visibility == "members"
+        );
+
+      allow create: if isApprovedOrAdmin() &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.visibility in ["private", "members"];
+
+      allow update: if isApprovedOrAdmin() &&
+        resource.data.userId == request.auth.uid &&
+        request.resource.data.userId == resource.data.userId;
+
+      allow delete: if isApprovedOrAdmin() &&
+        resource.data.userId == request.auth.uid;
+    }
+
+    match /feedPosts/{postId} {
+      allow read: if isApprovedOrAdmin();
+
+      allow create: if isApprovedOrAdmin() &&
+        request.resource.data.actorId == request.auth.uid &&
+        request.resource.data.reactionCount == 0 &&
+        request.resource.data.reactionUserIds is list &&
+        request.resource.data.reactionUserIds.size() == 0 &&
+        (
+          (
+            request.resource.data.kind == "workout" &&
+            request.resource.data.workoutSessionId is string &&
+            existsAfter(/databases/$(database)/documents/workoutSessions/$(request.resource.data.workoutSessionId)) &&
+            getAfter(/databases/$(database)/documents/workoutSessions/$(request.resource.data.workoutSessionId)).data.userId == request.auth.uid &&
+            getAfter(/databases/$(database)/documents/workoutSessions/$(request.resource.data.workoutSessionId)).data.visibility == "members"
+          ) ||
+          (
+            request.resource.data.kind == "performance" &&
+            request.resource.data.performanceMovementSlug is string
+          )
+        );
+
+      allow update: if isApprovedOrAdmin() &&
+        affectsOnly(["reactionUserIds", "reactionCount"]) &&
+        (isFeedReactionAdd() || isFeedReactionRemove());
+
+      allow delete: if isAdmin() || (
+        isApprovedOrAdmin() &&
+        resource.data.actorId == request.auth.uid
+      );
+    }
+
+    match /movementLibrary/{movementId} {
+      allow read: if isApprovedOrAdmin();
+      allow write: if isAdmin();
+    }
+
+    match /wods/{wodDate} {
+      allow read: if isApprovedOrAdmin();
+      allow write: if isAdmin();
+    }
+
+    match /classes/{classId} {
+      allow read: if isApprovedOrAdmin();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || canAdjustBookedCount();
+    }
+
+    match /bookings/{bookingId} {
+      allow read: if isAdmin() || (
+        isApprovedOrAdmin() &&
+        resource.data.userId == request.auth.uid
+      );
+
+      allow create: if isApprovedOrAdmin() &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.status == "booked";
+
+      allow update: if isAdmin() || (
+        isApprovedOrAdmin() &&
+        resource.data.userId == request.auth.uid &&
+        request.resource.data.userId == resource.data.userId &&
+        request.resource.data.classId == resource.data.classId &&
+        affectsOnly(["status", "cancelledAt"]) &&
+        request.resource.data.status == "cancelled"
+      );
+
+      allow delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,5 +1,5 @@
 import React from "react";
-import { Share, TimerReset, Trash2 } from "lucide-react";
+import { Newspaper, Share, TimerReset, Trash2 } from "lucide-react";
 import type { AccentClasses } from "../utils/movementHelpers";
 
 type TrainingLog = {
@@ -19,10 +19,12 @@ type MovementHistorySectionProps = {
   filteredLogs: TrainingLog[];
   bestLogId?: string | null;
   deletingLogId?: string | null;
+  postingLogId?: string | null;
   isTimeDisplay: (unit?: string, movementName?: string) => boolean;
   formatDisplayValue: (value: string, unit?: string, movementName?: string) => string;
   prettyDate: (date: string) => string;
   onShareLog: (log: TrainingLog) => void;
+  onPostToFeed: (log: TrainingLog) => void;
   onDeleteLog: (logId: string) => void;
 };
 
@@ -33,10 +35,12 @@ export default function MovementHistorySection({
   filteredLogs,
   bestLogId,
   deletingLogId,
+  postingLogId,
   isTimeDisplay,
   formatDisplayValue,
   prettyDate,
   onShareLog,
+  onPostToFeed,
   onDeleteLog,
 }: MovementHistorySectionProps) {
   return (
@@ -70,6 +74,7 @@ export default function MovementHistorySection({
           filteredLogs.map((log, index) => {
             const isBest = bestLogId === log.id;
             const isDeleting = deletingLogId === log.id;
+            const isPosting = postingLogId === log.id;
 
             return (
               <div
@@ -118,7 +123,7 @@ export default function MovementHistorySection({
                       <button
                         type="button"
                         onClick={() => onShareLog(log)}
-                        disabled={isDeleting}
+                        disabled={isDeleting || isPosting}
                         className="rounded-full border border-white/10 bg-white/[0.04] p-2 text-white/60 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
                         aria-label="Share entry"
                       >
@@ -127,8 +132,18 @@ export default function MovementHistorySection({
 
                       <button
                         type="button"
+                        onClick={() => onPostToFeed(log)}
+                        disabled={isDeleting || isPosting}
+                        className="rounded-full border border-amber-400/20 bg-amber-400/10 p-2 text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-400/15 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                        aria-label="Post to feed"
+                      >
+                        <Newspaper className="h-4 w-4" />
+                      </button>
+
+                      <button
+                        type="button"
                         onClick={() => onDeleteLog(log.id)}
-                        disabled={isDeleting}
+                        disabled={isDeleting || isPosting}
                         className="rounded-full border border-red-500/20 bg-red-500/10 p-2 text-red-200 transition hover:border-red-400/35 hover:bg-red-500/15 hover:text-red-100 disabled:cursor-not-allowed disabled:opacity-50"
                         aria-label="Delete entry"
                       >
@@ -147,7 +162,7 @@ export default function MovementHistorySection({
                     </div>
 
                     <div className="mt-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/38">
-                      {isDeleting ? "Deleting..." : prettyDate(log.date)}
+                      {isDeleting ? "Deleting..." : isPosting ? "Posting..." : prettyDate(log.date)}
                     </div>
                   </div>
                 </div>

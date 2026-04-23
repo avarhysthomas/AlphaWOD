@@ -22,6 +22,10 @@ import Training from "./features/training/pages/Training";
 import TrainingCategory from "./features/training/pages/TrainingCategory";
 import TrainingMovement from "./features/training/pages/TrainingMovement";
 import Profile from "./features/profile/pages/Profile";
+import Feed from "./features/workouts/pages/Feed";
+import Workouts from "./features/workouts/pages/Workouts";
+import WorkoutComposer from "./features/workouts/pages/WorkoutComposer";
+import WorkoutDetail from "./features/workouts/pages/WorkoutDetail";
 import { useAuth } from "./context/AuthContext";
 
 import AdminInsights from "./features/admin/pages/AdminInsights";
@@ -198,11 +202,93 @@ export default function App() {
         }
       />
 
-      <Route path="/training" element={<Training />} />
-      <Route path="/training/:category" element={<TrainingCategory />} />
+      <Route
+        path="/feed"
+        element={
+          <RequireAuth>
+            <RequireApproved>
+              <RequireMember>
+                <Feed />
+              </RequireMember>
+            </RequireApproved>
+          </RequireAuth>
+        }
+      />
+
+      <Route
+        path="/workouts"
+        element={
+          <RequireAuth>
+            <RequireApproved>
+              <RequireMember>
+                <Workouts />
+              </RequireMember>
+            </RequireApproved>
+          </RequireAuth>
+        }
+      />
+
+      <Route
+        path="/workouts/new"
+        element={
+          <RequireAuth>
+            <RequireApproved>
+              <RequireMember>
+                <WorkoutComposer />
+              </RequireMember>
+            </RequireApproved>
+          </RequireAuth>
+        }
+      />
+
+      <Route
+        path="/workouts/:workoutId"
+        element={
+          <RequireAuth>
+            <RequireApproved>
+              <RequireMember>
+                <WorkoutDetail />
+              </RequireMember>
+            </RequireApproved>
+          </RequireAuth>
+        }
+      />
+
+      <Route
+        path="/training"
+        element={
+          <RequireAuth>
+            <RequireApproved>
+              <RequireMember>
+                <Training />
+              </RequireMember>
+            </RequireApproved>
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/training/:category"
+        element={
+          <RequireAuth>
+            <RequireApproved>
+              <RequireMember>
+                <TrainingCategory />
+              </RequireMember>
+            </RequireApproved>
+          </RequireAuth>
+        }
+      />
       <Route
         path="/training/:category/:movementSlug"
-        element={<TrainingMovement />}
+        element={
+          <RequireAuth>
+            <RequireApproved>
+              <RequireMember>
+                <TrainingMovement />
+              </RequireMember>
+            </RequireApproved>
+          </RequireAuth>
+        }
       />
 
       {/* Admin-only area */}

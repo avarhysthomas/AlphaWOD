@@ -2,6 +2,59 @@
 
 This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
 
+## Movement Library
+
+The app can use a reusable Firestore-backed movement catalog in the top-level
+`movementLibrary` collection.
+
+Recommended document shape:
+
+```json
+{
+  "slug": "back-squat",
+  "gymKey": "alphafit",
+  "sourcePreset": "alphafit-core-v1",
+  "name": "Back Squat",
+  "category": "strength",
+  "measurementTypes": ["load", "reps"],
+  "aliases": ["squat"],
+  "equipment": ["barbell", "rack"],
+  "tags": ["lower-body", "compound"],
+  "isActive": true,
+  "sortOrder": 10,
+  "createdAt": "serverTimestamp()",
+  "updatedAt": "serverTimestamp()"
+}
+```
+
+Notes:
+
+- `slug` is the Firestore document id and stable lookup key.
+- `gymKey` lets you reuse the same format across different gym versions.
+- `measurementTypes` should use values like `load`, `reps`, `distance`,
+  `seconds`, or `cals`.
+- `aliases`, `equipment`, and `tags` are optional but useful for search and
+  filtering later.
+
+Seed script:
+
+```bash
+cd functions
+GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json \
+npm run seed:movements -- \
+  --preset ./src/seed-data/movement-library/alphafit-core.json \
+  --collection movementLibrary
+```
+
+Optional flags:
+
+- `--gym alphafit` overrides the preset `gymKey`.
+- `--project your-firebase-project-id` sets the target project id explicitly.
+- `--replace true` clears the target collection before seeding.
+
+You can reuse the script for other gyms by copying the preset JSON format and
+swapping in a different movement list.
+
 ## Available Scripts
 
 In the project directory, you can run:

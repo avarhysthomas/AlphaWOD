@@ -668,6 +668,42 @@ export default function Dashboard() {
           </h1>
         </div>
 
+        <section>
+          <div className="grid grid-cols-2 gap-3">
+            <Link
+              to="/workouts"
+              className="group rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.08] via-white/[0.04] to-white/[0.02] p-4 transition hover:bg-white/[0.08]"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/68">
+                  <Dumbbell className="h-3.5 w-3.5" />
+                  Training
+                </div>
+                <ChevronRight className="h-4 w-4 text-white/30 transition group-hover:text-white/70" />
+              </div>
+              <div className="mt-3 text-lg font-heading uppercase tracking-[-0.04em] text-white sm:text-xl">
+                Log sessions
+              </div>
+            </Link>
+
+            <Link
+              to="/feed"
+              className="group rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.08] via-white/[0.04] to-white/[0.02] p-4 transition hover:bg-white/[0.08]"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/68">
+                  <Share className="h-3.5 w-3.5" />
+                  Feed
+                </div>
+                <ChevronRight className="h-4 w-4 text-white/30 transition group-hover:text-white/70" />
+              </div>
+              <div className="mt-3 text-lg font-heading uppercase tracking-[-0.04em] text-white sm:text-xl">
+                Zero Alpha feed
+              </div>
+            </Link>
+          </div>
+        </section>
+
         {/* ── Today's Classes ─────────────────────────────────── */}
         <section>
           <div className="flex items-center gap-2 mb-3">

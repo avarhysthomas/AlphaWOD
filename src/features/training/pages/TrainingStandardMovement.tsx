@@ -16,7 +16,7 @@ import {
   serverTimestamp,
   where,
 } from "firebase/firestore";
-import { auth, db } from "../../../firebase";
+import { db } from "../../../firebase";
 import { getMovementBySlug } from "../../../lib/training";
 import PBShareModal from "../../training/components/PBShareModal";
 import MovementHistorySection from "../components/MovementHistorySection";
@@ -32,6 +32,7 @@ import {
   ReferenceDot,
 } from "recharts";
 import UserTopNav from "../../../components/layout/UserTopNav";
+import { useAuth } from "../../../context/AuthContext";
 import {
   formatChartValue,
   formatDisplayValue,
@@ -46,6 +47,7 @@ import {
   validateTrainingLogForm,
 } from "../utils/movementHelpers";
 import { getDateInputValueInTimeZone } from "../../../utils/date";
+import { createPerformanceFeedPost } from "../../workouts/services/workouts";
 
 type TrainingLog = {
   id: string;
@@ -103,6 +105,7 @@ function CustomTooltip({
 
 export default function TrainingStandardMovement() {
   const timeZone = "Europe/London";
+  const { user, appUser } = useAuth();
   const { category, movementSlug } = useParams<{
     category: string;
     movementSlug: string;
@@ -139,6 +142,7 @@ export default function TrainingStandardMovement() {
   const [shareOpen, setShareOpen] = useState(false);
   const [isNewPB, setIsNewPB] = useState(false);
   const [deletingLogId, setDeletingLogId] = useState<string | null>(null);
+  const [postingLogId, setPostingLogId] = useState<string | null>(null);
   const [sharePayload, setSharePayload] = useState<{
     movement: string;
     metricType: string;
@@ -303,8 +307,6 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
       return;
     }
 
-    const user = auth.currentUser;
-
     if (!user) {
       setLogs([]);
       setLoadError("You need to be signed in to view training logs.");
@@ -350,12 +352,10 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
     );
 
     return () => unsubscribe();
-  }, [selectedCategory, movement]);
+  }, [selectedCategory, movement, user]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-
-    const user = auth.currentUser;
 
     if (!user || !selectedCategory || !movement) return;
 
@@ -439,8 +439,6 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
   }
 
   async function handleDeleteLog(logId: string) {
-    const user = auth.currentUser;
-
     if (!user) return;
 
     const confirmed = window.confirm(
@@ -474,6 +472,34 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
       setSaveError("Could not delete this log. Please try again.");
     } finally {
       setDeletingLogId(null);
+    }
+  }
+
+  async function handlePostLogToFeed(log: TrainingLog) {
+    if (!user || !selectedCategory || !movement) return;
+
+    try {
+      setPostingLogId(log.id);
+      setSaveError("");
+
+      await createPerformanceFeedPost({
+        actorId: user.uid,
+        actorName: appUser?.name || user.displayName || "Member",
+        actorPhotoURL: user.photoURL || undefined,
+        category: selectedCategory.key,
+        movementSlug: movement.slug,
+        movementName: movement.name,
+        metricType: log.metricType,
+        value: log.value,
+        unit: log.unit,
+        date: log.date,
+        notes: log.notes,
+      });
+    } catch (error) {
+      console.error("Error posting training log to feed:", error);
+      setSaveError("Could not post this PB to the feed. Please try again.");
+    } finally {
+      setPostingLogId(null);
     }
   }
 
@@ -530,7 +556,7 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
                   className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/25 px-5 py-3 text-sm font-semibold text-white/85 backdrop-blur-md transition hover:border-white/20 hover:bg-black/35 hover:text-white"
                 >
                   <ChevronLeft className="h-4 w-4" />
-                  Training
+                  Performance
                 </Link>
 
                 <Link
@@ -797,6 +823,7 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
             filteredLogs={filteredLogs}
             bestLogId={bestLog?.id}
             deletingLogId={deletingLogId}
+            postingLogId={postingLogId}
             isTimeDisplay={(unitValue, movementNameValue) =>
               isTimeDisplay(unitValue, selectedCategory.key, movementNameValue)
             }
@@ -814,13 +841,21 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
               });
               setShareOpen(true);
             }}
+            onPostToFeed={(log) => {
+              void handlePostLogToFeed({
+                ...log,
+                category: selectedCategory.key,
+                movementSlug: movement.slug,
+                movementName: movement.name,
+              });
+            }}
             onDeleteLog={handleDeleteLog}
           />
         </div>
         <PBShareModal
           open={shareOpen && !!sharePayload}
           onClose={() => setShareOpen(false)}
-          athleteName={auth.currentUser?.displayName || "AlphaFIT Athlete"}
+          athleteName={appUser?.name || user?.displayName || "AlphaFIT Athlete"}
           movement={sharePayload?.movement || movement.name}
           metricType={sharePayload?.metricType || metricType}
           value={sharePayload?.value || value}

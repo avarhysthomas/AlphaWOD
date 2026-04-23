@@ -11,6 +11,8 @@ import {
   SquarePen,
   BarChart3,
   Activity,
+  Newspaper,
+  ClipboardPen,
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 
@@ -25,7 +27,9 @@ type NavItem = {
 const baseNavItems: NavItem[] = [
   { to: "/dashboard", label: "Home", icon: LayoutDashboard },
   { to: "/schedule", label: "Schedule", icon: CalendarDays },
-  { to: "/training", label: "Training", icon: Dumbbell },
+  { to: "/feed", label: "Feed", icon: Newspaper },
+  { to: "/workouts", label: "Training", icon: ClipboardPen },
+  { to: "/training", label: "Performance", icon: Dumbbell },
   { to: "/profile", label: "Profile", icon: User },
   { to: "/leaderboard", label: "Board of Fame", icon: Trophy },
   { to: "/board-of-shame", label: "Board of Shame", icon: Flame, danger: true },
@@ -33,7 +37,7 @@ const baseNavItems: NavItem[] = [
 
 const adminNavItems: NavItem[] = [
   { to: "/admin/insights", label: "Insights", icon: BarChart3, adminOnly: true },
-  { to: "/admin/performance", label: "Performance", icon: Activity, adminOnly: true },
+  { to: "/admin/performance", label: "Admin Performance", icon: Activity, adminOnly: true },
   { to: "/display", label: "Display", icon: MonitorPlay, adminOnly: true },
   { to: "/editor", label: "Editor", icon: SquarePen, adminOnly: true },
 ];
@@ -43,13 +47,16 @@ export default function UserTopNav() {
   const isAdmin = appUser?.role === "admin";
 
   const navItems = [
-    ...baseNavItems,
+    ...baseNavItems.filter((item) => !(isAdmin && item.to === "/training")),
     ...(isAdmin ? adminNavItems : []),
   ];
 
   return (
-    <div className="sticky top-0 z-30 border-b border-neutral-900/80 bg-black/80 backdrop-blur-xl">
-      <div className="mx-auto flex max-w-7xl gap-2 overflow-x-auto px-4 py-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+    <div
+      className="sticky top-0 z-30 border-b border-neutral-900/80 bg-black/80 backdrop-blur-xl"
+      style={{ paddingTop: "env(safe-area-inset-top)" }}
+    >
+      <div className="mx-auto flex max-w-7xl gap-2 overflow-x-auto px-4 py-2.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {navItems.map(({ to, label, icon: Icon, danger, adminOnly }) => (
           <NavLink
             key={to}

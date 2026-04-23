@@ -80,7 +80,7 @@ export async function getPerformanceSummary() {
   const memberLogs = logs
     .filter((log) => {
       const user = log.userId ? userMap.get(log.userId) : null;
-      return user?.role !== "admin" && user?.approvalStatus !== "pending";
+      return user?.role !== "admin" && user?.role !== "banned" && user?.approvalStatus !== "pending";
     })
     .sort((a, b) => getCreatedAtMs(b.createdAt) - getCreatedAtMs(a.createdAt));
 

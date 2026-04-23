@@ -29,4 +29,19 @@ describe("auth user builders", () => {
       approvalStatus: "pending",
     });
   });
+
+  it("preserves a banned role from the profile", () => {
+    expect(
+      buildAppUser(
+        { uid: "abc", email: "member@example.com" },
+        { name: "Member", role: "banned", approvalStatus: "approved" }
+      )
+    ).toEqual({
+      uid: "abc",
+      email: "member@example.com",
+      name: "Member",
+      role: "banned",
+      approvalStatus: "approved",
+    });
+  });
 });

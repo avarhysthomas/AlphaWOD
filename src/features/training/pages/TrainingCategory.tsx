@@ -61,7 +61,7 @@ export default function TrainingCategory() {
                   className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/25 px-5 py-3 text-sm font-semibold text-white/85 backdrop-blur-md transition hover:border-white/20 hover:bg-black/35 hover:text-white"
                 >
                   <ChevronLeft className="h-4 w-4" />
-                  Back to Training
+                  Back to Performance
                 </Link>
               </div>
             </div>

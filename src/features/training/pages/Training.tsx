@@ -17,14 +17,14 @@ export default function Training() {
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_12%,rgba(59,130,246,0.16),transparent_30%),radial-gradient(circle_at_56%_0%,rgba(168,85,247,0.10),transparent_26%),radial-gradient(circle_at_85%_10%,rgba(249,115,22,0.14),transparent_28%),linear-gradient(135deg,rgba(255,255,255,0.03),transparent_55%)]" />
           <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] bg-[size:32px_32px] opacity-[0.06]" />
           <div className="absolute -right-8 bottom-[-28px] select-none text-[110px] font-black uppercase tracking-[0.18em] text-white/[0.04] sm:text-[150px] lg:text-[190px]">
-            TRAIN
+            PERF
           </div>
 
           <div className="relative p-6 sm:p-8 lg:p-10">
             <div className="max-w-4xl">
               <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.3em] text-white/72 backdrop-blur-md">
                 <Dumbbell className="h-3.5 w-3.5" />
-                Training
+                Performance
               </div>
 
               <h1 className="mt-6 text-4xl font-heading uppercase tracking-[-0.04em] sm:text-5xl lg:text-6xl">
