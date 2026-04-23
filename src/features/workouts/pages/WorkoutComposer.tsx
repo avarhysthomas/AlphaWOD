@@ -34,6 +34,7 @@ import type {
 const timeZone = "Europe/London";
 
 type ComposerStep = 0 | 1 | 2;
+type LoggingMode = "structured" | "freeText";
 
 type TypeMeta = {
   label: string;
@@ -450,6 +451,8 @@ export default function WorkoutComposer() {
   const [sessionMovements, setSessionMovements] = useState<WorkoutMovementEntry[]>([
     emptyMovement("reps"),
   ]);
+  const [loggingMode, setLoggingMode] = useState<LoggingMode>("structured");
+  const [sessionText, setSessionText] = useState("");
   const [totalRounds, setTotalRounds] = useState("");
   const [notes, setNotes] = useState("");
   const [saveError, setSaveError] = useState("");
@@ -475,6 +478,7 @@ export default function WorkoutComposer() {
       runArea.trim(),
       type === "run" ? cardioMode : "",
       totalRounds.trim(),
+      sessionText.trim(),
       notes.trim(),
       ...strengthMovements.flatMap((item) => [item.movementName.trim(), item.value.trim()]),
       ...sessionMovements.flatMap((item) => [item.movementName.trim(), item.value.trim()]),
@@ -492,6 +496,7 @@ export default function WorkoutComposer() {
     type,
     cardioMode,
     totalRounds,
+    sessionText,
     totalTime,
   ]);
 
@@ -535,6 +540,7 @@ export default function WorkoutComposer() {
     );
     setTotalRounds("");
     setSaveError("");
+    setLoggingMode(nextType === "run" ? "structured" : "structured");
 
     if (nextType === "strength" && strengthMovements.length === 0) {
       setStrengthMovements([emptyMovement("load")]);
@@ -657,6 +663,15 @@ export default function WorkoutComposer() {
       }
 
       if (type === "strength") {
+        if (loggingMode === "freeText") {
+          if (!sessionText.trim()) {
+            setSaveError("Add a quick note about what you trained.");
+            return false;
+          }
+          setSaveError("");
+          return true;
+        }
+
         const validMovements = strengthMovements.filter(
           (item) =>
             item.movementName.trim() &&
@@ -672,6 +687,15 @@ export default function WorkoutComposer() {
       }
 
       if (type === "amrap" || type === "emom") {
+        if (loggingMode === "freeText") {
+          if (!sessionText.trim()) {
+            setSaveError(`Add a quick note about the ${type.toUpperCase()} session.`);
+            return false;
+          }
+          setSaveError("");
+          return true;
+        }
+
         const validMovements = sessionMovements.filter(
           (item) => item.movementName.trim() && item.value.trim()
         );
@@ -748,7 +772,9 @@ export default function WorkoutComposer() {
       const selfieURL = await uploadSelfieIfNeeded();
 
       const baseMovementEntries =
-        type === "strength"
+        loggingMode === "freeText"
+          ? []
+          : type === "strength"
           ? strengthMovements
           : type === "amrap" || type === "emom"
           ? sessionMovements
@@ -781,6 +807,10 @@ export default function WorkoutComposer() {
           score:
             type === "run"
               ? runTime
+              : loggingMode === "freeText"
+              ? totalTime.trim()
+                ? `${totalTime.trim()} min`
+                : "Quick log"
               : type === "strength"
               ? `${cleanMovementEntries.length} movement${cleanMovementEntries.length === 1 ? "" : "s"}`
               : type === "amrap"
@@ -789,6 +819,8 @@ export default function WorkoutComposer() {
           scoreType:
             type === "run"
               ? "time"
+              : loggingMode === "freeText"
+              ? "custom"
               : type === "strength"
               ? "custom"
               : type === "amrap"
@@ -801,6 +833,9 @@ export default function WorkoutComposer() {
         movementEntries: cleanMovementEntries,
         selfieURL,
         sections: [
+          ...(loggingMode === "freeText" && sessionText.trim()
+            ? [{ kind: "main" as const, text: sessionText.trim() }]
+            : []),
           ...(type === "run" && runArea.trim()
             ? [{ kind: "notes" as const, text: `Area: ${runArea.trim()}` }]
             : []),
@@ -1158,7 +1193,45 @@ export default function WorkoutComposer() {
                 </div>
               )}
 
-              {type === "strength" ? (
+              {type !== "run" ? (
+                <div className="flex flex-wrap gap-2">
+                  {([
+                    { value: "structured", label: "Structured" },
+                    { value: "freeText", label: "Free Text" },
+                  ] as const).map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => setLoggingMode(option.value)}
+                      className={[
+                        "rounded-full border px-3.5 py-2 text-sm font-semibold transition",
+                        loggingMode === option.value
+                          ? "border-amber-400/25 bg-amber-400/[0.1] text-white"
+                          : "border-white/10 bg-neutral-950/80 text-white/72 hover:border-white/20 hover:text-white",
+                      ].join(" ")}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+
+              {type !== "run" && loggingMode === "freeText" ? (
+                <label className="block">
+                  <span className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.22em] text-white/44">
+                    Session notes
+                  </span>
+                  <textarea
+                    value={sessionText}
+                    onChange={(event) => setSessionText(event.target.value)}
+                    rows={7}
+                    placeholder="Write the session however you want: movements, sets, rounds, weights, or just a quick note."
+                    className="w-full resize-none rounded-[20px] border border-white/10 bg-black/85 px-4 py-3.5 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-neutral-950"
+                  />
+                </label>
+              ) : null}
+
+              {type === "strength" && loggingMode === "structured" ? (
                 <div className="space-y-3 rounded-[22px] border border-white/10 bg-black/20 p-3.5">
                   <div className="flex flex-wrap items-end justify-between gap-3">
                     <div className="min-w-0 flex-1">
@@ -1271,7 +1344,7 @@ export default function WorkoutComposer() {
                 </div>
               ) : null}
 
-              {(type === "amrap" || type === "emom") ? (
+              {(type === "amrap" || type === "emom") && loggingMode === "structured" ? (
                 <div className="space-y-4 rounded-[24px] border border-white/10 bg-black/20 p-4">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
@@ -1461,6 +1534,8 @@ export default function WorkoutComposer() {
                     <div className="mt-1 text-sm text-white/58">
                   {type === "run"
                     ? `${runDistance || "0"} m · ${runTime || "No time"}${runPace ? ` · ${runPace}` : ""}`
+                    : loggingMode === "freeText"
+                    ? sessionText.trim() || "Quick text log"
                     : type === "strength"
                     ? `${strengthMovements.filter((item) => item.movementName.trim()).length} strength movements`
                     : type === "amrap"
