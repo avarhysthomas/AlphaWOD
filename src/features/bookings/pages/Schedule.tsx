@@ -44,7 +44,7 @@ type BookingDoc = {
 const DEFAULT_TZ = "Europe/London";
 
 /** Booking close rules:
- *  - 06:00 class closes previous day 20:30
+ *  - 06:00 class closes previous day 21:00
  *  - 18:00 class closes same day 15:00
  */
 function computeBookingClosesAt(startTs?: Timestamp) {
@@ -56,7 +56,7 @@ function computeBookingClosesAt(startTs?: Timestamp) {
 
   if (hour === 5 || hour === 6) {
     closes.setDate(closes.getDate() - 1);
-    closes.setHours(20, 30, 0, 0);
+    closes.setHours(21, 0, 0, 0);
     return closes;
   }
 
