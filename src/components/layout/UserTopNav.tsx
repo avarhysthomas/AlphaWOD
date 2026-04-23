@@ -47,7 +47,7 @@ export default function UserTopNav() {
   const isAdmin = appUser?.role === "admin";
 
   const navItems = [
-    ...baseNavItems.filter((item) => !(isAdmin && item.to === "/training")),
+    ...baseNavItems,
     ...(isAdmin ? adminNavItems : []),
   ];
 
