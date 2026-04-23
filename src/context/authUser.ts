@@ -2,7 +2,7 @@ export type AppUser = {
   uid: string;
   email?: string | null;
   name?: string;
-  role?: "admin" | "user";
+  role?: "admin" | "user" | "banned";
   approvalStatus?: "approved" | "pending";
 };
 
@@ -16,11 +16,18 @@ export function buildAppUser(
   firebaseUser: { uid: string; email?: string | null },
   rawData?: RawUserDoc | null
 ): AppUser {
+  const role =
+    rawData?.role === "admin"
+      ? "admin"
+      : rawData?.role === "banned"
+      ? "banned"
+      : "user";
+
   return {
     uid: firebaseUser.uid,
     email: firebaseUser.email ?? null,
     name: typeof rawData?.name === "string" ? rawData.name : undefined,
-    role: rawData?.role === "admin" ? "admin" : "user",
+    role,
     approvalStatus: rawData?.approvalStatus === "pending" ? "pending" : "approved",
   };
 }

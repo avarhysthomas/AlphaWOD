@@ -67,3 +67,36 @@ export async function inviteMemberByEmail(email: string) {
     throw new Error(getInviteErrorMessage(err));
   }
 }
+
+function getRoleUpdateErrorMessage(err: any) {
+  const code = String(err?.code || "");
+  const message = String(err?.message || "");
+
+  if (
+    code.includes("internal") ||
+    code.includes("unavailable") ||
+    message.includes("404") ||
+    message.toLowerCase().includes("cors")
+  ) {
+    return "The member role update function is not available yet. Deploy the latest Cloud Functions, or restart the Functions emulator if you're testing locally.";
+  }
+
+  if (code.includes("permission-denied")) {
+    return "This account does not have permission to change member roles.";
+  }
+
+  return message || "Failed to update member role.";
+}
+
+export async function updateMemberRole(userId: string, role: "user" | "banned") {
+  const callable = httpsCallable<{ userId: string; role: "user" | "banned" }, { ok: boolean }>(
+    functions,
+    "updateMemberRole"
+  );
+
+  try {
+    return await callable({ userId, role });
+  } catch (err: any) {
+    throw new Error(getRoleUpdateErrorMessage(err));
+  }
+}

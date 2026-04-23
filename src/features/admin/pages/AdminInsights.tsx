@@ -2,10 +2,11 @@ import React, { useEffect, useState } from "react";
 import {
   Activity,
   AlertTriangle,
+  Ban,
   CheckCircle2,
-  ChevronRight,
   Flame,
   LoaderCircle,
+  RotateCcw,
   ShieldAlert,
   Trophy,
   Users,
@@ -14,7 +15,11 @@ import AdminOnly from "../../../components/guards/AdminOnly";
 import UserAvatar from "../../../components/ui/UserAvatar";
 import AdminKpiCard from "../components/AdminKpiCard";
 import AdminSectionCard from "../components/AdminSectionCard";
-import { approveUserAccess, inviteMemberByEmail } from "../services/access";
+import {
+  approveUserAccess,
+  inviteMemberByEmail,
+  updateMemberRole,
+} from "../services/access";
 import { getInsightsSummary } from "../services/insights";
 import UserTopNav from "../../../components/layout/UserTopNav";
 
@@ -67,6 +72,9 @@ export default function AdminInsights() {
   const [inviteLoading, setInviteLoading] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [inviteSuccess, setInviteSuccess] = useState<string | null>(null);
+  const [roleBusyUserId, setRoleBusyUserId] = useState<string | null>(null);
+  const [roleActionError, setRoleActionError] = useState<string | null>(null);
+  const [memberSearch, setMemberSearch] = useState("");
 
   useEffect(() => {
     let alive = true;
@@ -131,6 +139,89 @@ export default function AdminInsights() {
       setInviteLoading(false);
     }
   }
+
+  async function handleRoleChange(userId: string, role: "user" | "banned") {
+    try {
+      setRoleBusyUserId(userId);
+      setRoleActionError(null);
+      await updateMemberRole(userId, role);
+
+      setData((current) => {
+        if (!current) return current;
+
+        const movedUser =
+          current.users.find((user) => user.id === userId) ??
+          current.inactiveMembers.find((user) => user.id === userId) ??
+          current.bannedMembers.find((user) => user.id === userId) ??
+          null;
+
+        if (!movedUser) return current;
+
+        const nextUsers = current.users
+          .filter((user) => user.id !== userId)
+          .map((user) => (user.id === userId ? {...user, role} : user));
+
+        const nextInactiveMembers = current.inactiveMembers.filter((user) => user.id !== userId);
+        const nextBannedMembers = current.bannedMembers.filter((user) => user.id !== userId);
+
+        if (role === "banned") {
+          return {
+            ...current,
+            totalMembers: Math.max(0, current.totalMembers - 1),
+            activeMembers:
+              movedUser.stats?.lastCheckInDate &&
+              Math.floor(
+                (Date.now() - new Date(`${movedUser.stats.lastCheckInDate}T00:00:00`).getTime()) /
+                  (1000 * 60 * 60 * 24)
+              ) <= 30
+                ? Math.max(0, current.activeMembers - 1)
+                : current.activeMembers,
+            monthCheckIns:
+              current.monthCheckIns - (movedUser.stats?.monthCheckIns?.[current.monthKey] ?? 0),
+            totalCheckIns: current.totalCheckIns - (movedUser.stats?.totalCheckIns ?? 0),
+            users: nextUsers,
+            inactiveMembers: nextInactiveMembers,
+            bannedMembers: [...nextBannedMembers, {...movedUser, role}].sort((a, b) =>
+              (a.name ?? a.email ?? "").localeCompare(b.name ?? b.email ?? "")
+            ),
+          };
+        }
+
+        return {
+          ...current,
+          totalMembers: current.totalMembers + 1,
+          activeMembers:
+            movedUser.stats?.lastCheckInDate &&
+            Math.floor(
+              (Date.now() - new Date(`${movedUser.stats.lastCheckInDate}T00:00:00`).getTime()) /
+                (1000 * 60 * 60 * 24)
+            ) <= 30
+              ? current.activeMembers + 1
+              : current.activeMembers,
+          monthCheckIns:
+            current.monthCheckIns + (movedUser.stats?.monthCheckIns?.[current.monthKey] ?? 0),
+          totalCheckIns: current.totalCheckIns + (movedUser.stats?.totalCheckIns ?? 0),
+          users: [...nextUsers, {...movedUser, role}].sort((a, b) =>
+            (a.name ?? a.email ?? "").localeCompare(b.name ?? b.email ?? "")
+          ),
+          bannedMembers: nextBannedMembers,
+        };
+      });
+    } catch (err: any) {
+      setRoleActionError(err?.message ?? "Failed to update member role.");
+    } finally {
+      setRoleBusyUserId(null);
+    }
+  }
+
+  const normalizedSearch = memberSearch.trim().toLowerCase();
+  const searchableMembers = data
+    ? data.users.filter((user) => {
+        if (!normalizedSearch) return true;
+        const haystack = `${user.name ?? ""} ${user.email ?? ""}`.toLowerCase();
+        return haystack.includes(normalizedSearch);
+      })
+    : [];
 
   return (
     <AdminOnly>
@@ -289,9 +380,9 @@ export default function AdminInsights() {
 
                 <div className="mt-6 lg:mt-8">
                   <AdminSectionCard title="Pending Sign-up Approvals">
-                    {approvalError ? (
+                    {approvalError || roleActionError ? (
                       <div className="mb-4 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">
-                        {approvalError}
+                        {approvalError ?? roleActionError}
                       </div>
                     ) : null}
 
@@ -444,7 +535,6 @@ export default function AdminInsights() {
                                 >
                                   Needs attention
                                 </div>
-                                <ChevronRight className="h-4 w-4 text-neutral-600 transition group-hover:text-amber-200" />
                               </div>
                             </div>
 
@@ -456,8 +546,115 @@ export default function AdminInsights() {
                               >
                                 Needs attention
                               </div>
-                              <ChevronRight className="h-4 w-4 shrink-0 text-neutral-600 transition group-hover:text-amber-200" />
                             </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </AdminSectionCard>
+                </div>
+
+                <div className="mt-6 lg:mt-8">
+                  <AdminSectionCard title="Suspended Members">
+                    <div className="mb-4 space-y-3">
+                      <input
+                        type="search"
+                        value={memberSearch}
+                        onChange={(e) => setMemberSearch(e.target.value)}
+                        placeholder="Search members to suspend..."
+                        className="w-full rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-white outline-none transition placeholder:text-neutral-500 focus:border-red-400/40 focus:bg-white/[0.06]"
+                      />
+
+                      {normalizedSearch ? (
+                        searchableMembers.length === 0 ? (
+                          <div className="rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-4 text-sm text-neutral-400">
+                            No matching active members found.
+                          </div>
+                        ) : (
+                          <div className="space-y-3">
+                            {searchableMembers.slice(0, 6).map((user) => (
+                              <div
+                                key={user.id}
+                                className="flex flex-col gap-4 rounded-2xl border border-white/8 bg-white/[0.02] px-4 py-4 sm:flex-row sm:items-center sm:justify-between"
+                              >
+                                <div className="flex min-w-0 items-center gap-3">
+                                  <UserAvatar
+                                    name={user.name || "Member"}
+                                    photoURL={user.photoURL}
+                                    size={44}
+                                  />
+
+                                  <div className="min-w-0">
+                                    <div className="truncate text-sm font-medium text-white sm:text-base">
+                                      {user.name || "Unnamed member"}
+                                    </div>
+                                    <div className="truncate text-xs text-neutral-500 sm:text-sm">
+                                      {user.email || "No email"}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleRoleChange(user.id, "banned")}
+                                  disabled={roleBusyUserId === user.id}
+                                  className="inline-flex items-center justify-center gap-2 rounded-full border border-red-500/25 bg-red-500/10 px-4 py-2 text-sm font-semibold text-red-100 transition hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  {roleBusyUserId === user.id ? (
+                                    <LoaderCircle className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <Ban className="h-4 w-4" />
+                                  )}
+                                  Ban 7 days
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )
+                      ) : null}
+                    </div>
+
+                    {data.bannedMembers.length === 0 ? (
+                      <div className="rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-5 text-sm text-neutral-400">
+                        No suspended members right now.
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        {data.bannedMembers.map((user) => (
+                          <div
+                            key={user.id}
+                            className="flex flex-col gap-4 rounded-2xl border border-red-500/15 bg-red-500/[0.04] px-4 py-4 sm:flex-row sm:items-center sm:justify-between"
+                          >
+                            <div className="flex min-w-0 items-center gap-3">
+                              <UserAvatar
+                                name={user.name || "Suspended member"}
+                                photoURL={user.photoURL}
+                                size={44}
+                              />
+
+                              <div className="min-w-0">
+                                <div className="truncate text-sm font-medium text-white sm:text-base">
+                                  {user.name || "Unnamed member"}
+                                </div>
+                                <div className="truncate text-xs text-neutral-500 sm:text-sm">
+                                  {user.email || "No email"}
+                                </div>
+                              </div>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => handleRoleChange(user.id, "user")}
+                              disabled={roleBusyUserId === user.id}
+                              className="inline-flex items-center justify-center gap-2 rounded-full border border-white/15 bg-white/[0.06] px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/[0.1] disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {roleBusyUserId === user.id ? (
+                                <LoaderCircle className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <RotateCcw className="h-4 w-4" />
+                              )}
+                              Restore member
+                            </button>
                           </div>
                         ))}
                       </div>

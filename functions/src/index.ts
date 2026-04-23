@@ -24,7 +24,7 @@ const defaultInviteOrigin = "https://alpha-wod.vercel.app";
 /** -----------------------------
  * Types
  * ----------------------------*/
-type Role = "admin" | "user" | string;
+type Role = "admin" | "user" | "banned" | string;
 type ApprovalStatus = "approved" | "pending" | string;
 
 type UserDoc = {
@@ -812,6 +812,10 @@ async function requireApprovedMember(uid: string): Promise<UserDoc> {
     return user;
   }
 
+  if (user.role === "banned") {
+    throw new HttpsError("permission-denied", "Your account is currently suspended.");
+  }
+
   if (user.approvalStatus === "pending") {
     throw new HttpsError("permission-denied", "Your account is awaiting admin approval.");
   }
@@ -1265,6 +1269,49 @@ export const approveUserAccess = onCall(async (request) => {
     approvalStatus: "approved",
     approvedAt: admin.firestore.FieldValue.serverTimestamp(),
     approvedBy: callerUid,
+  }, {merge: true});
+
+  return {ok: true};
+});
+
+export const updateMemberRole = onCall(async (request) => {
+  const callerUid = requireAuth(request);
+  await requireAdmin(callerUid);
+
+  const userId = requireString(request.data?.userId, "userId");
+  const role = requireString(request.data?.role, "role") as "user" | "banned";
+
+  if (role !== "user" && role !== "banned") {
+    throw new HttpsError("invalid-argument", "Role must be user or banned.");
+  }
+
+  const userRef = db.collection("users").doc(userId);
+  const snap = await userRef.get();
+
+  if (!snap.exists) {
+    throw new HttpsError("not-found", "User not found.");
+  }
+
+  const user = snap.data() as UserDoc;
+  if (user.role === "admin") {
+    throw new HttpsError("failed-precondition", "Admins cannot be reassigned.");
+  }
+
+  await userRef.set({
+    role,
+    approvalStatus: "approved",
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    ...(
+      role === "banned" ?
+        {
+          suspendedAt: admin.firestore.FieldValue.serverTimestamp(),
+          suspendedBy: callerUid,
+        } :
+        {
+          restoredAt: admin.firestore.FieldValue.serverTimestamp(),
+          restoredBy: callerUid,
+        }
+    ),
   }, {merge: true});
 
   return {ok: true};

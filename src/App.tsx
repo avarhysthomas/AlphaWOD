@@ -22,6 +22,10 @@ import Training from "./features/training/pages/Training";
 import TrainingCategory from "./features/training/pages/TrainingCategory";
 import TrainingMovement from "./features/training/pages/TrainingMovement";
 import Profile from "./features/profile/pages/Profile";
+import Feed from "./features/workouts/pages/Feed";
+import Workouts from "./features/workouts/pages/Workouts";
+import WorkoutComposer from "./features/workouts/pages/WorkoutComposer";
+import WorkoutDetail from "./features/workouts/pages/WorkoutDetail";
 import { useAuth } from "./context/AuthContext";
 
 import AdminInsights from "./features/admin/pages/AdminInsights";
@@ -75,6 +79,8 @@ function RequireMember({ children }: { children: React.ReactElement }) {
 
   if (loading)
     return <div className="text-white text-center mt-20">Loading...</div>;
+  if (appUser?.role === "banned")
+    return <Navigate to="/dashboard" replace state={{ from: location }} />;
   if (appUser?.role !== "user" && appUser?.role !== "admin")
     return <Navigate to="/" replace state={{ from: location }} />;
 
@@ -100,11 +106,17 @@ function AdminLayout() {
 
 export default function App() {
   const { user, appUser, loading } = useAuth();
+  const location = useLocation();
 
   if (loading)
     return <div className="text-white text-center mt-20">Loading...</div>;
 
   const isAuthed = !!user;
+  const isBanned = appUser?.role === "banned";
+
+  if (isAuthed && isBanned && location.pathname !== "/dashboard") {
+    return <Navigate to="/dashboard" replace state={{ from: location }} />;
+  }
 
   return (
     <Routes>
@@ -136,9 +148,7 @@ export default function App() {
         element={
           <RequireAuth>
             <RequireApproved>
-              <RequireMember>
-                <Dashboard />
-              </RequireMember>
+              <Dashboard />
             </RequireApproved>
           </RequireAuth>
         }
@@ -187,6 +197,58 @@ export default function App() {
           <RequireAuth>
             <RequireApproved>
               <Profile />
+            </RequireApproved>
+          </RequireAuth>
+        }
+      />
+
+      <Route
+        path="/feed"
+        element={
+          <RequireAuth>
+            <RequireApproved>
+              <RequireMember>
+                <Feed />
+              </RequireMember>
+            </RequireApproved>
+          </RequireAuth>
+        }
+      />
+
+      <Route
+        path="/workouts"
+        element={
+          <RequireAuth>
+            <RequireApproved>
+              <RequireMember>
+                <Workouts />
+              </RequireMember>
+            </RequireApproved>
+          </RequireAuth>
+        }
+      />
+
+      <Route
+        path="/workouts/new"
+        element={
+          <RequireAuth>
+            <RequireApproved>
+              <RequireMember>
+                <WorkoutComposer />
+              </RequireMember>
+            </RequireApproved>
+          </RequireAuth>
+        }
+      />
+
+      <Route
+        path="/workouts/:workoutId"
+        element={
+          <RequireAuth>
+            <RequireApproved>
+              <RequireMember>
+                <WorkoutDetail />
+              </RequireMember>
             </RequireApproved>
           </RequireAuth>
         }

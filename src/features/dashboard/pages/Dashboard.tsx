@@ -15,6 +15,7 @@ import { getAuth, onAuthStateChanged, User } from "firebase/auth";
 import { db } from "../../../firebase";
 import { useAuth } from "../../../context/AuthContext";
 import UserTopNav from "../../../components/layout/UserTopNav";
+import LogoutButton from "../../../components/ui/LogoutButton";
 import {
   Flame,
   Dumbbell,
@@ -454,6 +455,7 @@ function typeMeta(title?: string) {
 export default function Dashboard() {
   const { appUser } = useAuth();
   const auth = getAuth();
+  const isBanned = appUser?.role === "banned";
 
   const [user, setUser] = useState<User | null>(auth.currentUser);
   const [stats, setStats] = useState<UserStats | null>(null);
@@ -584,6 +586,32 @@ export default function Dashboard() {
   }, []);
 
   const firstName = appUser?.name?.split(" ")[0] || appUser?.email?.split("@")[0] || "there";
+
+  if (isBanned) {
+    return (
+      <div className="min-h-screen bg-black text-white overflow-x-hidden">
+        <div className="mx-auto flex min-h-screen max-w-3xl items-center px-4 py-12">
+          <div className="w-full rounded-[2rem] border border-red-500/20 bg-gradient-to-br from-red-500/10 via-black to-black p-8 shadow-[0_0_60px_rgba(127,29,29,0.18)] sm:p-10">
+            <div className="inline-flex items-center gap-2 rounded-full border border-red-500/25 bg-red-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-red-200">
+              Account Suspended
+            </div>
+
+            <h1 className="mt-5 text-4xl font-heading uppercase tracking-[0.18em] text-white sm:text-5xl">
+              Access paused
+            </h1>
+
+            <p className="mt-4 max-w-2xl text-base leading-7 text-white/75 sm:text-lg">
+              Your account has been suspended for 7 days, due to not turning up to your booking on multiple occasions.
+            </p>
+
+            <div className="mt-8">
+              <LogoutButton />
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const todayKey = todayKeyLondon();
   const todayClasses = bookedClasses.filter(

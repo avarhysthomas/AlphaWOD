@@ -30,10 +30,13 @@ export async function getInsightsSummary() {
   const monthKey = getMonthKey();
 
   const approvedMembers = users.filter(
-    (u) => u.role !== "admin" && u.approvalStatus !== "pending"
+    (u) => u.role !== "admin" && u.role !== "banned" && u.approvalStatus !== "pending"
   );
   const pendingApprovals = users
-    .filter((u) => u.role !== "admin" && u.approvalStatus === "pending")
+    .filter((u) => u.role !== "admin" && u.role !== "banned" && u.approvalStatus === "pending")
+    .sort((a, b) => (a.name ?? a.email ?? "").localeCompare(b.name ?? b.email ?? ""));
+  const bannedMembers = users
+    .filter((u) => u.role === "banned")
     .sort((a, b) => (a.name ?? a.email ?? "").localeCompare(b.name ?? b.email ?? ""));
 
   const totalMembers = approvedMembers.length;
@@ -79,6 +82,7 @@ export async function getInsightsSummary() {
     topStreakUser,
     topAttenders,
     inactiveMembers,
+    bannedMembers,
     pendingApprovals,
     monthKey,
     users: approvedMembers,
