@@ -24,7 +24,7 @@ const defaultInviteOrigin = "https://alpha-wod.vercel.app";
 /** -----------------------------
  * Types
  * ----------------------------*/
-type Role = "admin" | "user" | "banned" | string;
+type Role = "admin" | "user" | "sgpt" | "banned" | string;
 type ApprovalStatus = "approved" | "pending" | string;
 
 type UserDoc = {
@@ -1279,10 +1279,10 @@ export const updateMemberRole = onCall(async (request) => {
   await requireAdmin(callerUid);
 
   const userId = requireString(request.data?.userId, "userId");
-  const role = requireString(request.data?.role, "role") as "user" | "banned";
+  const role = requireString(request.data?.role, "role") as "user" | "sgpt" | "banned";
 
-  if (role !== "user" && role !== "banned") {
-    throw new HttpsError("invalid-argument", "Role must be user or banned.");
+  if (role !== "user" && role !== "sgpt" && role !== "banned") {
+    throw new HttpsError("invalid-argument", "Role must be user, sgpt, or banned.");
   }
 
   const userRef = db.collection("users").doc(userId);

@@ -1,5 +1,5 @@
 import React from "react";
-import { Newspaper, Share, TimerReset, Trash2 } from "lucide-react";
+import { Newspaper, Share, Trash2 } from "lucide-react";
 import type { AccentClasses } from "../utils/movementHelpers";
 
 type TrainingLog = {
@@ -50,17 +50,11 @@ export default function MovementHistorySection({
 
       <div className="relative mb-7 flex items-center justify-between gap-4">
         <div>
-          <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/42">
-            <TimerReset className="h-3.5 w-3.5" />
-            History
-          </div>
           <h2 className="text-2xl font-semibold tracking-[-0.03em] text-white">
-            {activeMetricFilter ? `${movementName} · ${activeMetricFilter}` : `${movementName} History`}
+            {activeMetricFilter ? activeMetricFilter : `${movementName} history`}
           </h2>
           <p className="mt-3 text-sm leading-7 text-white/58">
-            {activeMetricFilter
-              ? `Your latest ${activeMetricFilter} entries for this movement.`
-              : "Your latest entries for this movement."}
+            Latest entries for {movementName}.
           </p>
         </div>
       </div>
@@ -110,7 +104,7 @@ export default function MovementHistorySection({
                     </div>
 
                     <div className="mt-2 text-sm text-white/56">
-                      {log.reps ? `${log.reps} reps` : "Logged entry"}
+                      {log.reps ? `${log.reps} reps` : prettyDate(log.date)}
                     </div>
 
                     {log.notes ? (
@@ -162,7 +156,7 @@ export default function MovementHistorySection({
                     </div>
 
                     <div className="mt-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/38">
-                      {isDeleting ? "Deleting..." : isPosting ? "Posting..." : prettyDate(log.date)}
+                      {isDeleting ? "Deleting..." : isPosting ? "Posting..." : log.metricType}
                     </div>
                   </div>
                 </div>

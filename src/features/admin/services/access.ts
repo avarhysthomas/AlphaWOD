@@ -88,8 +88,8 @@ function getRoleUpdateErrorMessage(err: any) {
   return message || "Failed to update member role.";
 }
 
-export async function updateMemberRole(userId: string, role: "user" | "banned") {
-  const callable = httpsCallable<{ userId: string; role: "user" | "banned" }, { ok: boolean }>(
+export async function updateMemberRole(userId: string, role: "user" | "sgpt" | "banned") {
+  const callable = httpsCallable<{ userId: string; role: "user" | "sgpt" | "banned" }, { ok: boolean }>(
     functions,
     "updateMemberRole"
   );

@@ -1,8 +1,10 @@
+import type { AppRole } from "../lib/roles";
+
 export type AppUser = {
   uid: string;
   email?: string | null;
   name?: string;
-  role?: "admin" | "user" | "banned";
+  role?: AppRole;
   approvalStatus?: "approved" | "pending";
 };
 
@@ -19,6 +21,8 @@ export function buildAppUser(
   const role =
     rawData?.role === "admin"
       ? "admin"
+      : rawData?.role === "sgpt"
+      ? "sgpt"
       : rawData?.role === "banned"
       ? "banned"
       : "user";

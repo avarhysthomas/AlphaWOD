@@ -1,5 +1,5 @@
 import React from "react";
-import { CheckCircle2, Plus, Share, Sparkles } from "lucide-react";
+import { CheckCircle2, Plus, Share } from "lucide-react";
 import type { AccentClasses, FormFieldErrors, SmartFormConfig } from "../utils/movementHelpers";
 
 type MovementLogFormProps = {
@@ -73,15 +73,11 @@ export default function MovementLogForm({
 
       <div className="relative mb-7 flex items-start justify-between gap-4">
         <div>
-          <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/42">
-            <Sparkles className="h-3.5 w-3.5" />
-            Manual Log
-          </div>
           <h2 className="text-2xl font-semibold tracking-[-0.03em] text-white">
-            Log {movementName}
+            Log result
           </h2>
           <p className="mt-3 max-w-xl text-sm leading-7 text-white/58">
-            Add a clean entry with the right metric, unit, and session detail.
+            Add a result for {movementName}.
           </p>
         </div>
       </div>
@@ -239,7 +235,7 @@ export default function MovementLogForm({
             {formErrors.notes ? (
               <span className="text-xs text-red-200">{formErrors.notes}</span>
             ) : (
-              <span className="text-xs text-white/35">Optional context for this entry.</span>
+              <span className="text-xs text-white/35">Optional.</span>
             )}
             <span className="text-xs text-white/35">{notes.length}/280</span>
           </div>

@@ -10,7 +10,7 @@ import {
   Target,
   Trophy,
 } from "lucide-react";
-import AdminOnly from "../../../components/guards/AdminOnly";
+import PerformanceAccessOnly from "../../../components/guards/PerformanceAccessOnly";
 import UserTopNav from "../../../components/layout/UserTopNav";
 import UserAvatar from "../../../components/ui/UserAvatar";
 import AdminKpiCard from "../components/AdminKpiCard";
@@ -118,7 +118,7 @@ export default function AdminMemberPerformance() {
   }, [data, categoryFilter]);
 
   return (
-    <AdminOnly>
+    <PerformanceAccessOnly>
       <div className="min-h-screen bg-black text-white">
         <UserTopNav />
 
@@ -489,6 +489,6 @@ export default function AdminMemberPerformance() {
           </div>
         </div>
       </div>
-    </AdminOnly>
+    </PerformanceAccessOnly>
   );
 }

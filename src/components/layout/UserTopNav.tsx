@@ -15,6 +15,7 @@ import {
   ClipboardPen,
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
+import { isAdminRole, isSgptRole } from "../../lib/roles";
 
 type NavItem = {
   to: string;
@@ -42,14 +43,23 @@ const adminNavItems: NavItem[] = [
   { to: "/editor", label: "Editor", icon: SquarePen, adminOnly: true },
 ];
 
+const sgptNavItems: NavItem[] = [
+  { to: "/sgpt/dashboard", label: "Home", icon: LayoutDashboard },
+  { to: "/training", label: "Performance", icon: Dumbbell },
+  { to: "/admin/performance", label: "Dashboard", icon: Activity, adminOnly: true },
+];
+
 export default function UserTopNav() {
   const { appUser } = useAuth();
-  const isAdmin = appUser?.role === "admin";
+  const isAdmin = isAdminRole(appUser?.role);
+  const isSgpt = isSgptRole(appUser?.role);
 
-  const navItems = [
-    ...baseNavItems,
-    ...(isAdmin ? adminNavItems : []),
-  ];
+  const navItems = isSgpt
+    ? sgptNavItems
+    : [
+        ...baseNavItems,
+        ...(isAdmin ? adminNavItems : []),
+      ];
 
   return (
     <div

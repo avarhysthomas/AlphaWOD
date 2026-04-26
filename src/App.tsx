@@ -15,6 +15,7 @@ import Login from "./features/auth/pages/Login";
 import PendingApproval from "./features/auth/pages/PendingApproval";
 import Signup from "./features/auth/pages/Signup";
 import Dashboard from "./features/dashboard/pages/Dashboard";
+import SgptDashboard from "./features/dashboard/pages/SgptDashboard";
 import Schedule from "./features/bookings/pages/Schedule";
 import ClassRoster from "./features/bookings/pages/ClassRoster";
 import Leaderboard from "./features/leaderboard/pages/Leaderboard";
@@ -33,6 +34,13 @@ import AdminPerformance from "./features/admin/pages/AdminPerformance";
 import AdminMemberPerformance from "./features/admin/pages/AdminMemberPerformance";
 import AdminMetricPerformance from "./features/admin/pages/AdminMetricPerformance";
 import AdminMetricIndex from "./features/admin/pages/AdminMetricIndex";
+import {
+  canAccessTraining,
+  hasPerformanceAccess,
+  isAdminRole,
+  isGeneralMemberRole,
+  isSgptRole,
+} from "./lib/roles";
 
 /** ---------- Route guards ---------- */
 
@@ -53,8 +61,20 @@ function RequireAdmin({ children }: { children: React.ReactElement }) {
 
   if (loading)
     return <div className="text-white text-center mt-20">Loading...</div>;
-  if (appUser?.role !== "admin")
+  if (!isAdminRole(appUser?.role))
     return <Navigate to="/dashboard" replace state={{ from: location }} />;
+
+  return children;
+}
+
+function RequireSgpt({ children }: { children: React.ReactElement }) {
+  const { appUser, loading } = useAuth();
+  const location = useLocation();
+
+  if (loading)
+    return <div className="text-white text-center mt-20">Loading...</div>;
+  if (!isSgptRole(appUser?.role))
+    return <Navigate to={getAuthedHome(appUser)} replace state={{ from: location }} />;
 
   return children;
 }
@@ -81,14 +101,41 @@ function RequireMember({ children }: { children: React.ReactElement }) {
     return <div className="text-white text-center mt-20">Loading...</div>;
   if (appUser?.role === "banned")
     return <Navigate to="/dashboard" replace state={{ from: location }} />;
-  if (appUser?.role !== "user" && appUser?.role !== "admin")
-    return <Navigate to="/" replace state={{ from: location }} />;
+  if (!isGeneralMemberRole(appUser?.role))
+    return <Navigate to={getAuthedHome(appUser)} replace state={{ from: location }} />;
+
+  return children;
+}
+
+function RequireTrainingAccess({ children }: { children: React.ReactElement }) {
+  const { appUser, loading } = useAuth();
+  const location = useLocation();
+
+  if (loading)
+    return <div className="text-white text-center mt-20">Loading...</div>;
+  if (appUser?.role === "banned")
+    return <Navigate to={getAuthedHome(appUser)} replace state={{ from: location }} />;
+  if (!canAccessTraining(appUser?.role))
+    return <Navigate to={getAuthedHome(appUser)} replace state={{ from: location }} />;
+
+  return children;
+}
+
+function RequirePerformanceArea({ children }: { children: React.ReactElement }) {
+  const { appUser, loading } = useAuth();
+  const location = useLocation();
+
+  if (loading)
+    return <div className="text-white text-center mt-20">Loading...</div>;
+  if (!hasPerformanceAccess(appUser?.role))
+    return <Navigate to={getAuthedHome(appUser)} replace state={{ from: location }} />;
 
   return children;
 }
 
 function getAuthedHome(appUser: ReturnType<typeof useAuth>["appUser"]) {
   if (appUser?.approvalStatus === "pending") return "/pending-approval";
+  if (isSgptRole(appUser?.role)) return "/sgpt/dashboard";
   return "/dashboard";
 }
 
@@ -148,7 +195,20 @@ export default function App() {
         element={
           <RequireAuth>
             <RequireApproved>
-              <Dashboard />
+              {isSgptRole(appUser?.role) ? <Navigate to="/sgpt/dashboard" replace /> : <Dashboard />}
+            </RequireApproved>
+          </RequireAuth>
+        }
+      />
+
+      <Route
+        path="/sgpt/dashboard"
+        element={
+          <RequireAuth>
+            <RequireApproved>
+              <RequireSgpt>
+                <SgptDashboard />
+              </RequireSgpt>
             </RequireApproved>
           </RequireAuth>
         }
@@ -259,9 +319,9 @@ export default function App() {
         element={
           <RequireAuth>
             <RequireApproved>
-              <RequireMember>
+              <RequireTrainingAccess>
                 <Training />
-              </RequireMember>
+              </RequireTrainingAccess>
             </RequireApproved>
           </RequireAuth>
         }
@@ -271,9 +331,9 @@ export default function App() {
         element={
           <RequireAuth>
             <RequireApproved>
-              <RequireMember>
+              <RequireTrainingAccess>
                 <TrainingCategory />
-              </RequireMember>
+              </RequireTrainingAccess>
             </RequireApproved>
           </RequireAuth>
         }
@@ -283,13 +343,34 @@ export default function App() {
         element={
           <RequireAuth>
             <RequireApproved>
-              <RequireMember>
+              <RequireTrainingAccess>
                 <TrainingMovement />
-              </RequireMember>
+              </RequireTrainingAccess>
             </RequireApproved>
           </RequireAuth>
         }
       />
+
+      {/* Performance area */}
+      <Route
+        element={
+          <RequireAuth>
+            <RequireApproved>
+              <RequirePerformanceArea>
+                <AdminLayout />
+              </RequirePerformanceArea>
+            </RequireApproved>
+          </RequireAuth>
+        }
+      >
+        <Route path="/admin/performance" element={<AdminPerformance />} />
+        <Route path="/admin/performance/metrics" element={<AdminMetricIndex />} />
+        <Route
+          path="/admin/performance/metric/:movementSlug/:metricType"
+          element={<AdminMetricPerformance />}
+        />
+        <Route path="/admin/performance/:userId" element={<AdminMemberPerformance />} />
+      </Route>
 
       {/* Admin-only area */}
       <Route
@@ -304,13 +385,6 @@ export default function App() {
         }
       >
         <Route path="/admin/insights" element={<AdminInsights />} />
-        <Route path="/admin/performance" element={<AdminPerformance />} />
-        <Route path="/admin/performance/metrics" element={<AdminMetricIndex />} />
-        <Route
-          path="/admin/performance/metric/:movementSlug/:metricType"
-          element={<AdminMetricPerformance />}
-        />
-        <Route path="/admin/performance/:userId" element={<AdminMemberPerformance />} />
         <Route path="/display" element={<WODDisplay />} />
         <Route path="/editor" element={<WODEditor />} />
         <Route path="/admin/classes/:classId" element={<ClassRoster />} />

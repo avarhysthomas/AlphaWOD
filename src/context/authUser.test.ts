@@ -44,4 +44,19 @@ describe("auth user builders", () => {
       approvalStatus: "approved",
     });
   });
+
+  it("preserves the sgpt role from the profile", () => {
+    expect(
+      buildAppUser(
+        { uid: "abc", email: "member@example.com" },
+        { name: "SGPT", role: "sgpt", approvalStatus: "approved" }
+      )
+    ).toEqual({
+      uid: "abc",
+      email: "member@example.com",
+      name: "SGPT",
+      role: "sgpt",
+      approvalStatus: "approved",
+    });
+  });
 });

@@ -10,7 +10,7 @@ import {
   Timer,
   Trophy,
 } from "lucide-react";
-import AdminOnly from "../../../components/guards/AdminOnly";
+import PerformanceAccessOnly from "../../../components/guards/PerformanceAccessOnly";
 import UserTopNav from "../../../components/layout/UserTopNav";
 import UserAvatar from "../../../components/ui/UserAvatar";
 import AdminSectionCard from "../components/AdminSectionCard";
@@ -101,7 +101,7 @@ export default function AdminMetricPerformance() {
   }, [movementSlug, metricType]);
 
   return (
-    <AdminOnly>
+    <PerformanceAccessOnly>
       <div className="min-h-screen bg-black text-white">
         <UserTopNav />
 
@@ -301,6 +301,6 @@ export default function AdminMetricPerformance() {
           </div>
         </div>
       </div>
-    </AdminOnly>
+    </PerformanceAccessOnly>
   );
 }

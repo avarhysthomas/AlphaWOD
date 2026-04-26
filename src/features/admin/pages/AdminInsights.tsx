@@ -3,6 +3,7 @@ import {
   Activity,
   AlertTriangle,
   Ban,
+  Bot,
   CheckCircle2,
   Flame,
   LoaderCircle,
@@ -140,7 +141,7 @@ export default function AdminInsights() {
     }
   }
 
-  async function handleRoleChange(userId: string, role: "user" | "banned") {
+  async function handleRoleChange(userId: string, role: "user" | "sgpt" | "banned") {
     try {
       setRoleBusyUserId(userId);
       setRoleActionError(null);
@@ -163,22 +164,24 @@ export default function AdminInsights() {
 
         const nextInactiveMembers = current.inactiveMembers.filter((user) => user.id !== userId);
         const nextBannedMembers = current.bannedMembers.filter((user) => user.id !== userId);
+        const wasBanned = movedUser.role === "banned";
+        const wasActiveRecently =
+          !!movedUser.stats?.lastCheckInDate &&
+          Math.floor(
+            (Date.now() - new Date(`${movedUser.stats.lastCheckInDate}T00:00:00`).getTime()) /
+              (1000 * 60 * 60 * 24)
+          ) <= 30;
+        const monthCheckIns = movedUser.stats?.monthCheckIns?.[current.monthKey] ?? 0;
+        const totalCheckIns = movedUser.stats?.totalCheckIns ?? 0;
 
         if (role === "banned") {
           return {
             ...current,
-            totalMembers: Math.max(0, current.totalMembers - 1),
+            totalMembers: wasBanned ? current.totalMembers : Math.max(0, current.totalMembers - 1),
             activeMembers:
-              movedUser.stats?.lastCheckInDate &&
-              Math.floor(
-                (Date.now() - new Date(`${movedUser.stats.lastCheckInDate}T00:00:00`).getTime()) /
-                  (1000 * 60 * 60 * 24)
-              ) <= 30
-                ? Math.max(0, current.activeMembers - 1)
-                : current.activeMembers,
-            monthCheckIns:
-              current.monthCheckIns - (movedUser.stats?.monthCheckIns?.[current.monthKey] ?? 0),
-            totalCheckIns: current.totalCheckIns - (movedUser.stats?.totalCheckIns ?? 0),
+              !wasBanned && wasActiveRecently ? Math.max(0, current.activeMembers - 1) : current.activeMembers,
+            monthCheckIns: wasBanned ? current.monthCheckIns : current.monthCheckIns - monthCheckIns,
+            totalCheckIns: wasBanned ? current.totalCheckIns : current.totalCheckIns - totalCheckIns,
             users: nextUsers,
             inactiveMembers: nextInactiveMembers,
             bannedMembers: [...nextBannedMembers, {...movedUser, role}].sort((a, b) =>
@@ -189,18 +192,10 @@ export default function AdminInsights() {
 
         return {
           ...current,
-          totalMembers: current.totalMembers + 1,
-          activeMembers:
-            movedUser.stats?.lastCheckInDate &&
-            Math.floor(
-              (Date.now() - new Date(`${movedUser.stats.lastCheckInDate}T00:00:00`).getTime()) /
-                (1000 * 60 * 60 * 24)
-            ) <= 30
-              ? current.activeMembers + 1
-              : current.activeMembers,
-          monthCheckIns:
-            current.monthCheckIns + (movedUser.stats?.monthCheckIns?.[current.monthKey] ?? 0),
-          totalCheckIns: current.totalCheckIns + (movedUser.stats?.totalCheckIns ?? 0),
+          totalMembers: wasBanned ? current.totalMembers + 1 : current.totalMembers,
+          activeMembers: wasBanned && wasActiveRecently ? current.activeMembers + 1 : current.activeMembers,
+          monthCheckIns: wasBanned ? current.monthCheckIns + monthCheckIns : current.monthCheckIns,
+          totalCheckIns: wasBanned ? current.totalCheckIns + totalCheckIns : current.totalCheckIns,
           users: [...nextUsers, {...movedUser, role}].sort((a, b) =>
             (a.name ?? a.email ?? "").localeCompare(b.name ?? b.email ?? "")
           ),
@@ -561,7 +556,7 @@ export default function AdminInsights() {
                         type="search"
                         value={memberSearch}
                         onChange={(e) => setMemberSearch(e.target.value)}
-                        placeholder="Search members to suspend..."
+                        placeholder="Search members to assign SGPT or suspend..."
                         className="w-full rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-white outline-none transition placeholder:text-neutral-500 focus:border-red-400/40 focus:bg-white/[0.06]"
                       />
 
@@ -594,19 +589,35 @@ export default function AdminInsights() {
                                   </div>
                                 </div>
 
-                                <button
-                                  type="button"
-                                  onClick={() => handleRoleChange(user.id, "banned")}
-                                  disabled={roleBusyUserId === user.id}
-                                  className="inline-flex items-center justify-center gap-2 rounded-full border border-red-500/25 bg-red-500/10 px-4 py-2 text-sm font-semibold text-red-100 transition hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-60"
-                                >
-                                  {roleBusyUserId === user.id ? (
-                                    <LoaderCircle className="h-4 w-4 animate-spin" />
-                                  ) : (
-                                    <Ban className="h-4 w-4" />
-                                  )}
-                                  Ban 7 days
-                                </button>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRoleChange(user.id, user.role === "sgpt" ? "user" : "sgpt")}
+                                    disabled={roleBusyUserId === user.id}
+                                    className="inline-flex items-center justify-center gap-2 rounded-full border border-sky-500/25 bg-sky-500/10 px-4 py-2 text-sm font-semibold text-sky-100 transition hover:bg-sky-500/15 disabled:cursor-not-allowed disabled:opacity-60"
+                                  >
+                                    {roleBusyUserId === user.id ? (
+                                      <LoaderCircle className="h-4 w-4 animate-spin" />
+                                    ) : (
+                                      <Bot className="h-4 w-4" />
+                                    )}
+                                    {user.role === "sgpt" ? "Make member" : "Make SGPT"}
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRoleChange(user.id, "banned")}
+                                    disabled={roleBusyUserId === user.id}
+                                    className="inline-flex items-center justify-center gap-2 rounded-full border border-red-500/25 bg-red-500/10 px-4 py-2 text-sm font-semibold text-red-100 transition hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-60"
+                                  >
+                                    {roleBusyUserId === user.id ? (
+                                      <LoaderCircle className="h-4 w-4 animate-spin" />
+                                    ) : (
+                                      <Ban className="h-4 w-4" />
+                                    )}
+                                    Ban 7 days
+                                  </button>
+                                </div>
                               </div>
                             ))}
                           </div>

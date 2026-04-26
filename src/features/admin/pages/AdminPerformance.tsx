@@ -8,9 +8,10 @@ import {
   Target,
   Trophy,
 } from "lucide-react";
-import AdminOnly from "../../../components/guards/AdminOnly";
+import PerformanceAccessOnly from "../../../components/guards/PerformanceAccessOnly";
 import UserTopNav from "../../../components/layout/UserTopNav";
 import UserAvatar from "../../../components/ui/UserAvatar";
+import { useAuth } from "../../../context/AuthContext";
 import AdminSectionCard from "../components/AdminSectionCard";
 import { getPerformanceSummary } from "../services/performance";
 
@@ -84,8 +85,11 @@ function RankBadge({ index }: { index: number }) {
 }
 
 export default function AdminPerformance() {
+  const { appUser } = useAuth();
   const [data, setData] = useState<PerformanceSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const dashboardLabel = appUser?.role === "sgpt" ? "Performance Dashboard" : "Admin Performance";
+  const dashboardTitle = appUser?.role === "sgpt" ? "Performance Dashboard" : "Performance Command Centre";
 
   useEffect(() => {
     let alive = true;
@@ -105,7 +109,7 @@ export default function AdminPerformance() {
   }, []);
 
   return (
-    <AdminOnly>
+    <PerformanceAccessOnly>
       <div className="min-h-screen bg-black text-white">
         <UserTopNav />
 
@@ -119,11 +123,11 @@ export default function AdminPerformance() {
                 <div className="max-w-2xl min-w-0">
                   <div className="inline-flex items-center gap-2 rounded-full border border-amber-500/20 bg-amber-500/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] text-amber-200 sm:text-[11px] sm:tracking-[0.28em]">
                     <Activity className="h-3.5 w-3.5" />
-                    Admin Performance
+                    {dashboardLabel}
                   </div>
 
                   <h1 className="mt-4 text-2xl font-heading tracking-tight sm:text-4xl">
-                    Performance Command Centre
+                    {dashboardTitle}
                   </h1>
 
                   <p className="mt-3 max-w-xl text-sm leading-6 text-neutral-400 sm:text-base">
@@ -499,6 +503,6 @@ export default function AdminPerformance() {
           </div>
         </div>
       </div>
-    </AdminOnly>
+    </PerformanceAccessOnly>
   );
 }

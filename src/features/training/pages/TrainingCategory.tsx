@@ -46,12 +46,6 @@ export default function TrainingCategory() {
                   <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5 backdrop-blur">
                     {selectedCategory.movements.length} movements
                   </span>
-                  <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5 backdrop-blur">
-                    Zero Alpha Performance
-                  </span>
-                  <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5 backdrop-blur">
-                    Track progress precisely
-                  </span>
                 </div>
               </div>
 
@@ -84,10 +78,6 @@ export default function TrainingCategory() {
               <div className="relative flex h-full flex-col">
                 <div className="flex items-start justify-between gap-4">
                   <div className="pr-10">
-                    <div className="mb-3 inline-flex rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] text-white/45">
-                      Benchmark
-                    </div>
-
                     <h2 className="text-2xl font-heading uppercase tracking-[-0.03em] text-white">
                       {movement.name}
                     </h2>
@@ -112,13 +102,8 @@ export default function TrainingCategory() {
                     </span>
                   ))}
                 </div>
-                <div className="mt-5 flex items-center justify-between border-t border-white/8 pt-4">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-white/35">
-                    Open movement
-                  </div>
-                  <div className="text-sm font-medium text-white/65 transition duration-300 group-hover:text-white">
-                    View details
-                  </div>
+                <div className="mt-5 flex items-center border-t border-white/8 pt-4 text-sm font-medium text-white/65 transition duration-300 group-hover:text-white">
+                  View movement
                 </div>
               </div>
             </Link>

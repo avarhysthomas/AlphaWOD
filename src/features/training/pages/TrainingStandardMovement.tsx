@@ -3,7 +3,6 @@ import { Link, Navigate, useParams } from "react-router-dom";
 import {
   ChevronLeft,
   Trophy,
-  BarChart3,
 } from "lucide-react";
 import {
   addDoc,
@@ -40,6 +39,7 @@ import {
   getSmartFormConfig,
   isBetterPerformance,
   isTimeDisplay,
+  normalizeTrainingLogValue,
   parseChartValue,
   prettyDate,
   shortDate,
@@ -383,7 +383,7 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
       setSaved(false);
       setIsNewPB(false);
 
-      const submittedValue = value.trim();
+      const submittedValue = normalizeTrainingLogValue(value, effectiveUnit);
       const submittedUnit = effectiveUnit;
       const parsedSubmittedValue = parseChartValue(submittedValue, submittedUnit);
 
@@ -539,13 +539,7 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
 
                 <div className="mt-6 flex flex-wrap items-center gap-3 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/45">
                   <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5 backdrop-blur">
-                    Movement Detail
-                  </span>
-                  <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5 backdrop-blur">
-                    Benchmark Tracking
-                  </span>
-                  <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5 backdrop-blur">
-                    Zero Alpha Performance
+                    {movement.metricTypes.length} metrics
                   </span>
                 </div>
               </div>
@@ -606,7 +600,7 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
             <div className={`absolute inset-x-0 top-0 h-px ${accent.line}`} />
             <div className="relative">
               <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-white/42">
-                Latest Entry
+                Latest
               </div>
               <div className="mt-4 text-3xl font-semibold tracking-[-0.04em]">
                 {latestLog
@@ -631,7 +625,7 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
             <div className={`absolute inset-x-0 top-0 h-px ${accent.line}`} />
             <div className="relative">
               <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-white/42">
-                Total Logs
+                Entries
               </div>
               <div className="mt-4 text-3xl font-semibold tracking-[-0.04em]">
                 {filteredLogs.length}
@@ -650,20 +644,13 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
           <div className="relative">
             <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                    <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/42">
-                    <BarChart3 className="h-3.5 w-3.5" />
+                    <h2 className="text-2xl font-semibold tracking-[-0.03em]">
                     Progress
-                    </div>
-                    <h2 className="mt-4 text-2xl font-semibold tracking-[-0.03em]">
-                    Progress over time
                     </h2>
                     <p className="mt-2 max-w-2xl text-sm leading-7 text-white/62">
-                    Track how this benchmark is moving across sessions and spot PB moments instantly.
-                    </p>
-                    <p className="mt-2 text-sm text-white/50">
                     {activeMetricFilter
-                        ? `Viewing ${activeMetricFilter} entries.`
-                        : "Select a metric type to view progress."}
+                        ? `${activeMetricFilter} across logged sessions.`
+                        : "Select a metric to view progress."}
                     </p>
                     <div className="mt-5 flex flex-wrap gap-2">
                       {metricFilterOptions.map((option) => {
@@ -693,11 +680,16 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
 
                 <div className="rounded-[24px] border border-white/10 bg-black/30 px-5 py-4 text-sm text-white/62 backdrop-blur">
                     <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/38">
-                    {selectedCategory.key === "engine" ? "Current fastest" : "Current best"} · {activeMetricFilter}
+                    {selectedCategory.key === "engine" ? "Current fastest" : "Current best"}
                     </div>
                     <div className="mt-3 text-sm text-white/62">
                     {bestLog
-                        ? `${bestLog.metricType} · ${prettyDate(bestLog.date)}`
+                        ? `${formatDisplayValue(
+                            bestLog.value,
+                            bestLog.unit,
+                            selectedCategory.key,
+                            movement.name
+                          )} · ${prettyDate(bestLog.date)}`
                         : selectedCategory.key === "engine"
                         ? `No ${activeMetricFilter} time yet`
                         : `No ${activeMetricFilter} entry yet`}

@@ -55,6 +55,8 @@ export function parseChartValue(rawValue: string, unit?: string) {
 
   if (!value) return null;
 
+  const isMinuteSecondTime = unit === "mm:ss";
+
   if (value.includes(":")) {
     const parts = value.split(":").map((part) => part.trim());
 
@@ -62,18 +64,57 @@ export function parseChartValue(rawValue: string, unit?: string) {
       const minutes = Number(parts[0]);
       const seconds = Number(parts[1]);
 
-      if (Number.isFinite(minutes) && Number.isFinite(seconds)) {
+      if (
+        Number.isInteger(minutes) &&
+        Number.isInteger(seconds) &&
+        minutes >= 0 &&
+        seconds >= 0 &&
+        seconds < 60
+      ) {
+        return minutes * 60 + seconds;
+      }
+    }
+  }
+
+  if (isMinuteSecondTime && value.includes(".")) {
+    const parts = value.split(".").map((part) => part.trim());
+
+    if (parts.length === 2) {
+      const minutes = Number(parts[0]);
+      const seconds = Number(parts[1]);
+
+      if (
+        Number.isInteger(minutes) &&
+        Number.isInteger(seconds) &&
+        minutes >= 0 &&
+        seconds >= 0 &&
+        seconds < 60
+      ) {
         return minutes * 60 + seconds;
       }
     }
   }
 
   const parsed = Number(value);
-  if (Number.isFinite(parsed)) {
+  if (Number.isFinite(parsed) && (!isMinuteSecondTime || !value.includes("."))) {
     return parsed;
   }
 
   return null;
+}
+
+export function normalizeTrainingLogValue(rawValue: string, unit?: string) {
+  const trimmedValue = rawValue.trim();
+  if (!trimmedValue) return trimmedValue;
+
+  if (unit === "mm:ss") {
+    const parsed = parseChartValue(trimmedValue, unit);
+    if (parsed !== null) {
+      return formatSeconds(parsed);
+    }
+  }
+
+  return trimmedValue;
 }
 
 export function formatSeconds(totalSeconds: number) {
@@ -186,7 +227,7 @@ export function validateTrainingLogForm(args: {
   } else if (isTimeDisplay(unit, categoryKey, movementName)) {
     const parsed = parseChartValue(trimmedValue, unit);
     if (parsed === null || parsed <= 0) {
-      errors.value = "Enter a valid time like 4:30 or a positive number of seconds.";
+      errors.value = "Enter a valid time like 4:30 or 4.30, or a positive number of seconds.";
     }
   } else if (!isPositiveNumber(trimmedValue)) {
     errors.value = "Enter a positive number.";

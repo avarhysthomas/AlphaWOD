@@ -32,8 +32,7 @@ export default function Training() {
               </h1>
 
               <p className="mt-4 max-w-3xl text-sm leading-7 text-white/68 sm:text-base">
-                Explore your benchmark categories, log key movements, track
-                progress over time.
+                Browse benchmark categories, log results, and track progress.
               </p>
 
               <div className="mt-6 flex flex-wrap gap-3 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/45">
@@ -45,10 +44,7 @@ export default function Training() {
                   total movements
                 </span>
                 <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5 backdrop-blur">
-                  Performance tracking
-                </span>
-                <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5 backdrop-blur">
-                  Zero Alpha standard
+                  5 categories
                 </span>
               </div>
             </div>
@@ -93,40 +89,12 @@ export default function Training() {
                     </p>
                   </div>
 
-                  <div className="mt-8 grid grid-cols-2 gap-3 rounded-[22px] border border-white/10 bg-black/25 p-4 backdrop-blur-sm">
-                    <div>
-                      <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/38">
-                        Movements
-                      </div>
-                      <div className="mt-1 text-sm font-semibold text-white/86">
-                        {category.movements.length}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/38">
-                        Focus
-                      </div>
-                      <div className="mt-1 text-sm font-semibold text-white/86">
-                        {category.key === "strength"
-                          ? "Force"
-                          : category.key === "power"
-                          ? "Explosive"
-                          : category.key === "engine"
-                          ? "Conditioning"
-                          : category.key === "zaps"
-                          ? "Gym Standard"
-                          : "Health"}
-                      </div>
-                    </div>
+                  <div className="mt-8 inline-flex w-fit rounded-full border border-white/10 bg-black/25 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-white/58 backdrop-blur-sm">
+                    {category.movements.length} movements
                   </div>
 
-                  <div className="mt-5 flex items-center justify-between border-t border-white/8 pt-4">
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/38">
-                      Open category
-                    </div>
-                    <div className="text-sm font-medium text-white/68 transition duration-300 group-hover:text-white">
-                      Explore
-                    </div>
+                  <div className="mt-6 flex items-center text-sm font-medium text-white/68 transition duration-300 group-hover:text-white">
+                    Explore category
                   </div>
                 </div>
               </Link>

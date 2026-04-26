@@ -8,7 +8,7 @@ import {
   Search,
   Target,
 } from "lucide-react";
-import AdminOnly from "../../../components/guards/AdminOnly";
+import PerformanceAccessOnly from "../../../components/guards/PerformanceAccessOnly";
 import UserTopNav from "../../../components/layout/UserTopNav";
 import AdminSectionCard from "../components/AdminSectionCard";
 import { getPerformanceSummary } from "../services/performance";
@@ -123,7 +123,7 @@ export default function AdminMetricIndex() {
   }
 
   return (
-    <AdminOnly>
+    <PerformanceAccessOnly>
       <div className="min-h-screen bg-black text-white">
         <UserTopNav />
 
@@ -313,6 +313,6 @@ export default function AdminMetricIndex() {
           </div>
         </div>
       </div>
-    </AdminOnly>
+    </PerformanceAccessOnly>
   );
 }
