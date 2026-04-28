@@ -1,5 +1,6 @@
 import React from "react";
 import type { WorkoutSection, WorkoutSession } from "../types";
+import { getPrimaryScoreLabel } from "../utils/workoutDisplay";
 
 type WorkoutShareCardProps = {
   workout: WorkoutSession;
@@ -56,15 +57,27 @@ function sectionLabel(kind: WorkoutSection["kind"]) {
   }
 }
 
+function isQuickLog(workout: WorkoutSession) {
+  const hasMovementEntries = workout.movementEntries.some((entry) =>
+    entry.movementName.trim()
+  );
+  const hasSections = workout.sections.some((section) => section.text.trim());
+
+  return !hasMovementEntries && !hasSections;
+}
+
 function buildStatRows(workout: WorkoutSession) {
+  const quickLog = isQuickLog(workout);
   const rows = [
-    workout.stats.score ? { label: "Score", value: workout.stats.score } : null,
+    workout.stats.score && !quickLog
+      ? { label: getPrimaryScoreLabel(workout), value: workout.stats.score }
+      : null,
     workout.stats.loadKg ? { label: "Load", value: `${workout.stats.loadKg} kg` } : null,
     workout.stats.reps ? { label: "Reps", value: workout.stats.reps } : null,
     workout.stats.distanceM ? { label: "Distance", value: `${workout.stats.distanceM} m` } : null,
     workout.stats.calories ? { label: "Calories", value: workout.stats.calories } : null,
     workout.stats.avgHeartRate ? { label: "Avg HR", value: `${workout.stats.avgHeartRate} bpm` } : null,
-    workout.stats.area ? { label: "Area", value: workout.stats.area } : null,
+    workout.stats.area ? { label: "Details", value: workout.stats.area } : null,
     workout.stats.totalRounds ? { label: "Rounds", value: workout.stats.totalRounds } : null,
     workout.durationMin ? { label: "Duration", value: `${workout.durationMin} min` } : null,
   ].filter(Boolean) as Array<{ label: string; value: string }>;
@@ -106,7 +119,7 @@ export function getWorkoutShareCardHeight(
   const heroBump = workout.title.trim().length > 22 ? 56 : 0;
   const infoRows = statRows + movementRows + sectionRows + notesRows;
 
-  return Math.max(700, 420 + heroBump + infoRows * 66 + (saluteCount ? 44 : 0));
+  return Math.max(720, 500 + heroBump + infoRows * 78 + (saluteCount ? 56 : 0));
 }
 
 function renderListCard(title: string, items: string[], accent: string) {

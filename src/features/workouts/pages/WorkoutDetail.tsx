@@ -17,6 +17,7 @@ import UserAvatar from "../../../components/ui/UserAvatar";
 import WorkoutShareModal from "../components/WorkoutShareModal";
 import { listenToFeedPost, listenToWorkoutSession } from "../services/workouts";
 import type { FeedPost, WorkoutSession } from "../types";
+import { getPrimaryScoreLabel } from "../utils/workoutDisplay";
 
 function formatDateLabel(sessionDate: string) {
   if (!sessionDate) return "Date TBD";
@@ -41,7 +42,9 @@ function buildStatRows(workout: WorkoutSession) {
   const isCardio = workout.type === "run";
 
   return [
-    workout.stats.score && !isCardio ? { label: "Score", value: workout.stats.score } : null,
+    workout.stats.score && !isCardio
+      ? { label: getPrimaryScoreLabel(workout), value: workout.stats.score }
+      : null,
     workout.stats.loadKg ? { label: "Load", value: `${workout.stats.loadKg} kg` } : null,
     workout.stats.reps ? { label: "Reps", value: workout.stats.reps } : null,
     workout.stats.distanceM ? { label: "Distance", value: `${workout.stats.distanceM} m` } : null,
@@ -49,7 +52,7 @@ function buildStatRows(workout: WorkoutSession) {
     workout.stats.avgHeartRate
       ? { label: "Avg HR", value: `${workout.stats.avgHeartRate} bpm` }
       : null,
-    workout.stats.area && !isCardio ? { label: "Area", value: workout.stats.area } : null,
+    workout.stats.area && !isCardio ? { label: "Details", value: workout.stats.area } : null,
     workout.stats.totalRounds && !scoreMatchesRounds
       ? { label: "Total Rounds", value: workout.stats.totalRounds }
       : null,

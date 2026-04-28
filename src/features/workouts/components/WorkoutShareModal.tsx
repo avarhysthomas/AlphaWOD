@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useLayoutEffect, useRef, useState } from "react";
 import styles from "../../../styles/PBShareModal.module.css";
 import { exportNodeToPng } from "../../../utils/shareExport";
 import type { WorkoutSession } from "../types";
@@ -19,8 +19,35 @@ export default function WorkoutShareModal({
 }: WorkoutShareModalProps) {
   const exportRef = useRef<HTMLDivElement | null>(null);
   const [isExporting, setIsExporting] = useState(false);
-  const cardHeight = getWorkoutShareCardHeight(workout, saluteCount);
-  const previewScale = Math.max(0.2, Math.min(0.36, 390 / cardHeight));
+  const estimatedHeight = getWorkoutShareCardHeight(workout, saluteCount);
+  const [cardHeight, setCardHeight] = useState(estimatedHeight);
+  const previewScale = Math.max(0.18, Math.min(0.36, 390 / cardHeight));
+
+  useLayoutEffect(() => {
+    if (!open) return;
+
+    setCardHeight(estimatedHeight);
+
+    if (!exportRef.current) return;
+
+    const measure = () => {
+      if (!exportRef.current) return;
+      const cardNode = exportRef.current.firstElementChild as HTMLElement | null;
+      const nextHeight = Math.ceil(
+        cardNode?.offsetHeight ||
+          exportRef.current.scrollHeight ||
+          exportRef.current.offsetHeight
+      );
+      if (nextHeight > 0) {
+        setCardHeight(nextHeight);
+      }
+    };
+
+    measure();
+
+    const animationId = window.requestAnimationFrame(measure);
+    return () => window.cancelAnimationFrame(animationId);
+  }, [estimatedHeight, open]);
 
   if (!open) return null;
 
