@@ -744,3 +744,12 @@ export async function getWorkoutSession(workoutId: string) {
     snapshot.data() as Record<string, unknown>
   );
 }
+
+export async function deleteWorkoutSession(workoutId: string) {
+  const batch = writeBatch(db);
+
+  batch.delete(doc(db, "workoutSessions", workoutId));
+  batch.delete(doc(db, "feedPosts", workoutId));
+
+  await batch.commit();
+}

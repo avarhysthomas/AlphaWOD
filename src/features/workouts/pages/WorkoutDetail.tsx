@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Link, Navigate, useParams } from "react-router-dom";
+import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import {
   ChevronLeft,
   Clock3,
@@ -10,12 +10,18 @@ import {
   Share2,
   Sparkles,
   ShieldCheck,
+  Trash2,
   Trophy,
 } from "lucide-react";
 import UserTopNav from "../../../components/layout/UserTopNav";
 import UserAvatar from "../../../components/ui/UserAvatar";
+import { useAuth } from "../../../context/AuthContext";
 import WorkoutShareModal from "../components/WorkoutShareModal";
-import { listenToFeedPost, listenToWorkoutSession } from "../services/workouts";
+import {
+  deleteWorkoutSession,
+  listenToFeedPost,
+  listenToWorkoutSession,
+} from "../services/workouts";
 import type { FeedPost, WorkoutSession } from "../types";
 import { getPrimaryScoreLabel } from "../utils/workoutDisplay";
 
@@ -164,11 +170,14 @@ function getDisplaySections(workout: WorkoutSession) {
 }
 
 export default function WorkoutDetail() {
+  const { user } = useAuth();
+  const navigate = useNavigate();
   const { workoutId } = useParams<{ workoutId: string }>();
   const [workout, setWorkout] = useState<WorkoutSession | null>(null);
   const [feedPost, setFeedPost] = useState<FeedPost | null>(null);
   const [loading, setLoading] = useState(true);
   const [shareOpen, setShareOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     if (!workoutId) {
@@ -203,6 +212,25 @@ export default function WorkoutDetail() {
   const cardioPace = workout
     ? formatCardioPace(workout.stats.distanceM, workout.stats.score)
     : null;
+  const canDelete = Boolean(user?.uid && workout && user.uid === workout.userId);
+
+  async function handleDeleteWorkout() {
+    if (!workout || !canDelete || isDeleting) return;
+
+    const confirmed = window.confirm(
+      "Delete this workout log? This will also remove it from the feed."
+    );
+    if (!confirmed) return;
+
+    try {
+      setIsDeleting(true);
+      await deleteWorkoutSession(workout.id);
+      navigate("/workouts");
+    } catch (error) {
+      console.error("Could not delete workout session", error);
+      setIsDeleting(false);
+    }
+  }
 
   return (
     <div className="min-h-screen bg-black text-white">
@@ -246,6 +274,17 @@ export default function WorkoutDetail() {
                       <Share2 className="h-4 w-4" />
                       Share
                     </button>
+                    {canDelete ? (
+                      <button
+                        type="button"
+                        onClick={handleDeleteWorkout}
+                        disabled={isDeleting}
+                        className="inline-flex items-center gap-2 rounded-full border border-red-400/18 bg-red-400/10 px-4 py-2.5 text-sm font-semibold text-red-100 transition hover:border-red-400/28 hover:bg-red-400/14 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        {isDeleting ? "Deleting..." : "Delete"}
+                      </button>
+                    ) : null}
                   </div>
 
                   <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-white/72">
