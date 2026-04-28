@@ -1,8 +1,8 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
-import { MessageSquareText, ShieldCheck, Timer } from "lucide-react";
+import { MessageSquareText, ShieldCheck, SquareArrowOutUpRight, Timer } from "lucide-react";
 import UserAvatar from "../../../components/ui/UserAvatar";
-import { toggleFeedReaction } from "../services/workouts";
+import { addFeedComment, toggleFeedReaction } from "../services/workouts";
 import type { FeedPost } from "../types";
 
 function formatDateLabel(sessionDate: string) {
@@ -18,9 +18,27 @@ function formatDateLabel(sessionDate: string) {
   }).format(value);
 }
 
+function formatCommentDate(createdAtMs: number | null) {
+  if (!createdAtMs) return "Just now";
+
+  const value = new Date(createdAtMs);
+  if (Number.isNaN(value.getTime())) return "Just now";
+
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(value);
+}
+
 type FeedPostCardProps = {
   post: FeedPost;
-  currentUserId?: string;
+  currentUser?: {
+    userId: string;
+    name: string;
+    photoURL?: string;
+  };
 };
 
 function formatWorkoutType(type: FeedPost["workoutType"]) {
@@ -39,26 +57,74 @@ function buildPostLink(post: FeedPost) {
   return post.workoutSessionId ? `/workouts/${post.workoutSessionId}` : "/feed";
 }
 
+function buildSaluteLine(post: FeedPost) {
+  const names = post.reactionUsers.map((entry) => entry.name).filter(Boolean);
+  const knownCount = names.length;
+  const extraCount = Math.max(post.reactionCount - knownCount, 0);
+
+  if (!knownCount && !extraCount) return "";
+  if (!knownCount) return `${post.reactionCount} members saluted this workout`;
+  if (knownCount === 1 && !extraCount) return `${names[0]} saluted this workout`;
+  if (knownCount === 2 && !extraCount) {
+    return `${names[0]} and ${names[1]} saluted this workout`;
+  }
+
+  const visibleNames = names.slice(0, 3);
+  const remainingCount =
+    extraCount + Math.max(knownCount - visibleNames.length, 0);
+
+  return remainingCount > 0
+    ? `${visibleNames.join(", ")} and ${remainingCount} other${remainingCount === 1 ? "" : "s"} saluted this workout`
+    : `${visibleNames.join(", ")} saluted this workout`;
+}
+
 export default function FeedPostCard({
   post,
-  currentUserId,
+  currentUser,
 }: FeedPostCardProps) {
   const [isToggling, setIsToggling] = useState(false);
-  const hasReacted = currentUserId
-    ? post.reactionUserIds.includes(currentUserId)
+  const [commentDraft, setCommentDraft] = useState("");
+  const [isCommenting, setIsCommenting] = useState(false);
+  const [showComments, setShowComments] = useState(false);
+  const hasReacted = currentUser
+    ? post.reactionUserIds.includes(currentUser.userId)
     : false;
   const postLink = buildPostLink(post);
+  const saluteLine = buildSaluteLine(post);
 
   async function handleReaction() {
-    if (!currentUserId || isToggling) return;
+    if (!currentUser || isToggling) return;
 
     try {
       setIsToggling(true);
-      await toggleFeedReaction(post.id, currentUserId);
+      await toggleFeedReaction(post.id, currentUser);
     } catch (error) {
       console.error("Could not toggle feed reaction", error);
     } finally {
       setIsToggling(false);
+    }
+  }
+
+  async function handleCommentSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!currentUser || isCommenting || !commentDraft.trim()) return;
+
+    try {
+      setIsCommenting(true);
+      await addFeedComment({
+        postId: post.id,
+        userId: currentUser.userId,
+        userName: currentUser.name,
+        userPhotoURL: currentUser.photoURL,
+        message: commentDraft,
+      });
+      setCommentDraft("");
+      setShowComments(true);
+    } catch (error) {
+      console.error("Could not add feed comment", error);
+    } finally {
+      setIsCommenting(false);
     }
   }
 
@@ -114,7 +180,7 @@ export default function FeedPostCard({
           <button
             type="button"
             onClick={handleReaction}
-            disabled={!currentUserId || isToggling}
+            disabled={!currentUser || isToggling}
             className={[
               "inline-flex items-center gap-2 rounded-full border px-3.5 py-2 text-[13px] font-semibold transition",
               hasReacted
@@ -126,16 +192,89 @@ export default function FeedPostCard({
             {post.reactionCount} salutes
           </button>
 
+          <button
+            type="button"
+            onClick={() => setShowComments((current) => !current)}
+            className="inline-flex items-center gap-2 rounded-full border border-white/8 bg-white/[0.03] px-3.5 py-2 text-[13px] font-semibold text-white/62 transition hover:border-white/16 hover:text-white"
+          >
+            <MessageSquareText className="h-3.5 w-3.5" />
+            {post.commentCount} comments
+          </button>
+
           {post.kind !== "performance" ? (
             <Link
               to={postLink}
               className="inline-flex items-center gap-2 rounded-full border border-white/8 bg-white/[0.03] px-3.5 py-2 text-[13px] font-semibold text-white/62 transition hover:border-white/16 hover:text-white"
             >
-              <MessageSquareText className="h-3.5 w-3.5" />
+              <SquareArrowOutUpRight className="h-3.5 w-3.5" />
               View workout
             </Link>
           ) : null}
         </div>
+
+        {saluteLine ? (
+          <p className="mt-3 text-sm text-white/54">{saluteLine}</p>
+        ) : null}
+
+        {showComments ? (
+          <div className="mt-4 rounded-[22px] border border-white/6 bg-white/[0.03] p-3.5 sm:p-4">
+            {post.comments.length ? (
+              <div className="space-y-3">
+                {post.comments.map((comment) => (
+                  <div
+                    key={comment.id}
+                    className="flex items-start gap-3 rounded-[18px] border border-white/6 bg-black/15 p-3"
+                  >
+                    <UserAvatar
+                      name={comment.userName}
+                      photoURL={comment.userPhotoURL}
+                      size={34}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2 text-[12px] text-white/44">
+                        <span className="font-semibold text-white/82">
+                          {comment.userName}
+                        </span>
+                        <span>{formatCommentDate(comment.createdAtMs)}</span>
+                      </div>
+                      <p className="mt-1.5 text-sm leading-6 text-white/68">
+                        {comment.message}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-white/42">
+                No comments yet. Start the conversation.
+              </p>
+            )}
+
+            <form className="mt-4 flex flex-col gap-3" onSubmit={handleCommentSubmit}>
+              <textarea
+                value={commentDraft}
+                onChange={(event) => setCommentDraft(event.target.value)}
+                placeholder="Add a comment..."
+                rows={3}
+                maxLength={280}
+                disabled={!currentUser || isCommenting}
+                className="w-full rounded-[18px] border border-white/8 bg-black/20 px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/28 focus:border-amber-300/40"
+              />
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-[12px] text-white/38">
+                  {commentDraft.trim().length}/280
+                </span>
+                <button
+                  type="submit"
+                  disabled={!currentUser || isCommenting || !commentDraft.trim()}
+                  className="inline-flex items-center rounded-full border border-amber-400/20 bg-amber-400/12 px-4 py-2 text-sm font-semibold text-amber-100 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isCommenting ? "Posting..." : "Post comment"}
+                </button>
+              </div>
+            </form>
+          </div>
+        ) : null}
       </div>
     </article>
   );

@@ -8,8 +8,16 @@ import { listenToFeed } from "../services/workouts";
 import type { FeedPost } from "../types";
 
 export default function Feed() {
-  const { user } = useAuth();
+  const { user, appUser } = useAuth();
   const [posts, setPosts] = useState<FeedPost[]>([]);
+
+  const currentUser = user
+    ? {
+        userId: user.uid,
+        name: appUser?.name || user.displayName || "Member",
+        photoURL: user.photoURL || undefined,
+      }
+    : undefined;
 
   useEffect(() => {
     const unsubscribe = listenToFeed(setPosts);
@@ -55,7 +63,7 @@ export default function Feed() {
               <FeedPostCard
                 key={post.id}
                 post={post}
-                currentUserId={user?.uid}
+                currentUser={currentUser}
               />
             ))
           ) : (

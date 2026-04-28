@@ -8,13 +8,16 @@ import {
   query,
   runTransaction,
   serverTimestamp,
+  Timestamp,
   where,
   writeBatch,
 } from "firebase/firestore";
 import { db } from "../../../firebase";
 import type {
   CreateWorkoutSessionInput,
+  FeedComment,
   FeedPost,
+  FeedReactionUser,
   WorkoutMovementEntry,
   WorkoutMovementEntryMetric,
   WorkoutScoreType,
@@ -36,6 +39,55 @@ function asStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === "string")
     : [];
+}
+
+function asFeedReactionUsers(value: unknown): FeedReactionUser[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return null;
+
+      const raw = entry as Record<string, unknown>;
+      const userId = asString(raw.userId);
+      const name = asString(raw.name);
+
+      if (!userId || !name) return null;
+
+      return {
+        userId,
+        name,
+        photoURL: asOptionalString(raw.photoURL),
+      };
+    })
+    .filter(Boolean) as FeedReactionUser[];
+}
+
+function asFeedComments(value: unknown): FeedComment[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return null;
+
+      const raw = entry as Record<string, unknown>;
+      const id = asString(raw.id);
+      const userId = asString(raw.userId);
+      const userName = asString(raw.userName);
+      const message = asString(raw.message);
+
+      if (!id || !userId || !userName || !message) return null;
+
+      return {
+        id,
+        userId,
+        userName,
+        userPhotoURL: asOptionalString(raw.userPhotoURL),
+        message,
+        createdAtMs: timestampToMillis(raw.createdAt),
+      };
+    })
+    .filter(Boolean) as FeedComment[];
 }
 
 function asMovementEntries(value: unknown): WorkoutMovementEntry[] {
@@ -273,6 +325,9 @@ function toFeedPost(id: string, data: Record<string, unknown>): FeedPost {
     reactionCount:
       typeof data.reactionCount === "number" ? data.reactionCount : 0,
     reactionUserIds: asStringArray(data.reactionUserIds),
+    reactionUsers: asFeedReactionUsers(data.reactionUsers),
+    commentCount: typeof data.commentCount === "number" ? data.commentCount : 0,
+    comments: asFeedComments(data.comments),
     linkedClassTitle: asOptionalString(data.linkedClassTitle),
     performanceCategory: asOptionalString(data.performanceCategory),
     performanceMovementSlug: asOptionalString(data.performanceMovementSlug),
@@ -281,6 +336,48 @@ function toFeedPost(id: string, data: Record<string, unknown>): FeedPost {
     performanceUnit: asOptionalString(data.performanceUnit),
     createdAtMs: timestampToMillis(data.createdAt),
   };
+}
+
+async function hydrateReactionUsers(post: FeedPost): Promise<FeedPost> {
+  if (!post.reactionUserIds.length) return post;
+
+  const knownUsers = new Map(
+    post.reactionUsers.map((entry) => [entry.userId, entry] as const)
+  );
+  const missingIds = post.reactionUserIds.filter((userId) => !knownUsers.has(userId));
+
+  if (!missingIds.length) return post;
+
+  try {
+    const missingUsers = await Promise.all(
+      missingIds.map(async (userId) => {
+        const snapshot = await getDoc(doc(db, "users", userId));
+        const data = snapshot.exists()
+          ? (snapshot.data() as Record<string, unknown>)
+          : null;
+
+        return {
+          userId,
+          name: asString(data?.name) || "Member",
+          photoURL: asOptionalString(data?.photoURL),
+        };
+      })
+    );
+
+    for (const user of missingUsers) {
+      knownUsers.set(user.userId, user);
+    }
+
+    return {
+      ...post,
+      reactionUsers: post.reactionUserIds
+        .map((userId) => knownUsers.get(userId))
+        .filter(Boolean) as FeedReactionUser[],
+    };
+  } catch (error) {
+    console.error("Could not hydrate reaction users", error);
+    return post;
+  }
 }
 
 const FEED_POST_LIMIT = 40;
@@ -294,11 +391,17 @@ export function listenToFeed(callback: (posts: FeedPost[]) => void) {
   );
 
   return onSnapshot(postsRef, (snapshot) => {
-    callback(
-      snapshot.docs.map((item) =>
-        toFeedPost(item.id, item.data() as Record<string, unknown>)
-      )
-    );
+    void (async () => {
+      const posts = await Promise.all(
+        snapshot.docs.map((item) =>
+          hydrateReactionUsers(
+            toFeedPost(item.id, item.data() as Record<string, unknown>)
+          )
+        )
+      );
+
+      callback(posts);
+    })();
   });
 }
 
@@ -387,6 +490,26 @@ export function listenToWorkoutSession(
   });
 }
 
+export function listenToFeedPost(
+  postId: string,
+  callback: (post: FeedPost | null) => void
+) {
+  return onSnapshot(doc(db, "feedPosts", postId), (snapshot) => {
+    if (!snapshot.exists()) {
+      callback(null);
+      return;
+    }
+
+    void (async () => {
+      callback(
+        await hydrateReactionUsers(
+          toFeedPost(snapshot.id, snapshot.data() as Record<string, unknown>)
+        )
+      );
+    })();
+  });
+}
+
 export async function createWorkoutSession(input: CreateWorkoutSessionInput) {
   const workoutRef = doc(collection(db, "workoutSessions"));
   const batch = writeBatch(db);
@@ -469,6 +592,9 @@ export async function createWorkoutSession(input: CreateWorkoutSessionInput) {
       notesPreview: input.notes.trim().slice(0, 180) || null,
       reactionCount: 0,
       reactionUserIds: [],
+      reactionUsers: [],
+      commentCount: 0,
+      comments: [],
       linkedClassTitle: input.linkedClassTitle?.trim() || null,
       createdAt: serverTimestamp(),
     });
@@ -512,6 +638,9 @@ export async function createPerformanceFeedPost(input: {
       notesPreview: input.notes?.trim().slice(0, 180) || null,
       reactionCount: 0,
       reactionUserIds: [],
+      reactionUsers: [],
+      commentCount: 0,
+      comments: [],
       performanceCategory: input.category.trim(),
       performanceMovementSlug: input.movementSlug.trim(),
       performanceMetricType: input.metricType.trim(),
@@ -524,7 +653,10 @@ export async function createPerformanceFeedPost(input: {
   return postRef.id;
 }
 
-export async function toggleFeedReaction(postId: string, userId: string) {
+export async function toggleFeedReaction(
+  postId: string,
+  actor: { userId: string; name: string; photoURL?: string }
+) {
   const postRef = doc(db, "feedPosts", postId);
 
   await runTransaction(db, async (transaction) => {
@@ -536,14 +668,68 @@ export async function toggleFeedReaction(postId: string, userId: string) {
 
     const data = snapshot.data() as Record<string, unknown>;
     const currentIds = asStringArray(data.reactionUserIds);
-    const hasReacted = currentIds.includes(userId);
+    const currentUsers = asFeedReactionUsers(data.reactionUsers);
+    const hasReacted = currentIds.includes(actor.userId);
     const nextIds = hasReacted
-      ? currentIds.filter((id) => id !== userId)
-      : [...currentIds, userId];
+      ? currentIds.filter((id) => id !== actor.userId)
+      : [...currentIds, actor.userId];
+    const nextUsers = hasReacted
+      ? currentUsers.filter((entry) => entry.userId !== actor.userId)
+      : [
+          ...currentUsers.filter((entry) => entry.userId !== actor.userId),
+          {
+            userId: actor.userId,
+            name: actor.name.trim() || "Member",
+            photoURL: actor.photoURL?.trim() || null,
+          },
+        ];
 
     transaction.update(postRef, {
       reactionUserIds: nextIds,
+      reactionUsers: nextUsers,
       reactionCount: nextIds.length,
+    });
+  });
+}
+
+export async function addFeedComment(input: {
+  postId: string;
+  userId: string;
+  userName: string;
+  userPhotoURL?: string;
+  message: string;
+}) {
+  const postRef = doc(db, "feedPosts", input.postId);
+  const cleanMessage = input.message.trim();
+
+  if (!cleanMessage) {
+    throw new Error("Comment message is required.");
+  }
+
+  await runTransaction(db, async (transaction) => {
+    const snapshot = await transaction.get(postRef);
+
+    if (!snapshot.exists()) {
+      throw new Error("Feed post no longer exists.");
+    }
+
+    const data = snapshot.data() as Record<string, unknown>;
+    const currentComments = asFeedComments(data.comments);
+    const nextComments = [
+      ...currentComments,
+      {
+        id: `${input.userId}-${Date.now()}`,
+        userId: input.userId,
+        userName: input.userName.trim() || "Member",
+        userPhotoURL: input.userPhotoURL?.trim() || null,
+        message: cleanMessage,
+        createdAt: Timestamp.now(),
+      },
+    ];
+
+    transaction.update(postRef, {
+      comments: nextComments,
+      commentCount: nextComments.length,
     });
   });
 }

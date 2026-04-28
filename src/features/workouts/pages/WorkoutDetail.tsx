@@ -7,13 +7,16 @@ import {
   Image,
   Lock,
   MapPinned,
+  Share2,
   Sparkles,
+  ShieldCheck,
   Trophy,
 } from "lucide-react";
 import UserTopNav from "../../../components/layout/UserTopNav";
 import UserAvatar from "../../../components/ui/UserAvatar";
-import { listenToWorkoutSession } from "../services/workouts";
-import type { WorkoutSession } from "../types";
+import WorkoutShareModal from "../components/WorkoutShareModal";
+import { listenToFeedPost, listenToWorkoutSession } from "../services/workouts";
+import type { FeedPost, WorkoutSession } from "../types";
 
 function formatDateLabel(sessionDate: string) {
   if (!sessionDate) return "Date TBD";
@@ -160,7 +163,9 @@ function getDisplaySections(workout: WorkoutSession) {
 export default function WorkoutDetail() {
   const { workoutId } = useParams<{ workoutId: string }>();
   const [workout, setWorkout] = useState<WorkoutSession | null>(null);
+  const [feedPost, setFeedPost] = useState<FeedPost | null>(null);
   const [loading, setLoading] = useState(true);
+  const [shareOpen, setShareOpen] = useState(false);
 
   useEffect(() => {
     if (!workoutId) {
@@ -174,6 +179,16 @@ export default function WorkoutDetail() {
       setLoading(false);
     });
 
+    return () => unsubscribe();
+  }, [workoutId]);
+
+  useEffect(() => {
+    if (!workoutId) {
+      setFeedPost(null);
+      return;
+    }
+
+    const unsubscribe = listenToFeedPost(workoutId, setFeedPost);
     return () => unsubscribe();
   }, [workoutId]);
 
@@ -212,13 +227,23 @@ export default function WorkoutDetail() {
               <div className="absolute inset-0 bg-[radial-gradient(circle_at_16%_14%,rgba(59,130,246,0.16),transparent_28%),radial-gradient(circle_at_82%_10%,rgba(245,158,11,0.16),transparent_28%),linear-gradient(135deg,rgba(255,255,255,0.03),transparent_55%)]" />
               <div className="relative p-5 sm:p-6 lg:p-7">
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <Link
-                    to="/workouts"
-                    className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/25 px-4 py-2.5 text-sm font-semibold text-white/85 transition hover:border-white/20 hover:bg-black/35 hover:text-white"
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                    Workouts
-                  </Link>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Link
+                      to="/workouts"
+                      className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/25 px-4 py-2.5 text-sm font-semibold text-white/85 transition hover:border-white/20 hover:bg-black/35 hover:text-white"
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                      Workouts
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => setShareOpen(true)}
+                      className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-semibold text-white/85 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
+                    >
+                      <Share2 className="h-4 w-4" />
+                      Share
+                    </button>
+                  </div>
 
                   <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-white/72">
                     <Sparkles className="h-3.5 w-3.5" />
@@ -272,6 +297,32 @@ export default function WorkoutDetail() {
                     </div>
                   </div>
                 </div>
+
+                {feedPost?.reactionCount ? (
+                  <div className="mt-4 rounded-[20px] border border-white/10 bg-black/20 p-4">
+                    <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-white/40">
+                      <ShieldCheck className="h-3.5 w-3.5 text-white/48" />
+                      Salutes
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2.5">
+                      {feedPost.reactionUsers.slice(0, 6).map((entry) => (
+                        <div
+                          key={entry.userId}
+                          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1.5"
+                        >
+                          <UserAvatar
+                            name={entry.name}
+                            photoURL={entry.photoURL}
+                            size={24}
+                          />
+                          <span className="text-sm font-medium text-white/78">
+                            {entry.name}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
 
                 {workout.notes ? (
                   <div className="mt-4 max-w-3xl rounded-[20px] border border-white/10 bg-black/20 p-4">
@@ -436,6 +487,15 @@ export default function WorkoutDetail() {
           </>
         ) : null}
       </div>
+
+      {workout ? (
+        <WorkoutShareModal
+          open={shareOpen}
+          onClose={() => setShareOpen(false)}
+          workout={workout}
+          saluteCount={feedPost?.reactionCount || 0}
+        />
+      ) : null}
     </div>
   );
 }

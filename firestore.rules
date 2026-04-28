@@ -34,7 +34,11 @@ service cloud.firestore {
     }
 
     function isReactionUpdate() {
-      return affectsOnly(["reactionUserIds", "reactionCount"]);
+      return affectsOnly(["reactionUserIds", "reactionUsers", "reactionCount"]);
+    }
+
+    function isCommentUpdate() {
+      return affectsOnly(["comments", "commentCount"]);
     }
 
     match /users/{userId} {
@@ -88,7 +92,8 @@ service cloud.firestore {
         isSignedIn() &&
         (
           resource.data.actorId == request.auth.uid ||
-          isReactionUpdate()
+          isReactionUpdate() ||
+          isCommentUpdate()
         )
       );
       allow delete: if isAdmin() || (

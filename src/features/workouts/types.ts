@@ -91,6 +91,21 @@ export type WorkoutSession = {
   updatedAtMs: number | null;
 };
 
+export type FeedReactionUser = {
+  userId: string;
+  name: string;
+  photoURL?: string;
+};
+
+export type FeedComment = {
+  id: string;
+  userId: string;
+  userName: string;
+  userPhotoURL?: string;
+  message: string;
+  createdAtMs: number | null;
+};
+
 export type FeedPost = {
   id: string;
   kind?: "workout" | "performance";
@@ -108,6 +123,9 @@ export type FeedPost = {
   notesPreview?: string;
   reactionCount: number;
   reactionUserIds: string[];
+  reactionUsers: FeedReactionUser[];
+  commentCount: number;
+  comments: FeedComment[];
   linkedClassTitle?: string;
   performanceCategory?: string;
   performanceMovementSlug?: string;
