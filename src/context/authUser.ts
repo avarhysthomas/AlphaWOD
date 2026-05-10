@@ -6,12 +6,14 @@ export type AppUser = {
   name?: string;
   role?: AppRole;
   approvalStatus?: "approved" | "pending";
+  strengthBlock?: "A" | "B" | "none";
 };
 
 type RawUserDoc = {
   name?: unknown;
   role?: unknown;
   approvalStatus?: unknown;
+  strengthBlock?: unknown;
 };
 
 export function buildAppUser(
@@ -33,6 +35,10 @@ export function buildAppUser(
     name: typeof rawData?.name === "string" ? rawData.name : undefined,
     role,
     approvalStatus: rawData?.approvalStatus === "pending" ? "pending" : "approved",
+    strengthBlock:
+      rawData?.strengthBlock === "A" || rawData?.strengthBlock === "B"
+        ? rawData.strengthBlock
+        : "none",
   };
 }
 
@@ -44,5 +50,6 @@ export function buildSafePendingAppUser(
     email: firebaseUser.email ?? null,
     role: "user",
     approvalStatus: "pending",
+    strengthBlock: "none",
   };
 }

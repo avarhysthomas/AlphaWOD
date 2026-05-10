@@ -26,12 +26,14 @@ const defaultInviteOrigin = "https://alpha-wod.vercel.app";
  * ----------------------------*/
 type Role = "admin" | "user" | "sgpt" | "banned" | string;
 type ApprovalStatus = "approved" | "pending" | string;
+type StrengthBlock = "A" | "B" | "none" | string;
 
 type UserDoc = {
   name?: string;
   email?: string;
   role?: Role;
   approvalStatus?: ApprovalStatus;
+  strengthBlock?: StrengthBlock;
   approvedAt?: admin.firestore.FieldValue | admin.firestore.Timestamp;
   approvedBy?: string;
   photoURL?: string;
@@ -116,6 +118,8 @@ type InviteDoc = {
   lastSentAt: admin.firestore.FieldValue | admin.firestore.Timestamp;
 };
 
+type StrengthSlot = "A" | "B" | null;
+
 /** -----------------------------
  * Helpers
  * ----------------------------*/
@@ -175,6 +179,34 @@ function resolveInviteOrigin(value: unknown): string {
 
 function inviteDocIdFor(email: string) {
   return Buffer.from(email.toLowerCase()).toString("base64url");
+}
+
+function normaliseStrengthBlock(value: unknown): "A" | "B" | "none" {
+  return value === "A" || value === "B" ? value : "none";
+}
+
+function getStrengthSlotForClass(classData: Partial<ClassDoc>): StrengthSlot {
+  const start = classData.startTime?.toDate?.();
+  if (!start) return null;
+
+  const title = String(classData.title ?? "").toLowerCase();
+  if (!title.includes("strength")) return null;
+
+  const zone = String(classData.timezone || "Europe/London");
+  const session = DateTime.fromJSDate(start, {zone});
+  const weekday = session.weekday; // Mon=1 .. Sun=7
+  const hour = session.hour;
+
+  if ((weekday === 2 || weekday === 4) && hour === 6) return "A";
+  if ((weekday === 1 || weekday === 3) && hour === 18) return "B";
+  return null;
+}
+
+function canUserAccessClass(user: Partial<UserDoc>, classData: Partial<ClassDoc>) {
+  const slot = getStrengthSlotForClass(classData);
+  if (!slot) return true;
+
+  return normaliseStrengthBlock(user.strengthBlock) === slot;
 }
 
 function buildInviteEmailHtml(signUpUrl: string) {
@@ -457,7 +489,7 @@ export const generateClassOccurrences = onCall(async (request) => {
  * ----------------------------*/
 export const bookClass = onCall(async (request) => {
   const uid = requireAuth(request);
-  await requireApprovedMember(uid);
+  const member = await requireApprovedMember(uid);
   const classId = requireString(request.data?.classId, "classId");
 
   const classRef = db.collection("classes").doc(classId);
@@ -474,6 +506,13 @@ export const bookClass = onCall(async (request) => {
     if (!classSnap.exists) throw new HttpsError("not-found", "Class not found");
 
     const classData = classSnap.data() as Partial<ClassDoc>;
+    if (!canUserAccessClass(member, classData)) {
+      throw new HttpsError(
+        "permission-denied",
+        "This member is not assigned to the strength block for this class."
+      );
+    }
+
     const capacity = Number(classData.capacity ?? 0);
     const bookedCount = Number(classData.bookedCount ?? 0);
 
@@ -1312,6 +1351,38 @@ export const updateMemberRole = onCall(async (request) => {
           restoredBy: callerUid,
         }
     ),
+  }, {merge: true});
+
+  return {ok: true};
+});
+
+export const updateMemberStrengthBlock = onCall(async (request) => {
+  const callerUid = requireAuth(request);
+  await requireAdmin(callerUid);
+
+  const userId = requireString(request.data?.userId, "userId");
+  const strengthBlock = normaliseStrengthBlock(request.data?.strengthBlock);
+
+  if (
+    strengthBlock !== "A" &&
+    strengthBlock !== "B" &&
+    strengthBlock !== "none"
+  ) {
+    throw new HttpsError("invalid-argument", "Strength block must be A, B, or none.");
+  }
+
+  const userRef = db.collection("users").doc(userId);
+  const snap = await userRef.get();
+
+  if (!snap.exists) {
+    throw new HttpsError("not-found", "User not found.");
+  }
+
+  await userRef.set({
+    strengthBlock,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    strengthBlockUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    strengthBlockUpdatedBy: callerUid,
   }, {merge: true});
 
   return {ok: true};

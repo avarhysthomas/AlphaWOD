@@ -29,6 +29,7 @@ const Signup = () => {
         name: name.trim(),
         role: "user",
         approvalStatus: "pending",
+        strengthBlock: "none",
       });
 
       navigate("/pending-approval");

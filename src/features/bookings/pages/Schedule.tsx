@@ -42,6 +42,7 @@ type BookingDoc = {
 };
 
 const DEFAULT_TZ = "Europe/London";
+type StrengthBlock = "A" | "B" | "none";
 
 /** Booking close rules:
  *  - 06:00 class closes previous day 21:00
@@ -95,6 +96,35 @@ function fmtRemaining(ms: number) {
 
 function classIdToBookingId(classId: string, userId: string) {
   return `${classId}_${userId}`;
+}
+
+function normalizeStrengthBlock(value: unknown): StrengthBlock {
+  return value === "A" || value === "B" ? value : "none";
+}
+
+function getStrengthSlotForClass(classData: ClassDoc): "A" | "B" | null {
+  const title = String(classData.title ?? "").toLowerCase();
+  if (!title.includes("strength")) return null;
+
+  const start = classData.startTime?.toDate?.();
+  if (!start) return null;
+
+  const day = start.getDay(); // Sun=0 ... Sat=6
+  const hour = start.getHours();
+
+  if ((day === 2 || day === 4) && hour === 6) return "A";
+  if ((day === 1 || day === 3) && hour === 18) return "B";
+  return null;
+}
+
+function canAccessClass(
+  classData: ClassDoc,
+  strengthBlock: StrengthBlock
+) {
+  const slot = getStrengthSlotForClass(classData);
+  if (!slot) return true;
+
+  return strengthBlock === slot;
 }
 
 function fmtDate(d: Date, timeZone: string) {
@@ -225,9 +255,18 @@ export default function Schedule() {
     return () => unsub();
   }, [user]);
 
+  const memberStrengthBlock = normalizeStrengthBlock(appUser?.strengthBlock);
+  const visibleClasses = useMemo(
+    () =>
+      classes.filter(({ data }) =>
+        canAccessClass(data, memberStrengthBlock)
+      ),
+    [classes, memberStrengthBlock]
+  );
+
   const grouped = useMemo(() => {
     const groups: Record<string, Array<{ id: string; data: ClassDoc }>> = {};
-    for (const c of classes) {
+    for (const c of visibleClasses) {
       const tz = c.data.timezone || DEFAULT_TZ;
       const start = c.data.startTime.toDate();
       const key = fmtDate(start, tz);
@@ -235,10 +274,18 @@ export default function Schedule() {
       groups[key].push(c);
     }
     return groups;
-  }, [classes]);
+  }, [visibleClasses]);
 
   async function handleBook(classId: string) {
     if (!user) return alert("Log in first.");
+
+    const classRow = classes.find((item) => item.id === classId);
+    if (
+      classRow &&
+      !canAccessClass(classRow.data, memberStrengthBlock)
+    ) {
+      return alert("You are not assigned to the strength block for this class.");
+    }
 
     setBusyClassId(classId);
     try {
@@ -251,6 +298,11 @@ export default function Schedule() {
         if (!classSnap.exists()) throw new Error("Class not found");
 
         const classData = classSnap.data() as ClassDoc;
+        if (!canAccessClass(classData, memberStrengthBlock)) {
+          const err: any = new Error("Strength block access denied");
+          err.code = "strength-block";
+          throw err;
+        }
 
         //Enforce booking close rules server-side (transaction)
         const bs = bookingStatus(classData.startTime);
@@ -297,6 +349,9 @@ export default function Schedule() {
       if (e?.code === "already-booked" || e?.message === "Already booked") return alert("Already booked");
       if (e?.code === "full" || e?.message === "Class is full") return alert("Class is full");
       if (e?.code === "closed" || e?.message === "Booking closed") return alert("Booking closed for this class");
+      if (e?.code === "strength-block" || e?.message === "Strength block access denied") {
+        return alert("You are not assigned to the strength block for this class.");
+      }
       alert(e?.message || "Booking failed");
     } finally {
       setBusyClassId(null);

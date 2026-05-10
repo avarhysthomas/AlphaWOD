@@ -100,3 +100,39 @@ export async function updateMemberRole(userId: string, role: "user" | "sgpt" | "
     throw new Error(getRoleUpdateErrorMessage(err));
   }
 }
+
+function getStrengthBlockUpdateErrorMessage(err: any) {
+  const code = String(err?.code || "");
+  const message = String(err?.message || "");
+
+  if (
+    code.includes("internal") ||
+    code.includes("unavailable") ||
+    message.includes("404") ||
+    message.toLowerCase().includes("cors")
+  ) {
+    return "The strength block update function is not available yet. Deploy the latest Cloud Functions, or restart the Functions emulator if you're testing locally.";
+  }
+
+  if (code.includes("permission-denied")) {
+    return "This account does not have permission to change strength blocks.";
+  }
+
+  return message || "Failed to update strength block.";
+}
+
+export async function updateMemberStrengthBlock(
+  userId: string,
+  strengthBlock: "A" | "B" | "none"
+) {
+  const callable = httpsCallable<
+    { userId: string; strengthBlock: "A" | "B" | "none" },
+    { ok: boolean }
+  >(functions, "updateMemberStrengthBlock");
+
+  try {
+    return await callable({ userId, strengthBlock });
+  } catch (err: any) {
+    throw new Error(getStrengthBlockUpdateErrorMessage(err));
+  }
+}

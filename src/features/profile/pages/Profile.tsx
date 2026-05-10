@@ -334,6 +334,7 @@ export default function Profile() {
               email: resolvedEmail || null,
               role: "user",
               approvalStatus: "approved",
+              strengthBlock: "none",
               photoURL: resolvedPhoto ?? null,
               createdAt: serverTimestamp(),
               updatedAt: serverTimestamp(),

@@ -14,6 +14,7 @@ export type AdminUser = {
   photoURL?: string;
   role?: string;
   approvalStatus?: "approved" | "pending";
+  strengthBlock?: "A" | "B" | "none";
   stats?: UserStats;
 };
 

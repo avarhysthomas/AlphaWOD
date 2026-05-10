@@ -20,6 +20,7 @@ import {
   approveUserAccess,
   inviteMemberByEmail,
   updateMemberRole,
+  updateMemberStrengthBlock,
 } from "../services/access";
 import { getInsightsSummary } from "../services/insights";
 import UserTopNav from "../../../components/layout/UserTopNav";
@@ -75,6 +76,8 @@ export default function AdminInsights() {
   const [inviteSuccess, setInviteSuccess] = useState<string | null>(null);
   const [roleBusyUserId, setRoleBusyUserId] = useState<string | null>(null);
   const [roleActionError, setRoleActionError] = useState<string | null>(null);
+  const [strengthBlockBusyUserId, setStrengthBlockBusyUserId] = useState<string | null>(null);
+  const [strengthBlockError, setStrengthBlockError] = useState<string | null>(null);
   const [memberSearch, setMemberSearch] = useState("");
 
   useEffect(() => {
@@ -206,6 +209,38 @@ export default function AdminInsights() {
       setRoleActionError(err?.message ?? "Failed to update member role.");
     } finally {
       setRoleBusyUserId(null);
+    }
+  }
+
+  async function handleStrengthBlockChange(
+    userId: string,
+    strengthBlock: "A" | "B" | "none"
+  ) {
+    try {
+      setStrengthBlockBusyUserId(userId);
+      setStrengthBlockError(null);
+      await updateMemberStrengthBlock(userId, strengthBlock);
+
+      setData((current) => {
+        if (!current) return current;
+
+        const applyBlock = <T extends { id: string; strengthBlock?: "A" | "B" | "none" }>(
+          users: T[]
+        ) => users.map((user) => (user.id === userId ? { ...user, strengthBlock } : user));
+
+        return {
+          ...current,
+          users: applyBlock(current.users),
+          inactiveMembers: applyBlock(current.inactiveMembers),
+          bannedMembers: applyBlock(current.bannedMembers),
+          pendingApprovals: applyBlock(current.pendingApprovals),
+          topAttenders: applyBlock(current.topAttenders),
+        };
+      });
+    } catch (err: any) {
+      setStrengthBlockError(err?.message ?? "Failed to update strength block.");
+    } finally {
+      setStrengthBlockBusyUserId(null);
     }
   }
 
@@ -375,9 +410,9 @@ export default function AdminInsights() {
 
                 <div className="mt-6 lg:mt-8">
                   <AdminSectionCard title="Pending Sign-up Approvals">
-                    {approvalError || roleActionError ? (
+                    {approvalError || roleActionError || strengthBlockError ? (
                       <div className="mb-4 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">
-                        {approvalError ?? roleActionError}
+                        {approvalError ?? roleActionError ?? strengthBlockError}
                       </div>
                     ) : null}
 
@@ -590,10 +625,32 @@ export default function AdminInsights() {
                                 </div>
 
                                 <div className="flex flex-wrap items-center gap-2">
+                                  <select
+                                    value={user.strengthBlock ?? "none"}
+                                    onChange={(e) =>
+                                      handleStrengthBlockChange(
+                                        user.id,
+                                        e.target.value as "A" | "B" | "none"
+                                      )
+                                    }
+                                    disabled={
+                                      roleBusyUserId === user.id ||
+                                      strengthBlockBusyUserId === user.id
+                                    }
+                                    className="rounded-full border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-sm font-semibold text-amber-100 outline-none"
+                                  >
+                                    <option value="none">No block</option>
+                                    <option value="A">Block A</option>
+                                    <option value="B">Block B</option>
+                                  </select>
+
                                   <button
                                     type="button"
                                     onClick={() => handleRoleChange(user.id, user.role === "sgpt" ? "user" : "sgpt")}
-                                    disabled={roleBusyUserId === user.id}
+                                    disabled={
+                                      roleBusyUserId === user.id ||
+                                      strengthBlockBusyUserId === user.id
+                                    }
                                     className="inline-flex items-center justify-center gap-2 rounded-full border border-sky-500/25 bg-sky-500/10 px-4 py-2 text-sm font-semibold text-sky-100 transition hover:bg-sky-500/15 disabled:cursor-not-allowed disabled:opacity-60"
                                   >
                                     {roleBusyUserId === user.id ? (
@@ -607,7 +664,10 @@ export default function AdminInsights() {
                                   <button
                                     type="button"
                                     onClick={() => handleRoleChange(user.id, "banned")}
-                                    disabled={roleBusyUserId === user.id}
+                                    disabled={
+                                      roleBusyUserId === user.id ||
+                                      strengthBlockBusyUserId === user.id
+                                    }
                                     className="inline-flex items-center justify-center gap-2 rounded-full border border-red-500/25 bg-red-500/10 px-4 py-2 text-sm font-semibold text-red-100 transition hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-60"
                                   >
                                     {roleBusyUserId === user.id ? (

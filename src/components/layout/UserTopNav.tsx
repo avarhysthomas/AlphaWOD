@@ -13,6 +13,7 @@ import {
   Activity,
   Newspaper,
   ClipboardPen,
+  Rows3,
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { isAdminRole, isSgptRole } from "../../lib/roles";
@@ -38,6 +39,7 @@ const baseNavItems: NavItem[] = [
 
 const adminNavItems: NavItem[] = [
   { to: "/admin/insights", label: "Insights", icon: BarChart3, adminOnly: true },
+  { to: "/admin/strength-blocks", label: "Strength Blocks", icon: Rows3, adminOnly: true },
   { to: "/admin/performance", label: "Admin Performance", icon: Activity, adminOnly: true },
   { to: "/display", label: "Display", icon: MonitorPlay, adminOnly: true },
   { to: "/editor", label: "Editor", icon: SquarePen, adminOnly: true },

@@ -34,6 +34,7 @@ import AdminPerformance from "./features/admin/pages/AdminPerformance";
 import AdminMemberPerformance from "./features/admin/pages/AdminMemberPerformance";
 import AdminMetricPerformance from "./features/admin/pages/AdminMetricPerformance";
 import AdminMetricIndex from "./features/admin/pages/AdminMetricIndex";
+import AdminStrengthBlocks from "./features/admin/pages/AdminStrengthBlocks";
 import {
   canAccessTraining,
   hasPerformanceAccess,
@@ -385,6 +386,7 @@ export default function App() {
         }
       >
         <Route path="/admin/insights" element={<AdminInsights />} />
+        <Route path="/admin/strength-blocks" element={<AdminStrengthBlocks />} />
         <Route path="/display" element={<WODDisplay />} />
         <Route path="/editor" element={<WODEditor />} />
         <Route path="/admin/classes/:classId" element={<ClassRoster />} />

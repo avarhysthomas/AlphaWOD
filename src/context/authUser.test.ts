@@ -8,7 +8,7 @@ describe("auth user builders", () => {
     expect(
       buildAppUser(
         { uid: "abc", email: "member@example.com" },
-        { name: "Member", role: "user", approvalStatus: "approved" }
+        { name: "Member", role: "user", approvalStatus: "approved", strengthBlock: "A" }
       )
     ).toEqual({
       uid: "abc",
@@ -16,6 +16,7 @@ describe("auth user builders", () => {
       name: "Member",
       role: "user",
       approvalStatus: "approved",
+      strengthBlock: "A",
     });
   });
 
@@ -27,6 +28,7 @@ describe("auth user builders", () => {
       email: "member@example.com",
       role: "user",
       approvalStatus: "pending",
+      strengthBlock: "none",
     });
   });
 
@@ -42,6 +44,7 @@ describe("auth user builders", () => {
       name: "Member",
       role: "banned",
       approvalStatus: "approved",
+      strengthBlock: "none",
     });
   });
 
@@ -57,6 +60,7 @@ describe("auth user builders", () => {
       name: "SGPT",
       role: "sgpt",
       approvalStatus: "approved",
+      strengthBlock: "none",
     });
   });
 });
