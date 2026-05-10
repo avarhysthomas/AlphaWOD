@@ -206,7 +206,9 @@ function canUserAccessClass(user: Partial<UserDoc>, classData: Partial<ClassDoc>
   const slot = getStrengthSlotForClass(classData);
   if (!slot) return true;
 
-  return normaliseStrengthBlock(user.strengthBlock) === slot;
+  const strengthBlock = normaliseStrengthBlock(user.strengthBlock);
+  if (user.role === "admin" && strengthBlock === "none") return true;
+  return strengthBlock === slot;
 }
 
 function buildInviteEmailHtml(signUpUrl: string) {

@@ -119,11 +119,13 @@ function getStrengthSlotForClass(classData: ClassDoc): "A" | "B" | null {
 
 function canAccessClass(
   classData: ClassDoc,
-  strengthBlock: StrengthBlock
+  strengthBlock: StrengthBlock,
+  isAdmin: boolean
 ) {
   const slot = getStrengthSlotForClass(classData);
   if (!slot) return true;
 
+  if (isAdmin && strengthBlock === "none") return true;
   return strengthBlock === slot;
 }
 
@@ -259,9 +261,9 @@ export default function Schedule() {
   const visibleClasses = useMemo(
     () =>
       classes.filter(({ data }) =>
-        canAccessClass(data, memberStrengthBlock)
+        canAccessClass(data, memberStrengthBlock, isAdmin)
       ),
-    [classes, memberStrengthBlock]
+    [classes, isAdmin, memberStrengthBlock]
   );
 
   const grouped = useMemo(() => {
@@ -282,7 +284,7 @@ export default function Schedule() {
     const classRow = classes.find((item) => item.id === classId);
     if (
       classRow &&
-      !canAccessClass(classRow.data, memberStrengthBlock)
+      !canAccessClass(classRow.data, memberStrengthBlock, isAdmin)
     ) {
       return alert("You are not assigned to the strength block for this class.");
     }
@@ -298,7 +300,7 @@ export default function Schedule() {
         if (!classSnap.exists()) throw new Error("Class not found");
 
         const classData = classSnap.data() as ClassDoc;
-        if (!canAccessClass(classData, memberStrengthBlock)) {
+        if (!canAccessClass(classData, memberStrengthBlock, isAdmin)) {
           const err: any = new Error("Strength block access denied");
           err.code = "strength-block";
           throw err;
