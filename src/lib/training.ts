@@ -56,6 +56,13 @@ export const TRAINING_CATEGORIES: TrainingCategory[] = [
         unitOptions: ["kg", "reps"],
       },
       {
+        name: "Incline Bench",
+        slug: "incline-bench",
+        description: "Track upper-chest development and pressing strength at an angle.",
+        metricTypes: ["1RM", "3RM", "5RM", "Working Set", "Volume"],
+        unitOptions: ["kg", "reps"],
+      },
+      {
         name: "Overhead Press",
         slug: "overhead-press",
         description: "Track overhead pressing strength and shoulder development.",
@@ -67,6 +74,13 @@ export const TRAINING_CATEGORIES: TrainingCategory[] = [
         slug: "deadlift",
         description: "Monitor posterior-chain strength and top-end pulling numbers.",
         metricTypes: ["1RM", "3RM", "5RM", "Working Set", "Volume"],
+        unitOptions: ["kg", "reps"],
+      },
+      {
+        name: "Trap Bar Deadlift",
+        slug: "trap-bar-deadlift",
+        description: "Track lower-body force production and athletic strength.",
+        metricTypes: ["1RM", "3RM", "5RM", "Working Set"],
         unitOptions: ["kg", "reps"],
       },
       {
