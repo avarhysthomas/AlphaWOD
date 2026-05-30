@@ -8,7 +8,15 @@ describe("auth user builders", () => {
     expect(
       buildAppUser(
         { uid: "abc", email: "member@example.com" },
-        { name: "Member", role: "user", approvalStatus: "approved", strengthBlock: "A" }
+        {
+          name: "Member",
+          role: "user",
+          approvalStatus: "approved",
+          strengthBlock: "A",
+          waiverAcceptedAt: "2026-05-30T10:00:00.000Z",
+          waiverAcceptedName: "Member",
+          waiverAcceptedVersion: "2026-05-30",
+        }
       )
     ).toEqual({
       uid: "abc",
@@ -17,6 +25,9 @@ describe("auth user builders", () => {
       role: "user",
       approvalStatus: "approved",
       strengthBlock: "A",
+      waiverAcceptedAt: "2026-05-30T10:00:00.000Z",
+      waiverAcceptedName: "Member",
+      waiverAcceptedVersion: "2026-05-30",
     });
   });
 

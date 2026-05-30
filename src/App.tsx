@@ -14,6 +14,7 @@ import DipLeaderboard from "./features/leaderboard/pages/DipLeaderboard";
 import Login from "./features/auth/pages/Login";
 import PendingApproval from "./features/auth/pages/PendingApproval";
 import Signup from "./features/auth/pages/Signup";
+import WaiverGate from "./features/auth/components/WaiverGate";
 import Dashboard from "./features/dashboard/pages/Dashboard";
 import SgptDashboard from "./features/dashboard/pages/SgptDashboard";
 import Schedule from "./features/bookings/pages/Schedule";
@@ -144,7 +145,7 @@ function getAuthedHome(appUser: ReturnType<typeof useAuth>["appUser"]) {
 
 function AdminLayout() {
   return (
-    <div className="min-h-screen bg-black text-white overflow-x-hidden">
+    <div className="min-h-screen overflow-x-hidden bg-[#050505] font-barlow text-[#f4f0ea]">
       <Outlet />
     </div>
   );
@@ -167,6 +168,7 @@ export default function App() {
   }
 
   return (
+    <WaiverGate>
     <Routes>
       {/* Public */}
       <Route
@@ -398,5 +400,6 @@ export default function App() {
         element={<Navigate to={isAuthed ? getAuthedHome(appUser) : "/"} replace />}
       />
     </Routes>
+    </WaiverGate>
   );
 }

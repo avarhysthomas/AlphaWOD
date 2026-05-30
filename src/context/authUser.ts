@@ -7,6 +7,10 @@ export type AppUser = {
   role?: AppRole;
   approvalStatus?: "approved" | "pending";
   strengthBlock?: "A" | "B" | "none";
+  photoURL?: string;
+  waiverAcceptedAt?: unknown;
+  waiverAcceptedName?: string;
+  waiverAcceptedVersion?: string;
 };
 
 type RawUserDoc = {
@@ -14,6 +18,10 @@ type RawUserDoc = {
   role?: unknown;
   approvalStatus?: unknown;
   strengthBlock?: unknown;
+  photoURL?: unknown;
+  waiverAcceptedAt?: unknown;
+  waiverAcceptedName?: unknown;
+  waiverAcceptedVersion?: unknown;
 };
 
 export function buildAppUser(
@@ -39,6 +47,16 @@ export function buildAppUser(
       rawData?.strengthBlock === "A" || rawData?.strengthBlock === "B"
         ? rawData.strengthBlock
         : "none",
+    photoURL: typeof rawData?.photoURL === "string" ? rawData.photoURL : undefined,
+    waiverAcceptedAt: rawData?.waiverAcceptedAt,
+    waiverAcceptedName:
+      typeof rawData?.waiverAcceptedName === "string"
+        ? rawData.waiverAcceptedName
+        : undefined,
+    waiverAcceptedVersion:
+      typeof rawData?.waiverAcceptedVersion === "string"
+        ? rawData.waiverAcceptedVersion
+        : undefined,
   };
 }
 
