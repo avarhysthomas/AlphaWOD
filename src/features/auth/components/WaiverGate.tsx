@@ -18,6 +18,26 @@ function needsCurrentWaiver(appUser: ReturnType<typeof useAuth>["appUser"]) {
   return appUser?.waiverAcceptedVersion !== WAIVER_VERSION;
 }
 
+function getLocalWaiverKey(uid: string) {
+  return `zaf-waiver-accepted:${uid}:${WAIVER_VERSION}`;
+}
+
+function hasLocalWaiver(uid: string) {
+  try {
+    return window.localStorage.getItem(getLocalWaiverKey(uid)) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function rememberLocalWaiver(uid: string) {
+  try {
+    window.localStorage.setItem(getLocalWaiverKey(uid), "true");
+  } catch {
+    // Firestore remains the source of truth if local storage is unavailable.
+  }
+}
+
 export default function WaiverGate({ children }: { children: React.ReactNode }) {
   const { user, appUser, loading, refreshAppUser } = useAuth();
   const [signature, setSignature] = useState("");
@@ -34,7 +54,16 @@ export default function WaiverGate({ children }: { children: React.ReactNode }) 
     [appUser?.name, user?.displayName]
   );
 
-  if (loading || !user || !appUser || signedThisSession || !needsCurrentWaiver(appUser)) {
+  const signedOnThisDevice = !!user && hasLocalWaiver(user.uid);
+
+  if (
+    loading ||
+    !user ||
+    !appUser ||
+    signedThisSession ||
+    signedOnThisDevice ||
+    !needsCurrentWaiver(appUser)
+  ) {
     return <>{children}</>;
   }
 
@@ -62,6 +91,7 @@ export default function WaiverGate({ children }: { children: React.ReactNode }) 
         },
         { merge: true }
       );
+      rememberLocalWaiver(user.uid);
       setSignedThisSession(true);
       await refreshAppUser();
     } catch (err) {

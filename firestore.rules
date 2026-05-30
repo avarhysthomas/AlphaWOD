@@ -41,6 +41,18 @@ service cloud.firestore {
       return affectsOnly(["comments", "commentCount"]);
     }
 
+    function isWaiverUpdate() {
+      return affectsOnly([
+        "waiverAcceptedAt",
+        "waiverAcceptedBy",
+        "waiverAcceptedEmail",
+        "waiverAcceptedName",
+        "waiverAcceptedVersion",
+        "waiverAcknowledgements",
+        "waiverMediaConsent"
+      ]);
+    }
+
     match /users/{userId} {
       allow read: if isSignedIn();
 
@@ -48,9 +60,14 @@ service cloud.firestore {
 
       allow update: if isAdmin() || (
         isOwnUser(userId) &&
-        request.resource.data.role == resource.data.role &&
-        request.resource.data.approvalStatus == resource.data.approvalStatus &&
-        request.resource.data.strengthBlock == resource.data.strengthBlock
+        (
+          isWaiverUpdate() ||
+          (
+            request.resource.data.role == resource.data.role &&
+            request.resource.data.approvalStatus == resource.data.approvalStatus &&
+            request.resource.data.strengthBlock == resource.data.strengthBlock
+          )
+        )
       );
 
       allow delete: if false;
