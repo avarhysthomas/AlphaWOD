@@ -30,10 +30,26 @@ body {
 }
 
 body {
-  @apply bg-black text-white font-sans;
+  @apply text-white font-sans;
   font-family: 'Inter', sans-serif;
   min-height: 100vh;
   min-height: 100dvh;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: max(env(safe-area-inset-top), 0px);
+  background-color: var(--carbon-bg-color);
+  background-image: var(--carbon-bg-image);
+  background-position: var(--carbon-bg-position);
+  background-size: var(--carbon-bg-size);
+  background-attachment: fixed;
+  pointer-events: none;
+  z-index: 0;
 }
 
 .carbon-fiber-bg {
