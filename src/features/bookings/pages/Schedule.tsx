@@ -157,6 +157,19 @@ function shortDayLabel(d: Date) {
   }).format(d);
 }
 
+function isTuesdayHyroxClass(classData: ClassDoc) {
+  const title = String(classData.title ?? "").toLowerCase();
+  const start = classData.startTime?.toDate?.();
+  if (!title.includes("hyrox") || !start) return false;
+
+  const weekday = new Intl.DateTimeFormat("en-GB", {
+    weekday: "long",
+    timeZone: classData.timezone || DEFAULT_TZ,
+  }).format(start);
+
+  return weekday === "Tuesday";
+}
+
 function typeMeta(title?: string) {
   const t = (title || "").toLowerCase();
 
@@ -668,6 +681,7 @@ export default function Schedule() {
                 const cancelClosed = cs.state === "closed" || cs.state === "started";
                 const meta = typeMeta(data.title);
                 const Icon = meta.icon;
+                const showChili = isTuesdayHyroxClass(data);
                 const percent = capacityPercent(bookedCount, capacity);
                 const waitlist = capacity > 0 ? Math.max(0, bookedCount - capacity) : 0;
 
@@ -691,7 +705,13 @@ export default function Schedule() {
                         </p>
                       </div>
                       <div className={`grid h-11 w-11 shrink-0 place-items-center rounded-xl border ${meta.iconWrap}`}>
-                        <Icon className="h-5 w-5" />
+                        {showChili ? (
+                          <span role="img" aria-label="Chili pepper" className="text-[1.35rem] leading-none">
+                            🌶️
+                          </span>
+                        ) : (
+                          <Icon className="h-5 w-5" />
+                        )}
                       </div>
                     </div>
 
