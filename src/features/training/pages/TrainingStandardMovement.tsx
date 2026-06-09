@@ -897,24 +897,24 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
       </main>
 
       <nav
-        className="fixed inset-x-4 bottom-4 z-40 mx-auto max-w-xl rounded-[28px] border border-white/45 bg-white/90 px-3 py-3 shadow-[0_18px_60px_rgba(0,0,0,0.35)] backdrop-blur-xl sm:max-w-2xl"
-        style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
+        className="fixed inset-x-3 bottom-3 z-40 mx-auto max-w-[27rem] rounded-[22px] border border-white/40 bg-white/90 px-2 py-2 shadow-[0_12px_34px_rgba(0,0,0,0.28)] backdrop-blur-xl sm:max-w-xl"
+        style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
         aria-label="Primary"
       >
-        <div className="flex gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <div className="flex gap-1 overflow-x-auto px-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {navItems.map(({ to, label, icon: NavIcon }) => (
             <NavLink
               key={to}
               to={to}
               className={({ isActive }) =>
                 [
-                  "flex min-w-[76px] shrink-0 flex-col items-center gap-1.5 rounded-2xl px-2 py-2 text-[11px] font-bold transition",
-                  isActive ? "bg-black/10 text-black" : "text-black hover:bg-black/5",
+                  "flex min-w-[56px] shrink-0 flex-col items-center gap-1 rounded-[15px] px-1.5 py-1.5 text-[10px] font-extrabold leading-tight transition",
+                  isActive ? "bg-black/12 text-black" : "text-black hover:bg-black/6",
                 ].join(" ")
               }
             >
-              <NavIcon className="h-5 w-5 text-black" />
-              <span className="max-w-full truncate">{label}</span>
+              <NavIcon className="h-[18px] w-[18px] text-black" />
+              <span className="max-w-[56px] truncate leading-tight text-black">{label}</span>
             </NavLink>
           ))}
         </div>
