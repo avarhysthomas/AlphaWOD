@@ -31,10 +31,10 @@ export const baseNavItems: NavItem[] = [
   { to: "/schedule", label: "Schedule", icon: CalendarDays },
   { to: "/feed", label: "Feed", icon: Newspaper },
   { to: "/workouts", label: "Training", icon: ClipboardPen },
-  { to: "/training", label: "Performance", icon: Dumbbell },
+  { to: "/training", label: "Perform", icon: Dumbbell },
   { to: "/profile", label: "Profile", icon: User },
-  { to: "/leaderboard", label: "Board of Fame", icon: Trophy },
-  { to: "/board-of-shame", label: "Board of Shame", icon: Flame, danger: true },
+  { to: "/leaderboard", label: "Fame", icon: Trophy },
+  { to: "/board-of-shame", label: "Shame", icon: Flame, danger: true },
 ];
 
 export const adminNavItems: NavItem[] = [
