@@ -3,10 +3,30 @@
 @tailwind utilities;
 @import url('https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@300;500;700&display=swap');
 
+:root {
+  --carbon-bg-color: #050505;
+  --carbon-bg-image:
+    linear-gradient(rgba(5,5,5,0.22), rgba(5,5,5,0.22)),
+    conic-gradient(from 45deg at 50% 50%, rgba(255,255,255,0.12) 0deg, rgba(255,255,255,0.03) 38deg, rgba(0,0,0,0.72) 45deg, rgba(0,0,0,0.18) 82deg, rgba(255,255,255,0.10) 90deg, rgba(255,255,255,0.025) 128deg, rgba(0,0,0,0.70) 135deg, rgba(0,0,0,0.20) 172deg, rgba(255,255,255,0.12) 180deg, rgba(255,255,255,0.03) 218deg, rgba(0,0,0,0.72) 225deg, rgba(0,0,0,0.18) 262deg, rgba(255,255,255,0.10) 270deg, rgba(255,255,255,0.025) 308deg, rgba(0,0,0,0.70) 315deg, rgba(0,0,0,0.20) 352deg, rgba(255,255,255,0.12) 360deg),
+    linear-gradient(135deg, rgba(255,255,255,0.06) 0 1px, transparent 1px 12px, rgba(0,0,0,0.48) 12px 13px, transparent 13px 24px),
+    radial-gradient(circle at top right, rgba(255,255,255,0.09), transparent 36%);
+  --carbon-bg-position: 0 0, 0 0, 0 0, 0 0;
+  --carbon-bg-size: 100% 100%, 32px 32px, 32px 32px, 100% 100%;
+}
+
 html,
 body,
 #root {
   min-height: 100%;
+}
+
+html,
+body {
+  background-color: var(--carbon-bg-color);
+  background-image: var(--carbon-bg-image);
+  background-position: var(--carbon-bg-position);
+  background-size: var(--carbon-bg-size);
+  background-attachment: fixed;
 }
 
 body {
@@ -17,14 +37,10 @@ body {
 }
 
 .carbon-fiber-bg {
-  background-color: #050505;
-  background-image:
-    linear-gradient(rgba(5,5,5,0.22), rgba(5,5,5,0.22)),
-    conic-gradient(from 45deg at 50% 50%, rgba(255,255,255,0.12) 0deg, rgba(255,255,255,0.03) 38deg, rgba(0,0,0,0.72) 45deg, rgba(0,0,0,0.18) 82deg, rgba(255,255,255,0.10) 90deg, rgba(255,255,255,0.025) 128deg, rgba(0,0,0,0.70) 135deg, rgba(0,0,0,0.20) 172deg, rgba(255,255,255,0.12) 180deg, rgba(255,255,255,0.03) 218deg, rgba(0,0,0,0.72) 225deg, rgba(0,0,0,0.18) 262deg, rgba(255,255,255,0.10) 270deg, rgba(255,255,255,0.025) 308deg, rgba(0,0,0,0.70) 315deg, rgba(0,0,0,0.20) 352deg, rgba(255,255,255,0.12) 360deg),
-    linear-gradient(135deg, rgba(255,255,255,0.06) 0 1px, transparent 1px 12px, rgba(0,0,0,0.48) 12px 13px, transparent 13px 24px),
-    radial-gradient(circle at top right, rgba(255,255,255,0.09), transparent 36%);
-  background-position: 0 0, 0 0, 0 0, 0 0;
-  background-size: 100% 100%, 32px 32px, 32px 32px, 100% 100%;
+  background-color: var(--carbon-bg-color);
+  background-image: var(--carbon-bg-image);
+  background-position: var(--carbon-bg-position);
+  background-size: var(--carbon-bg-size);
   background-attachment: fixed;
 }
 
