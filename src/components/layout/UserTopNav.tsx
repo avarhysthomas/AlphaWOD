@@ -18,7 +18,7 @@ import {
 import { useAuth } from "../../context/AuthContext";
 import { isAdminRole, isSgptRole } from "../../lib/roles";
 
-type NavItem = {
+export type NavItem = {
   to: string;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
@@ -26,7 +26,7 @@ type NavItem = {
   adminOnly?: boolean;
 };
 
-const baseNavItems: NavItem[] = [
+export const baseNavItems: NavItem[] = [
   { to: "/dashboard", label: "Home", icon: LayoutDashboard },
   { to: "/schedule", label: "Schedule", icon: CalendarDays },
   { to: "/feed", label: "Feed", icon: Newspaper },
@@ -37,7 +37,7 @@ const baseNavItems: NavItem[] = [
   { to: "/board-of-shame", label: "Board of Shame", icon: Flame, danger: true },
 ];
 
-const adminNavItems: NavItem[] = [
+export const adminNavItems: NavItem[] = [
   { to: "/admin/insights", label: "Insights", icon: BarChart3, adminOnly: true },
   { to: "/admin/strength-blocks", label: "Strength Blocks", icon: Rows3, adminOnly: true },
   { to: "/admin/performance", label: "Admin Performance", icon: Activity, adminOnly: true },
@@ -45,7 +45,7 @@ const adminNavItems: NavItem[] = [
   { to: "/editor", label: "Editor", icon: SquarePen, adminOnly: true },
 ];
 
-const sgptNavItems: NavItem[] = [
+export const sgptNavItems: NavItem[] = [
   { to: "/sgpt/dashboard", label: "Home", icon: LayoutDashboard },
   { to: "/training", label: "Performance", icon: Dumbbell },
   { to: "/admin/performance", label: "Dashboard", icon: Activity, adminOnly: true },
@@ -53,15 +53,7 @@ const sgptNavItems: NavItem[] = [
 
 export default function UserTopNav() {
   const { appUser } = useAuth();
-  const isAdmin = isAdminRole(appUser?.role);
-  const isSgpt = isSgptRole(appUser?.role);
-
-  const navItems = isSgpt
-    ? sgptNavItems
-    : [
-        ...baseNavItems,
-        ...(isAdmin ? adminNavItems : []),
-      ];
+  const navItems = getUserNavItems(appUser?.role);
 
   return (
     <div
@@ -97,4 +89,16 @@ export default function UserTopNav() {
       </div>
     </div>
   );
+}
+
+export function getUserNavItems(role?: string) {
+  const isAdmin = isAdminRole(role);
+  const isSgpt = isSgptRole(role);
+
+  return isSgpt
+    ? sgptNavItems
+    : [
+        ...baseNavItems,
+        ...(isAdmin ? adminNavItems : []),
+      ];
 }

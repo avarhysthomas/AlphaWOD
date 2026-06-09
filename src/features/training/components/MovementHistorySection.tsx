@@ -29,7 +29,7 @@ type MovementHistorySectionProps = {
 };
 
 export default function MovementHistorySection({
-  accent,
+  accent: _accent,
   movementName,
   activeMetricFilter,
   filteredLogs,
@@ -44,24 +44,19 @@ export default function MovementHistorySection({
   onDeleteLog,
 }: MovementHistorySectionProps) {
   return (
-    <section className="relative overflow-hidden rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(18,18,22,0.98),rgba(10,10,12,0.98))] p-5 shadow-[0_24px_60px_rgba(0,0,0,0.35)] sm:p-6">
-      <div className={`absolute inset-0 ${accent.glow}`} />
-      <div className={`absolute inset-x-0 top-0 h-px ${accent.line}`} />
-
-      <div className="relative mb-7 flex items-center justify-between gap-4">
-        <div>
-          <h2 className="text-2xl font-semibold tracking-[-0.03em] text-white">
-            {activeMetricFilter ? activeMetricFilter : `${movementName} history`}
-          </h2>
-          <p className="mt-3 text-sm leading-7 text-white/58">
-            Latest entries for {movementName}.
-          </p>
-        </div>
+    <section className="mt-2">
+      <div className="mb-4 flex items-end justify-between gap-4">
+        <h2 className="text-[12px] font-bold uppercase tracking-[0.32em] text-white/82">
+          History
+        </h2>
+        <span className="text-sm font-bold text-white/40">
+          {filteredLogs.length} {activeMetricFilter || "logs"}
+        </span>
       </div>
 
-      <div className="relative space-y-3">
+      <div className="overflow-hidden rounded-[28px] border border-white/10 bg-[#151311] shadow-[0_24px_60px_rgba(0,0,0,0.28)]">
         {filteredLogs.length === 0 ? (
-          <div className="rounded-[22px] border border-dashed border-white/10 bg-black/30 p-6 text-sm text-white/50">
+          <div className="p-6 text-sm font-medium text-white/44">
             No logs yet for {movementName}.
           </div>
         ) : (
@@ -73,52 +68,70 @@ export default function MovementHistorySection({
             return (
               <div
                 key={log.id}
-                className="group relative overflow-hidden rounded-[22px] border border-white/10 bg-black/35 p-4 transition duration-300 hover:-translate-y-0.5 hover:border-white/15 hover:bg-black/45"
+                className="group relative border-b border-white/10 px-5 py-4 last:border-b-0 transition hover:bg-white/[0.025]"
               >
-                <div
-                  className={`absolute inset-0 ${
-                    isBest
-                      ? accent.softGlow
-                      : "bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.04),transparent_24%)]"
-                  } opacity-70`}
-                />
-
-                <div className="relative flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className="text-lg font-semibold text-white">{log.metricType}</div>
-
+                <div className="grid grid-cols-[1fr_auto] gap-4">
+                  <div className="min-w-0 pt-1">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <h3 className="truncate text-lg font-extrabold tracking-[-0.02em] text-white">
+                        {log.metricType}
+                      </h3>
                       {isBest ? (
-                        <span
-                          className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.22em] ${accent.badgeGlow}`}
-                        >
-                          PB
+                        <span className="shrink-0 rounded-md bg-[#f2eee8] px-2 py-1 text-[10px] font-black uppercase tracking-[0.08em] text-black">
+                          PR
                         </span>
                       ) : null}
-
                       {index === 0 ? (
-                        <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.22em] text-white/50">
+                        <span className="shrink-0 rounded-md bg-white/[0.08] px-2 py-1 text-[10px] font-black uppercase tracking-[0.08em] text-white/58">
                           Latest
                         </span>
                       ) : null}
                     </div>
 
-                    <div className="mt-2 text-sm text-white/56">
-                      {log.reps ? `${log.reps} reps` : prettyDate(log.date)}
+                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium text-white/38">
+                      <span>{prettyDate(log.date)}</span>
+                      {log.reps ? (
+                        <>
+                          <span className="text-white/18">·</span>
+                          <span>{log.reps} reps</span>
+                        </>
+                      ) : null}
                     </div>
 
                     {log.notes ? (
-                      <p className="mt-3 max-w-xl text-sm leading-6 text-white/64">{log.notes}</p>
+                      <p className="mt-2 line-clamp-2 max-w-lg text-sm font-medium leading-5 text-white/55">
+                        {log.notes}
+                      </p>
                     ) : null}
                   </div>
 
-                  <div className="flex shrink-0 flex-col items-end gap-2 text-left sm:text-right">
-                    <div className="flex items-center gap-2">
+                  <div className="flex shrink-0 flex-col items-end gap-3">
+                    <div className="text-right">
+                      <div className="font-mono text-3xl font-bold leading-none text-white">
+                        {isTimeDisplay(log.unit, movementName) ? (
+                          formatDisplayValue(log.value, log.unit, movementName)
+                        ) : (
+                          <>
+                            {log.value}
+                            {log.unit ? (
+                              <span className="ml-1 text-sm font-bold uppercase tracking-[0.12em] text-white/38">
+                                {log.unit}
+                              </span>
+                            ) : null}
+                          </>
+                        )}
+                      </div>
+                      <div className="mt-2 text-[10px] font-bold uppercase tracking-[0.18em] text-white/32">
+                        {isDeleting ? "Deleting" : isPosting ? "Posting" : activeMetricFilter || log.metricType}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1">
                       <button
                         type="button"
                         onClick={() => onShareLog(log)}
                         disabled={isDeleting || isPosting}
-                        className="rounded-full border border-white/10 bg-white/[0.04] p-2 text-white/60 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                        className="grid h-9 w-9 place-items-center rounded-full text-white/38 transition hover:bg-white/[0.07] hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
                         aria-label="Share entry"
                       >
                         <Share className="h-4 w-4" />
@@ -128,7 +141,7 @@ export default function MovementHistorySection({
                         type="button"
                         onClick={() => onPostToFeed(log)}
                         disabled={isDeleting || isPosting}
-                        className="rounded-full border border-amber-400/20 bg-amber-400/10 p-2 text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-400/15 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                        className="grid h-9 w-9 place-items-center rounded-full text-white/38 transition hover:bg-white/[0.07] hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
                         aria-label="Post to feed"
                       >
                         <Newspaper className="h-4 w-4" />
@@ -138,25 +151,11 @@ export default function MovementHistorySection({
                         type="button"
                         onClick={() => onDeleteLog(log.id)}
                         disabled={isDeleting || isPosting}
-                        className="rounded-full border border-red-500/20 bg-red-500/10 p-2 text-red-200 transition hover:border-red-400/35 hover:bg-red-500/15 hover:text-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="grid h-9 w-9 place-items-center rounded-full text-white/30 transition hover:bg-red-500/10 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-35"
                         aria-label="Delete entry"
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>
-                    </div>
-
-                    <div className="text-2xl font-semibold tracking-[-0.03em] text-white">
-                      {isTimeDisplay(log.unit, movementName) ? (
-                        formatDisplayValue(log.value, log.unit, movementName)
-                      ) : (
-                        <>
-                          {log.value} <span className="text-sm font-medium text-white/52">{log.unit}</span>
-                        </>
-                      )}
-                    </div>
-
-                    <div className="mt-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/38">
-                      {isDeleting ? "Deleting..." : isPosting ? "Posting..." : log.metricType}
                     </div>
                   </div>
                 </div>

@@ -1,8 +1,8 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
 import { db } from "../../../firebase";
 import LogoutButton from "../../../components/ui/LogoutButton";
-import UserTopNav from "../../../components/layout/UserTopNav";
+import AppBottomNav from "../../../components/layout/AppBottomNav";
 import {
   CalendarDays,
   Dumbbell,
@@ -133,26 +133,25 @@ function normaliseStrength(raw: any): StrengthRow[] {
 }
 
 const inputClass =
-  "w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/25 focus:border-white/20 focus:bg-black";
+  "w-full rounded-2xl border border-white/8 bg-[#090909] px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/25 focus:border-white/20 focus:bg-black";
 
 const labelClass =
   "mb-2 block text-[11px] font-semibold uppercase tracking-[0.22em] text-white/44";
 
 const sectionCardClass =
-  "rounded-[24px] border border-white/10 bg-neutral-950/85 p-5 shadow-[0_16px_40px_rgba(0,0,0,0.28)] sm:p-6";
+  "rounded-[24px] border border-white/8 bg-[#11100f]/85 p-5 shadow-[0_16px_40px_rgba(0,0,0,0.28)] sm:p-6";
 
 const secondaryButtonClass =
-  "inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-semibold text-white/80 transition hover:border-white/20 hover:bg-white/[0.06] hover:text-white";
+  "inline-flex items-center gap-2 rounded-full border border-white/8 bg-white/[0.03] px-4 py-2 text-sm font-semibold text-white/80 transition hover:border-white/20 hover:bg-white/[0.06] hover:text-white";
 
 const primaryButtonClass =
   "inline-flex items-center justify-center gap-2 rounded-[20px] border border-white/15 bg-white px-6 py-3 text-sm font-semibold text-black transition hover:opacity-90";
 
-
-const WODEditor = () => {
-  const [formData, setFormData] = useState({
+function buildDefaultFormData(date = "", timeOfDay: TimeOfDay = "AM") {
+  return {
     wodName: "",
-    date: "",
-    timeOfDay: "AM" as TimeOfDay,
+    date,
+    timeOfDay,
     sessionType: "HYROX" as SessionType,
 
     wodType: "AMRAP" as WodType,
@@ -174,7 +173,12 @@ const WODEditor = () => {
     strengthLoad: "",
     strengthRange: "",
     strengthCue: "",
-  });
+  };
+}
+
+const WODEditor = () => {
+  const [formData, setFormData] = useState(() => buildDefaultFormData());
+  const latestLoadRequestRef = useRef(0);
 
   const roundDurationSeconds = useMemo(() => {
     const m = clampInt(toInt(formData.roundMinutes, 0), 0, 180);
@@ -219,27 +223,47 @@ const WODEditor = () => {
   }, [formData.stations]);
 
   const flattenedMovements = useMemo(() => flattenStationMovements(cleanedStations), [cleanedStations]);
+  const controlStationOptions = useMemo(
+    () =>
+      cleanedStations.map((station, index) => ({
+        value: index,
+        label: String(station.title ?? "").trim() || `Station ${index + 1}`,
+      })),
+    [cleanedStations]
+  );
 
   useEffect(() => {
     const loadExisting = async () => {
       if (!formData.date || !formData.timeOfDay) return;
+      const requestId = latestLoadRequestRef.current + 1;
+      latestLoadRequestRef.current = requestId;
 
       try {
         const docRef = doc(db, "wods", formData.date);
         const snap = await getDoc(docRef);
-        if (!snap.exists()) return;
+        if (latestLoadRequestRef.current !== requestId) return;
+        if (!snap.exists()) {
+          setFormData(buildDefaultFormData(formData.date, formData.timeOfDay));
+          return;
+        }
 
         const data = snap.data() as any;
         const existing = data?.[formData.timeOfDay];
-        if (!existing) return;
+        if (!existing) {
+          setFormData(buildDefaultFormData(formData.date, formData.timeOfDay));
+          return;
+        }
 
         const storedRoundSeconds = toInt(existing.roundDurationSeconds, 0);
         const mins = storedRoundSeconds ? Math.floor(storedRoundSeconds / 60) : 0;
         const secs = storedRoundSeconds ? storedRoundSeconds % 60 : 0;
+        const nextStations = normaliseStations(existing.stations, existing.movements);
 
         setFormData((prev) => ({
           ...prev,
           wodName: String(existing.wodName ?? ""),
+          date: formData.date,
+          timeOfDay: formData.timeOfDay,
           sessionType: (existing.sessionType as SessionType) ?? "HYROX",
 
           wodType: (existing.wodType as WodType) ?? "AMRAP",
@@ -249,8 +273,12 @@ const WODEditor = () => {
           roundSeconds: secs,
           rounds: toInt(existing.rounds, 1),
           restBetweenRoundsSeconds: toInt(existing.restBetweenRoundsSeconds, 0),
-          controlStationIndex: clampInt(toInt(existing.controlStationIndex, 0), 0, 999),
-          stations: normaliseStations(existing.stations, existing.movements),
+          controlStationIndex: clampInt(
+            toInt(existing.controlStationIndex, 0),
+            0,
+            Math.max(0, nextStations.length - 1)
+          ),
+          stations: nextStations,
 
           strengthMovements: normaliseStrength(existing.strengthMovements),
           strengthGoal: String(existing.strengthGoal ?? "Quality reps"),
@@ -259,6 +287,7 @@ const WODEditor = () => {
           strengthCue: String(existing.strengthCue ?? ""),
         }));
       } catch (e) {
+        if (latestLoadRequestRef.current !== requestId) return;
         console.error("Failed to load existing session", e);
       }
     };
@@ -303,7 +332,11 @@ const WODEditor = () => {
         restBetweenRoundsSeconds: restSeconds,
         totalWorkSeconds,
         totalSessionSeconds,
-        controlStationIndex: clampInt(toInt(formData.controlStationIndex, 0), 0, 999),
+        controlStationIndex: clampInt(
+          toInt(formData.controlStationIndex, 0),
+          0,
+          Math.max(0, cleanedStations.length - 1)
+        ),
         stations: cleanedStations,
         movements: flattenedMovements,
       });
@@ -340,12 +373,10 @@ const WODEditor = () => {
   };
 
   return (
-    <div className="min-h-screen bg-black text-white">
-      <UserTopNav />
-
-      <div className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6 lg:px-8">
+    <div className="carbon-fiber-bg min-h-screen overflow-x-hidden font-barlow text-[#f4f0ea]">
+      <div className="mx-auto w-full max-w-5xl px-4 pb-36 pt-6 sm:px-6 lg:px-8">
         <div className="space-y-6">
-          <section className="relative overflow-hidden rounded-[28px] border border-white/10 bg-neutral-950 px-6 py-7 shadow-[0_24px_60px_rgba(0,0,0,0.35)]">
+          <section className="relative overflow-hidden rounded-[28px] border border-white/8 bg-[#11100f] px-6 py-7 shadow-[0_24px_60px_rgba(0,0,0,0.35)]">
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.06),transparent_28%),radial-gradient(circle_at_85%_10%,rgba(59,130,246,0.12),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.03),transparent_55%)]" />
             <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] bg-[size:32px_32px] opacity-[0.06]" />
             <div className="absolute -right-6 bottom-[-18px] select-none text-[82px] font-black uppercase tracking-[0.18em] text-white/[0.04] sm:text-[120px]">
@@ -354,7 +385,7 @@ const WODEditor = () => {
 
             <div className="relative flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
               <div>
-                <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.3em] text-white/72">
+                <div className="inline-flex items-center gap-2 rounded-full border border-white/8 bg-white/[0.04] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.3em] text-white/72">
                   <Layers3 className="h-3.5 w-3.5" />
                   Admin Editor
                 </div>
@@ -386,7 +417,7 @@ const WODEditor = () => {
           >
             <section className={sectionCardClass}>
               <div className="mb-5">
-                <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/42">
+                <div className="inline-flex items-center gap-2 rounded-full border border-white/8 bg-white/[0.03] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/42">
                   <CalendarDays className="h-3.5 w-3.5" />
                   Programming Details
                 </div>
@@ -548,7 +579,7 @@ const WODEditor = () => {
                         />
                       </div>
 
-                      <div className="rounded-[22px] border border-white/10 bg-black/40 p-5">
+                      <div className="rounded-[22px] border border-white/8 bg-[#050505]/55 p-5">
                         <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/40">
                           Total Session Time
                         </div>
@@ -571,12 +602,12 @@ const WODEditor = () => {
                         onChange={handleChange}
                         className={inputClass}
                       >
-                        {flattenedMovements.length === 0 ? (
+                        {controlStationOptions.length === 0 ? (
                           <option value={0}>Add movements first</option>
                         ) : (
-                          flattenedMovements.map((m, i) => (
-                            <option key={i} value={i}>
-                              {i + 1}. {m}
+                          controlStationOptions.map((station) => (
+                            <option key={station.value} value={station.value}>
+                              {station.value + 1}. {station.label}
                             </option>
                           ))
                         )}
@@ -588,7 +619,7 @@ const WODEditor = () => {
                 <section className={sectionCardClass}>
                   <div className="mb-5 flex items-center justify-between gap-4">
                     <div>
-                      <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/42">
+                      <div className="inline-flex items-center gap-2 rounded-full border border-white/8 bg-white/[0.03] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/42">
                         <Layers3 className="h-3.5 w-3.5" />
                         Stations
                       </div>
@@ -623,7 +654,7 @@ const WODEditor = () => {
                     {(formData.stations || []).map((station, sIdx) => (
                       <div
                         key={station.id}
-                        className="rounded-[22px] border border-white/10 bg-black/30 p-4 space-y-3"
+                        className="rounded-[22px] border border-white/8 bg-[#050505]/50 p-4 space-y-3"
                       >
                         <div className="flex items-center gap-2">
                           <input
@@ -696,7 +727,7 @@ const WODEditor = () => {
                                   }
                                 }}
                                 placeholder={`Movement ${mIdx + 1}`}
-                                className="md:col-span-7 w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-white outline-none transition placeholder:text-white/25 focus:border-white/20 focus:bg-black"
+                                className="md:col-span-7 w-full rounded-2xl border border-white/8 bg-[#090909] px-4 py-3 text-white outline-none transition placeholder:text-white/25 focus:border-white/20 focus:bg-black"
                               />
 
                               <input
@@ -719,12 +750,12 @@ const WODEditor = () => {
                                   }));
                                 }}
                                 placeholder="Target (e.g. 12 cals / 10 reps)"
-                                className="md:col-span-4 w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-white outline-none transition placeholder:text-white/25 focus:border-white/20 focus:bg-black"
+                                className="md:col-span-4 w-full rounded-2xl border border-white/8 bg-[#090909] px-4 py-3 text-white outline-none transition placeholder:text-white/25 focus:border-white/20 focus:bg-black"
                               />
 
                               <button
                                 type="button"
-                                className="md:col-span-1 rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-3 text-sm font-semibold text-white/70 transition hover:border-white/20 hover:bg-white/[0.06] hover:text-white disabled:opacity-40"
+                                className="md:col-span-1 rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-3 text-sm font-semibold text-white/70 transition hover:border-white/20 hover:bg-white/[0.06] hover:text-white disabled:opacity-40"
                                 onClick={() => {
                                   setFormData((p: any) => ({
                                     ...p,
@@ -775,7 +806,7 @@ const WODEditor = () => {
             {formData.sessionType === "Strength" && (
               <section className={sectionCardClass}>
                 <div className="mb-5">
-                  <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/42">
+                  <div className="inline-flex items-center gap-2 rounded-full border border-white/8 bg-white/[0.03] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/42">
                     <Dumbbell className="h-3.5 w-3.5" />
                     Strength Block
                   </div>
@@ -835,7 +866,7 @@ const WODEditor = () => {
                     {formData.strengthMovements.map((row, idx) => (
                       <div
                         key={idx}
-                        className="rounded-[22px] border border-white/10 bg-black/30 p-4"
+                        className="rounded-[22px] border border-white/8 bg-[#050505]/50 p-4"
                       >
                         <div className="mb-3 text-[11px] font-semibold uppercase tracking-[0.22em] text-white/40">
                           Row {idx + 1}
@@ -900,7 +931,7 @@ const WODEditor = () => {
               </section>
             )}
 
-            <div className="sticky bottom-4 z-20 rounded-[24px] border border-white/10 bg-neutral-950/95 p-4 shadow-[0_20px_50px_rgba(0,0,0,0.4)] backdrop-blur-xl">
+            <div className="sticky bottom-4 z-20 rounded-[24px] border border-white/8 bg-[#11100f]/95 p-4 shadow-[0_20px_50px_rgba(0,0,0,0.4)] backdrop-blur-xl">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/40">
@@ -920,6 +951,7 @@ const WODEditor = () => {
           </form>
         </div>
       </div>
+      <AppBottomNav />
     </div>
   );
 };

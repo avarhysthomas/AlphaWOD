@@ -1,6 +1,6 @@
 // src/features/dashboard/pages/Dashboard.tsx
 import React, { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, NavLink } from "react-router-dom";
 import {
   collection,
   doc,
@@ -14,7 +14,7 @@ import {
 import { getAuth, onAuthStateChanged, User } from "firebase/auth";
 import { db } from "../../../firebase";
 import { useAuth } from "../../../context/AuthContext";
-import UserTopNav from "../../../components/layout/UserTopNav";
+import { getUserNavItems } from "../../../components/layout/UserTopNav";
 import LogoutButton from "../../../components/ui/LogoutButton";
 import {
   Flame,
@@ -22,14 +22,14 @@ import {
   PersonStanding,
   Award,
   Activity,
-  CalendarDays,
-  ChevronRight,
   Zap,
-  Trophy,
-  Timer,
   Share,
   Sun,
   Moon,
+  Bell,
+  Newspaper,
+  FileText,
+  Percent,
 } from "lucide-react";
 import SessionShareModal from "../../wod/components/SessionShareModal";
 
@@ -61,20 +61,6 @@ type UserStats = {
   monthCheckIns?: Record<string, number>;
   currentStreak?: number;
   longestStreak?: number;
-};
-
-type TrainingLog = {
-  movementSlug: string;
-  metricType: string;
-  value: string;
-  unit: string;
-  date: string;
-};
-
-type PBs = {
-  backSquat: string | null;
-  flatBench: string | null;
-  run1km: string | null;
 };
 
 type SessionKey = "AM" | "PM";
@@ -180,16 +166,6 @@ function fmtTodayFull(): string {
     year: "numeric",
     timeZone: TZ,
   }).format(new Date());
-}
-
-function parseSeconds(value: string): number | null {
-  const v = value.trim();
-  if (v.includes(":")) {
-    const [min, sec] = v.split(":").map(Number);
-    if (Number.isFinite(min) && Number.isFinite(sec)) return min * 60 + sec;
-  }
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
 }
 
 function formatSeconds(total: number): string {
@@ -450,6 +426,12 @@ function typeMeta(title?: string) {
   };
 }
 
+function capacityPercent(bookedCount?: number, capacity?: number) {
+  const cap = Number(capacity ?? 0);
+  if (!cap || cap <= 0) return 0;
+  return Math.max(0, Math.min(100, (Number(bookedCount ?? 0) / cap) * 100));
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
@@ -459,12 +441,13 @@ export default function Dashboard() {
 
   const [user, setUser] = useState<User | null>(auth.currentUser);
   const [stats, setStats] = useState<UserStats | null>(null);
-  const [pbs, setPbs] = useState<PBs>({ backSquat: null, flatBench: null, run1km: null });
   const [bookedClasses, setBookedClasses] = useState<ClassWithId[]>([]);
   const [loadingClasses, setLoadingClasses] = useState(true);
   const [todayProgramming, setTodayProgramming] = useState<Record<string, any> | null>(null);
   const [sharePayload, setSharePayload] = useState<SessionSharePayload | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
+  const [calculatorWeight, setCalculatorWeight] = useState("");
+  const [percentageInput, setPercentageInput] = useState("75");
 
   // Track auth user
   useEffect(() => {
@@ -480,40 +463,6 @@ export default function Dashboard() {
         setStats(data.stats ?? null);
       }
     });
-  }, [user]);
-
-  // Fetch PBs from trainingLogs subcollection
-  useEffect(() => {
-    if (!user) return;
-
-    const logsRef = collection(db, "users", user.uid, "trainingLogs");
-
-    async function fetchBest(slug: string, metricType: string, lowerIsBetter = false) {
-      const snap = await getDocs(
-        query(logsRef, where("movementSlug", "==", slug), where("metricType", "==", metricType))
-      );
-      let best: number | null = null;
-      snap.docs.forEach((d) => {
-        const log = d.data() as TrainingLog;
-        const parsed = parseSeconds(log.value);
-        if (parsed === null) return;
-        if (best === null) { best = parsed; return; }
-        if (lowerIsBetter ? parsed < best : parsed > best) best = parsed;
-      });
-      return best;
-    }
-
-    Promise.all([
-      fetchBest("back-squat", "1RM"),
-      fetchBest("flat-bench", "1RM"),
-      fetchBest("1km-run", "Time Trial", true),
-    ]).then(([backSquat, flatBench, run1km]) => {
-      setPbs({
-        backSquat: backSquat !== null ? `${backSquat} kg` : null,
-        flatBench: flatBench !== null ? `${flatBench} kg` : null,
-        run1km: run1km !== null ? formatSeconds(run1km) : null,
-      });
-    }).catch((e) => console.error("PB fetch error:", e));
   }, [user]);
 
   // Subscribe to active bookings, then fetch corresponding class docs
@@ -586,10 +535,11 @@ export default function Dashboard() {
   }, []);
 
   const firstName = appUser?.name?.split(" ")[0] || appUser?.email?.split("@")[0] || "there";
+  const profilePhotoURL = appUser?.photoURL || user?.photoURL || "";
 
   if (isBanned) {
     return (
-      <div className="min-h-screen bg-black text-white overflow-x-hidden">
+      <div className="carbon-fiber-bg min-h-screen text-white overflow-x-hidden">
         <div className="mx-auto flex min-h-screen max-w-3xl items-center px-4 py-12">
           <div className="w-full rounded-[2rem] border border-red-500/20 bg-gradient-to-br from-red-500/10 via-black to-black p-8 shadow-[0_0_60px_rgba(127,29,29,0.18)] sm:p-10">
             <div className="inline-flex items-center gap-2 rounded-full border border-red-500/25 bg-red-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-red-200">
@@ -622,8 +572,6 @@ export default function Dashboard() {
   );
 
   const thisMonthCount = stats?.monthCheckIns?.[monthKeyLondon()] ?? 0;
-  const streak = stats?.currentStreak ?? 0;
-  const total = stats?.totalCheckIns ?? 0;
   const sessionCards: DashboardSessionCard[] = (["AM", "PM"] as SessionKey[]).map((key) => {
     const payload = getDashboardSessionPayload(todayProgramming?.[key], key, todayKey);
     const emptyLabel = key === "AM" ? "6AM" : "6PM";
@@ -649,141 +597,186 @@ export default function Dashboard() {
     };
   });
 
+  const nextUp = todayClasses[0] ?? upcomingClasses[0] ?? null;
+  const nextUpMeta = nextUp ? typeMeta(nextUp.data.title) : null;
+  const nextUpStart = nextUp?.data.startTime.toDate();
+  const nextUpEnd = nextUp?.data.endTime.toDate();
+  const nextUpCapacity = Number(nextUp?.data.capacity ?? 0);
+  const nextUpBooked = Number(nextUp?.data.bookedCount ?? 0);
+  const nextUpProgress = capacityPercent(nextUpBooked, nextUpCapacity);
+  const hasNextUpToday = Boolean(
+    nextUpStart && datekeyLondon(nextUpStart) === todayKey
+  );
+  const navItems = getUserNavItems(appUser?.role);
+  const percentagePresets = [50, 60, 65, 70, 75, 80, 85, 90, 95, 100];
+  const enteredWeight = Number.parseFloat(calculatorWeight);
+  const selectedPercentage = Number.parseFloat(percentageInput);
+  const calculatedLoad =
+    Number.isFinite(enteredWeight) && enteredWeight > 0 && Number.isFinite(selectedPercentage)
+      ? enteredWeight * (selectedPercentage / 100)
+      : 0;
+  const roundedLoad = calculatedLoad ? Math.round(calculatedLoad / 2.5) * 2.5 : 0;
+
   return (
-    <div className="min-h-screen bg-black text-white overflow-x-hidden">
-      <UserTopNav />
+    <div className="carbon-fiber-bg min-h-screen overflow-x-hidden text-[#f4f0ea]">
+      <main className="relative mx-auto min-h-screen max-w-xl px-5 pb-32 pt-7 sm:max-w-3xl sm:px-8">
+        <header className="flex items-center justify-between" style={{ paddingTop: "env(safe-area-inset-top)" }}>
+          <Link to="/dashboard" aria-label="Zero Alpha home" className="block">
+            <img
+              src="/ZERO-ALPHA.png"
+              alt="ZERO-ALPHA"
+              className="h-20 w-auto object-contain"
+            />
+          </Link>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              aria-label="Notifications"
+              className="grid h-12 w-12 place-items-center rounded-full border border-white/10 bg-white/[0.04] text-white/55 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] transition hover:bg-white/[0.08] hover:text-white"
+            >
+              <Bell className="h-5 w-5" />
+            </button>
+            <Link
+              to="/profile"
+              aria-label="Profile"
+              className="grid h-12 w-12 overflow-hidden rounded-full border border-[#8b725b]/60 bg-[#765f4b] text-sm font-bold uppercase text-[#f8efe5] shadow-[inset_0_1px_0_rgba(255,255,255,0.14)]"
+            >
+              {profilePhotoURL ? (
+                <img
+                  src={profilePhotoURL}
+                  alt={appUser?.name ? `${appUser.name}'s profile` : "Profile"}
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <span className="grid h-full w-full place-items-center">
+                  {firstName.slice(0, 1)}
+                </span>
+              )}
+            </Link>
+          </div>
+        </header>
 
-      <div className="max-w-3xl mx-auto px-4 py-8 space-y-8">
-
-        {/* ── Greeting ────────────────────────────────────────── */}
-        <div>
-          <p className="text-white/40 text-sm uppercase tracking-widest font-semibold mb-1">
+        <section className="mt-12 sm:mt-16">
+          <p className="text-[12px] font-bold uppercase tracking-[0.28em] text-white/34">
             {fmtTodayFull()}
           </p>
-          <h1 className="text-5xl sm:text-6xl font-heading uppercase tracking-widest text-white leading-none">
-            {greeting()},
+          <h1 className="mt-6 max-w-[12ch] font-heading text-[4rem] uppercase leading-[0.98] tracking-[0.01em] text-white sm:text-[5.7rem]">
+            {greeting()}, {firstName}.
           </h1>
-          <h1 className="text-5xl sm:text-6xl font-heading uppercase tracking-widest text-white leading-none">
-            {firstName}.
-          </h1>
-        </div>
-
-        <section>
-          <div className="grid grid-cols-2 gap-3">
-            <Link
-              to="/workouts"
-              className="group rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.08] via-white/[0.04] to-white/[0.02] p-4 transition hover:bg-white/[0.08]"
-            >
-              <div className="flex items-center justify-between gap-3">
-                <div className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/68">
-                  <Dumbbell className="h-3.5 w-3.5" />
-                  Training
-                </div>
-                <ChevronRight className="h-4 w-4 text-white/30 transition group-hover:text-white/70" />
-              </div>
-              <div className="mt-3 text-lg font-heading uppercase tracking-[-0.04em] text-white sm:text-xl">
-                Log sessions
-              </div>
-            </Link>
-
-            <Link
-              to="/feed"
-              className="group rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.08] via-white/[0.04] to-white/[0.02] p-4 transition hover:bg-white/[0.08]"
-            >
-              <div className="flex items-center justify-between gap-3">
-                <div className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/68">
-                  <Share className="h-3.5 w-3.5" />
-                  Feed
-                </div>
-                <ChevronRight className="h-4 w-4 text-white/30 transition group-hover:text-white/70" />
-              </div>
-              <div className="mt-3 text-lg font-heading uppercase tracking-[-0.04em] text-white sm:text-xl">
-                Zero Alpha feed
-              </div>
-            </Link>
-          </div>
         </section>
 
-        {/* ── Today's Classes ─────────────────────────────────── */}
-        <section>
-          <div className="flex items-center gap-2 mb-3">
-            <CalendarDays className="h-4 w-4 text-white/40" />
-            <h2 className="text-xs uppercase tracking-widest font-semibold text-white/40">
-              Today's classes
-            </h2>
-          </div>
-
+        <section className="mt-10">
           {loadingClasses ? (
-            <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 text-white/40 text-sm">
-              Loading…
+            <div className="rounded-[28px] border border-white/10 bg-[#151311] p-7 text-sm text-white/45">
+              Loading your next session...
             </div>
-          ) : todayClasses.length === 0 ? (
-            <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <p className="text-white/50 text-sm">No classes booked today.</p>
-              <Link
-                to="/schedule"
-                className="inline-flex items-center gap-1.5 text-sm font-semibold text-white/70 hover:text-white transition"
-              >
-                View schedule <ChevronRight className="h-4 w-4" />
-              </Link>
+          ) : nextUp && nextUpMeta && nextUpStart && nextUpEnd ? (
+            <div className="rounded-[28px] border border-white/10 bg-[#151311] p-7 shadow-[0_26px_80px_rgba(0,0,0,0.42)]">
+              <div className="flex items-start justify-between gap-4">
+                <p className="text-[12px] font-bold uppercase tracking-[0.28em] text-white/34">
+                  Next up {hasNextUpToday ? "- today" : `- ${fmtDayShort(nextUpStart)}`}
+                </p>
+                <span className="rounded-full bg-emerald-400/12 px-4 py-2 text-[12px] font-bold uppercase tracking-[0.12em] text-emerald-200">
+                  Booked
+                </span>
+              </div>
+
+              <div className="mt-7 flex items-end gap-3">
+                <div className="font-heading text-[4.55rem] leading-[0.88] tracking-[0.02em] text-white">
+                  {fmtTime(nextUpStart)}
+                </div>
+                <div className="pb-2 text-lg font-semibold text-white/35">
+                  - {fmtTime(nextUpEnd)}
+                </div>
+              </div>
+
+              <div className="mt-3 font-heading text-4xl uppercase leading-none tracking-[0.02em] text-white">
+                {nextUpMeta.label}
+              </div>
+              <p className="mt-6 text-[15px] text-white/48">
+                {[nextUp.data.coachName, nextUp.data.location].filter(Boolean).join(" · ") || "AlphaFIT"}
+              </p>
+
+              <div className="mt-8">
+                <div className="mb-3 flex items-center justify-between text-[12px] font-bold uppercase tracking-[0.18em] text-white/38">
+                  <span>Capacity</span>
+                  <span>
+                    {nextUpBooked} / {nextUpCapacity || "-"}
+                  </span>
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-white/8">
+                  <div
+                    className="h-full rounded-full bg-[#f2eee8]"
+                    style={{ width: `${nextUpProgress || 10}%` }}
+                  />
+                </div>
+              </div>
+
             </div>
           ) : (
-            <div className="space-y-3">
-              {todayClasses.map(({ id, data }) => {
-                const meta = typeMeta(data.title);
-                const start = data.startTime.toDate();
-                const end = data.endTime.toDate();
-                return (
-                  <div
-                    key={id}
-                    className="relative overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.09] via-white/[0.04] to-white/[0.01] p-5 flex items-center gap-4"
-                  >
-                    <div className={`absolute left-0 top-0 h-full w-[4px] ${meta.stripe}`} />
-                    <div
-                      className={`shrink-0 h-10 w-10 rounded-xl border flex items-center justify-center ${meta.pill} pl-2`}
-                    >
-                      {meta.icon}
-                    </div>
-                    <div className="min-w-0 flex-1 pl-1">
-                      <div className="text-base font-heading tracking-widest text-white">
-                        {meta.label}
-                      </div>
-                      <div className="text-sm text-white/50 mt-0.5">
-                        {fmtTime(start)}–{fmtTime(end)}
-                        {data.coachName ? ` · ${data.coachName}` : ""}
-                        {data.location ? ` · ${data.location}` : ""}
-                      </div>
-                    </div>
-                    <span className="shrink-0 text-xs font-semibold uppercase tracking-wide rounded-full px-2.5 py-1 border border-emerald-500/40 bg-emerald-500/10 text-emerald-300">
-                      Booked
-                    </span>
-                  </div>
-                );
-              })}
+            <div className="rounded-[28px] border border-white/10 bg-[#151311] p-7">
+              <p className="text-[12px] font-bold uppercase tracking-[0.28em] text-white/34">
+                Next up
+              </p>
+              <div className="mt-6 font-heading text-5xl uppercase leading-none text-white">
+                No booking
+              </div>
+              <p className="mt-4 text-[15px] leading-6 text-white/50">
+                Find a class for the week and lock it in.
+              </p>
+              <Link
+                to="/schedule"
+                className="mt-7 inline-flex rounded-full bg-[#f2eee8] px-6 py-4 text-sm font-bold text-black"
+              >
+                View schedule
+              </Link>
             </div>
           )}
         </section>
 
-        <section>
-          <div className="flex items-center gap-2 mb-3">
-            <CalendarDays className="h-4 w-4 text-white/40" />
-            <h2 className="text-xs uppercase tracking-widest font-semibold text-white/40">
-              Today&apos;s programming
-            </h2>
-          </div>
+        <section className="mt-5 grid grid-cols-2 gap-4">
+          <Link
+            to="/workouts"
+            className="group rounded-[20px] border border-white/10 bg-[#151311] p-5 transition hover:bg-[#1b1815]"
+          >
+            <div className="grid h-11 w-11 place-items-center rounded-xl bg-white/[0.06] text-white/52">
+              <FileText className="h-5 w-5" />
+            </div>
+            <div className="mt-7 text-[17px] font-bold text-white">Log session</div>
+            <div className="mt-1 text-sm text-white/35">{thisMonthCount} this month</div>
+          </Link>
+          <Link
+            to="/feed"
+            className="group rounded-[20px] border border-white/10 bg-[#151311] p-5 transition hover:bg-[#1b1815]"
+          >
+            <div className="grid h-11 w-11 place-items-center rounded-xl bg-white/[0.06] text-white/52">
+              <Newspaper className="h-5 w-5" />
+            </div>
+            <div className="mt-7 text-[17px] font-bold text-white">Feed</div>
+            <div className="mt-1 text-sm text-white/35">Latest posts</div>
+          </Link>
+        </section>
 
-          <div className="grid grid-cols-2 gap-3">
+        <section className="mt-10">
+          <div className="mb-4 flex items-center justify-between">
+            <p className="text-[12px] font-bold uppercase tracking-[0.28em] text-white/34">
+              Programming
+            </p>
+            <Link to="/schedule" className="text-sm font-bold text-white/64">
+              View all
+            </Link>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
             {sessionCards.map((session) => {
               const Icon = session.key === "AM" ? Sun : Moon;
-
               return (
-                <div
+                <article
                   key={session.key}
-                  className="rounded-[26px] border border-white/10 bg-gradient-to-br from-white/[0.09] via-white/[0.04] to-white/[0.02] p-4"
+                  className="rounded-[24px] border border-white/10 bg-[#151311] p-5"
                 >
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                    <div className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/72">
-                      <Icon className="h-3 w-3" />
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-2 text-[12px] font-bold uppercase tracking-[0.18em] text-white/42">
+                      <Icon className="h-4 w-4" />
                       {session.timeLabel}
                     </div>
                     {session.payload ? (
@@ -793,141 +786,130 @@ export default function Dashboard() {
                           setSharePayload(session.payload);
                           setShareOpen(true);
                         }}
-                        className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/82 transition hover:bg-white/[0.08]"
+                        aria-label={`Share ${session.timeLabel} programming`}
+                        className="grid h-10 w-10 place-items-center rounded-xl border border-white/10 bg-white/[0.04] text-white/58 transition hover:bg-white/[0.08] hover:text-white"
                       >
-                        <Share className="h-3 w-3" />
-                        Share
+                        <Share className="h-4 w-4" />
                       </button>
                     ) : null}
                   </div>
-
-                  <div className="mt-4 text-2xl font-heading uppercase tracking-[-0.04em] leading-[0.92] text-white">
+                  <div className="mt-7 font-heading text-4xl uppercase leading-none text-white">
                     {session.title}
                   </div>
-                  <div className="mt-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-white/45">
-                    {session.meta}
-                  </div>
-                  <div className="mt-3 rounded-[18px] border border-white/8 bg-black/20 px-3 py-2.5 text-[13px] leading-snug text-white/68">
-                    {session.detail}
-                  </div>
-                </div>
+                  <p className="mt-4 text-sm leading-6 text-white/45">{session.detail}</p>
+                </article>
               );
             })}
           </div>
         </section>
 
-        {/* ── Quick Stats ─────────────────────────────────────── */}
-        <section>
-          <div className="flex items-center gap-2 mb-3">
-            <Activity className="h-4 w-4 text-white/40" />
-            <h2 className="text-xs uppercase tracking-widest font-semibold text-white/40">
-              Your stats
-            </h2>
+        <section className="mt-10 overflow-hidden rounded-[24px] border border-white/10 bg-[#151311] p-5">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-[12px] font-bold uppercase tracking-[0.28em] text-white/34">
+                Percentage calculator
+              </p>
+              <p className="mt-2 text-sm font-medium text-white/38">
+                Work out a percentage of any weight.
+              </p>
+            </div>
+            <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-white/[0.06] text-white/52">
+              <Percent className="h-5 w-5" />
+            </div>
           </div>
-          <div className="grid grid-cols-3 gap-3">
-            {[
-              { label: "Streak", value: streak, suffix: streak === 1 ? "week" : "weeks", icon: <Flame className="h-5 w-5 text-orange-400" /> },
-              { label: "This month", value: thisMonthCount, suffix: thisMonthCount === 1 ? "class" : "classes", icon: <CalendarDays className="h-5 w-5 text-sky-400" /> },
-              { label: "All time", value: total, suffix: total === 1 ? "check-in" : "check-ins", icon: <Award className="h-5 w-5 text-emerald-400" /> },
-            ].map(({ label, value, suffix, icon }) => (
-              <div
-                key={label}
-                className="rounded-2xl border border-white/10 bg-gradient-to-b from-white/[0.06] to-white/[0.02] p-4 flex flex-col items-center text-center gap-1"
-              >
-                {icon}
-                <div className="text-3xl font-heading tracking-wider text-white mt-1">{value}</div>
-                <div className="text-[10px] uppercase tracking-widest text-white/40 font-semibold leading-tight">
-                  {label}
-                </div>
-                <div className="text-[10px] text-white/30 leading-tight">{suffix}</div>
+
+          <div className="mt-6 grid grid-cols-[1fr_104px] gap-3">
+            <label className="block">
+              <span className="mb-2 block text-[11px] font-black uppercase tracking-[0.2em] text-white/34">
+                Weight
+              </span>
+              <input
+                value={calculatorWeight}
+                onChange={(event) => setCalculatorWeight(event.target.value)}
+                inputMode="decimal"
+                placeholder="e.g. 100"
+                className="w-full rounded-[18px] border border-white/10 bg-[#211e1b] px-4 py-4 font-mono text-xl font-bold text-white outline-none placeholder:text-white/20 focus:border-white/22"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-2 block text-[11px] font-black uppercase tracking-[0.2em] text-white/34">
+                %
+              </span>
+              <input
+                value={percentageInput}
+                onChange={(event) => setPercentageInput(event.target.value)}
+                inputMode="decimal"
+                placeholder="75"
+                className="w-full rounded-[18px] border border-white/10 bg-[#211e1b] px-4 py-4 text-center font-mono text-xl font-bold text-white outline-none placeholder:text-white/20 focus:border-white/22"
+              />
+            </label>
+          </div>
+
+          <div className="mt-3 flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {percentagePresets.map((preset) => {
+              const isActive = Number(percentageInput) === preset;
+              return (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => setPercentageInput(String(preset))}
+                  className={[
+                    "shrink-0 rounded-full border px-3.5 py-2 font-mono text-sm font-bold transition",
+                    isActive
+                      ? "border-white/20 bg-white/[0.10] text-white"
+                      : "border-white/10 bg-transparent text-white/36 hover:text-white/70",
+                  ].join(" ")}
+                >
+                  {preset}%
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="mt-6 rounded-[20px] border border-white/10 bg-black/18 p-5">
+            <div className="text-[11px] font-black uppercase tracking-[0.2em] text-white/34">
+              Target load
+            </div>
+            <div className="mt-3 flex items-end gap-2">
+              <div className="font-mono text-[3.4rem] font-bold leading-none text-white">
+                {roundedLoad ? roundedLoad.toFixed(roundedLoad % 1 === 0 ? 0 : 1) : "--"}
               </div>
-            ))}
+              <div className="pb-2 text-sm font-bold uppercase tracking-[0.12em] text-white/38">
+                kg
+              </div>
+            </div>
           </div>
         </section>
 
-        {/* ── Personal Bests ──────────────────────────────────── */}
-        <section>
-          <div className="flex items-center gap-2 mb-3">
-            <Trophy className="h-4 w-4 text-white/40" />
-            <h2 className="text-xs uppercase tracking-widest font-semibold text-white/40">
-              Personal bests
-            </h2>
-          </div>
-          <div className="grid grid-cols-3 gap-3">
-            {([
-              { label: "Back Squat", sub: "1RM", value: pbs.backSquat, icon: <Dumbbell className="h-5 w-5 text-sky-400" />, link: "/training/strength/back-squat" },
-              { label: "Flat Bench", sub: "1RM", value: pbs.flatBench, icon: <Dumbbell className="h-5 w-5 text-violet-400" />, link: "/training/strength/flat-bench" },
-              { label: "1km Run", sub: "Time Trial", value: pbs.run1km, icon: <Timer className="h-5 w-5 text-orange-400" />, link: "/training/engine/1km-run" },
-            ] as const).map(({ label, sub, value, icon, link }) => (
-              <Link
-                key={label}
-                to={link}
-                className="rounded-2xl border border-white/10 bg-gradient-to-b from-white/[0.06] to-white/[0.02] p-4 flex flex-col items-center text-center gap-1 hover:bg-white/[0.08] transition"
-              >
-                {icon}
-                <div className="text-2xl font-heading tracking-wider text-white mt-1">
-                  {value ?? "—"}
-                </div>
-                <div className="text-[10px] uppercase tracking-widest text-white/40 font-semibold leading-tight">
-                  {label}
-                </div>
-                <div className="text-[10px] text-white/30 leading-tight">{sub}</div>
-              </Link>
-            ))}
-          </div>
-        </section>
+      </main>
 
-        {/* ── Upcoming Bookings ────────────────────────────────── */}
-        {upcomingClasses.length > 0 && (
-          <section>
-            <div className="flex items-center gap-2 mb-3">
-              <CalendarDays className="h-4 w-4 text-white/40" />
-              <h2 className="text-xs uppercase tracking-widest font-semibold text-white/40">
-                Upcoming
-              </h2>
-            </div>
-            <div className="rounded-2xl border border-white/10 bg-white/[0.03] overflow-hidden divide-y divide-white/[0.06]">
-              {upcomingClasses.slice(0, 5).map(({ id, data }) => {
-                const meta = typeMeta(data.title);
-                const start = data.startTime.toDate();
-                const end = data.endTime.toDate();
-                return (
-                  <div key={id} className="flex items-center gap-4 px-5 py-4">
-                    <div className={`shrink-0 w-1 self-stretch rounded-full ${meta.stripe}`} />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-heading tracking-widest text-white">{meta.label}</div>
-                      <div className="text-xs text-white/40 mt-0.5">
-                        {fmtDayShort(start)} · {fmtTime(start)}–{fmtTime(end)}
-                        {data.coachName ? ` · ${data.coachName}` : ""}
-                      </div>
-                    </div>
-                    <span
-                      className={`shrink-0 text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border ${meta.pill}`}
-                    >
-                      {meta.label}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-        )}
-
-        {/* ── Schedule CTA ─────────────────────────────────────── */}
-        <Link
-          to="/schedule"
-          className="flex items-center justify-between w-full rounded-2xl border border-white/10 bg-white/[0.03] hover:bg-white/[0.06] transition px-5 py-4 group"
-        >
-          <div className="flex items-center gap-3">
-            <CalendarDays className="h-5 w-5 text-white/50 group-hover:text-white/80 transition" />
-            <span className="text-sm font-semibold text-white/70 group-hover:text-white transition">
-              View full schedule
-            </span>
-          </div>
-          <ChevronRight className="h-4 w-4 text-white/30 group-hover:text-white/60 transition" />
-        </Link>
-
-      </div>
+      <nav
+        className="fixed inset-x-4 bottom-4 z-40 mx-auto max-w-xl rounded-[28px] border border-white/45 bg-white/90 px-3 py-3 shadow-[0_18px_60px_rgba(0,0,0,0.35)] backdrop-blur-xl sm:max-w-2xl"
+        style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
+        aria-label="Primary"
+      >
+        <div className="flex gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {navItems.map(({ to, label, icon: Icon, danger, adminOnly }) => (
+            <NavLink
+              key={to}
+              to={to}
+              className={({ isActive }) =>
+                [
+                  "flex min-w-[76px] shrink-0 flex-col items-center gap-1.5 rounded-2xl px-2 py-2 text-[11px] font-bold transition",
+                  isActive
+                    ? "bg-black/10 text-black"
+                    : "text-black hover:bg-black/5",
+                  danger && !isActive ? "text-black" : "",
+                  adminOnly && !isActive ? "text-black" : "",
+                ].join(" ")
+              }
+            >
+              <Icon className="h-5 w-5 text-black" />
+              <span className="max-w-full truncate">{label}</span>
+            </NavLink>
+          ))}
+        </div>
+      </nav>
       {sharePayload ? (
         <SessionShareModal
           open={shareOpen}

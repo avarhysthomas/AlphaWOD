@@ -1,6 +1,6 @@
 import React from "react";
 import { Link } from "react-router-dom";
-import { Activity, ArrowUpRight, CalendarDays, Clock3, Lock, Users } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import UserAvatar from "../../../components/ui/UserAvatar";
 import type { WorkoutSession } from "../types";
 
@@ -31,92 +31,77 @@ function statChips(workout: WorkoutSession) {
 type WorkoutSessionCardProps = {
   workout: WorkoutSession;
   showOwner?: boolean;
+  compact?: boolean;
 };
 
 function formatWorkoutType(type: WorkoutSession["type"]) {
   return type === "run" ? "Cardio" : type.toUpperCase();
 }
 
+function sessionSummary(workout: WorkoutSession) {
+  const chips = statChips(workout);
+  const movementCount = workout.movementEntries.filter((entry) =>
+    entry.movementName.trim()
+  ).length;
+
+  if (workout.type === "strength" && movementCount) {
+    return `${movementCount} move${movementCount === 1 ? "" : "s"}${
+      workout.durationMin ? ` · ${workout.durationMin} min` : ""
+    }`;
+  }
+
+  if (chips.length) return chips.join(" · ");
+  if (workout.notes) return workout.notes;
+  return "Session logged";
+}
+
 export default function WorkoutSessionCard({
   workout,
   showOwner = false,
+  compact = false,
 }: WorkoutSessionCardProps) {
-  const chips = statChips(workout);
+  const summary = sessionSummary(workout);
 
   return (
     <Link
       to={`/workouts/${workout.id}`}
-      className="group relative overflow-hidden rounded-[28px] border border-white/10 bg-neutral-950/95 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.35)] transition duration-300 hover:-translate-y-1 hover:border-white/20 hover:bg-neutral-900"
+      className={[
+        "group grid grid-cols-[84px_1fr_auto] items-center gap-3 border-white/8 px-4 py-4 transition hover:bg-white/[0.025]",
+        compact
+          ? "border-b last:border-b-0"
+          : "rounded-[18px] border bg-[#11100f]",
+      ].join(" ")}
     >
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(245,158,11,0.1),transparent_28%),radial-gradient(circle_at_bottom_left,rgba(14,165,233,0.08),transparent_26%)] opacity-80" />
-
-      <div className="relative">
-        <div className="flex items-start justify-between gap-4">
-          <div className="space-y-3">
-            <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/52">
-              <Activity className="h-3.5 w-3.5" />
-              {formatWorkoutType(workout.type)}
-            </div>
-
-            <div>
-              <h3 className="text-2xl font-semibold tracking-[-0.03em] text-white">
-                {workout.title}
-              </h3>
-              <p className="mt-2 max-w-xl text-sm leading-7 text-white/60">
-                {workout.notes || "Session logged and ready to revisit."}
-              </p>
-            </div>
-          </div>
-
-          <div className="rounded-full border border-white/10 bg-black/30 p-2.5 text-white/45 transition group-hover:border-white/20 group-hover:text-white/80">
-            <ArrowUpRight className="h-4 w-4" />
-          </div>
-        </div>
-
-        {showOwner ? (
-          <div className="mt-5 flex items-center gap-3 text-sm text-white/68">
-            <UserAvatar
-              name={workout.userName}
-              photoURL={workout.userPhotoURL}
-              size={36}
-            />
-            <span>{workout.userName}</span>
-          </div>
-        ) : null}
-
-        <div className="mt-5 flex flex-wrap items-center gap-3 text-sm text-white/55">
-          <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/25 px-3 py-1.5">
-            <CalendarDays className="h-4 w-4" />
+      <div className="min-w-0">
+        <span className="inline-flex max-w-full rounded-full border border-white/8 bg-white/[0.045] px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.08em] text-white/55">
+          {formatWorkoutType(workout.type)}
+        </span>
+      </div>
+      <div className="min-w-0">
+        <div className="flex min-w-0 items-center gap-2">
+          <h3 className="truncate text-[17px] font-bold leading-5 text-white sm:text-xl">
+            {workout.title}
+          </h3>
+          <span className="shrink-0 text-white/28">·</span>
+          <span className="shrink-0 font-mono text-sm text-white/50">
             {formatDateLabel(workout.sessionDate)}
           </span>
-          {workout.startTime ? (
-            <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/25 px-3 py-1.5">
-              <Clock3 className="h-4 w-4" />
-              {workout.startTime}
-            </span>
-          ) : null}
-          <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/25 px-3 py-1.5">
-            {workout.visibility === "members" ? (
-              <Users className="h-4 w-4" />
-            ) : (
-              <Lock className="h-4 w-4" />
-            )}
-            {workout.visibility === "members" ? "Shared to feed" : "Private"}
-          </span>
         </div>
-
-        {chips.length ? (
-          <div className="mt-5 flex flex-wrap gap-2">
-            {chips.map((chip) => (
-              <span
-                key={chip}
-                className="rounded-full border border-amber-400/15 bg-amber-400/[0.08] px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-amber-100"
-              >
-                {chip}
-              </span>
-            ))}
+        <p className="mt-1 truncate font-mono text-[13px] text-white/32">{summary}</p>
+        {showOwner ? (
+          <div className="mt-2 flex items-center gap-2 text-xs font-bold text-white/44">
+            <UserAvatar name={workout.userName} photoURL={workout.userPhotoURL} size={22} />
+            <span className="truncate">{workout.userName}</span>
           </div>
         ) : null}
+      </div>
+      <div className="flex items-center gap-3">
+        {workout.startTime ? (
+          <span className="hidden font-mono text-sm text-white/32 sm:inline">
+            {workout.startTime}
+          </span>
+        ) : null}
+        <ChevronRight className="h-4 w-4 text-white/20 transition group-hover:text-white/55" />
       </div>
     </Link>
   );

@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Link, Navigate, useParams } from "react-router-dom";
+import { Link, Navigate, NavLink, useParams } from "react-router-dom";
 import {
+  Bell,
   ChevronLeft,
-  Trophy,
+  Plus,
+  X,
 } from "lucide-react";
 import {
   addDoc,
@@ -22,15 +24,16 @@ import MovementHistorySection from "../components/MovementHistorySection";
 import MovementLogForm from "../components/MovementLogForm";
 import {
   ResponsiveContainer,
-  LineChart,
+  AreaChart,
   Line,
+  Area,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   ReferenceDot,
 } from "recharts";
-import UserTopNav from "../../../components/layout/UserTopNav";
+import { getUserNavItems } from "../../../components/layout/UserTopNav";
 import { useAuth } from "../../../context/AuthContext";
 import {
   formatChartValue,
@@ -138,6 +141,7 @@ export default function TrainingStandardMovement() {
   const [activeMetricFilter, setActiveMetricFilter] = useState(
     movement?.metricTypes[0] ?? ""
     );
+  const [logSheetOpen, setLogSheetOpen] = useState(false);
 
   const [shareOpen, setShareOpen] = useState(false);
   const [isNewPB, setIsNewPB] = useState(false);
@@ -507,182 +511,174 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
     return <Navigate to="/training" replace />;
   }
 
-  const Icon = selectedCategory.icon;
+  const navItems = getUserNavItems(appUser?.role);
+  const firstName = appUser?.name?.split(" ")[0] || appUser?.email?.split("@")[0] || "there";
+  const profilePhotoURL = appUser?.photoURL || user?.photoURL || "";
+  const oldestLog = filteredLogs[filteredLogs.length - 1] ?? null;
+  const daysTracked = oldestLog
+    ? Math.max(
+        0,
+        Math.floor(
+          (Date.now() - new Date(`${oldestLog.date}T00:00:00`).getTime()) / 86400000
+        )
+      )
+    : 0;
 
   return (
-    <div className="min-h-screen bg-black text-white">
-        <UserTopNav />
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
-        <section className="relative overflow-hidden rounded-[32px] border border-white/10 bg-neutral-950 shadow-[0_30px_80px_rgba(0,0,0,0.45)]">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.08),transparent_25%),radial-gradient(circle_at_85%_20%,rgba(59,130,246,0.18),transparent_28%),linear-gradient(135deg,rgba(255,255,255,0.03),transparent_55%)]" />
-          <div className={`absolute inset-0 bg-gradient-to-br ${selectedCategory.accent} opacity-95`} />
-          <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] bg-[size:34px_34px] opacity-[0.07]" />
-          <div className="absolute -right-6 bottom-[-18px] select-none text-[82px] font-black uppercase tracking-[0.22em] text-white/[0.05] sm:text-[120px] lg:text-[165px]">
-            {movement.name.replace(/\s+/g, " ")}
+    <div className="carbon-fiber-bg min-h-screen overflow-x-hidden font-barlow text-[#f4f0ea]">
+      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_top_right,rgba(120,95,70,0.16),transparent_34%),linear-gradient(180deg,rgba(255,255,255,0.025),transparent_22%)]" />
+      <main className="relative mx-auto min-h-screen max-w-xl px-5 pb-32 pt-7 sm:max-w-3xl sm:px-8">
+        <header className="flex items-center justify-between" style={{ paddingTop: "env(safe-area-inset-top)" }}>
+          <Link to="/dashboard" aria-label="Zero Alpha home" className="block">
+            <img src="/ZERO-ALPHA.png" alt="ZERO-ALPHA" className="h-20 w-auto object-contain" />
+          </Link>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              aria-label="Notifications"
+              className="grid h-12 w-12 place-items-center rounded-full border border-white/10 bg-white/[0.04] text-white/55 transition hover:bg-white/[0.08] hover:text-white"
+            >
+              <Bell className="h-5 w-5" />
+            </button>
+            <Link
+              to="/profile"
+              aria-label="Profile"
+              className="grid h-12 w-12 overflow-hidden rounded-full border border-[#8b725b]/60 bg-[#765f4b] text-sm font-bold uppercase text-[#f8efe5]"
+            >
+              {profilePhotoURL ? (
+                <img
+                  src={profilePhotoURL}
+                  alt={appUser?.name ? `${appUser.name}'s profile` : "Profile"}
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <span className="grid h-full w-full place-items-center">{firstName.slice(0, 1)}</span>
+              )}
+            </Link>
           </div>
+        </header>
 
-          <div className="relative p-6 sm:p-8 lg:p-10">
-            <div className="flex flex-col gap-8 lg:flex-row lg:items-end lg:justify-between">
-              <div className="max-w-3xl">
-                <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/20 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.35em] text-white/78 backdrop-blur-md">
-                  <Icon className="h-3.5 w-3.5" />
-                  {selectedCategory.label}
-                </div>
-
-                <h1 className="text-4xl font-heading uppercase tracking-[-0.05em] sm:text-5xl lg:text-6xl">
-                  {movement.name}
-                </h1>
-
-                <p className="mt-4 max-w-2xl text-sm leading-7 text-white/74 sm:text-base">
-                  {movement.description}
-                </p>
-
-                <div className="mt-6 flex flex-wrap items-center gap-3 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/45">
-                  <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5 backdrop-blur">
-                    {movement.metricTypes.length} metrics
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap gap-3">
-                <Link
-                  to="/training"
-                  className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/25 px-5 py-3 text-sm font-semibold text-white/85 backdrop-blur-md transition hover:border-white/20 hover:bg-black/35 hover:text-white"
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                  Performance
-                </Link>
-
-                <Link
-                  to={`/training/${selectedCategory.key}`}
-                  className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/25 px-5 py-3 text-sm font-semibold text-white/85 backdrop-blur-md transition hover:border-white/20 hover:bg-black/35 hover:text-white"
-                >
-                  {selectedCategory.label}
-                </Link>
-              </div>
-            </div>
-          </div>
+        <section className="mt-12">
+          <Link
+            to={`/training/${selectedCategory.key}`}
+            className="inline-flex items-center gap-2 text-sm font-bold text-white/34 transition hover:text-white/70"
+          >
+            <ChevronLeft className="h-4 w-4" />
+            {selectedCategory.label}
+          </Link>
+          <p className="mt-8 text-[12px] font-bold uppercase tracking-[0.28em] text-white/34">
+            Barbell · Benchmark
+          </p>
+          <h1 className="mt-5 font-heading text-[4.4rem] uppercase leading-none tracking-[0.01em] text-white sm:text-[6rem]">
+            {movement.name}
+          </h1>
         </section>
 
-        <section className="grid gap-4 md:grid-cols-3">
-          <div className="relative overflow-hidden rounded-[28px] border border-white/10 bg-neutral-950 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.35)]">
-            <div className={`absolute inset-0 ${accent.glow}`} />
-            <div className={`absolute inset-x-0 top-0 h-px ${accent.line}`} />
-            <div className="relative">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-white/42">
-            {selectedCategory.key === "engine" ? "Fastest" : "Best"} · {activeMetricFilter}
-            </div>
-              <div className="mt-4 flex items-center gap-3">
-                <div className={`rounded-2xl border p-3 ${accent.badgeGlow}`}>
-                  <Trophy className="h-5 w-5" />
-                </div>
-                <div className="text-3xl font-semibold tracking-[-0.04em]">
-                  {bestLog
-                    ? formatDisplayValue(
-                        bestLog.value,
-                        bestLog.unit,
-                        selectedCategory.key,
-                        movement.name
-                        )
-                    : "—"}
-                </div>
-              </div>
-              <div className="mt-3 text-sm text-white/62">
-                {bestLog
-                  ? `${bestLog.metricType} · ${prettyDate(bestLog.date)}`
-                  : "No best entry yet"}
-              </div>
-            </div>
+        <section className="mt-8 overflow-hidden rounded-[28px] border border-white/10 bg-[#151311] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.35)]">
+          <div className="flex items-start justify-between gap-4">
+            <p className="text-[12px] font-bold uppercase tracking-[0.28em] text-white/34">
+              Current {activeMetricFilter} · Best ever
+            </p>
+            {bestLog ? (
+              <span className="rounded-full bg-white/[0.08] px-4 py-2 text-[12px] font-bold uppercase tracking-[0.12em] text-white/72">
+                PR · {prettyDate(bestLog.date)}
+              </span>
+            ) : null}
           </div>
 
-          <div className="relative overflow-hidden rounded-[28px] border border-white/10 bg-neutral-950 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.35)]">
-            <div className={`absolute inset-0 ${accent.softGlow}`} />
-            <div className={`absolute inset-x-0 top-0 h-px ${accent.line}`} />
-            <div className="relative">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-white/42">
-                Latest
-              </div>
-              <div className="mt-4 text-3xl font-semibold tracking-[-0.04em]">
-                {latestLog
-                ? formatDisplayValue(
-                    latestLog.value,
-                    latestLog.unit,
-                    selectedCategory.key,
-                    movement.name
-                    )
+          <div className="mt-5 flex items-end gap-3">
+            <div className="font-mono text-[4.2rem] leading-none text-[#f2eee8] sm:text-[5.4rem]">
+              {bestLog
+                ? formatDisplayValue(bestLog.value, bestLog.unit, selectedCategory.key, movement.name).replace(/\s?(kg|reps|bpm|%)$/i, "")
                 : "—"}
-              </div>
-              <div className="mt-3 text-sm text-white/62">
-                {latestLog
-                  ? `${latestLog.metricType} · ${prettyDate(latestLog.date)}`
-                  : "No logs yet"}
-              </div>
             </div>
+            {bestLog?.unit && bestLog.unit !== "mm:ss" ? (
+              <div className="pb-3 text-lg font-bold uppercase tracking-[0.12em] text-white/36">
+                {bestLog.unit}
+              </div>
+            ) : null}
           </div>
 
-          <div className="relative overflow-hidden rounded-[28px] border border-white/10 bg-neutral-950 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.35)]">
-            <div className={`absolute inset-0 ${accent.softGlow}`} />
-            <div className={`absolute inset-x-0 top-0 h-px ${accent.line}`} />
-            <div className="relative">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-white/42">
-                Entries
-              </div>
-              <div className="mt-4 text-3xl font-semibold tracking-[-0.04em]">
-                {filteredLogs.length}
-              </div>
-              <div className="mt-3 text-sm text-white/62">
-                Entries recorded for {movement.name}
-              </div>
-            </div>
+          {latestLog && bestLog ? (
+            <p className="mt-3 font-mono text-[15px] text-emerald-300">
+              ▲ Latest {formatDisplayValue(latestLog.value, latestLog.unit, selectedCategory.key, movement.name)}
+            </p>
+          ) : null}
+
+          <div className="mt-7 flex flex-wrap gap-2">
+            {metricFilterOptions.map((option) => {
+              const isActive = activeMetricFilter === option;
+              return (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => {
+                    setActiveMetricFilter(option);
+                    setMetricType(option);
+                  }}
+                  className={[
+                    "rounded-full border px-4 py-2 text-sm font-bold transition",
+                    isActive
+                      ? "border-white/20 bg-white/[0.12] text-white"
+                      : "border-white/10 bg-white/[0.02] text-white/28 hover:text-white/65",
+                  ].join(" ")}
+                >
+                  {option}
+                </button>
+              );
+            })}
           </div>
         </section>
 
-        <section className="relative overflow-hidden rounded-[30px] border border-white/10 bg-neutral-950 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.35)]">
-          <div className={`absolute inset-0 ${accent.glow}`} />
-          <div className={`absolute inset-x-0 top-0 h-px ${accent.line}`} />
+        <section className="mt-5 rounded-[24px] border border-white/10 bg-[#151311] p-5">
+          <div className="grid grid-cols-3 divide-x divide-white/10 text-center">
+            {[
+              {
+                label: `Best · ${activeMetricFilter}`,
+                value: bestLog
+                  ? formatDisplayValue(bestLog.value, bestLog.unit, selectedCategory.key, movement.name)
+                  : "—",
+              },
+              {
+                label: latestLog ? `Last · ${latestLog.metricType}` : "Latest",
+                value: latestLog
+                  ? formatDisplayValue(latestLog.value, latestLog.unit, selectedCategory.key, movement.name)
+                  : "—",
+              },
+              { label: `${filteredLogs.length} logs`, value: `${daysTracked} d` },
+            ].map(({ label, value }) => (
+              <div key={label} className="px-2">
+                <div className="font-mono text-2xl font-bold leading-none text-white sm:text-3xl">
+                  {value}
+                </div>
+                <div className="mt-3 text-[10px] font-bold uppercase tracking-[0.14em] text-white/34">
+                  {label}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <button
+          type="button"
+          onClick={() => setLogSheetOpen(true)}
+          className="mt-6 flex w-full items-center justify-center gap-3 rounded-full bg-[#f2eee8] px-6 py-5 text-lg font-bold text-black transition hover:bg-white"
+        >
+          <Plus className="h-5 w-5" />
+          Log set
+        </button>
+
+        <section className="mt-6 overflow-hidden rounded-[28px] border border-white/10 bg-[#151311] p-5 shadow-[0_24px_60px_rgba(0,0,0,0.35)]">
 
           <div className="relative">
-            <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="mb-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                    <h2 className="text-2xl font-semibold tracking-[-0.03em]">
-                    Progress
-                    </h2>
-                    <p className="mt-2 max-w-2xl text-sm leading-7 text-white/62">
-                    {activeMetricFilter
-                        ? `${activeMetricFilter} across logged sessions.`
-                        : "Select a metric to view progress."}
+                    <p className="text-[12px] font-bold uppercase tracking-[0.28em] text-white/34">
+                      Progress · {activeMetricFilter}
                     </p>
-                    <div className="mt-5 flex flex-wrap gap-2">
-                      {metricFilterOptions.map((option) => {
-                        const isActive = activeMetricFilter === option;
-
-                        return (
-                          <button
-                            key={option}
-                            type="button"
-                            onClick={() => {
-                              setActiveMetricFilter(option);
-                              setMetricType(option);
-                            }}
-                            className={[
-                              "rounded-full border px-4 py-2 text-sm font-semibold transition",
-                              isActive
-                                ? `${accent.badgeGlow}`
-                                : "border-white/10 bg-white/[0.03] text-white/65 hover:border-white/15 hover:bg-white/[0.05] hover:text-white",
-                            ].join(" ")}
-                          >
-                            {option}
-                          </button>
-                        );
-                      })}
-                    </div>
                 </div>
 
-                <div className="rounded-[24px] border border-white/10 bg-black/30 px-5 py-4 text-sm text-white/62 backdrop-blur">
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/38">
-                    {selectedCategory.key === "engine" ? "Current fastest" : "Current best"}
-                    </div>
-                    <div className="mt-3 text-sm text-white/62">
+                <div className="text-right text-sm text-white/62">
                     {bestLog
                         ? `${formatDisplayValue(
                             bestLog.value,
@@ -693,32 +689,44 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
                         : selectedCategory.key === "engine"
                         ? `No ${activeMetricFilter} time yet`
                         : `No ${activeMetricFilter} entry yet`}
-                    </div>
                 </div>
                 </div>
 
             {chartData.length >= 2 ? (
-              <div className="h-[280px] w-full rounded-[24px] border border-white/10 bg-black/25 p-4">
+              <div className="h-[300px] w-full overflow-hidden rounded-[24px] bg-black/10 px-1 py-2">
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart
+                  <AreaChart
                     data={chartData}
-                    margin={{ top: 16, right: 12, left: 0, bottom: 8 }}
+                    margin={{ top: 22, right: 10, left: -12, bottom: 6 }}
                   >
-                    <CartesianGrid stroke={accent.chartGrid} strokeDasharray="3 3" />
+                    <defs>
+                      <linearGradient id="movementProgressFill" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#f2eee8" stopOpacity={0.28} />
+                        <stop offset="52%" stopColor="#f2eee8" stopOpacity={0.11} />
+                        <stop offset="100%" stopColor="#f2eee8" stopOpacity={0.01} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid
+                      stroke="rgba(255,255,255,0.075)"
+                      vertical={false}
+                      strokeDasharray="0"
+                    />
                     <XAxis
                       dataKey="shortDate"
-                      stroke="rgba(255,255,255,0.38)"
+                      stroke="rgba(255,255,255,0.22)"
                       tickLine={false}
                       axisLine={false}
-                      fontSize={12}
+                      fontSize={11}
+                      tickMargin={12}
                     />
                     <YAxis
-                        stroke="rgba(255,255,255,0.38)"
+                        stroke="rgba(255,255,255,0.18)"
                         tickLine={false}
                         axisLine={false}
-                        fontSize={12}
+                        fontSize={11}
                         domain={[chartMin, chartMax]}
                         allowDecimals={selectedCategory.key === "personal"}
+                        width={52}
                         tickFormatter={(val) =>
                             formatChartValue(Number(val), selectedCategory.key, movement.name, effectiveUnit)
                     }
@@ -732,22 +740,30 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
                         />
                     }
                     />
+                    <Area
+                      type="monotone"
+                      dataKey="value"
+                      stroke="none"
+                      fill="url(#movementProgressFill)"
+                      activeDot={false}
+                      isAnimationActive={false}
+                    />
                     <Line
                       type="monotone"
                       dataKey="value"
-                      stroke={accent.chartStroke}
-                      strokeWidth={3}
+                      stroke="#f2eee8"
+                      strokeWidth={3.5}
                       dot={{
-                        r: 4,
-                        fill: accent.chartDot,
-                        stroke: accent.chartStroke,
+                        r: 4.5,
+                        fill: "#f2eee8",
+                        stroke: "#151311",
                         strokeWidth: 2,
                       }}
                       activeDot={{
-                        r: 6,
-                        fill: accent.chartDot,
-                        stroke: accent.chartStroke,
-                        strokeWidth: 2,
+                        r: 7,
+                        fill: "#f2eee8",
+                        stroke: "rgba(242,238,232,0.22)",
+                        strokeWidth: 8,
                       }}
                     />
                     {chartData
@@ -757,13 +773,13 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
                           key={point.id}
                           x={point.shortDate}
                           y={point.value}
-                          r={7}
-                          fill={accent.chartDot}
-                          stroke={accent.chartStroke}
-                          strokeWidth={3}
+                          r={8}
+                          fill="#f2eee8"
+                          stroke="rgba(242,238,232,0.2)"
+                          strokeWidth={8}
                         />
                       ))}
-                  </LineChart>
+                  </AreaChart>
                 </ResponsiveContainer>
               </div>
             ) : (
@@ -774,40 +790,7 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
           </div>
         </section>
 
-        <div className="grid gap-6 xl:grid-cols-[1.02fr_0.98fr]">
-          <MovementLogForm
-            movementName={movement.name}
-            metricTypes={movement.metricTypes}
-            unitOptions={movement.unitOptions}
-            metricType={metricType}
-            setMetricType={setMetricType}
-            unit={unit}
-            setUnit={setUnit}
-            effectiveUnit={effectiveUnit}
-            value={value}
-            setValue={setValue}
-            reps={reps}
-            setReps={setReps}
-            date={date}
-            setDate={setDate}
-            notes={notes}
-            setNotes={setNotes}
-            formConfig={formConfig}
-            formErrors={formErrors}
-            clearFieldError={(field) =>
-              setFormErrors((current) => ({ ...current, [field]: undefined }))
-            }
-            handleSubmit={handleSubmit}
-            isSaving={isSaving}
-            saved={saved}
-            isNewPB={isNewPB}
-            hasSharePayload={Boolean(sharePayload)}
-            onShare={() => setShareOpen(true)}
-            saveError={saveError}
-            loadError={loadError}
-            accent={accent}
-          />
-
+        <div className="mt-6 grid gap-6">
           <MovementHistorySection
             accent={accent}
             movementName={movement.name}
@@ -844,6 +827,62 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
             onDeleteLog={handleDeleteLog}
           />
         </div>
+        {logSheetOpen ? (
+          <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/72 backdrop-blur-sm">
+            <button
+              type="button"
+              className="absolute inset-0 cursor-default"
+              aria-label="Close log set"
+              onClick={() => setLogSheetOpen(false)}
+            />
+            <div className="relative max-h-[88vh] w-full max-w-xl overflow-y-auto rounded-t-[32px] border border-white/10 bg-[#151311] p-4 shadow-[0_-24px_80px_rgba(0,0,0,0.55)] sm:max-w-2xl sm:p-5">
+              <div className="mx-auto mb-5 h-1.5 w-16 rounded-full bg-white/22" />
+              <button
+                type="button"
+                onClick={() => setLogSheetOpen(false)}
+                className="absolute right-5 top-12 z-20 grid h-12 w-12 place-items-center rounded-full bg-white/[0.08] text-white/72 transition hover:bg-white/[0.12] hover:text-white"
+                aria-label="Close log set"
+              >
+                <X className="h-6 w-6" />
+              </button>
+              <MovementLogForm
+                movementName={movement.name}
+                metricTypes={movement.metricTypes}
+                unitOptions={movement.unitOptions}
+                metricType={metricType}
+                setMetricType={setMetricType}
+                unit={unit}
+                setUnit={setUnit}
+                effectiveUnit={effectiveUnit}
+                value={value}
+                setValue={setValue}
+                reps={reps}
+                setReps={setReps}
+                date={date}
+                setDate={setDate}
+                notes={notes}
+                setNotes={setNotes}
+                formConfig={formConfig}
+                formErrors={formErrors}
+                clearFieldError={(field) =>
+                  setFormErrors((current) => ({ ...current, [field]: undefined }))
+                }
+                handleSubmit={handleSubmit}
+                isSaving={isSaving}
+                saved={saved}
+                isNewPB={isNewPB}
+                hasSharePayload={Boolean(sharePayload)}
+                onShare={() => setShareOpen(true)}
+                saveError={saveError}
+                loadError={loadError}
+                accent={accent}
+                presentation="sheet"
+                onCancel={() => setLogSheetOpen(false)}
+                previousBestValue={bestLog?.value}
+              />
+            </div>
+          </div>
+        ) : null}
         <PBShareModal
           open={shareOpen && !!sharePayload}
           onClose={() => setShareOpen(false)}
@@ -855,7 +894,31 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
           dateLabel={sharePayload?.dateLabel || prettyDate(date)}
           categoryKey={selectedCategory?.key}
         />
-      </div>
+      </main>
+
+      <nav
+        className="fixed inset-x-4 bottom-4 z-40 mx-auto max-w-xl rounded-[28px] border border-white/45 bg-white/90 px-3 py-3 shadow-[0_18px_60px_rgba(0,0,0,0.35)] backdrop-blur-xl sm:max-w-2xl"
+        style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
+        aria-label="Primary"
+      >
+        <div className="flex gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {navItems.map(({ to, label, icon: NavIcon }) => (
+            <NavLink
+              key={to}
+              to={to}
+              className={({ isActive }) =>
+                [
+                  "flex min-w-[76px] shrink-0 flex-col items-center gap-1.5 rounded-2xl px-2 py-2 text-[11px] font-bold transition",
+                  isActive ? "bg-black/10 text-black" : "text-black hover:bg-black/5",
+                ].join(" ")
+              }
+            >
+              <NavIcon className="h-5 w-5 text-black" />
+              <span className="max-w-full truncate">{label}</span>
+            </NavLink>
+          ))}
+        </div>
+      </nav>
     </div>
   );
 }

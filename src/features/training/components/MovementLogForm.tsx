@@ -1,5 +1,5 @@
 import React from "react";
-import { CheckCircle2, Plus, Share } from "lucide-react";
+import { CheckCircle2, Minus, Plus, Share } from "lucide-react";
 import type { AccentClasses, FormFieldErrors, SmartFormConfig } from "../utils/movementHelpers";
 
 type MovementLogFormProps = {
@@ -31,6 +31,9 @@ type MovementLogFormProps = {
   saveError: string;
   loadError: string;
   accent: AccentClasses;
+  presentation?: "card" | "sheet";
+  onCancel?: () => void;
+  previousBestValue?: string;
 };
 
 export default function MovementLogForm({
@@ -62,9 +65,324 @@ export default function MovementLogForm({
   saveError,
   loadError,
   accent,
+  presentation = "card",
+  onCancel,
+  previousBestValue,
 }: MovementLogFormProps) {
+  const isSheet = presentation === "sheet";
   const inputClass =
-    "w-full rounded-[20px] border bg-black/85 px-4 py-3.5 text-sm text-white outline-none transition placeholder:text-white/22 focus:bg-neutral-950";
+    "w-full rounded-[18px] border bg-[#211e1b] px-4 py-3.5 text-sm text-white outline-none transition placeholder:text-white/28 focus:bg-[#171513]";
+  const numericValue = Number.parseFloat(value);
+  const previousBestNumber = Number.parseFloat(previousBestValue ?? "");
+  const valueStep = effectiveUnit.toLowerCase() === "kg" ? 2.5 : 1;
+  const basePresetValue = Number.isFinite(numericValue)
+    ? numericValue
+    : Number.isFinite(previousBestNumber)
+    ? previousBestNumber
+    : 0;
+  const quickValues = Array.from(
+    new Set(
+      [basePresetValue - valueStep * 4, basePresetValue - valueStep * 2, basePresetValue, basePresetValue + valueStep, basePresetValue + valueStep * 2]
+        .filter((preset) => Number.isFinite(preset) && preset > 0)
+        .map((preset) => Number(preset.toFixed(2)))
+    )
+  );
+  const formattedDate = date
+    ? new Date(`${date}T00:00:00`).toLocaleDateString("en-GB", {
+        weekday: "short",
+        day: "numeric",
+        month: "short",
+      })
+    : "Today";
+
+  function updateNumericValue(delta: number) {
+    const nextBase = Number.isFinite(numericValue) ? numericValue : basePresetValue;
+    const nextValue = Math.max(0, nextBase + delta);
+    setValue(Number.isInteger(nextValue) ? String(nextValue) : String(Number(nextValue.toFixed(2))));
+    clearFieldError("value");
+  }
+
+  function updateNumericReps(delta: number) {
+    const current = Number.parseInt(reps || "0", 10);
+    const nextValue = Math.max(0, (Number.isFinite(current) ? current : 0) + delta);
+    setReps(String(nextValue));
+    clearFieldError("reps");
+  }
+
+  if (isSheet) {
+    return (
+      <section className="relative">
+        <div className="mb-8 pr-16">
+          <p className="text-[12px] font-bold uppercase tracking-[0.28em] text-white/38">
+            Log set
+          </p>
+          <h2 className="mt-3 text-4xl font-bold tracking-[-0.05em] text-white">
+            {movementName}
+          </h2>
+          <p className="mt-2 text-base font-medium text-white/40">Today · {formattedDate}</p>
+        </div>
+
+        {loadError ? (
+          <div className="mb-5 rounded-[18px] border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+            {loadError}
+          </div>
+        ) : null}
+
+        <form onSubmit={handleSubmit} className="space-y-7">
+          {saveError ? (
+            <div className="rounded-[18px] border border-red-400/20 bg-red-400/10 px-4 py-3 text-sm text-red-100">
+              {saveError}
+            </div>
+          ) : null}
+
+          <div>
+            <span className="mb-4 block text-[12px] font-bold uppercase tracking-[0.24em] text-white/34">
+              Set type
+            </span>
+            <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
+              {metricTypes.map((option) => {
+                const isActive = option === metricType;
+                return (
+                  <button
+                    key={option}
+                    type="button"
+                    onClick={() => setMetricType(option)}
+                    className={[
+                      "min-h-[58px] rounded-[14px] border px-3 text-sm font-extrabold transition",
+                      isActive
+                        ? "border-[#f2eee8] bg-[#f2eee8] text-black"
+                        : "border-white/10 bg-[#211e1b] text-white/52 hover:border-white/18 hover:text-white",
+                    ].join(" ")}
+                  >
+                    {option}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-4 flex items-end justify-between gap-4">
+              <span className="block text-[12px] font-bold uppercase tracking-[0.24em] text-white/34">
+                {formConfig.valueLabel}
+              </span>
+              {previousBestValue ? (
+                <span className="font-mono text-sm text-white/42">
+                  Prior best {previousBestValue} {effectiveUnit}
+                </span>
+              ) : null}
+            </div>
+            <div
+              className={[
+                "rounded-[24px] border bg-[#211e1b] p-5",
+                formErrors.value ? "border-red-400/40" : "border-white/10",
+              ].join(" ")}
+            >
+              <div className="grid grid-cols-[56px_1fr_56px] items-center gap-4">
+                <button
+                  type="button"
+                  onClick={() => updateNumericValue(-valueStep)}
+                  className="grid h-14 w-14 place-items-center rounded-[14px] border border-white/10 bg-white/[0.05] text-white transition hover:bg-white/[0.09]"
+                  aria-label="Decrease load"
+                >
+                  <Minus className="h-5 w-5" />
+                </button>
+                <label className="block">
+                  <span className="sr-only">{formConfig.valueLabel}</span>
+                  <div className="flex items-end justify-center gap-3">
+                    <input
+                      value={value}
+                      onChange={(e) => {
+                        setValue(e.target.value);
+                        clearFieldError("value");
+                      }}
+                      inputMode="decimal"
+                      placeholder={formConfig.valuePlaceholder}
+                      className="w-full min-w-0 bg-transparent text-center font-mono text-[4.2rem] font-bold leading-none text-white outline-none placeholder:text-white/18"
+                    />
+                    {effectiveUnit ? (
+                      <span className="pb-3 text-sm font-bold uppercase tracking-[0.12em] text-white/34">
+                        {effectiveUnit}
+                      </span>
+                    ) : null}
+                  </div>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => updateNumericValue(valueStep)}
+                  className="grid h-14 w-14 place-items-center rounded-[14px] border border-white/10 bg-white/[0.05] text-white transition hover:bg-white/[0.09]"
+                  aria-label="Increase load"
+                >
+                  <Plus className="h-5 w-5" />
+                </button>
+              </div>
+              {isNewPB ? (
+                <p className="mt-3 text-center font-mono text-sm text-emerald-300">
+                  ▲ new PR
+                </p>
+              ) : null}
+              {formErrors.value ? <span className="mt-3 block text-center text-xs text-red-200">{formErrors.value}</span> : null}
+            </div>
+            {quickValues.length ? (
+              <div className="mt-3 grid grid-cols-5 gap-2">
+                {quickValues.map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => {
+                      setValue(String(preset));
+                      clearFieldError("value");
+                    }}
+                    className={[
+                      "rounded-[10px] border px-2 py-3 font-mono text-sm font-bold transition",
+                      String(preset) === value
+                        ? "border-white/20 bg-white/[0.08] text-white"
+                        : "border-white/10 bg-transparent text-white/32 hover:text-white/70",
+                    ].join(" ")}
+                  >
+                    {preset}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+
+          {formConfig.showUnitSelector ? (
+            <label className="block">
+              <span className="mb-3 block text-[12px] font-bold uppercase tracking-[0.24em] text-white/34">
+                Unit
+              </span>
+              <select
+                value={unit}
+                onChange={(e) => setUnit(e.target.value)}
+                className={`${inputClass} border-white/10 focus:border-white/22`}
+              >
+                {unitOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+
+          <div className={`grid gap-5 ${formConfig.showRepsField ? "grid-cols-2" : "grid-cols-1"}`}>
+            {formConfig.showRepsField ? (
+              <div>
+                <span className="mb-3 block text-[12px] font-bold uppercase tracking-[0.24em] text-white/34">
+                  {formConfig.repsLabel}
+                </span>
+                <div className="grid grid-cols-[48px_1fr_48px] items-center gap-3 rounded-[18px] border border-white/10 bg-[#211e1b] p-3">
+                  <button
+                    type="button"
+                    onClick={() => updateNumericReps(-1)}
+                    className="grid h-11 w-11 place-items-center rounded-[12px] border border-white/10 bg-white/[0.05] text-white"
+                    aria-label="Decrease reps"
+                  >
+                    <Minus className="h-4 w-4" />
+                  </button>
+                  <input
+                    value={reps}
+                    onChange={(e) => {
+                      setReps(e.target.value);
+                      clearFieldError("reps");
+                    }}
+                    inputMode="numeric"
+                    placeholder={formConfig.repsPlaceholder}
+                    className="w-full bg-transparent text-center text-3xl font-bold text-white outline-none placeholder:text-white/18"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => updateNumericReps(1)}
+                    className="grid h-11 w-11 place-items-center rounded-[12px] border border-white/10 bg-white/[0.05] text-white"
+                    aria-label="Increase reps"
+                  >
+                    <Plus className="h-4 w-4" />
+                  </button>
+                </div>
+                {formErrors.reps ? <span className="mt-2 block text-xs text-red-200">{formErrors.reps}</span> : null}
+              </div>
+            ) : null}
+
+            <label className="block">
+              <span className="mb-3 block text-[12px] font-bold uppercase tracking-[0.24em] text-white/34">
+                Date
+              </span>
+              <input
+                type="date"
+                value={date}
+                onChange={(e) => {
+                  setDate(e.target.value);
+                  clearFieldError("date");
+                }}
+                className={`${inputClass} border-white/10 [color-scheme:dark] focus:border-white/22`}
+              />
+              {formErrors.date ? <span className="mt-2 block text-xs text-red-200">{formErrors.date}</span> : null}
+            </label>
+          </div>
+
+          <label className="block">
+            <span className="mb-3 block text-[12px] font-bold uppercase tracking-[0.24em] text-white/34">
+              Notes
+            </span>
+            <textarea
+              value={notes}
+              onChange={(e) => {
+                setNotes(e.target.value);
+                clearFieldError("notes");
+              }}
+              rows={3}
+              placeholder="Bar speed, cues, what felt good..."
+              maxLength={280}
+              className={`${inputClass} resize-none border-white/10 focus:border-white/22 ${formErrors.notes ? "border-red-400/40" : ""}`}
+            />
+            {formErrors.notes ? <span className="mt-2 block text-xs text-red-200">{formErrors.notes}</span> : null}
+          </label>
+
+          <div className="grid grid-cols-[0.9fr_1.4fr] gap-3 pb-2">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="rounded-full border border-white/12 px-5 py-4 text-base font-bold text-white transition hover:bg-white/[0.05]"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isSaving}
+              className="inline-flex items-center justify-center gap-3 rounded-full bg-[#f2eee8] px-5 py-4 text-base font-extrabold text-black transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isSaving ? "Saving..." : "Save set"}
+              {isNewPB ? (
+                <span className="rounded-md bg-black/10 px-2 py-1 text-[11px] font-black uppercase tracking-[0.08em]">
+                  New PR
+                </span>
+              ) : null}
+            </button>
+          </div>
+
+          {saved ? (
+            <div className="flex items-center justify-between gap-3 rounded-[16px] border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm font-bold text-emerald-100">
+              <span className="inline-flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4" />
+                {isNewPB ? "PB logged" : "Set saved"}
+              </span>
+              {isNewPB && hasSharePayload ? (
+                <button
+                  type="button"
+                  onClick={onShare}
+                  className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1.5 text-xs text-white"
+                >
+                  <Share className="h-3.5 w-3.5" />
+                  Share
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </form>
+      </section>
+    );
+  }
 
   return (
     <section className="relative overflow-hidden rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(18,18,22,0.98),rgba(10,10,12,0.98))] p-5 shadow-[0_24px_60px_rgba(0,0,0,0.35)] sm:p-6">

@@ -1,8 +1,8 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "../../../firebase";
-import { Dumbbell, Flame, Moon, Share, Sun } from "lucide-react";
-import UserTopNav from "../../../components/layout/UserTopNav";
+import { Dumbbell, Flame, Home, MonitorPlay, Moon, Settings2, Share, Sun } from "lucide-react";
 import SessionShareModal from "../components/SessionShareModal";
 import { getDateInputValueInTimeZone } from "../../../utils/date";
 
@@ -30,6 +30,8 @@ const WODDisplay = () => {
   const [sessionKey, setSessionKey] = useState<SessionKey>("AM");
   const [loading, setLoading] = useState<boolean>(false);
   const [shareOpen, setShareOpen] = useState(false);
+  const [controlsOpen, setControlsOpen] = useState(false);
+  const latestFetchRequestRef = useRef(0);
 
   const selectedDateObj = useMemo(() => {
     if (!selectedDate) return null;
@@ -46,10 +48,13 @@ const WODDisplay = () => {
   const strengthTitle = "Strength";
 
   const fetchWODForDate = async (dateString: string, key: SessionKey) => {
+    const requestId = latestFetchRequestRef.current + 1;
+    latestFetchRequestRef.current = requestId;
     setLoading(true);
     try {
       const docRef = doc(db, "wods", dateString);
       const docSnap = await getDoc(docRef);
+      if (latestFetchRequestRef.current !== requestId) return;
 
       if (docSnap.exists()) {
         const data = docSnap.data();
@@ -59,10 +64,13 @@ const WODDisplay = () => {
         setWod(null);
       }
     } catch (error) {
+      if (latestFetchRequestRef.current !== requestId) return;
       console.error("Error fetching WOD:", error);
       setWod(null);
     } finally {
-      setLoading(false);
+      if (latestFetchRequestRef.current === requestId) {
+        setLoading(false);
+      }
     }
   };
 
@@ -272,154 +280,133 @@ const WODDisplay = () => {
     wod,
   ]);
 
-  return (
-    <div className="min-h-screen bg-black text-white">
-      <UserTopNav />
-      <div className="mx-auto w-full max-w-[1400px] px-4 py-4">
-        {/* TOP CONTROLS */}
-        <div className="flex flex-wrap items-center gap-2 pb-3">
-          <input
-            type="date"
-            value={selectedDate}
-            onChange={handleDateChange}
-            className="p-2 rounded bg-neutral-900 text-white border border-neutral-700"
-          />
-          <button
-            onClick={() => setSessionKey("AM")}
-            className={`px-4 py-2 rounded border ${
-              sessionKey === "AM"
-                ? "bg-white text-black border-white"
-                : "bg-neutral-900 text-white border-neutral-700"
-            }`}
-          >
-            AM <Sun className="inline ml-1 w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setSessionKey("930AM")}
-            className={`px-4 py-2 rounded border ${
-              sessionKey === "930AM"
-                ? "bg-white text-black border-white"
-                : "bg-neutral-900 text-white border-neutral-700"
-            }`}
-          >
-            9:30AM
-          </button>
-          <button
-            onClick={() => setSessionKey("PM")}
-            className={`px-4 py-2 rounded border ${
-              sessionKey === "PM"
-                ? "bg-white text-black border-white"
-                : "bg-neutral-900 text-white border-neutral-700"
-            }`}
-          >
-            PM <Moon className="inline ml-1 w-4 h-4" />
-          </button>
-          {wod ? (
-            <button
-              type="button"
-              onClick={() => setShareOpen(true)}
-              className="ml-auto inline-flex items-center gap-2 rounded border border-neutral-700 bg-neutral-900 px-4 py-2 text-white transition hover:border-neutral-500"
-            >
-              <Share className="h-4 w-4" />
-              Share Session
-            </button>
-          ) : null}
-        </div>
+  const isStrengthSession = wod?.sessionType === "Strength";
+  const displayTitle = isStrengthSession
+    ? wod?.wodName?.trim() || strengthTitle
+    : wod?.wodName?.trim() || `${dayName || "Daily"} Session`;
+  const displaySubtitle = isStrengthSession
+    ? String(wod?.strengthGoal ?? "Strength block").trim() || "Strength block"
+    : dayName || sessionHeaderBits.style;
+  const boardCountLabel = isStrengthSession
+    ? `${wod?.strengthMovements?.length ?? 0} stations`
+    : `${stationCount} stations`;
+  const footerNote = isStrengthSession
+    ? String(wod?.strengthCue ?? "").trim() || "Quality reps. Own the positions."
+    : timerMode === "stationControlled" && controlStationTitle
+    ? `Control station: ${controlStationTitle}. Move when the pace station completes the target.`
+    : "Stay sharp. Rotate clean. Chase standards.";
 
+  return (
+    <div className="relative min-h-screen overflow-hidden bg-[#030303] font-body text-[#f4f0ea]">
+      <div className="absolute inset-0 carbon-fiber-bg opacity-70" />
+      <div className="absolute inset-0 bg-[linear-gradient(115deg,rgba(255,255,255,0.06),transparent_28%,rgba(20,184,166,0.13)_60%,transparent_82%)]" />
+      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/35 to-transparent" />
+      <img
+        src="/ZERO-ALPHA.png"
+        alt=""
+        aria-hidden="true"
+        className="pointer-events-none absolute -right-12 top-1/2 hidden w-[44vw] max-w-[760px] -translate-y-1/2 select-none opacity-[0.035] mix-blend-screen lg:block"
+      />
+
+      <AdminControls
+        controlsOpen={controlsOpen}
+        setControlsOpen={setControlsOpen}
+        selectedDate={selectedDate}
+        handleDateChange={handleDateChange}
+        sessionKey={sessionKey}
+        setSessionKey={setSessionKey}
+        canShare={!!wod}
+        onShare={() => setShareOpen(true)}
+      />
+
+      <main className="relative z-10 flex min-h-screen items-stretch p-4 md:p-6 xl:p-8">
         {!selectedDate ? null : loading ? (
-          <div className="rounded-xl border border-neutral-800 bg-neutral-950 p-10 text-center text-xl">
-            Loading…
-          </div>
+          <DisplayState title="Loading session" detail="Pulling the latest board from AlphaFIT." />
         ) : !wod ? (
-          <div className="rounded-xl border border-neutral-800 bg-neutral-950 p-10 text-center text-xl">
-            No session found for selected date.
-          </div>
+          <DisplayState title="No session found" detail="Open controls to choose a different date or class time." />
         ) : (
-          <div className="space-y-4">
+          <div className="grid min-h-[calc(100vh-2rem)] w-full grid-rows-[auto_1fr_auto] gap-4 md:min-h-[calc(100vh-3rem)] xl:min-h-[calc(100vh-4rem)]">
             <TVHeader
               selectedDate={selectedDateObj}
               sessionKey={sessionKey}
               type={sessionHeaderBits.type}
               style={sessionHeaderBits.style}
               extra={sessionHeaderBits.extra}
+              title={displayTitle}
+              subtitle={displaySubtitle}
             />
 
-            <div className="grid gap-4 grid-cols-[1fr_2fr] max-lg:grid-cols-1">
-              {/* LEFT */}
-              <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-6">
-                <div className="flex items-start justify-between gap-6">
+            <section className="grid min-h-0 gap-4 xl:grid-cols-[minmax(390px,0.88fr)_minmax(620px,1.42fr)] 2xl:grid-cols-[minmax(440px,0.82fr)_minmax(760px,1.55fr)]">
+              <div className="relative min-h-0 overflow-hidden rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(21,19,17,0.94),rgba(8,8,8,0.96))] p-5 shadow-[0_26px_90px_rgba(0,0,0,0.50)] xl:p-7">
+                <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-teal-300/70 to-transparent" />
+                <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">
-                    <h1 className="mt-2 text-4xl sm:text-5xl font-heading uppercase tracking-widest text-white/90">
+                    <div className="text-[11px] font-black uppercase tracking-[0.34em] text-white/34">
                       Zero Alpha Made
-                      <br />
+                    </div>
+                    <h1 className="mt-3 max-w-[12ch] font-heading text-[3.35rem] uppercase leading-[0.92] text-white md:text-[4.7rem] xl:text-[4.4rem] 2xl:text-[5.8rem]">
                       Zero Alpha Fit.
                     </h1>
-
-                    {wod.sessionType === "Strength" ? (
-                      <div className="mt-2 text-4xl sm:text-5xl font-bold italic tracking-tight text-white/90" />
-                    ) : (
-                      <div className="mt-2 text-4xl sm:text-5xl font-bold italic tracking-tight text-white/90">
-                        {dayName || ""}
-                      </div>
-                    )}
-
-                    {wod.wodName ? (
-                      <div className="mt-3 text-xl text-white/70">{wod.wodName}</div>
-                    ) : null}
+                  </div>
+                  <div className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl border border-white/10 bg-white/[0.05] text-white/70">
+                    <MonitorPlay className="h-7 w-7" />
                   </div>
                 </div>
 
-                <div className="mt-6 space-y-4">
-                  {/* HERO MODULE */}
-                  <div>
-                    {wod.sessionType === "HYROX" ? (
-                      timerMode === "timed" ? (
-                        roundDurationSeconds && rounds ? (
-                          <RoundTimer
-                            roundDurationSeconds={roundDurationSeconds}
-                            rounds={rounds}
-                            restBetweenRoundsSeconds={restBetweenRoundsSeconds}
-                          />
-                        ) : (
-                          <div className="rounded-2xl border border-neutral-800 bg-neutral-900/40 p-6">
-                            <div className="text-xs uppercase tracking-[0.35em] text-white/60 font-semibold">
-                              Timer not configured
-                            </div>
-                            <div className="mt-2 text-white/80">
-                              Set minutes/seconds + rounds in the editor.
-                            </div>
-                          </div>
-                        )
-                      ) : (
-                        <ControlStationHero
-                          controlIndex={controlStationIndex}
-                          total={stationCount}
-                          controlName={controlStationTitle}
+                <div className="mt-5 xl:mt-8">
+                  {wod.sessionType === "HYROX" ? (
+                    timerMode === "timed" ? (
+                      roundDurationSeconds && rounds ? (
+                        <RoundTimer
+                          roundDurationSeconds={roundDurationSeconds}
+                          rounds={rounds}
+                          restBetweenRoundsSeconds={restBetweenRoundsSeconds}
                         />
+                      ) : (
+                        <TimerEmptyState />
                       )
                     ) : (
-                      <StrengthOverview title={strengthTitle} movements={wod.strengthMovements || []}  goal={wod?.strengthGoal} load={wod?.strengthLoad} range={wod?.strengthRange} cue={wod?.strengthCue}/>
-                    )}
-                  </div>
+                      <ControlStationHero
+                        controlIndex={controlStationIndex}
+                        total={stationCount}
+                        controlName={controlStationTitle}
+                      />
+                    )
+                  ) : (
+                    <StrengthOverview
+                      title={strengthTitle}
+                      movements={wod.strengthMovements || []}
+                      goal={wod?.strengthGoal}
+                      load={wod?.strengthLoad}
+                      range={wod?.strengthRange}
+                      cue={wod?.strengthCue}
+                    />
+                  )}
                 </div>
               </div>
 
-              {/* RIGHT: Session Plan */}
-              <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-6">
-                <div className="flex items-baseline justify-between gap-4">
-                  <h2 className="text-3xl font-bold uppercase tracking-wide text-white/90">
-                    {wod.sessionType === "Strength" ? strengthTitle : "Session Plan"}
-                  </h2>
-                  <div className="text-sm text-white/60">
-                    {wod.sessionType === "Strength"
-                      ? `${wod?.strengthMovements?.length ?? 0} stations`
-                      : `${stationCount} stations`}
+              <div className="relative min-h-0 overflow-hidden rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(15,14,13,0.92),rgba(4,4,4,0.94))] p-5 shadow-[0_26px_90px_rgba(0,0,0,0.46)] xl:p-7">
+                <div className="absolute inset-y-8 left-0 w-px bg-gradient-to-b from-transparent via-white/18 to-transparent" />
+                <div className="flex items-end justify-between gap-4">
+                  <div>
+                    <div className="text-[11px] font-black uppercase tracking-[0.34em] text-teal-100/75">
+                      Workout Board
+                    </div>
+                    <h2 className="mt-2 font-heading text-5xl uppercase leading-none text-white md:text-6xl xl:text-7xl">
+                      {wod.sessionType === "Strength" ? strengthTitle : "Session Plan"}
+                    </h2>
+                  </div>
+                  <div className="shrink-0 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-right">
+                    <div className="text-[11px] font-black uppercase tracking-[0.24em] text-white/34">
+                      Floor
+                    </div>
+                    <div className="mt-1 text-xl font-black uppercase text-white">{boardCountLabel}</div>
                   </div>
                 </div>
 
-                <div className="mt-4">
+                <div className="mt-5 min-h-0 overflow-hidden xl:mt-7">
                   {wod.sessionType === "Strength" ? (
-                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                    <div className="grid max-h-full grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
                       {wod.strengthMovements?.map((sm: any, index: number) => (
                         <StrengthStationCard
                           key={index}
@@ -431,7 +418,7 @@ const WODDisplay = () => {
                       ))}
                     </div>
                   ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                    <div className="grid max-h-full grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
                       {stations.map((s: Station, index: number) => {
                         const isControl =
                           timerMode === "stationControlled" &&
@@ -451,14 +438,19 @@ const WODDisplay = () => {
                   )}
                 </div>
               </div>
-            </div>
+            </section>
 
-            <div className="text-center text-xs text-white/20 tracking-[0.3em] uppercase">
-              AlphaFIT TV Mode
+            <div className="flex items-center justify-between gap-5 rounded-[22px] border border-white/10 bg-black/70 px-5 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+              <div className="min-w-0 truncate text-base font-semibold text-white/74 xl:text-xl">
+                {footerNote}
+              </div>
+              <div className="shrink-0 text-[11px] font-black uppercase tracking-[0.35em] text-white/30">
+                AlphaFIT TV Mode
+              </div>
             </div>
           </div>
         )}
-      </div>
+      </main>
       {sharePayload ? (
         <SessionShareModal
           open={shareOpen}
@@ -495,41 +487,184 @@ function TVHeader({
   type,
   style,
   extra,
+  title,
+  subtitle,
 }: {
   selectedDate: Date | null;
   sessionKey: SessionKey;
   type: string;
   style: string;
   extra: string;
+  title: string;
+  subtitle: string;
 }) {
   return (
-    <div className="rounded-2xl border border-neutral-800 bg-neutral-950 px-5 py-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-3 text-sm sm:text-base text-white/80">
-          <span className="font-semibold text-white">
-            {selectedDate
-              ? selectedDate.toLocaleDateString("en-GB", {
-                  weekday: "long",
-                  day: "numeric",
-                  month: "short",
-                  year: "numeric",
-                })
-              : "—"}
-          </span>
-          <span className="text-white/30">|</span>
-          <span className="uppercase tracking-widest">{sessionKey}</span>
-          <span className="text-white/30">|</span>
-          <span className="uppercase">{type}</span>
-          <span className="text-white/30">|</span>
-          <span className="uppercase">{style}</span>
-          <span className="text-white/30">|</span>
-          <span className="uppercase">{extra}</span>
+    <header className="relative overflow-hidden rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(18,18,18,0.90),rgba(5,5,5,0.88))] px-5 py-4 shadow-[0_24px_80px_rgba(0,0,0,0.40)] xl:px-7">
+      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-teal-500/0 via-teal-200/85 to-teal-500/0" />
+      <div className="flex items-center justify-between gap-5">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-3 text-[11px] font-black uppercase tracking-[0.28em] text-white/44">
+            <span>
+              {selectedDate
+                ? selectedDate.toLocaleDateString("en-GB", {
+                    weekday: "long",
+                    day: "numeric",
+                    month: "short",
+                    year: "numeric",
+                  })
+                : "—"}
+            </span>
+            <span className="h-1 w-1 rounded-full bg-teal-200/75" />
+            <span>{sessionKey}</span>
+            <span className="h-1 w-1 rounded-full bg-teal-200/75" />
+            <span>{type}</span>
+            <span className="h-1 w-1 rounded-full bg-teal-200/75" />
+            <span>{style}</span>
+            <span className="hidden xl:inline">{extra}</span>
+          </div>
+          <div className="mt-2 flex min-w-0 items-end gap-5">
+            <h1 className="truncate font-heading text-5xl uppercase leading-none text-white md:text-6xl xl:text-7xl">
+              {title}
+            </h1>
+            <div className="hidden pb-2 text-2xl font-bold uppercase italic text-white/54 lg:block">
+              {subtitle}
+            </div>
+          </div>
         </div>
 
-        <div className="flex items-center gap-2 text-sm">
-          <span className="inline-flex h-2 w-2 rounded-full bg-red-500" />
-          <span className="uppercase tracking-widest text-white/90">LIVE</span>
+        <div className="flex shrink-0 items-center gap-3 rounded-2xl border border-teal-200/25 bg-teal-400/10 px-4 py-3">
+          <span className="relative flex h-3 w-3">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-teal-200 opacity-60" />
+            <span className="relative inline-flex h-3 w-3 rounded-full bg-teal-300" />
+          </span>
+          <span className="text-sm font-black uppercase tracking-[0.28em] text-teal-50">Live</span>
         </div>
+      </div>
+    </header>
+  );
+}
+
+function AdminControls({
+  controlsOpen,
+  setControlsOpen,
+  selectedDate,
+  handleDateChange,
+  sessionKey,
+  setSessionKey,
+  canShare,
+  onShare,
+}: {
+  controlsOpen: boolean;
+  setControlsOpen: (open: boolean) => void;
+  selectedDate: string;
+  handleDateChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  sessionKey: SessionKey;
+  setSessionKey: (key: SessionKey) => void;
+  canShare: boolean;
+  onShare: () => void;
+}) {
+  return (
+    <div className="fixed left-4 top-4 z-50">
+      <div className="flex items-center gap-2">
+        <Link
+          to="/dashboard"
+          className="inline-grid h-11 w-11 place-items-center rounded-2xl border border-white/10 bg-black/70 text-white/70 opacity-20 shadow-[0_18px_55px_rgba(0,0,0,0.42)] backdrop-blur-xl transition hover:border-white/20 hover:text-white hover:opacity-100 focus:opacity-100"
+          aria-label="Back to dashboard"
+        >
+          <Home className="h-5 w-5" />
+        </Link>
+        <button
+          type="button"
+          onClick={() => setControlsOpen(!controlsOpen)}
+          className="inline-grid h-11 w-11 place-items-center rounded-2xl border border-white/10 bg-black/70 text-white/70 opacity-20 shadow-[0_18px_55px_rgba(0,0,0,0.42)] backdrop-blur-xl transition hover:border-white/20 hover:text-white hover:opacity-100 focus:opacity-100"
+          aria-label="Toggle TV controls"
+        >
+          <Settings2 className="h-5 w-5" />
+        </button>
+      </div>
+
+      {controlsOpen ? (
+        <div className="mt-3 w-[min(92vw,560px)] rounded-[24px] border border-white/12 bg-[#080807]/95 p-3 shadow-[0_24px_90px_rgba(0,0,0,0.58)] backdrop-blur-xl">
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={handleDateChange}
+              className="h-11 rounded-2xl border border-white/12 bg-white/[0.06] px-3 text-sm font-semibold text-white outline-none"
+            />
+            <SessionButton active={sessionKey === "AM"} onClick={() => setSessionKey("AM")}>
+              AM <Sun className="h-4 w-4" />
+            </SessionButton>
+            <SessionButton active={sessionKey === "930AM"} onClick={() => setSessionKey("930AM")}>
+              9:30AM
+            </SessionButton>
+            <SessionButton active={sessionKey === "PM"} onClick={() => setSessionKey("PM")}>
+              PM <Moon className="h-4 w-4" />
+            </SessionButton>
+            {canShare ? (
+              <button
+                type="button"
+                onClick={onShare}
+                className="ml-auto inline-flex h-11 items-center gap-2 rounded-2xl border border-white/12 bg-white/[0.06] px-4 text-sm font-bold text-white transition hover:bg-white/[0.10]"
+              >
+                <Share className="h-4 w-4" />
+                Share
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function SessionButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex h-11 items-center gap-2 rounded-2xl border px-4 text-sm font-black uppercase tracking-[0.12em] transition ${
+        active
+          ? "border-white bg-white text-black"
+          : "border-white/12 bg-white/[0.05] text-white/70 hover:text-white"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function DisplayState({ title, detail }: { title: string; detail: string }) {
+  return (
+    <div className="m-auto w-full max-w-2xl rounded-[30px] border border-white/10 bg-[#11100f]/92 p-10 text-center shadow-[0_28px_90px_rgba(0,0,0,0.48)]">
+      <div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl border border-white/10 bg-white/[0.05] text-white/64">
+        <MonitorPlay className="h-8 w-8" />
+      </div>
+      <h1 className="mt-6 font-heading text-5xl uppercase text-white">{title}</h1>
+      <p className="mt-3 text-lg font-medium text-white/56">{detail}</p>
+    </div>
+  );
+}
+
+function TimerEmptyState() {
+  return (
+    <div className="rounded-[26px] border border-white/10 bg-white/[0.04] p-7">
+      <div className="text-[11px] font-black uppercase tracking-[0.34em] text-teal-100/75">
+        Timer not configured
+      </div>
+      <div className="mt-4 font-heading text-5xl uppercase leading-none text-white">
+        Set round time
+      </div>
+      <div className="mt-3 text-base font-medium text-white/54">
+        Add minutes, seconds, and rounds in the editor.
       </div>
     </div>
   );
@@ -539,9 +674,9 @@ function TVHeader({
 
 function MetaPill({ label, value }: { label: string; value?: string }) {
   return (
-    <div className="rounded-xl border border-neutral-800 bg-neutral-900/40 px-3 py-2">
-      <div className="text-xs uppercase tracking-widest text-white/50">{label}</div>
-      <div className="text-base font-semibold text-white/90 truncate">{value || "—"}</div>
+    <div className="rounded-[18px] border border-white/10 bg-white/[0.045] px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.045)]">
+      <div className="text-[10px] font-black uppercase tracking-[0.26em] text-white/34">{label}</div>
+      <div className="mt-1 truncate text-xl font-black text-white">{value || "—"}</div>
     </div>
   );
 }
@@ -559,43 +694,50 @@ function HyroxStationCard({
   isControl: boolean;
 }) {
   const border = isControl
-    ? "border-sky-400 shadow-[0_0_30px_rgba(56,189,248,0.18)]"
-    : "border-neutral-800";
+    ? "border-teal-200/70 shadow-[0_0_44px_rgba(45,212,191,0.18)]"
+    : "border-white/10";
 
-  const badge = isControl ? "text-sky-300" : "text-white/70";
-  const iconColor = isControl ? "text-sky-300" : "text-yellow-400";
+  const badge = isControl ? "text-teal-100" : "text-teal-100/75";
+  const iconColor = isControl ? "text-teal-100" : "text-teal-200";
 
   const title = (station.title || `Station ${index + 1}`).trim();
   const movements = (station.movements || []).filter((m) => String(m?.name ?? "").trim().length > 0);
 
   return (
-    <div className={`rounded-2xl border ${border} bg-neutral-900/40 p-4`}>
-      <div className="flex items-start gap-3">
-        <div className="rounded-xl border border-neutral-700 bg-neutral-950 p-2">
-          <Flame className={`h-5 w-5 ${iconColor}`} />
+    <div className={`relative min-h-[168px] overflow-hidden rounded-[22px] border ${border} bg-[linear-gradient(180deg,rgba(255,255,255,0.055),rgba(255,255,255,0.025))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]`}>
+      <div className="absolute -right-3 -top-6 font-heading text-[8rem] leading-none text-white/[0.035]">
+        {String(index + 1).padStart(2, "0")}
+      </div>
+      <div className="relative flex items-start gap-3">
+        <div className="grid h-12 w-12 shrink-0 place-items-center rounded-[18px] border border-white/12 bg-black/42">
+          <Flame className={`h-6 w-6 ${iconColor}`} />
         </div>
 
         <div className="min-w-0 w-full">
-          <div className="text-xl font-bold text-white/95 leading-snug">
-            {index + 1}. {title}
+          <div className="text-[11px] font-black uppercase tracking-[0.26em] text-white/34">
+            Station {index + 1}
           </div>
 
-          {isControl ? <div className={`mt-1 text-sm font-semibold ${badge}`}>CONTROL STATION</div> : null}
+          <div className="mt-1 line-clamp-2 text-2xl font-black uppercase leading-[1.02] text-white xl:text-[1.7rem]">
+            {title}
+          </div>
+
+          {isControl ? <div className={`mt-2 text-xs font-black uppercase tracking-[0.22em] ${badge}`}>Control Station</div> : null}
 
           <div className="mt-3 space-y-2">
             {movements.length ? (
-              movements.map((m, i) => {
+              movements.slice(0, 3).map((m, i) => {
                 const name = String(m.name ?? "").trim();
                 const target = String(m.target ?? "").trim();
                 const notes = String(m.notes ?? "").trim();
 
                 return (
-                  <div key={m.id ?? i} className="rounded-xl border border-neutral-800 bg-neutral-950/40 px-3 py-2">
-                    <div className="text-sm font-semibold text-white/85 leading-snug">
+                  <div key={m.id ?? i} className="border-t border-white/8 pt-2 first:border-t-0 first:pt-0">
+                    <div className="line-clamp-1 text-base font-bold leading-tight text-white/86 xl:text-lg">
                       {name || "—"}
                     </div>
                     {(target || notes) ? (
-                      <div className="mt-1 text-xs text-white/55">
+                      <div className="mt-1 line-clamp-1 text-xs font-semibold uppercase tracking-[0.08em] text-white/42">
                         {target ? <span className="mr-2">Target: {target}</span> : null}
                         {notes ? <span>• {notes}</span> : null}
                       </div>
@@ -604,7 +746,7 @@ function HyroxStationCard({
                 );
               })
             ) : (
-              <div className="text-sm text-white/50">No movements added.</div>
+              <div className="text-sm font-semibold text-white/42">No movements added.</div>
             )}
           </div>
         </div>
@@ -636,13 +778,13 @@ function StrengthOverview({
   const cueText = (cue ?? "").trim();
 
   return (
-    <div className="w-full rounded-2xl border border-neutral-800 bg-neutral-950 p-6">
-      <div className="text-xs uppercase tracking-[0.35em] text-white/60 font-semibold">
+    <div className="w-full rounded-[26px] border border-white/10 bg-white/[0.04] p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.045)]">
+      <div className="text-[11px] font-black uppercase tracking-[0.34em] text-teal-100/75">
         Strength Block
       </div>
-      <div className="mt-2 text-5xl font-extrabold tracking-tight text-white">{title}</div>
+      <div className="mt-3 font-heading text-[4.4rem] uppercase leading-none text-white xl:text-[5.6rem]">{title}</div>
 
-      <div className="mt-5 grid grid-cols-2 gap-3">
+      <div className="mt-6 grid grid-cols-2 gap-3">
         <MetaPill label="Stations" value={`${movements.length || 0}`} />
         <MetaPill label="Goal" value={goalText} />
         <MetaPill label="Load" value={loadText} />
@@ -650,9 +792,9 @@ function StrengthOverview({
       </div>
 
       {cueText ? (
-        <div className="mt-4 rounded-xl border border-neutral-800 bg-neutral-900/40 p-4">
-          <div className="text-sm font-semibold text-white/80">Coaches Notes</div>
-          <div className="mt-1 text-sm text-white/60 whitespace-pre-wrap">
+        <div className="mt-5 rounded-[20px] border border-teal-200/16 bg-teal-400/[0.055] p-4">
+          <div className="text-[11px] font-black uppercase tracking-[0.24em] text-teal-50/60">Coaches Notes</div>
+          <div className="mt-2 whitespace-pre-wrap text-base font-semibold leading-6 text-white/70">
             {cueText}
           </div>
         </div>
@@ -676,25 +818,28 @@ function StrengthStationCard({
   const rr = String(repRange ?? "").trim();
 
   return (
-    <div className="rounded-2xl border border-neutral-800 bg-neutral-900/40 p-5">
-      <div className="flex items-start justify-between gap-4">
+    <div className="relative min-h-[150px] overflow-hidden rounded-[22px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.055),rgba(255,255,255,0.025))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
+      <div className="absolute -right-3 -top-6 font-heading text-[8rem] leading-none text-white/[0.035]">
+        {String(index + 1).padStart(2, "0")}
+      </div>
+      <div className="relative flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <div className="text-xs uppercase tracking-[0.35em] text-white/50">
+          <div className="text-[11px] font-black uppercase tracking-[0.26em] text-white/34">
             Station {index + 1}
           </div>
 
-          <div className="mt-1 text-2xl font-bold text-white/95 leading-snug">
+          <div className="mt-2 line-clamp-2 text-3xl font-black uppercase leading-[1.02] text-white">
             {movement || "—"}
           </div>
 
-          <div className="mt-2 text-lg font-semibold text-white/80">
+          <div className="mt-4 text-xl font-black uppercase tracking-[0.06em] text-teal-50/84">
             {pct ? `${pct}` : "—"}
             {rr ? ` • ${rr}` : ""}
           </div>
         </div>
 
-        <div className="rounded-xl border border-neutral-700 bg-neutral-950 p-3">
-          <Dumbbell className="h-6 w-6 text-yellow-300" />
+        <div className="grid h-12 w-12 shrink-0 place-items-center rounded-[18px] border border-white/12 bg-black/42">
+          <Dumbbell className="h-6 w-6 text-teal-100" />
         </div>
       </div>
     </div>
@@ -715,26 +860,29 @@ function ControlStationHero({
   const has = controlIndex != null && total > 0 && !!controlName;
 
   return (
-    <div className="w-full rounded-2xl border border-sky-400/60 bg-sky-500/5 p-6 shadow-[0_0_40px_rgba(56,189,248,0.10)]">
-      <div className="flex items-center justify-between">
-        <div className="text-xs uppercase tracking-[0.35em] text-sky-300 font-semibold">
+    <div className="relative overflow-hidden rounded-[26px] border border-teal-200/50 bg-teal-400/[0.055] p-6 shadow-[0_0_54px_rgba(45,212,191,0.12),inset_0_1px_0_rgba(255,255,255,0.06)]">
+      <div className="absolute -right-8 top-0 font-heading text-[14rem] leading-none text-teal-50/[0.04]">
+        {has ? String(controlIndex! + 1).padStart(2, "0") : "00"}
+      </div>
+      <div className="relative flex items-center justify-between">
+        <div className="text-[11px] font-black uppercase tracking-[0.34em] text-teal-100">
           Control Station
         </div>
-        <div className="text-xs uppercase tracking-[0.25em] text-white/60">
+        <div className="text-[11px] font-black uppercase tracking-[0.25em] text-white/46">
           STATION CONTROL
         </div>
       </div>
 
-      <div className="mt-4">
-        <div className="text-6xl font-extrabold text-white leading-none">
+      <div className="relative mt-7">
+        <div className="font-heading text-[8rem] uppercase leading-[0.84] text-white xl:text-[9.5rem]">
           {has ? `${controlIndex! + 1}/${total}` : "—"}
         </div>
-        <div className="mt-3 text-3xl font-bold text-white/90">
+        <div className="mt-5 text-4xl font-black uppercase leading-tight text-white/92">
           {has ? controlName : "Pick a control station in the editor"}
         </div>
-        <div className="mt-4 rounded-xl border border-neutral-800 bg-neutral-950/40 p-4">
-          <div className="text-sm text-white/70">Use this station as the pace setter.</div>
-          <div className="mt-1 text-sm text-white/50">
+        <div className="mt-6 rounded-[20px] border border-white/10 bg-black/30 p-4">
+          <div className="text-lg font-black uppercase text-white/80">Pace setter</div>
+          <div className="mt-1 text-base font-semibold leading-6 text-white/54">
             Move on when the group completes the target here.
           </div>
         </div>
@@ -857,85 +1005,114 @@ function RoundTimer({
   const label = phase === "WORK" ? "WORK" : phase === "REST" ? "REST" : "FINISHED";
   const labelColor =
     phase === "WORK"
-      ? "text-yellow-300"
+      ? "text-teal-50"
       : phase === "REST"
-      ? "text-sky-300"
-      : "text-emerald-300";
+      ? "text-white"
+      : "text-teal-100";
+  const ringColor =
+    phase === "WORK"
+      ? "rgba(45,212,191,0.95)"
+      : phase === "REST"
+      ? "rgba(255,255,255,0.92)"
+      : "rgba(153,246,228,0.94)";
+  const glowColor =
+    phase === "WORK"
+      ? "rgba(45,212,191,0.24)"
+      : phase === "REST"
+      ? "rgba(255,255,255,0.18)"
+      : "rgba(153,246,228,0.20)";
+  const isUrgent = isRunning && phase !== "FINISHED" && remaining <= 10;
 
   return (
-  <div className="flex flex-col items-center justify-center gap-6">
-    {/* ring + time (stacked in same box, no negative margins) */}
-    <div className="relative flex items-center justify-center">
-      <Ring progress={progress} size={300} stroke={16} />
+    <div className="flex flex-col items-center justify-center gap-6">
+      <div
+        className={`relative flex items-center justify-center rounded-full ${isUrgent ? "animate-pulse" : ""}`}
+        style={{ filter: `drop-shadow(0 0 38px ${glowColor})` }}
+      >
+        <Ring progress={progress} size={340} stroke={18} color={ringColor} />
 
-      <div className="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-auto">
-        <div className="text-7xl font-extrabold tracking-tight text-white">
-          {formatSeconds(remaining)}
-        </div>
+        <div className="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-auto">
+          <div className="font-heading text-[5.9rem] leading-[0.84] tracking-normal text-white xl:text-[6.4rem]">
+            {formatSeconds(remaining)}
+          </div>
 
-        <div className={`mt-2 text-sm uppercase tracking-[0.25em] ${labelColor}`}>
-          {label}{phase !== "FINISHED" ? (isRunning ? "" : " (PAUSED)") : ""}
-        </div>
+          <div className={`mt-4 text-sm font-black uppercase tracking-[0.32em] ${labelColor}`}>
+            {label}{phase !== "FINISHED" ? (isRunning ? "" : " Paused") : ""}
+          </div>
 
-        <div className="mt-4 text-sm font-semibold text-white/80">
-          ROUND {Math.min(roundIndex, safeRounds)} / {safeRounds}
+          <div className="mt-5 rounded-full border border-white/10 bg-white/[0.05] px-5 py-2 text-sm font-black uppercase tracking-[0.2em] text-white/78">
+            Round {Math.min(roundIndex, safeRounds)} / {safeRounds}
+          </div>
         </div>
       </div>
-    </div>
 
-    {/* buttons live BELOW the ring */}
-    <div className="flex items-center justify-center gap-3">
-      {!isRunning ? (
+      <div className="w-full max-w-[420px]">
+        <div className="mb-3 flex items-center justify-between text-[10px] font-black uppercase tracking-[0.24em] text-white/34">
+          <span>{phase === "REST" ? "Rest progress" : "Work progress"}</span>
+          <span>{Math.round(progress * 100)}%</span>
+        </div>
+        <div className="h-2 overflow-hidden rounded-full bg-white/10">
+          <div
+            className="h-full rounded-full transition-all duration-300"
+            style={{ width: `${progress * 100}%`, backgroundColor: ringColor }}
+          />
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center justify-center gap-3">
+        {!isRunning ? (
+          <button
+            type="button"
+            onClick={startOrResume}
+            className="h-11 rounded-2xl border border-white bg-white px-5 text-xs font-black uppercase tracking-[0.2em] text-black"
+          >
+            {elapsedInPhase === 0 && phase === "WORK" && roundIndex === 1 ? "Start" : "Resume"}
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={pause}
+            className="h-11 rounded-2xl border border-white/12 bg-white/[0.05] px-5 text-xs font-black uppercase tracking-[0.2em] text-white/84 hover:text-white"
+          >
+            Pause
+          </button>
+        )}
+
         <button
           type="button"
-          onClick={startOrResume}
-          className="px-4 py-2 rounded-lg border border-neutral-700 bg-white text-black text-xs uppercase tracking-widest font-bold"
+          onClick={advanceToNext}
+          disabled={phase === "FINISHED"}
+          className={`h-11 rounded-2xl border border-white/12 px-5 text-xs font-black uppercase tracking-[0.2em] ${
+            phase === "FINISHED"
+              ? "cursor-not-allowed bg-white/[0.025] text-white/25"
+              : "bg-white/[0.05] text-white/78 hover:text-white"
+          }`}
         >
-          {elapsedInPhase === 0 && phase === "WORK" && roundIndex === 1 ? "Start" : "Resume"}
+          Next round
         </button>
-      ) : (
+
         <button
           type="button"
-          onClick={pause}
-          className="px-4 py-2 rounded-lg border border-neutral-700 bg-neutral-900/40 text-xs uppercase tracking-widest text-white/90 hover:text-white"
+          onClick={resetToStart}
+          className="h-11 rounded-2xl border border-white/12 bg-white/[0.035] px-5 text-xs font-black uppercase tracking-[0.2em] text-white/54 hover:text-white"
         >
-          Pause
+          Restart
         </button>
-      )}
-
-      <button
-        type="button"
-        onClick={advanceToNext}
-        disabled={phase === "FINISHED"}
-        className={`px-4 py-2 rounded-lg border border-neutral-700 text-xs uppercase tracking-widest ${
-          phase === "FINISHED"
-            ? "bg-neutral-900/20 text-white/30 cursor-not-allowed"
-            : "bg-neutral-900/40 text-white/90 hover:text-white"
-        }`}
-      >
-        Next round
-      </button>
-
-      <button
-        type="button"
-        onClick={resetToStart}
-        className="px-4 py-2 rounded-lg border border-neutral-700 bg-neutral-900/40 text-xs uppercase tracking-widest text-white/70 hover:text-white"
-      >
-        Restart
-      </button>
+      </div>
     </div>
-  </div>
-);
+  );
 }
 
 function Ring({
   progress,
   size,
   stroke,
+  color,
 }: {
   progress: number;
   size: number;
   stroke: number;
+  color: string;
 }) {
   const r = (size - stroke) / 2;
   const c = 2 * Math.PI * r;
@@ -946,7 +1123,7 @@ function Ring({
     <svg
       width={size}
       height={size}
-      className="pointer-events-none drop-shadow-[0_0_30px_rgba(250,204,21,0.20)]"
+      className="pointer-events-none"
     >
       <circle
         cx={size / 2}
@@ -960,7 +1137,7 @@ function Ring({
         cx={size / 2}
         cy={size / 2}
         r={r}
-        stroke="rgba(250,204,21,0.90)"
+        stroke={color}
         strokeWidth={stroke}
         strokeLinecap="round"
         fill="transparent"

@@ -1,19 +1,16 @@
 import React, { useEffect, useState } from "react";
-import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, NavLink, useNavigate, useParams } from "react-router-dom";
 import {
+  Bell,
   ChevronLeft,
-  Clock3,
   Globe2,
   Image,
   Lock,
-  MapPinned,
   Share2,
-  Sparkles,
   ShieldCheck,
   Trash2,
-  Trophy,
 } from "lucide-react";
-import UserTopNav from "../../../components/layout/UserTopNav";
+import { getUserNavItems } from "../../../components/layout/UserTopNav";
 import UserAvatar from "../../../components/ui/UserAvatar";
 import { useAuth } from "../../../context/AuthContext";
 import WorkoutShareModal from "../components/WorkoutShareModal";
@@ -170,7 +167,7 @@ function getDisplaySections(workout: WorkoutSession) {
 }
 
 export default function WorkoutDetail() {
-  const { user } = useAuth();
+  const { user, appUser } = useAuth();
   const navigate = useNavigate();
   const { workoutId } = useParams<{ workoutId: string }>();
   const [workout, setWorkout] = useState<WorkoutSession | null>(null);
@@ -213,6 +210,9 @@ export default function WorkoutDetail() {
     ? formatCardioPace(workout.stats.distanceM, workout.stats.score)
     : null;
   const canDelete = Boolean(user?.uid && workout && user.uid === workout.userId);
+  const navItems = getUserNavItems(appUser?.role);
+  const profilePhotoURL = appUser?.photoURL || user?.photoURL || "";
+  const firstName = appUser?.name?.split(" ")[0] || appUser?.email?.split("@")[0] || "A";
 
   async function handleDeleteWorkout() {
     if (!workout || !canDelete || isDeleting) return;
@@ -233,12 +233,42 @@ export default function WorkoutDetail() {
   }
 
   return (
-    <div className="min-h-screen bg-black text-white">
-      <UserTopNav />
+    <div className="carbon-fiber-bg min-h-screen overflow-x-hidden font-barlow text-[#f4f0ea]">
+      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_top_right,rgba(120,95,70,0.16),transparent_34%),linear-gradient(180deg,rgba(255,255,255,0.025),transparent_22%)]" />
 
-      <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-4 py-5 sm:px-6 lg:px-8">
+      <main className="relative mx-auto min-h-screen max-w-xl px-5 pb-36 pt-7 sm:max-w-3xl sm:px-8">
+        <header className="flex items-center justify-between" style={{ paddingTop: "env(safe-area-inset-top)" }}>
+          <Link to="/dashboard" aria-label="Zero Alpha home" className="block">
+            <img src="/ZERO-ALPHA.png" alt="ZERO-ALPHA" className="h-20 w-auto object-contain" />
+          </Link>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              aria-label="Notifications"
+              className="grid h-12 w-12 place-items-center rounded-full border border-white/10 bg-white/[0.04] text-white/55 transition hover:bg-white/[0.08] hover:text-white"
+            >
+              <Bell className="h-5 w-5" />
+            </button>
+            <Link
+              to="/profile"
+              aria-label="Profile"
+              className="grid h-12 w-12 overflow-hidden rounded-full border border-[#8b725b]/60 bg-[#765f4b] text-sm font-bold uppercase text-[#f8efe5]"
+            >
+              {profilePhotoURL ? (
+                <img
+                  src={profilePhotoURL}
+                  alt={appUser?.name ? `${appUser.name}'s profile` : "Profile"}
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <span className="grid h-full w-full place-items-center">{firstName.slice(0, 1)}</span>
+              )}
+            </Link>
+          </div>
+        </header>
+
         {!loading && !workout ? (
-          <div className="rounded-[28px] border border-dashed border-white/10 bg-neutral-950/90 px-6 py-10 text-center">
+          <div className="mt-12 rounded-[28px] border border-dashed border-white/10 bg-[#151311] px-6 py-10 text-center">
             <div className="text-lg font-semibold text-white">
               This workout couldn&apos;t be found.
             </div>
@@ -254,281 +284,224 @@ export default function WorkoutDetail() {
 
         {workout ? (
           <>
-            <section className="relative overflow-hidden rounded-[28px] border border-white/10 bg-neutral-950 shadow-[0_24px_60px_rgba(0,0,0,0.38)]">
-              <div className="absolute inset-0 bg-[radial-gradient(circle_at_16%_14%,rgba(59,130,246,0.16),transparent_28%),radial-gradient(circle_at_82%_10%,rgba(245,158,11,0.16),transparent_28%),linear-gradient(135deg,rgba(255,255,255,0.03),transparent_55%)]" />
-              <div className="relative p-5 sm:p-6 lg:p-7">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <Link
-                      to="/workouts"
-                      className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/25 px-4 py-2.5 text-sm font-semibold text-white/85 transition hover:border-white/20 hover:bg-black/35 hover:text-white"
-                    >
-                      <ChevronLeft className="h-4 w-4" />
-                      Workouts
-                    </Link>
-                    <button
-                      type="button"
-                      onClick={() => setShareOpen(true)}
-                      className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-semibold text-white/85 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
-                    >
-                      <Share2 className="h-4 w-4" />
-                      Share
-                    </button>
-                    {canDelete ? (
-                      <button
-                        type="button"
-                        onClick={handleDeleteWorkout}
-                        disabled={isDeleting}
-                        className="inline-flex items-center gap-2 rounded-full border border-red-400/18 bg-red-400/10 px-4 py-2.5 text-sm font-semibold text-red-100 transition hover:border-red-400/28 hover:bg-red-400/14 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                        {isDeleting ? "Deleting..." : "Delete"}
-                      </button>
-                    ) : null}
-                  </div>
+            <section className="mt-10">
+              <Link
+                to="/feed"
+                className="inline-flex items-center gap-2 text-sm font-bold text-white/34 transition hover:text-white/70"
+              >
+                <ChevronLeft className="h-4 w-4" />
+                Feed
+              </Link>
+              <p className="mt-8 text-[12px] font-bold uppercase tracking-[0.3em] text-white/34">
+                Session detail
+              </p>
+              <h1 className="mt-4 font-heading text-[4.6rem] uppercase leading-none text-white sm:text-[6rem]">
+                {workout.title}
+              </h1>
+            </section>
 
-                  <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-white/72">
-                    <Sparkles className="h-3.5 w-3.5" />
-                    {formatWorkoutType(workout.type)}
+            <article className="mt-8 overflow-hidden rounded-[28px] border border-white/10 bg-[#151311] shadow-[0_24px_60px_rgba(0,0,0,0.28)]">
+              <div className="p-5">
+                <div className="grid grid-cols-[48px_1fr_auto] gap-3.5">
+                  <UserAvatar
+                    name={workout.userName}
+                    photoURL={workout.userPhotoURL}
+                    size={48}
+                  />
+                  <div className="min-w-0">
+                    <div className="truncate text-base font-bold text-white">{workout.userName}</div>
+                    <div className="mt-1 text-sm font-medium text-white/36">{formatDateLabel(workout.sessionDate)}</div>
                   </div>
+                  <span className="h-fit rounded-full bg-white/[0.08] px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.12em] text-white/58">
+                    {formatWorkoutType(workout.type)}
+                  </span>
                 </div>
 
-                <h1 className="mt-4 text-2xl font-heading uppercase tracking-[-0.04em] sm:text-4xl">
-                  {workout.title}
-                </h1>
-
-                {workout.type !== "run" ? (
-                  <div className="mt-2 text-sm text-white/60 sm:text-base">
+                <div className="mt-6">
+                  <h2 className="text-4xl font-bold leading-none text-white">
+                    {workout.title}
+                  </h2>
+                  <p className="mt-2 font-mono text-sm text-white/40">
                     {buildHeroSummary(workout)}
-                  </div>
-                ) : null}
-
-                <div className="mt-4 flex flex-wrap items-center gap-2.5 text-sm text-white/62">
-                  <span>{formatDateLabel(workout.sessionDate)}</span>
-                  {workout.startTime ? (
-                    <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-1">
-                      <Clock3 className="h-4 w-4" />
-                      {workout.startTime}
-                    </span>
+                    {workout.durationMin ? ` · ${workout.durationMin} min` : ""}
+                    {workout.startTime ? ` · ${workout.startTime}` : ""}
+                  </p>
+                  {workout.notes ? (
+                    <p className="mt-5 text-base leading-7 text-white/68">
+                      {workout.notes}
+                    </p>
                   ) : null}
-                  <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-1">
-                    {workout.visibility === "members" ? (
-                      <Globe2 className="h-4 w-4" />
-                    ) : (
-                      <Lock className="h-4 w-4" />
-                    )}
-                    {workout.visibility === "members" ? "Shared to feed" : "Private"}
+                </div>
+
+                <div className="mt-5 flex flex-wrap gap-2">
+                  <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-bold text-white/52">
+                    {workout.visibility === "members" ? <Globe2 className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
+                    {workout.visibility === "members" ? "Shared" : "Private"}
                   </span>
                   {workout.linkedClassTitle ? (
-                    <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-1">
+                    <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-bold text-white/52">
                       {workout.linkedClassTitle}
                     </span>
                   ) : null}
                 </div>
+              </div>
 
-                <div className="mt-4 flex items-center gap-3">
-                  <UserAvatar
-                    name={workout.userName}
-                    photoURL={workout.userPhotoURL}
-                    size={38}
-                  />
-                  <div>
-                    <div className="text-xs uppercase tracking-[0.18em] text-white/40">Logged by</div>
-                    <div className="text-sm font-semibold text-white/88">
-                      {workout.userName}
-                    </div>
-                  </div>
-                </div>
-
+              <div className="flex items-center gap-3 border-t border-white/10 px-4 py-3">
                 {feedPost?.reactionCount ? (
-                  <div className="mt-4 rounded-[20px] border border-white/10 bg-black/20 p-4">
-                    <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-white/40">
-                      <ShieldCheck className="h-3.5 w-3.5 text-white/48" />
-                      Salutes
-                    </div>
-                    <div className="mt-2 flex flex-wrap items-center gap-2.5">
-                      {feedPost.reactionUsers.slice(0, 6).map((entry) => (
-                        <div
-                          key={entry.userId}
-                          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1.5"
-                        >
-                          <UserAvatar
-                            name={entry.name}
-                            photoURL={entry.photoURL}
-                            size={24}
-                          />
-                          <span className="text-sm font-medium text-white/78">
-                            {entry.name}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
+                  <div className="inline-flex items-center gap-2 rounded-full bg-white/[0.05] px-3.5 py-2 text-sm font-bold text-white/62">
+                    <ShieldCheck className="h-3.5 w-3.5" />
+                    {feedPost.reactionCount}
                   </div>
                 ) : null}
-
-                {workout.notes ? (
-                  <div className="mt-4 max-w-3xl rounded-[20px] border border-white/10 bg-black/20 p-4">
-                    <p className="text-sm leading-6 text-white/68">
-                      {workout.notes}
-                    </p>
-                  </div>
+                <button
+                  type="button"
+                  onClick={() => setShareOpen(true)}
+                  className="inline-flex items-center gap-2 rounded-full px-3.5 py-2 text-sm font-bold text-white/46 transition hover:bg-white/[0.06] hover:text-white"
+                >
+                  <Share2 className="h-4 w-4" />
+                  Share
+                </button>
+                {canDelete ? (
+                  <button
+                    type="button"
+                    onClick={handleDeleteWorkout}
+                    disabled={isDeleting}
+                    className="ml-auto inline-flex items-center gap-2 rounded-full p-2 text-white/32 transition hover:bg-red-500/10 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-50"
+                    aria-label="Delete workout"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
                 ) : null}
               </div>
-            </section>
+            </article>
 
-            <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <section className="mt-5 grid gap-3 sm:grid-cols-2">
               {workout.type === "run" && workout.stats.distanceM ? (
-                <div className="rounded-[20px] border border-white/10 bg-neutral-950/95 p-3.5 sm:p-4">
-                  <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-white/40">
-                    Distance
-                  </div>
-                  <div className="mt-2 text-xl font-semibold tracking-[-0.04em] text-white sm:text-2xl">
-                    {workout.stats.distanceM} m
-                  </div>
+                <div className="rounded-[20px] border border-white/10 bg-[#151311] p-4">
+                  <div className="text-[11px] font-black uppercase tracking-[0.2em] text-white/34">Distance</div>
+                  <div className="mt-2 font-mono text-3xl font-bold text-white">{workout.stats.distanceM} m</div>
                 </div>
               ) : null}
 
               {workout.type === "run" && cardioPace ? (
-                <div className="rounded-[20px] border border-white/10 bg-neutral-950/95 p-3.5 sm:p-4">
-                  <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-white/40">
-                    Pace
-                  </div>
-                  <div className="mt-2 text-xl font-semibold tracking-[-0.04em] text-white sm:text-2xl">
-                    {cardioPace}
-                  </div>
+                <div className="rounded-[20px] border border-white/10 bg-[#151311] p-4">
+                  <div className="text-[11px] font-black uppercase tracking-[0.2em] text-white/34">Pace</div>
+                  <div className="mt-2 font-mono text-3xl font-bold text-white">{cardioPace}</div>
                 </div>
               ) : null}
 
               {buildStatRows(workout).map((stat) => (
-                <div
-                  key={stat.label}
-                  className="rounded-[20px] border border-white/10 bg-neutral-950/95 p-3.5 sm:p-4"
-                >
-                  <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-white/40">
-                    {stat.label}
-                  </div>
-                  <div className="mt-2 text-xl font-semibold tracking-[-0.04em] text-white sm:text-2xl">
-                    {stat.value}
-                  </div>
+                <div key={stat.label} className="rounded-[20px] border border-white/10 bg-[#151311] p-4">
+                  <div className="text-[11px] font-black uppercase tracking-[0.2em] text-white/34">{stat.label}</div>
+                  <div className="mt-2 font-mono text-3xl font-bold text-white">{stat.value}</div>
                 </div>
               ))}
-
-              {workout.durationMin ? (
-                <div className="rounded-[20px] border border-white/10 bg-neutral-950/95 p-3.5 sm:p-4">
-                  <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-white/40">
-                    Duration
-                  </div>
-                  <div className="mt-2 text-xl font-semibold tracking-[-0.04em] text-white sm:text-2xl">
-                    {workout.durationMin} min
-                  </div>
-                </div>
-              ) : null}
             </section>
 
-            <section className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
+            <section className="mt-5 grid gap-4">
               {workout.movementEntries.length ? (
-                <div className="rounded-[24px] border border-white/10 bg-neutral-950/95 p-4 sm:p-5">
-                  <div className="flex items-center gap-2">
-                    <Trophy className="h-4.5 w-4.5 text-white/52" />
-                    <h2 className="text-xl font-semibold tracking-[-0.03em] text-white">
-                      Session Breakdown
+                <div className="overflow-hidden rounded-[28px] border border-white/10 bg-[#151311]">
+                  <div className="border-b border-white/10 px-5 py-4">
+                    <h2 className="text-[12px] font-bold uppercase tracking-[0.28em] text-white/54">
+                      Session breakdown
                     </h2>
                   </div>
-
-                  <div className="mt-4 space-y-2.5">
-                    {workout.movementEntries.map((entry, index) => (
-                      <div
-                        key={`${entry.movementId || entry.movementName}-${index}`}
-                        className="rounded-[18px] border border-white/10 bg-black/20 p-3.5"
-                      >
-                        <div className="text-sm font-semibold text-white">
-                          {entry.movementName}
-                        </div>
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          {entry.loadKg ? (
-                            <span className="rounded-full border border-amber-400/15 bg-amber-400/[0.08] px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-100">
-                              {entry.loadKg} kg
-                            </span>
-                          ) : null}
-                          {entry.reps ? (
-                            <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-white/70">
-                              {entry.reps} reps
-                            </span>
-                          ) : null}
-                          {entry.sets ? (
-                            <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-white/70">
-                              {entry.sets} sets
-                            </span>
-                          ) : null}
-                          {!entry.loadKg && !entry.reps && !entry.sets ? (
-                            <span className="rounded-full border border-amber-400/15 bg-amber-400/[0.08] px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-100">
-                              {entry.value}
-                            </span>
-                          ) : null}
+                  {workout.movementEntries.map((entry, index) => (
+                    <div
+                      key={`${entry.movementId || entry.movementName}-${index}`}
+                      className="grid grid-cols-[1fr_auto] gap-4 border-b border-white/10 px-5 py-4 last:border-b-0"
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate text-lg font-bold text-white">{entry.movementName}</div>
+                        <div className="mt-1 font-mono text-sm text-white/38">
+                          {entry.sets ? `${entry.sets} sets` : ""}
+                          {entry.reps ? `${entry.sets ? " · " : ""}${entry.reps} reps` : ""}
                         </div>
                       </div>
-                    ))}
-                  </div>
+                      <div className="font-mono text-lg font-bold text-white">
+                        {entry.loadKg ? `${entry.loadKg} kg` : entry.value}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               ) : null}
 
-              <div className="space-y-3">
-                {displaySections.length ? (
-                  <div className="rounded-[24px] border border-white/10 bg-neutral-950/95 p-4 sm:p-5">
-                    <h2 className="text-xl font-semibold tracking-[-0.03em] text-white">
-                      Extra Notes
+              {displaySections.length ? (
+                <div className="overflow-hidden rounded-[28px] border border-white/10 bg-[#151311]">
+                  <div className="border-b border-white/10 px-5 py-4">
+                    <h2 className="text-[12px] font-bold uppercase tracking-[0.28em] text-white/54">
+                      Notes
                     </h2>
-
-                    <div className="mt-4 space-y-2.5">
-                      {displaySections.map((section, index) => (
-                        <div
-                          key={`${section.kind}-${index}`}
-                          className="rounded-[18px] border border-white/10 bg-black/20 p-3.5"
-                        >
-                          <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-white/40">
-                            {sectionLabel(section.kind)}
-                          </div>
-                          <p className="mt-2 text-sm leading-6 text-white/74">
-                            {section.text}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
                   </div>
-                ) : null}
-
-                {workout.stats.area ? (
-                  <div className="rounded-[24px] border border-white/10 bg-neutral-950/95 p-4 sm:p-5">
-                    <div className="flex items-center gap-2">
-                      <MapPinned className="h-4 w-4 text-white/48" />
-                      <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-white/40">
-                        Location
+                  {displaySections.map((section, index) => (
+                    <div key={`${section.kind}-${index}`} className="border-b border-white/10 px-5 py-4 last:border-b-0">
+                      <div className="text-[11px] font-black uppercase tracking-[0.2em] text-white/34">
+                        {sectionLabel(section.kind)}
                       </div>
+                      <p className="mt-2 text-base leading-7 text-white/68">{section.text}</p>
                     </div>
-                    <div className="mt-2 text-base font-semibold text-white">
-                      {workout.stats.area}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
+                  ))}
+                </div>
+              ) : null}
             </section>
+
+            {feedPost?.reactionCount ? (
+              <section className="mt-5 overflow-hidden rounded-[28px] border border-white/10 bg-[#151311] p-5">
+                <h2 className="text-[12px] font-bold uppercase tracking-[0.28em] text-white/54">
+                  Salutes
+                </h2>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {feedPost.reactionUsers.slice(0, 8).map((entry) => (
+                    <div key={entry.userId} className="inline-flex items-center gap-2 rounded-full bg-white/[0.05] px-3 py-2">
+                      <UserAvatar name={entry.name} photoURL={entry.photoURL} size={26} />
+                      <span className="text-sm font-bold text-white/72">{entry.name}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ) : null}
 
             {workout.selfieURL ? (
-              <section className="rounded-[24px] border border-white/10 bg-neutral-950/95 p-4 sm:p-5">
-                <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-white/52">
-                  <Image className="h-3.5 w-3.5" />
-                  Session Pic
+              <section className="mt-5 rounded-[28px] border border-white/10 bg-[#151311] p-5">
+                <div className="inline-flex items-center gap-2 text-[12px] font-bold uppercase tracking-[0.28em] text-white/54">
+                  <Image className="h-4 w-4" />
+                  Session pic
                 </div>
                 <img
                   src={workout.selfieURL}
                   alt="Workout pic"
-                  className="mt-4 w-full max-w-lg rounded-[20px] border border-white/10 object-cover"
+                  className="mt-4 w-full rounded-[22px] border border-white/10 object-cover"
                 />
               </section>
             ) : null}
+
           </>
         ) : null}
-      </div>
+      </main>
+
+      <nav
+        className="fixed inset-x-4 bottom-4 z-40 mx-auto max-w-xl rounded-[28px] border border-white/45 bg-white/90 px-3 py-3 shadow-[0_18px_60px_rgba(0,0,0,0.35)] backdrop-blur-xl sm:max-w-2xl"
+        style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
+        aria-label="Primary"
+      >
+        <div className="flex gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {navItems.map(({ to, label, icon: NavIcon }) => (
+            <NavLink
+              key={to}
+              to={to}
+              className={({ isActive }) =>
+                [
+                  "flex min-w-[76px] shrink-0 flex-col items-center gap-1.5 rounded-2xl px-2 py-2 text-[11px] font-bold transition",
+                  isActive ? "bg-black/10 text-black" : "text-black hover:bg-black/5",
+                ].join(" ")
+              }
+            >
+              <NavIcon className="h-5 w-5 text-black" />
+              <span className="max-w-full truncate">{label}</span>
+            </NavLink>
+          ))}
+        </div>
+      </nav>
 
       {workout ? (
         <WorkoutShareModal

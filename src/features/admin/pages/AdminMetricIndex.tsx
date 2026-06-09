@@ -9,7 +9,7 @@ import {
   Target,
 } from "lucide-react";
 import PerformanceAccessOnly from "../../../components/guards/PerformanceAccessOnly";
-import UserTopNav from "../../../components/layout/UserTopNav";
+import AppBottomNav from "../../../components/layout/AppBottomNav";
 import AdminSectionCard from "../components/AdminSectionCard";
 import { getPerformanceSummary } from "../services/performance";
 
@@ -31,7 +31,7 @@ function getCategoryPill(category?: string) {
     return "border-emerald-500/20 bg-emerald-500/10 text-emerald-300";
   }
 
-  return "border-white/10 bg-white/[0.04] text-white/70";
+  return "border-white/8 bg-white/[0.035] text-white/70";
 }
 
 export default function AdminMetricIndex() {
@@ -124,43 +124,42 @@ export default function AdminMetricIndex() {
 
   return (
     <PerformanceAccessOnly>
-      <div className="min-h-screen bg-black text-white">
-        <UserTopNav />
+      <div className="carbon-fiber-bg min-h-screen overflow-x-hidden font-barlow text-[#f4f0ea]">
 
-        <div className="overflow-x-hidden px-3 py-5 sm:px-6 lg:px-8">
+        <div className="overflow-x-hidden px-3 pb-36 pt-5 sm:px-6 lg:px-8">
           <div className="mx-auto max-w-7xl">
             <Link
               to="/admin/performance"
-              className="inline-flex items-center gap-2 text-sm text-neutral-400 transition hover:text-white"
+              className="inline-flex items-center gap-2 text-sm text-white/42 transition hover:text-white"
             >
               <ArrowLeft className="h-4 w-4 shrink-0" />
               Back to performance
             </Link>
 
-            <div className="relative mt-6 overflow-hidden rounded-[1.75rem] border border-white/10 bg-neutral-950 p-4 sm:rounded-[2rem] sm:p-8">
-              <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(245,158,11,0.12),transparent_30%),radial-gradient(circle_at_bottom_right,rgba(59,130,246,0.10),transparent_28%)]" />
-              <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-amber-400/40 to-transparent" />
+            <div className="relative mt-6 overflow-hidden rounded-[24px] border border-white/8 bg-[#11100f] p-4 sm:rounded-[28px] sm:p-8">
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_72%_0%,rgba(255,255,255,0.05),transparent_30%),linear-gradient(180deg,rgba(255,255,255,0.025),transparent_48%)]" />
+              <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/18 to-transparent" />
 
               <div className="relative z-10 flex min-w-0 flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
                 <div className="min-w-0 flex-1">
-                  <div className="inline-flex items-center gap-2 rounded-full border border-amber-500/20 bg-amber-500/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] text-amber-200 sm:text-[11px] sm:tracking-[0.28em]">
+                  <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.045] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] text-white/58 sm:text-[11px] sm:tracking-[0.28em]">
                     <Activity className="h-3.5 w-3.5 shrink-0" />
                     All Metrics
                   </div>
 
-                  <h1 className="mt-4 text-2xl font-heading tracking-tight sm:text-4xl">
+                  <h1 className="mt-4 text-[2.75rem] font-bold leading-none sm:text-6xl">
                     Browse Every Logged Metric
                   </h1>
 
-                  <p className="mt-3 max-w-2xl text-sm leading-6 text-neutral-400 sm:text-base">
+                  <p className="mt-3 max-w-2xl text-sm leading-6 text-white/42 sm:text-base">
                     Search the full metrics library and open the ranking board for any movement members have logged.
                   </p>
                 </div>
 
                 {!loading && data ? (
                   <div className="grid w-full grid-cols-2 gap-3 lg:w-auto lg:min-w-[320px] lg:grid-cols-2">
-                    <div className="rounded-2xl border border-white/10 bg-black/40 px-3 py-3 backdrop-blur sm:px-4">
-                      <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 sm:text-[11px] sm:tracking-[0.25em]">
+                    <div className="rounded-2xl border border-white/8 bg-[#050505]/55 px-3 py-3 backdrop-blur sm:px-4">
+                      <div className="text-[10px] uppercase tracking-[0.2em] text-white/30 sm:text-[11px] sm:tracking-[0.25em]">
                         Total metrics
                       </div>
                       <div className="mt-2 text-xl font-semibold text-white sm:text-2xl">
@@ -168,8 +167,8 @@ export default function AdminMetricIndex() {
                       </div>
                     </div>
 
-                    <div className="rounded-2xl border border-white/10 bg-black/40 px-3 py-3 backdrop-blur sm:px-4">
-                      <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 sm:text-[11px] sm:tracking-[0.25em]">
+                    <div className="rounded-2xl border border-white/8 bg-[#050505]/55 px-3 py-3 backdrop-blur sm:px-4">
+                      <div className="text-[10px] uppercase tracking-[0.2em] text-white/30 sm:text-[11px] sm:tracking-[0.25em]">
                         Showing
                       </div>
                       <div className="mt-2 text-xl font-semibold text-white sm:text-2xl">
@@ -194,7 +193,7 @@ export default function AdminMetricIndex() {
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
                         placeholder="Search movement or metric"
-                        className="w-full rounded-[20px] border border-white/10 bg-black/85 py-3.5 pl-11 pr-4 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-neutral-950"
+                        className="w-full rounded-[20px] border border-white/8 bg-[#090909] py-3.5 pl-11 pr-4 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-[#11100f]"
                       />
                     </div>
                   </label>
@@ -206,7 +205,7 @@ export default function AdminMetricIndex() {
                     <select
                       value={categoryFilter}
                       onChange={(e) => setCategoryFilter(e.target.value)}
-                      className="w-full rounded-[20px] border border-white/10 bg-black/85 px-4 py-3.5 text-sm text-white outline-none transition focus:border-white/20 focus:bg-neutral-950"
+                      className="w-full rounded-[20px] border border-white/8 bg-[#090909] px-4 py-3.5 text-sm text-white outline-none transition focus:border-white/20 focus:bg-[#11100f]"
                     >
                       <option value="all">All categories</option>
                       {data?.topCategories.map((item) => (
@@ -221,9 +220,9 @@ export default function AdminMetricIndex() {
 
               <AdminSectionCard title="Metric Library">
                 {loading ? (
-                  <div className="text-sm text-neutral-400">Loading metrics...</div>
+                  <div className="text-sm text-white/42">Loading metrics...</div>
                 ) : filteredMetrics.length === 0 ? (
-                  <div className="text-sm text-neutral-400">
+                  <div className="text-sm text-white/42">
                     No metrics match this search yet.
                   </div>
                 ) : (
@@ -234,7 +233,7 @@ export default function AdminMetricIndex() {
                       return (
                         <div
                           key={group.category}
-                          className="overflow-hidden rounded-[1.5rem] border border-white/8 bg-white/[0.02]"
+                          className="overflow-hidden rounded-[1.5rem] border border-white/8 bg-white/[0.025]"
                         >
                           <button
                             type="button"
@@ -250,14 +249,14 @@ export default function AdminMetricIndex() {
                                 >
                                   {group.category}
                                 </span>
-                                <span className="text-sm text-neutral-400">
+                                <span className="text-sm text-white/42">
                                   {group.items.length} metrics
                                 </span>
                               </div>
                             </div>
 
                             <ChevronDown
-                              className={`h-4 w-4 shrink-0 text-neutral-500 transition ${
+                              className={`h-4 w-4 shrink-0 text-white/30 transition ${
                                 isOpen ? "rotate-180 text-white" : ""
                               }`}
                             />
@@ -275,14 +274,14 @@ export default function AdminMetricIndex() {
                                         )}`
                                       : "#"
                                   }
-                                  className="group flex items-center justify-between gap-3 rounded-2xl border border-white/8 bg-black/30 px-3 py-3 transition hover:border-white/15 hover:bg-white/[0.04] sm:gap-4 sm:px-4 sm:py-4"
+                                  className="group flex items-center justify-between gap-3 rounded-2xl border border-white/8 bg-[#050505]/50 px-3 py-3 transition hover:border-white/15 hover:bg-white/[0.035] sm:gap-4 sm:px-4 sm:py-4"
                                 >
                                   <div className="min-w-0 flex-1">
-                                    <div className="truncate text-sm font-medium text-white transition group-hover:text-amber-100 sm:text-base">
+                                    <div className="truncate text-sm font-medium text-white transition group-hover:text-white sm:text-base">
                                       {item.label}
                                     </div>
 
-                                    <div className="mt-2 flex items-center gap-2 text-xs text-neutral-500">
+                                    <div className="mt-2 flex items-center gap-2 text-xs text-white/30">
                                       <Target className="h-3.5 w-3.5 shrink-0" />
                                       {item.count} logged entries
                                     </div>
@@ -293,11 +292,11 @@ export default function AdminMetricIndex() {
                                       <div className="text-lg font-semibold text-white">
                                         {item.count}
                                       </div>
-                                      <div className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">
+                                      <div className="text-[10px] uppercase tracking-[0.18em] text-white/30">
                                         total
                                       </div>
                                     </div>
-                                    <ChevronRight className="h-4 w-4 shrink-0 text-neutral-600 transition group-hover:text-amber-200" />
+                                    <ChevronRight className="h-4 w-4 shrink-0 text-white/24 transition group-hover:text-white" />
                                   </div>
                                 </Link>
                               ))}
@@ -312,6 +311,7 @@ export default function AdminMetricIndex() {
             </div>
           </div>
         </div>
+        <AppBottomNav />
       </div>
     </PerformanceAccessOnly>
   );

@@ -46,12 +46,19 @@ import {
 
 /** ---------- Route guards ---------- */
 
+function LoadingScreen() {
+  return (
+    <div className="carbon-fiber-bg flex min-h-screen items-center justify-center text-white">
+      Loading...
+    </div>
+  );
+}
+
 function RequireAuth({ children }: { children: React.ReactElement }) {
   const { user, loading } = useAuth();
   const location = useLocation();
 
-  if (loading)
-    return <div className="text-white text-center mt-20">Loading...</div>;
+  if (loading) return <LoadingScreen />;
   if (!user) return <Navigate to="/" replace state={{ from: location }} />;
 
   return children;
@@ -61,8 +68,7 @@ function RequireAdmin({ children }: { children: React.ReactElement }) {
   const { appUser, loading } = useAuth();
   const location = useLocation();
 
-  if (loading)
-    return <div className="text-white text-center mt-20">Loading...</div>;
+  if (loading) return <LoadingScreen />;
   if (!isAdminRole(appUser?.role))
     return <Navigate to="/dashboard" replace state={{ from: location }} />;
 
@@ -73,8 +79,7 @@ function RequireSgpt({ children }: { children: React.ReactElement }) {
   const { appUser, loading } = useAuth();
   const location = useLocation();
 
-  if (loading)
-    return <div className="text-white text-center mt-20">Loading...</div>;
+  if (loading) return <LoadingScreen />;
   if (!isSgptRole(appUser?.role))
     return <Navigate to={getAuthedHome(appUser)} replace state={{ from: location }} />;
 
@@ -85,8 +90,7 @@ function RequireApproved({ children }: { children: React.ReactElement }) {
   const { user, appUser, loading } = useAuth();
   const location = useLocation();
 
-  if (loading)
-    return <div className="text-white text-center mt-20">Loading...</div>;
+  if (loading) return <LoadingScreen />;
   if (!user) return <Navigate to="/" replace state={{ from: location }} />;
   if (appUser?.approvalStatus === "pending") {
     return <Navigate to="/pending-approval" replace state={{ from: location }} />;
@@ -99,8 +103,7 @@ function RequireMember({ children }: { children: React.ReactElement }) {
   const { appUser, loading } = useAuth();
   const location = useLocation();
 
-  if (loading)
-    return <div className="text-white text-center mt-20">Loading...</div>;
+  if (loading) return <LoadingScreen />;
   if (appUser?.role === "banned")
     return <Navigate to="/dashboard" replace state={{ from: location }} />;
   if (!isGeneralMemberRole(appUser?.role))
@@ -113,8 +116,7 @@ function RequireTrainingAccess({ children }: { children: React.ReactElement }) {
   const { appUser, loading } = useAuth();
   const location = useLocation();
 
-  if (loading)
-    return <div className="text-white text-center mt-20">Loading...</div>;
+  if (loading) return <LoadingScreen />;
   if (appUser?.role === "banned")
     return <Navigate to={getAuthedHome(appUser)} replace state={{ from: location }} />;
   if (!canAccessTraining(appUser?.role))
@@ -127,8 +129,7 @@ function RequirePerformanceArea({ children }: { children: React.ReactElement }) 
   const { appUser, loading } = useAuth();
   const location = useLocation();
 
-  if (loading)
-    return <div className="text-white text-center mt-20">Loading...</div>;
+  if (loading) return <LoadingScreen />;
   if (!hasPerformanceAccess(appUser?.role))
     return <Navigate to={getAuthedHome(appUser)} replace state={{ from: location }} />;
 
@@ -145,7 +146,7 @@ function getAuthedHome(appUser: ReturnType<typeof useAuth>["appUser"]) {
 
 function AdminLayout() {
   return (
-    <div className="min-h-screen overflow-x-hidden bg-[#050505] font-barlow text-[#f4f0ea]">
+    <div className="carbon-fiber-bg min-h-screen overflow-x-hidden font-barlow text-[#f4f0ea]">
       <Outlet />
     </div>
   );
@@ -157,8 +158,7 @@ export default function App() {
   const { user, appUser, loading } = useAuth();
   const location = useLocation();
 
-  if (loading)
-    return <div className="text-white text-center mt-20">Loading...</div>;
+  if (loading) return <LoadingScreen />;
 
   const isAuthed = !!user;
   const isBanned = appUser?.role === "banned";

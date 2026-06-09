@@ -9,7 +9,7 @@ import {
   Trophy,
 } from "lucide-react";
 import PerformanceAccessOnly from "../../../components/guards/PerformanceAccessOnly";
-import UserTopNav from "../../../components/layout/UserTopNav";
+import AppBottomNav from "../../../components/layout/AppBottomNav";
 import UserAvatar from "../../../components/ui/UserAvatar";
 import { useAuth } from "../../../context/AuthContext";
 import AdminSectionCard from "../components/AdminSectionCard";
@@ -60,7 +60,7 @@ function getCategoryPill(category?: string) {
     return "border-emerald-500/20 bg-emerald-500/10 text-emerald-300";
   }
 
-  return "border-white/10 bg-white/[0.04] text-white/70";
+  return "border-white/8 bg-white/[0.035] text-white/70";
 }
 
 function RankBadge({ index }: { index: number }) {
@@ -70,10 +70,10 @@ function RankBadge({ index }: { index: number }) {
     rank === 1
       ? "border-amber-400/30 bg-amber-400/10 text-amber-200"
       : rank === 2
-      ? "border-neutral-300/20 bg-neutral-300/10 text-neutral-200"
+      ? "border-neutral-300/20 bg-neutral-300/10 text-white/72"
       : rank === 3
       ? "border-orange-500/20 bg-orange-500/10 text-orange-200"
-      : "border-white/10 bg-white/[0.04] text-white/60";
+      : "border-white/8 bg-white/[0.035] text-white/60";
 
   return (
     <div
@@ -110,27 +110,26 @@ export default function AdminPerformance() {
 
   return (
     <PerformanceAccessOnly>
-      <div className="min-h-screen bg-black text-white">
-        <UserTopNav />
+      <div className="carbon-fiber-bg min-h-screen overflow-x-hidden font-barlow text-[#f4f0ea]">
 
-        <div className="px-3 py-5 sm:px-6 lg:px-8">
+        <div className="px-3 pb-36 pt-5 sm:px-6 lg:px-8">
           <div className="mx-auto max-w-7xl">
-            <div className="relative overflow-hidden rounded-[1.75rem] border border-white/10 bg-neutral-950 p-4 sm:rounded-[2rem] sm:p-8">
-              <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(245,158,11,0.14),transparent_32%),radial-gradient(circle_at_bottom_right,rgba(239,68,68,0.10),transparent_28%)]" />
-              <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-amber-400/50 to-transparent" />
+            <div className="relative overflow-hidden rounded-[24px] border border-white/8 bg-[#11100f] p-4 sm:rounded-[28px] sm:p-8">
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_72%_0%,rgba(255,255,255,0.05),transparent_30%),linear-gradient(180deg,rgba(255,255,255,0.025),transparent_48%)]" />
+              <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/18 to-transparent" />
 
               <div className="relative z-10 flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
                 <div className="max-w-2xl min-w-0">
-                  <div className="inline-flex items-center gap-2 rounded-full border border-amber-500/20 bg-amber-500/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] text-amber-200 sm:text-[11px] sm:tracking-[0.28em]">
+                  <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.045] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] text-white/58 sm:text-[11px] sm:tracking-[0.28em]">
                     <Activity className="h-3.5 w-3.5" />
                     {dashboardLabel}
                   </div>
 
-                  <h1 className="mt-4 text-2xl font-heading tracking-tight sm:text-4xl">
+                  <h1 className="mt-4 text-[2.75rem] font-bold leading-none sm:text-6xl">
                     {dashboardTitle}
                   </h1>
 
-                  <p className="mt-3 max-w-xl text-sm leading-6 text-neutral-400 sm:text-base">
+                  <p className="mt-3 max-w-xl text-sm leading-6 text-white/42 sm:text-base">
                     See who is logging, what is being tracked most, and jump
                     straight into individual member performance histories.
                   </p>
@@ -138,8 +137,8 @@ export default function AdminPerformance() {
 
                 {!loading && data ? (
                   <div className="grid w-full grid-cols-2 gap-3 lg:w-auto lg:min-w-[420px] lg:grid-cols-4">
-                    <div className="rounded-2xl border border-white/10 bg-black/40 px-3 py-3 backdrop-blur sm:px-4">
-                      <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 sm:text-[11px] sm:tracking-[0.25em]">
+                    <div className="rounded-2xl border border-white/8 bg-[#050505]/55 px-3 py-3 backdrop-blur sm:px-4">
+                      <div className="text-[10px] uppercase tracking-[0.2em] text-white/30 sm:text-[11px] sm:tracking-[0.25em]">
                         Log volume
                       </div>
                       <div className="mt-2 text-xl font-semibold text-white sm:text-2xl">
@@ -147,8 +146,8 @@ export default function AdminPerformance() {
                       </div>
                     </div>
 
-                    <div className="rounded-2xl border border-white/10 bg-black/40 px-3 py-3 backdrop-blur sm:px-4">
-                      <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 sm:text-[11px] sm:tracking-[0.25em]">
+                    <div className="rounded-2xl border border-white/8 bg-[#050505]/55 px-3 py-3 backdrop-blur sm:px-4">
+                      <div className="text-[10px] uppercase tracking-[0.2em] text-white/30 sm:text-[11px] sm:tracking-[0.25em]">
                         Active loggers
                       </div>
                       <div className="mt-2 text-xl font-semibold text-white sm:text-2xl">
@@ -156,8 +155,8 @@ export default function AdminPerformance() {
                       </div>
                     </div>
 
-                    <div className="rounded-2xl border border-white/10 bg-black/40 px-3 py-3 backdrop-blur sm:px-4">
-                      <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 sm:text-[11px] sm:tracking-[0.25em]">
+                    <div className="rounded-2xl border border-white/8 bg-[#050505]/55 px-3 py-3 backdrop-blur sm:px-4">
+                      <div className="text-[10px] uppercase tracking-[0.2em] text-white/30 sm:text-[11px] sm:tracking-[0.25em]">
                         Top metric
                       </div>
                       <div className="mt-2 line-clamp-2 text-sm font-semibold text-white">
@@ -165,8 +164,8 @@ export default function AdminPerformance() {
                       </div>
                     </div>
 
-                    <div className="rounded-2xl border border-white/10 bg-black/40 px-3 py-3 backdrop-blur sm:px-4">
-                      <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 sm:text-[11px] sm:tracking-[0.25em]">
+                    <div className="rounded-2xl border border-white/8 bg-[#050505]/55 px-3 py-3 backdrop-blur sm:px-4">
+                      <div className="text-[10px] uppercase tracking-[0.2em] text-white/30 sm:text-[11px] sm:tracking-[0.25em]">
                         Top category
                       </div>
                       <div className="mt-2 text-xl font-semibold capitalize text-white sm:text-2xl">
@@ -179,11 +178,11 @@ export default function AdminPerformance() {
             </div>
 
             {loading ? (
-              <div className="mt-6 rounded-3xl border border-white/10 bg-neutral-950 p-6 text-neutral-400 sm:mt-8">
+              <div className="mt-6 rounded-[22px] border border-white/8 bg-[#11100f] p-6 text-white/42 sm:mt-8">
                 Loading performance...
               </div>
             ) : !data ? (
-              <div className="mt-6 rounded-3xl border border-white/10 bg-neutral-950 p-6 text-neutral-400 sm:mt-8">
+              <div className="mt-6 rounded-[22px] border border-white/8 bg-[#11100f] p-6 text-white/42 sm:mt-8">
                 No performance data available.
               </div>
             ) : (
@@ -191,12 +190,12 @@ export default function AdminPerformance() {
                 <div className="mt-6 grid gap-6 lg:mt-8 lg:grid-cols-2">
                   <AdminSectionCard title="Most Logged Metrics">
                     <div className="mb-4 flex items-center justify-between gap-3">
-                      <p className="text-sm text-neutral-400">
+                      <p className="text-sm text-white/42">
                         Open the most-used metrics fast, or browse the full library.
                       </p>
                       <Link
                         to="/admin/performance/metrics"
-                        className="inline-flex shrink-0 items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white/70 transition hover:border-white/20 hover:bg-white/[0.06] hover:text-white"
+                        className="inline-flex shrink-0 items-center gap-2 rounded-full border border-white/8 bg-white/[0.03] px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white/70 transition hover:border-white/20 hover:bg-white/[0.06] hover:text-white"
                       >
                         View all
                         <ChevronRight className="h-3.5 w-3.5" />
@@ -205,7 +204,7 @@ export default function AdminPerformance() {
 
                     <div className="space-y-3">
                       {data.topMetrics.length === 0 ? (
-                        <div className="text-sm text-neutral-400">
+                        <div className="text-sm text-white/42">
                           No training log data yet.
                         </div>
                       ) : (
@@ -219,15 +218,15 @@ export default function AdminPerformance() {
                                   )}`
                                 : "#"
                             }
-                            className="group flex items-center justify-between gap-3 rounded-2xl border border-white/8 bg-white/[0.02] px-3 py-3 transition hover:border-white/15 hover:bg-white/[0.04] sm:gap-4 sm:px-4 sm:py-4"
+                            className="group flex items-center justify-between gap-3 rounded-2xl border border-white/8 bg-white/[0.025] px-3 py-3 transition hover:border-white/15 hover:bg-white/[0.035] sm:gap-4 sm:px-4 sm:py-4"
                           >
                             <div className="flex min-w-0 items-center gap-3 sm:gap-4">
                               <RankBadge index={index} />
                               <div className="min-w-0">
-                                <div className="truncate text-sm font-medium text-white transition group-hover:text-amber-100">
+                                <div className="truncate text-sm font-medium text-white transition group-hover:text-white">
                                   {item.label}
                                 </div>
-                                <div className="mt-1 flex items-center gap-2 text-xs text-neutral-500">
+                                <div className="mt-1 flex items-center gap-2 text-xs text-white/30">
                                   <Target className="h-3.5 w-3.5 shrink-0" />
                                   Logged entries
                                 </div>
@@ -239,12 +238,12 @@ export default function AdminPerformance() {
                                 <div className="text-lg font-semibold text-white">
                                   {item.count}
                                 </div>
-                                <div className="text-[10px] uppercase tracking-[0.18em] text-neutral-500 sm:text-[11px] sm:tracking-[0.2em]">
+                                <div className="text-[10px] uppercase tracking-[0.18em] text-white/30 sm:text-[11px] sm:tracking-[0.2em]">
                                   total
                                 </div>
                               </div>
                               {item.movementSlug && item.metricType ? (
-                                <ChevronRight className="h-4 w-4 shrink-0 text-neutral-600 transition group-hover:text-amber-200" />
+                                <ChevronRight className="h-4 w-4 shrink-0 text-white/24 transition group-hover:text-white" />
                               ) : null}
                             </div>
                           </Link>
@@ -256,7 +255,7 @@ export default function AdminPerformance() {
                   <AdminSectionCard title="Top Loggers">
                     <div className="space-y-3">
                       {data.topLoggers.length === 0 ? (
-                        <div className="text-sm text-neutral-400">
+                        <div className="text-sm text-white/42">
                           No loggers found yet.
                         </div>
                       ) : (
@@ -264,7 +263,7 @@ export default function AdminPerformance() {
                           <Link
                             key={user.userId}
                             to={`/admin/performance/${user.userId}`}
-                            className="group flex items-center justify-between gap-3 rounded-2xl border border-white/8 bg-white/[0.02] px-3 py-3 transition hover:border-amber-400/20 hover:bg-white/[0.04] sm:gap-4 sm:px-4 sm:py-4"
+                            className="group flex items-center justify-between gap-3 rounded-2xl border border-white/8 bg-white/[0.025] px-3 py-3 transition hover:border-white/16 hover:bg-white/[0.035] sm:gap-4 sm:px-4 sm:py-4"
                           >
                             <div className="flex min-w-0 flex-1 items-center gap-3 sm:gap-4">
                               <RankBadge index={index} />
@@ -283,10 +282,10 @@ export default function AdminPerformance() {
                               </div>
 
                               <div className="min-w-0 flex-1">
-                                <div className="truncate text-sm font-medium text-white transition group-hover:text-amber-100 sm:text-base">
+                                <div className="truncate text-sm font-medium text-white transition group-hover:text-white sm:text-base">
                                   {user.name}
                                 </div>
-                                <div className="truncate text-xs text-neutral-500 sm:text-sm">
+                                <div className="truncate text-xs text-white/30 sm:text-sm">
                                   {user.email || "No email"}
                                 </div>
                               </div>
@@ -297,11 +296,11 @@ export default function AdminPerformance() {
                                 <div className="text-lg font-semibold text-white">
                                   {user.count}
                                 </div>
-                                <div className="text-[10px] uppercase tracking-[0.18em] text-neutral-500 sm:text-[11px] sm:tracking-[0.2em]">
+                                <div className="text-[10px] uppercase tracking-[0.18em] text-white/30 sm:text-[11px] sm:tracking-[0.2em]">
                                   logs
                                 </div>
                               </div>
-                              <ChevronRight className="h-4 w-4 shrink-0 text-neutral-600 transition group-hover:text-amber-200" />
+                              <ChevronRight className="h-4 w-4 shrink-0 text-white/24 transition group-hover:text-white" />
                             </div>
                           </Link>
                         ))
@@ -316,7 +315,7 @@ export default function AdminPerformance() {
                       {/* Mobile cards */}
                       <div className="space-y-3 sm:hidden">
                         {data.recentLogs.length === 0 ? (
-                          <div className="rounded-2xl border border-white/8 bg-white/[0.02] px-4 py-8 text-center text-sm text-neutral-500">
+                          <div className="rounded-2xl border border-white/8 bg-white/[0.025] px-4 py-8 text-center text-sm text-white/30">
                             No training logs found.
                           </div>
                         ) : (
@@ -324,7 +323,7 @@ export default function AdminPerformance() {
                             <Link
                               key={log.id}
                               to={`/admin/performance/${log.userId}`}
-                              className="block rounded-2xl border border-white/8 bg-white/[0.02] p-4 transition hover:border-white/15 hover:bg-white/[0.04]"
+                              className="block rounded-2xl border border-white/8 bg-white/[0.025] p-4 transition hover:border-white/15 hover:bg-white/[0.035]"
                             >
                               <div className="flex items-start gap-3">
                                 <UserAvatar
@@ -337,12 +336,12 @@ export default function AdminPerformance() {
                                   <div className="truncate text-sm font-medium text-white">
                                     {log.userName}
                                   </div>
-                                  <div className="truncate text-xs text-neutral-500">
+                                  <div className="truncate text-xs text-white/30">
                                     {log.userEmail || "No email"}
                                   </div>
 
                                   <div className="mt-3 flex items-center gap-2 text-sm text-white">
-                                    <Dumbbell className="h-4 w-4 shrink-0 text-neutral-500" />
+                                    <Dumbbell className="h-4 w-4 shrink-0 text-white/30" />
                                     <span className="truncate">{log.metricLabel}</span>
                                   </div>
 
@@ -359,13 +358,13 @@ export default function AdminPerformance() {
                                     </span>
                                   </div>
 
-                                  <div className="mt-3 space-y-1 text-xs text-neutral-400">
+                                  <div className="mt-3 space-y-1 text-xs text-white/42">
                                     <div>Date: {log.date || "—"}</div>
                                     <div>Created: {formatCreatedAt(log.createdAt)}</div>
                                   </div>
                                 </div>
 
-                                <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-neutral-600" />
+                                <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-white/24" />
                               </div>
                             </Link>
                           ))
@@ -376,7 +375,7 @@ export default function AdminPerformance() {
                       <div className="hidden overflow-x-auto sm:block">
                         <table className="min-w-full border-separate border-spacing-y-2">
                           <thead>
-                            <tr className="text-left text-[11px] uppercase tracking-[0.22em] text-neutral-500">
+                            <tr className="text-left text-[11px] uppercase tracking-[0.22em] text-white/30">
                               <th className="px-4 py-2">Member</th>
                               <th className="px-4 py-2">Metric</th>
                               <th className="px-4 py-2">Category</th>
@@ -390,7 +389,7 @@ export default function AdminPerformance() {
                             {data.recentLogs.map((log) => (
                               <tr
                                 key={log.id}
-                                className="group rounded-2xl bg-neutral-950 text-sm transition hover:bg-neutral-900"
+                                className="group rounded-2xl bg-[#11100f] text-sm transition hover:bg-[#151311]"
                               >
                                 <td className="rounded-l-2xl border-y border-l border-white/6 px-4 py-4">
                                   <Link
@@ -403,10 +402,10 @@ export default function AdminPerformance() {
                                       size={38}
                                     />
                                     <div className="min-w-0">
-                                      <div className="truncate font-medium text-white transition group-hover:text-amber-100">
+                                      <div className="truncate font-medium text-white transition group-hover:text-white">
                                         {log.userName}
                                       </div>
-                                      <div className="truncate text-xs text-neutral-500">
+                                      <div className="truncate text-xs text-white/30">
                                         {log.userEmail || "No email"}
                                       </div>
                                     </div>
@@ -415,7 +414,7 @@ export default function AdminPerformance() {
 
                                 <td className="border-y border-white/6 px-4 py-4 text-white">
                                   <div className="flex items-center gap-2">
-                                    <Dumbbell className="h-4 w-4 shrink-0 text-neutral-500" />
+                                    <Dumbbell className="h-4 w-4 shrink-0 text-white/30" />
                                     <span className="truncate">{log.metricLabel}</span>
                                   </div>
                                 </td>
@@ -434,11 +433,11 @@ export default function AdminPerformance() {
                                   {formatLogValue(log)}
                                 </td>
 
-                                <td className="border-y border-white/6 px-4 py-4 text-neutral-400">
+                                <td className="border-y border-white/6 px-4 py-4 text-white/42">
                                   {log.date || "—"}
                                 </td>
 
-                                <td className="rounded-r-2xl border-y border-r border-white/6 px-4 py-4 text-neutral-400">
+                                <td className="rounded-r-2xl border-y border-r border-white/6 px-4 py-4 text-white/42">
                                   {formatCreatedAt(log.createdAt)}
                                 </td>
                               </tr>
@@ -448,7 +447,7 @@ export default function AdminPerformance() {
                               <tr>
                                 <td
                                   colSpan={6}
-                                  className="px-4 py-10 text-center text-sm text-neutral-500"
+                                  className="px-4 py-10 text-center text-sm text-white/30"
                                 >
                                   No training logs found.
                                 </td>
@@ -463,7 +462,7 @@ export default function AdminPerformance() {
                   <AdminSectionCard title="Category Breakdown">
                     <div className="space-y-3">
                       {data.topCategories.length === 0 ? (
-                        <div className="text-sm text-neutral-400">
+                        <div className="text-sm text-white/42">
                           No category data yet.
                         </div>
                       ) : (
@@ -475,7 +474,7 @@ export default function AdminPerformance() {
                             <div key={item.category} className="space-y-2">
                               <div className="flex items-center justify-between gap-4">
                                 <div className="flex min-w-0 items-center gap-2">
-                                  <Flame className="h-4 w-4 shrink-0 text-neutral-500" />
+                                  <Flame className="h-4 w-4 shrink-0 text-white/30" />
                                   <span className="truncate text-sm font-medium capitalize text-white">
                                     {item.category}
                                   </span>
@@ -502,6 +501,7 @@ export default function AdminPerformance() {
             )}
           </div>
         </div>
+        <AppBottomNav />
       </div>
     </PerformanceAccessOnly>
   );

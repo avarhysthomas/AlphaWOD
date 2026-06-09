@@ -103,7 +103,7 @@ export default function WaiverGate({ children }: { children: React.ReactNode }) 
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-black px-4 py-6 text-white sm:px-6">
+    <div className="carbon-fiber-bg fixed inset-0 z-50 overflow-y-auto px-4 py-6 text-white sm:px-6">
       <div className="mx-auto flex min-h-full w-full max-w-3xl items-center">
         <form
           onSubmit={handleSign}

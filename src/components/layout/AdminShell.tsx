@@ -1,19 +1,18 @@
 import { Outlet } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { isAdminRole } from "../../lib/roles";
-import UserTopNav from "./UserTopNav";
+import AppBottomNav from "./AppBottomNav";
 
 export default function AdminShell() {
   const { appUser } = useAuth();
   const isAdmin = isAdminRole(appUser?.role);
 
   return (
-    <div className="min-h-screen overflow-x-hidden bg-black text-white">
-      {isAdmin ? <UserTopNav /> : null}
-
-      <div className="p-6">
+    <div className="carbon-fiber-bg min-h-screen overflow-x-hidden font-barlow text-[#f4f0ea]">
+      <div className="p-5 pb-36 sm:p-6 sm:pb-36">
         <Outlet />
       </div>
+      {isAdmin ? <AppBottomNav /> : null}
     </div>
   );
 }

@@ -5,7 +5,7 @@ import './index.css';
 import { AuthProvider } from './context/AuthContext';
 import { BrowserRouter } from 'react-router-dom';
 import * as serviceWorkerRegistration from './serviceWorkerRegistration';
-serviceWorkerRegistration.register();
+serviceWorkerRegistration.unregister();
 
 const root = ReactDOM.createRoot(document.getElementById('root')!);
 root.render(
@@ -15,4 +15,3 @@ root.render(
     </AuthProvider>
   </BrowserRouter>
 );
-

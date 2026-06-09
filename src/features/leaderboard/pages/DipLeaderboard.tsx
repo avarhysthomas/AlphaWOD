@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { getFunctions, httpsCallable } from "firebase/functions";
-import { AlertTriangle, RefreshCw, Flame } from "lucide-react";
+import { Bell, ChevronLeft, ChevronRight, Flame, RefreshCw } from "lucide-react";
 import {useAuth} from "../../../context/AuthContext";
 import { collection, documentId, getDocs, query, where } from "firebase/firestore";
 import { db } from "../../../firebase";
 import UserAvatar from "../../../components/ui/UserAvatar";
-import UserTopNav from "../../../components/layout/UserTopNav";
+import { Link, NavLink } from "react-router-dom";
+import { getUserNavItems } from "../../../components/layout/UserTopNav";
 
 type DipRow = {
   userId: string;
@@ -42,6 +43,15 @@ function addMonthsUK(monthKey: string, delta: number) {
   return monthKeyUK(base);
 }
 
+function formatMonthLabel(monthKey: string) {
+  const [year, month] = monthKey.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString("en-GB", {
+    month: "long",
+    year: "numeric",
+    timeZone: "Europe/London",
+  });
+}
+
 type UserProfile = {
   name?: string;
   photoURL?: string;
@@ -63,7 +73,7 @@ async function fetchUserProfiles(uids: string[]) {
 }
 
 export default function DipLeaderboard() {
-  const { user } = useAuth();
+  const { user, appUser } = useAuth();
   const functions = useMemo(() => getFunctions(undefined, "europe-west1"), []);
   const getMonthlyDipLeaderboard = useMemo(
     () => httpsCallable<any, DipLeaderboardResponse>(functions, "getMonthlyDipLeaderboard"),
@@ -110,151 +120,253 @@ export default function DipLeaderboard() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [monthKey]);
 
-  const top3 = rows.filter((r) => r.dipCount > 0).slice(0, 3);
+  const rankedRows = rows.filter((r) => r.dipCount > 0);
+  const top1 = rankedRows[0];
+  const top2 = rankedRows[1];
+  const top3 = rankedRows[2];
+  const myIndex = user?.uid ? rankedRows.findIndex((row) => row.userId === user.uid) : -1;
+  const myRow = myIndex >= 0 ? rankedRows[myIndex] : null;
+  const myDips = Number(myRow?.dipCount || 0);
+  const burpees = myDips * 25;
+  const navItems = getUserNavItems(appUser?.role);
+  const firstName = appUser?.name?.split(" ")[0] || appUser?.email?.split("@")[0] || "A";
+  const profilePhotoURL = appUser?.photoURL || user?.photoURL || "";
+
+  function OffenderCard({ row, place }: { row: DipRow; place: 1 | 2 | 3 }) {
+    const isMe = Boolean(user?.uid && row.userId === user.uid);
+
+    return (
+      <div
+        className={[
+          "relative flex min-h-[168px] flex-col items-center justify-end overflow-hidden rounded-[22px] border bg-[#151311] px-4 py-5 text-center",
+          place === 1
+            ? "min-h-[220px] border-red-400/35 bg-[linear-gradient(180deg,rgba(239,68,68,0.13),rgba(21,19,17,1))]"
+            : "border-white/10",
+        ].join(" ")}
+      >
+        <div className="absolute top-5 rounded-full bg-red-400/12 px-3 py-1 text-[11px] font-black tracking-[0.12em] text-red-100/72">
+          # {place}
+        </div>
+        <div className="mb-3 rounded-full border border-[#8b725b]/70 bg-[#66503f] p-1">
+          <UserAvatar name={row.name || "Member"} photoURL={row.photoURL} size={place === 1 ? 64 : 58} />
+        </div>
+        <div className="min-w-0 max-w-full truncate text-base font-bold text-white">
+          {row.name || "Member"} {isMe ? <span className="text-white/45">(you)</span> : null}
+        </div>
+        <div className="mt-3 font-mono text-5xl font-bold leading-none text-white">
+          {Number(row.dipCount || 0)}
+        </div>
+        <div className="mt-2 text-[11px] font-bold uppercase tracking-[0.24em] text-white/34">
+          Dips
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-black text-white">
-    <UserTopNav />
-      <div className="mx-auto w-full max-w-5xl px-4 py-10">
-        <div className="relative overflow-hidden rounded-[28px] border border-red-950/40 bg-[radial-gradient(circle_at_top_left,rgba(239,68,68,0.10),transparent_30%),linear-gradient(180deg,rgba(23,23,23,0.96),rgba(0,0,0,0.96))] px-6 py-6 sm:px-8 sm:py-8 shadow-[0_0_50px_rgba(0,0,0,0.45)]">
-          <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),transparent_35%)]" />
-          <div className="relative flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
-            <div>
-              <div className="inline-flex items-center gap-2 rounded-full border border-red-500/15 bg-red-500/10 px-3 py-1 text-[11px] font-extrabold uppercase tracking-[0.35em] text-red-100/70">
-                <span className="h-2 w-2 rounded-full bg-red-400/80" />
-                {monthKey}
-              </div>
+    <div className="carbon-fiber-bg min-h-screen overflow-x-hidden text-[#f4f0ea]">
+      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_top_right,rgba(239,68,68,0.12),transparent_30%),linear-gradient(180deg,rgba(255,255,255,0.025),transparent_22%)]" />
+      <main className="relative mx-auto min-h-screen max-w-xl px-5 pb-36 pt-7 sm:max-w-3xl sm:px-8">
+        <header className="flex items-center justify-between" style={{ paddingTop: "env(safe-area-inset-top)" }}>
+          <Link to="/dashboard" aria-label="Zero Alpha home" className="block">
+            <img src="/ZERO-ALPHA.png" alt="ZERO-ALPHA" className="h-20 w-auto object-contain" />
+          </Link>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              aria-label="Notifications"
+              className="grid h-12 w-12 place-items-center rounded-full border border-white/10 bg-white/[0.04] text-white/55 transition hover:bg-white/[0.08] hover:text-white"
+            >
+              <Bell className="h-5 w-5" />
+            </button>
+            <Link
+              to="/profile"
+              aria-label="Profile"
+              className="grid h-12 w-12 overflow-hidden rounded-full border border-[#8b725b]/60 bg-[#765f4b] text-sm font-bold uppercase text-[#f8efe5]"
+            >
+              {profilePhotoURL ? (
+                <img
+                  src={profilePhotoURL}
+                  alt={appUser?.name ? `${appUser.name}'s profile` : "Profile"}
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <span className="grid h-full w-full place-items-center">{firstName.slice(0, 1)}</span>
+              )}
+            </Link>
+          </div>
+        </header>
 
-              <h1 className="mt-4 text-5xl leading-none sm:text-7xl xl:text-8xl font-heading uppercase tracking-[0.04em] text-white">
-                Board of Shame
-              </h1>
+        <section className="mt-12">
+          <h1 className="mt-1 font-heading text-[3.6rem] uppercase leading-none text-white sm:text-[6rem]">
+            Board of Shame
+          </h1>
+          <p className="mt-4 max-w-lg text-base font-medium leading-7 text-white/52">
+            Monthly dip rankings. 1 dip = 25 burpees.
+          </p>
 
-              <div className="mt-4 max-w-2xl text-sm sm:text-base text-white/45">
-                Monthly dip rankings for Zero Alpha members. 1 dip = 25 Burpees.
+          <div className="mt-7 flex w-fit items-center overflow-hidden rounded-full border border-white/10 bg-[#151311] p-1">
+            <button
+              className="grid h-10 w-10 place-items-center rounded-full bg-white/[0.04] text-white/45 transition hover:text-white"
+              onClick={() => setMonthKey((mk) => addMonthsUK(mk, -1))}
+              aria-label="Previous month"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+            <button
+              className="min-w-[150px] px-4 text-sm font-bold text-white"
+              onClick={() => setMonthKey(monthKeyUK(new Date()))}
+            >
+              • {formatMonthLabel(monthKey)}
+            </button>
+            <button
+              className="grid h-10 w-10 place-items-center rounded-full text-white/30 transition hover:bg-white/[0.04] hover:text-white"
+              onClick={() => setMonthKey((mk) => addMonthsUK(mk, 1))}
+              aria-label="Next month"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
+        </section>
+
+        <section className="mt-7 overflow-hidden rounded-[28px] border border-white/10 bg-[#151311] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.35)]">
+          <div className="grid grid-cols-[64px_1fr_auto] items-center gap-4">
+            <div className="rounded-full border-2 border-red-200/80 bg-[#765f4b] p-1">
+              <UserAvatar name={myRow?.name || appUser?.name || "Member"} photoURL={myRow?.photoURL || profilePhotoURL} size={52} />
+            </div>
+            <div className="min-w-0">
+              <p className="text-[12px] font-bold uppercase tracking-[0.28em] text-white/34">
+                Your dips
+              </p>
+              <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <span className="font-mono text-4xl font-bold leading-none text-white">
+                  {myIndex >= 0 ? `#${myIndex + 1}` : "—"}
+                </span>
+                <span className="font-mono text-sm text-red-200">
+                  {burpees} burpees owed
+                </span>
               </div>
             </div>
-
-            <div className="flex flex-col gap-3 xl:items-end">
-              <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:justify-end">
-                <button
-                  className="rounded-2xl border border-neutral-700 bg-neutral-950/80 px-4 py-3 text-sm font-semibold text-white/80 transition hover:bg-neutral-900"
-                  onClick={() => setMonthKey((mk) => addMonthsUK(mk, -1))}
-                >
-                  ← Prev
-                </button>
-
-                <button
-                  className="rounded-2xl border border-neutral-700 bg-neutral-950/80 px-4 py-3 text-sm font-semibold text-white/80 transition hover:bg-neutral-900"
-                  onClick={() => setMonthKey(monthKeyUK(new Date()))}
-                >
-                  This month
-                </button>
-
-                <button
-                  className="rounded-2xl border border-neutral-700 bg-neutral-950/80 px-4 py-3 text-sm font-semibold text-white/80 transition hover:bg-neutral-900"
-                  onClick={() => setMonthKey((mk) => addMonthsUK(mk, 1))}
-                >
-                  Next →
-                </button>
-              </div>
-
-              <button
-                className="inline-flex items-center justify-center gap-2 self-start rounded-2xl border border-neutral-700 bg-neutral-950/80 px-4 py-3 text-sm font-semibold text-white/80 transition hover:bg-neutral-900 disabled:opacity-50 xl:self-end"
-                onClick={load}
-                disabled={loading}
-              >
-                <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-                {loading ? "Loading…" : "Refresh"}
-              </button>
+            <div className="text-right">
+              <div className="font-mono text-4xl font-bold leading-none text-white">{myDips}</div>
+              <div className="mt-1 text-[10px] font-bold uppercase tracking-[0.18em] text-white/34">Dips</div>
             </div>
           </div>
-        </div>
+        </section>
 
-        <div className="mt-6">
-          <div className="mb-3 text-sm font-semibold text-white/80">Top offenders</div>
+        <section className="mt-10">
+          <div className="mb-5 flex items-center justify-between gap-4">
+            <h2 className="text-[12px] font-bold uppercase tracking-[0.32em] text-white/54">Top offenders</h2>
+            <button
+              className="inline-flex items-center gap-2 rounded-full text-sm font-bold text-white/42 transition hover:text-white disabled:opacity-45"
+              onClick={load}
+              disabled={loading}
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+              Refresh
+            </button>
+          </div>
 
-          {top3.length === 0 ? (
-            <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-6 text-sm text-white/60">
+          {!top1 ? (
+            <div className="rounded-[28px] border border-white/10 bg-[#151311] p-6 text-sm font-medium text-white/44">
               No dips for this month. Miracles do happen.
             </div>
           ) : (
-            <div className="grid gap-4 md:grid-cols-3">
-              {top3.map((r, idx) => {
-                const isMe = Boolean(user?.uid && r.userId === user.uid);
-                return (
-                  <div
-                    key={r.userId}
-                    className="rounded-2xl border border-red-500/20 bg-[radial-gradient(circle_at_top,rgba(239,68,68,0.08),transparent_55%),rgba(10,10,10,1)] p-5"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="inline-flex items-center gap-2 text-xs font-extrabold uppercase tracking-[0.3em] text-red-200/70">
-                        <AlertTriangle className="h-4 w-4" />
-                        #{idx + 1}
-                      </div>
-                      <div className="rounded-xl border border-red-500/15 bg-red-500/10 px-3 py-1 text-xs font-bold text-red-100/80">
-                        {r.dipCount} dips
-                      </div>
-                    </div>
-
-                    <div className="mt-4 flex items-center gap-3">
-                      <UserAvatar name={r.name || "Member"} photoURL={r.photoURL} size={48} />
-                      <div className="min-w-0">
-                        <div className="truncate text-lg font-extrabold text-white">
-                          {r.name || "Member"} {isMe ? <span className="text-white/50">(you)</span> : null}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+            <div className="grid grid-cols-3 items-end gap-3">
+              {top2 ? (
+                <OffenderCard place={2} row={top2} />
+              ) : (
+                <div className="flex min-h-[168px] items-center justify-center rounded-[22px] border border-white/10 bg-[#151311] p-4 text-center text-sm font-bold text-white/30">
+                  No #2 yet
+                </div>
+              )}
+              <OffenderCard place={1} row={top1} />
+              {top3 ? (
+                <OffenderCard place={3} row={top3} />
+              ) : (
+                <div className="flex min-h-[168px] items-center justify-center rounded-[22px] border border-white/10 bg-[#151311] p-4 text-center text-sm font-bold text-white/30">
+                  No #3 yet
+                </div>
+              )}
             </div>
           )}
-        </div>
+        </section>
 
-        <div className="mt-8 rounded-2xl border border-neutral-800 bg-neutral-950 overflow-hidden">
-          <div className="flex items-center justify-between border-b border-neutral-800 px-4 py-3">
-            <div className="text-sm font-semibold text-white/80">Full dip rankings</div>
-            {err ? <div className="text-sm text-red-300">{err}</div> : null}
+        <section className="mt-10">
+          <div className="mb-4 flex items-end justify-between gap-4">
+            <h2 className="text-[12px] font-bold uppercase tracking-[0.32em] text-white/54">Full rankings</h2>
+            <span className="text-sm font-bold text-white/40">{rankedRows.length} members</span>
           </div>
+          {err ? <div className="mb-4 rounded-[18px] border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">{err}</div> : null}
 
           {!err && !loading && rows.length === 0 && (
-            <div className="px-4 py-6 text-sm text-white/60">No members yet.</div>
+            <div className="rounded-[28px] border border-white/10 bg-[#151311] p-6 text-sm font-medium text-white/44">No members yet.</div>
           )}
 
-          {rows.filter((r) => r.dipCount > 0).length > 0 && (
-            <div className="divide-y divide-neutral-800">
-              {rows
-                .filter((r) => r.dipCount > 0)
-                .map((r, idx) => {
+          {rankedRows.length > 0 && (
+            <div className="overflow-hidden rounded-[28px] border border-white/10 bg-[#151311] shadow-[0_24px_60px_rgba(0,0,0,0.28)]">
+              {rankedRows.map((r, idx) => {
                   const isMe = Boolean(user?.uid && r.userId === user.uid);
                   const rank = idx + 1;
 
                   return (
                     <div
                       key={r.userId}
-                      className={`flex items-center justify-between px-4 py-3 ${isMe ? "bg-red-950/20" : ""}`}
+                      className={[
+                        "grid grid-cols-[44px_1fr_auto] items-center gap-3 border-b border-white/10 px-4 py-4 last:border-b-0",
+                        isMe ? "bg-red-500/[0.055]" : "",
+                      ].join(" ")}
                     >
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className="w-12 text-center text-sm font-extrabold text-white/80">
-                          #{rank}
-                        </div>
+                      <div className="text-center font-mono text-base font-bold text-white">
+                        {rank}
+                      </div>
+                      <div className="flex min-w-0 items-center gap-3">
                         <UserAvatar name={r.name || "Member"} photoURL={r.photoURL} size={40} />
-                        <div className="truncate text-sm font-semibold text-white/90">
-                          {r.name || "Member"} {isMe ? <span className="text-white/50">(you)</span> : null}
+                        <div className="min-w-0">
+                          <div className="truncate text-base font-bold text-white">
+                            {r.name || "Member"} {isMe ? <span className="text-white/45">(you)</span> : null}
+                          </div>
+                          <div className="mt-1 inline-flex rounded-md bg-red-400/12 px-2 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-red-100">
+                            {Number(r.dipCount || 0) * 25} burpees
+                          </div>
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2 rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2">
+                      <div className="flex items-center gap-2 text-right">
                         <Flame className="h-4 w-4 text-red-300" />
-                        <div className="text-lg font-extrabold">{r.dipCount}</div>
+                        <div className="font-mono text-2xl font-bold text-white">{r.dipCount}</div>
                       </div>
                     </div>
                   );
                 })}
             </div>
           )}
+        </section>
+      </main>
+
+      <nav
+        className="fixed inset-x-4 bottom-4 z-40 mx-auto max-w-xl rounded-[28px] border border-white/45 bg-white/90 px-3 py-3 shadow-[0_18px_60px_rgba(0,0,0,0.35)] backdrop-blur-xl sm:max-w-2xl"
+        style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
+        aria-label="Primary"
+      >
+        <div className="flex gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {navItems.map(({ to, label, icon: NavIcon }) => (
+            <NavLink
+              key={to}
+              to={to}
+              className={({ isActive }) =>
+                [
+                  "flex min-w-[76px] shrink-0 flex-col items-center gap-1.5 rounded-2xl px-2 py-2 text-[11px] font-bold transition",
+                  isActive ? "bg-black/10 text-black" : "text-black hover:bg-black/5",
+                ].join(" ")
+              }
+            >
+              <NavIcon className="h-5 w-5 text-black" />
+              <span className="max-w-full truncate">{label}</span>
+            </NavLink>
+          ))}
         </div>
-      </div>
+      </nav>
     </div>
   );
 }

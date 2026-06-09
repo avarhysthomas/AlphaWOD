@@ -1,11 +1,12 @@
 import React, {useEffect, useMemo, useState} from "react";
 import {getFunctions, httpsCallable} from "firebase/functions";
-import {Crown, Medal, Star, Trophy, RefreshCw} from "lucide-react";
+import {Bell, ChevronLeft, ChevronRight, RefreshCw} from "lucide-react";
 import {useAuth} from "../../../context/AuthContext";
 import { collection, documentId, getDocs, query, where } from "firebase/firestore";
 import { db } from "../../../firebase";
 import UserAvatar from "../../../components/ui/UserAvatar";
-import UserTopNav from "../../../components/layout/UserTopNav";
+import { Link, NavLink } from "react-router-dom";
+import { getUserNavItems } from "../../../components/layout/UserTopNav";
 
 type LeaderboardRow = {
   userId: string;
@@ -41,6 +42,15 @@ function addMonthsUK(monthKey: string, delta: number) {
   const m = Number(mStr);
   const base = new Date(Date.UTC(y, m - 1 + delta, 1));
   return monthKeyUK(base);
+}
+
+function formatMonthLabel(monthKey: string) {
+  const [year, month] = monthKey.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString("en-GB", {
+    month: "long",
+    year: "numeric",
+    timeZone: "Europe/London",
+  });
 }
 
 type UserProfile = {
@@ -110,62 +120,20 @@ function AttendanceBadge({ count }: { count: number }) {
 
   const styles =
     badge.tier === "gold"
-      ? {
-          outer:
-            "border-yellow-500/30 bg-[linear-gradient(180deg,rgba(234,179,8,0.16),rgba(234,179,8,0.06))] text-yellow-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_0_22px_rgba(234,179,8,0.10)]",
-          inner: "bg-yellow-200/10",
-          dot: "bg-yellow-400 shadow-[0_0_10px_rgba(250,204,21,0.65)]",
-          micro: "text-yellow-100/60",
-        }
+      ? "bg-yellow-300 text-black"
       : badge.tier === "silver"
-      ? {
-          outer:
-            "border-zinc-300/20 bg-[linear-gradient(180deg,rgba(212,212,216,0.14),rgba(212,212,216,0.05))] text-zinc-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_0_20px_rgba(212,212,216,0.08)]",
-          inner: "bg-zinc-100/10",
-          dot: "bg-zinc-300 shadow-[0_0_10px_rgba(212,212,216,0.5)]",
-          micro: "text-zinc-100/55",
-        }
+      ? "bg-zinc-200 text-black"
       : badge.tier === "bronze"
-      ? {
-          outer:
-            "border-amber-700/30 bg-[linear-gradient(180deg,rgba(180,83,9,0.16),rgba(180,83,9,0.05))] text-amber-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_0_20px_rgba(180,83,9,0.10)]",
-          inner: "bg-amber-200/10",
-          dot: "bg-amber-600 shadow-[0_0_10px_rgba(217,119,6,0.55)]",
-          micro: "text-amber-100/55",
-        }
-      : {
-          outer:
-            "border-emerald-500/25 bg-[linear-gradient(180deg,rgba(16,185,129,0.16),rgba(16,185,129,0.05))] text-emerald-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_0_20px_rgba(16,185,129,0.10)]",
-          inner: "bg-emerald-100/10",
-          dot: "bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.55)]",
-          micro: "text-emerald-100/55",
-        };
+      ? "bg-[#8b6748] text-white"
+      : "bg-emerald-300 text-black";
 
   return (
-    <div
-      className={[
-        "relative inline-flex items-center overflow-hidden rounded-xl border px-2.5 py-1.5",
-        "backdrop-blur-sm",
-        styles.outer,
-      ].join(" ")}
+    <span
+      className={`inline-flex rounded-md px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.14em] ${styles}`}
       title={`${badge.label} badge — ${badge.classesText}`}
     >
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.07),transparent_45%)]" />
-      <div className="relative flex items-center gap-2">
-        <div className={`rounded-md p-1 ${styles.inner}`}>
-          <span className={`block h-2 w-2 rounded-full ${styles.dot}`} />
-        </div>
-
-        <div className="leading-none">
-          <div className="text-[9px] font-black tracking-[0.28em]">
-            {badge.shortLabel}
-          </div>
-          <div className={`mt-0.5 text-[8px] uppercase tracking-[0.22em] ${styles.micro}`}>
-            attendance
-          </div>
-        </div>
-      </div>
-    </div>
+      {badge.shortLabel}
+    </span>
   );
 }
 
@@ -178,100 +146,36 @@ function PodiumCard({
   row: LeaderboardRow;
   isMe: boolean;
 }) {
-  const label = place === 1 ? "CHAMPION" : place === 2 ? "RUNNER UP" : "THIRD";
-  const icon =
-    place === 1 ? <Trophy className="h-5 w-5" /> :
-    place === 2 ? <Medal className="h-5 w-5" /> :
-    <Star className="h-5 w-5" />;
-
-  const height =
-    place === 1 ? "min-h-[230px]" :
-    place === 2 ? "min-h-[200px]" :
-    "min-h-[180px]";
-
-  // Medal glow flavours (Tailwind-only, no custom colors needed)
-  const glow =
-    place === 1 ? "shadow-[0_0_40px_rgba(255,215,0,0.18)] border-white/15" :
-    place === 2 ? "shadow-[0_0_35px_rgba(192,192,192,0.14)] border-white/12" :
-    "shadow-[0_0_35px_rgba(205,127,50,0.14)] border-white/12";
-
-  const badge = getAttendanceBadge(Number(row.attendedCount || 0));  
-
-  const ring =
-    place === 1 ? "bg-[radial-gradient(circle_at_center,rgba(255,215,0,0.18),transparent_65%)]" :
-    place === 2 ? "bg-[radial-gradient(circle_at_center,rgba(192,192,192,0.16),transparent_65%)]" :
-    "bg-[radial-gradient(circle_at_center,rgba(205,127,50,0.16),transparent_65%)]";
-
-  const spotlight =
-    place === 1
-      ? "bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.10),transparent_55%)]"
-      : "bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.06),transparent_60%)]";
-
   return (
-    <div className={`rounded-2xl border bg-neutral-950 p-5 ${height} relative overflow-hidden ${glow}`}>
-      {/* Spotlight wash */}
-      <div className={`pointer-events-none absolute inset-0 ${spotlight}`} />
-
-      {/* Medal glow ring */}
-      <div className={`pointer-events-none absolute -inset-8 ${ring} blur-2xl`} />
-
-      {/* Subtle top shine line */}
-      <div className="pointer-events-none absolute left-0 right-0 top-0 h-px bg-white/10" />
-
-      <div className="relative flex items-center justify-between">
-        <div className="flex items-center gap-2 text-xs uppercase tracking-[0.35em] text-white/60 font-semibold">
-          <span className="inline-flex items-center gap-2">
-            {icon}
-            {label}
-          </span>
-        </div>
-
-        <div className="rounded-xl border border-neutral-800 bg-neutral-900/40 px-3 py-1 text-xs font-extrabold tracking-widest text-white/80">
-          #{place}
-        </div>
+    <div
+      className={[
+        "relative flex min-h-[168px] flex-col items-center justify-end overflow-hidden rounded-[22px] border bg-[#151311] px-4 py-5 text-center",
+        place === 1
+          ? "min-h-[220px] border-yellow-400/30 bg-[linear-gradient(180deg,rgba(255,255,255,0.08),rgba(21,19,17,1))]"
+          : "border-white/10",
+      ].join(" ")}
+    >
+      <div className="absolute top-5 rounded-full bg-white/[0.08] px-3 py-1 text-[11px] font-black tracking-[0.12em] text-white/52">
+        # {place}
       </div>
-
-      <div className="relative mt-4 flex items-center gap-3">
-        <UserAvatar name={row.name || "Member"} photoURL={row.photoURL} size={48} />    
-        <div className="min-w-0">
-          <div className="truncate text-lg font-extrabold text-white/90">
-            {row.name || "Member"} {isMe ? <span className="text-white/50">(you)</span> : null}
-          </div>
-        </div>
+      <div className="mb-3 rounded-full border border-[#8b725b]/70 bg-[#66503f] p-1">
+        <UserAvatar name={row.name || "Member"} photoURL={row.photoURL} size={place === 1 ? 64 : 58} />
       </div>
-
-      <div className="relative mt-6 flex items-baseline gap-3">
-        <div className="text-5xl font-extrabold tracking-tight text-white">
+      <div className="min-w-0 max-w-full truncate text-base font-bold text-white">
+        {row.name || "Member"} {isMe ? <span className="text-white/45">(you)</span> : null}
+      </div>
+      <div className="mt-3 font-mono text-5xl font-bold leading-none text-white">
           {Number(row.attendedCount || 0)}
-        </div>
-        <div className="text-xs uppercase tracking-[0.35em] text-white/50 font-semibold">
-          classes
-        </div>
       </div>
-
-      {badge ? (
-        <div className="relative mt-3">
-          <AttendanceBadge count={Number(row.attendedCount || 0)} />
-        </div>
-      ) : null}
-
-      {/* Little "plate" at the bottom */}
-      <div className="relative mt-6 rounded-xl border border-neutral-800 bg-neutral-900/30 px-3 py-2 text-xs font-semibold text-white/70">
-        Board of Fame — {place === 1 ? "Gold" : place === 2 ? "Silver" : "Bronze"}
+      <div className="mt-2 text-[11px] font-bold uppercase tracking-[0.24em] text-white/34">
+        Classes
       </div>
-
-      {isMe ? (
-        <div className="relative mt-3 inline-flex items-center gap-2 rounded-xl border border-neutral-800 bg-neutral-900/40 px-3 py-2 text-xs font-semibold text-white/70">
-          <Crown className="h-4 w-4" />
-          Featured on the Board of Fame
-        </div>
-      ) : null}
     </div>
   );
 }
 
 export default function Leaderboard() {
-  const {user} = useAuth();
+  const {user, appUser} = useAuth();
   const functions = useMemo(() => getFunctions(undefined, "europe-west1"), []);
   const getMonthlyLeaderboard = useMemo(
     () => httpsCallable<any, LeaderboardResponse>(functions, "getMonthlyLeaderboard"),
@@ -323,161 +227,169 @@ export default function Leaderboard() {
   const top1 = rows[0];
   const top2 = rows[1];
   const top3 = rows[2];
+  const myIndex = user?.uid ? rows.findIndex((row) => row.userId === user.uid) : -1;
+  const myRow = myIndex >= 0 ? rows[myIndex] : null;
+  const myCount = Number(myRow?.attendedCount || 0);
+  const myBadge = getAttendanceBadge(myCount);
+  const nextTarget = myCount < 4 ? 4 : myCount < 8 ? 8 : myCount < 12 ? 12 : myCount < 16 ? 16 : myCount;
+  const tierFloor = myCount < 4 ? 0 : myCount < 8 ? 4 : myCount < 12 ? 8 : myCount < 16 ? 12 : 16;
+  const nextTierLabel = myCount < 4 ? "Starter" : myCount < 8 ? "Bronze" : myCount < 12 ? "Silver" : myCount < 16 ? "Gold" : "Gold";
+  const progressPct = nextTarget > tierFloor ? Math.min(100, Math.round(((myCount - tierFloor) / (nextTarget - tierFloor)) * 100)) : 100;
+  const navItems = getUserNavItems(appUser?.role);
+  const firstName = appUser?.name?.split(" ")[0] || appUser?.email?.split("@")[0] || "A";
+  const profilePhotoURL = appUser?.photoURL || user?.photoURL || "";
 
 return (
-  <div className="min-h-screen bg-black text-white">
-    <UserTopNav />
+  <div className="carbon-fiber-bg min-h-screen overflow-x-hidden text-[#f4f0ea]">
+    <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_top_right,rgba(120,95,70,0.16),transparent_34%),linear-gradient(180deg,rgba(255,255,255,0.025),transparent_22%)]" />
+    <main className="relative mx-auto min-h-screen max-w-xl px-5 pb-36 pt-7 sm:max-w-3xl sm:px-8">
+      <header className="flex items-center justify-between" style={{ paddingTop: "env(safe-area-inset-top)" }}>
+        <Link to="/dashboard" aria-label="Zero Alpha home" className="block">
+          <img src="/ZERO-ALPHA.png" alt="ZERO-ALPHA" className="h-20 w-auto object-contain" />
+        </Link>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            aria-label="Notifications"
+            className="grid h-12 w-12 place-items-center rounded-full border border-white/10 bg-white/[0.04] text-white/55 transition hover:bg-white/[0.08] hover:text-white"
+          >
+            <Bell className="h-5 w-5" />
+          </button>
+          <Link
+            to="/profile"
+            aria-label="Profile"
+            className="grid h-12 w-12 overflow-hidden rounded-full border border-[#8b725b]/60 bg-[#765f4b] text-sm font-bold uppercase text-[#f8efe5]"
+          >
+            {profilePhotoURL ? (
+              <img
+                src={profilePhotoURL}
+                alt={appUser?.name ? `${appUser.name}'s profile` : "Profile"}
+                className="h-full w-full object-cover"
+              />
+            ) : (
+              <span className="grid h-full w-full place-items-center">{firstName.slice(0, 1)}</span>
+            )}
+          </Link>
+        </div>
+      </header>
 
-    <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-      {/* Hero */}
-      <div className="relative overflow-hidden rounded-[28px] border border-neutral-800 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.025),transparent_35%),linear-gradient(180deg,rgba(15,15,15,0.97),rgba(0,0,0,0.98))] px-6 py-6 sm:px-8 sm:py-8 shadow-[0_0_50px_rgba(0,0,0,0.45)]">
-        <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.02),transparent_60%)]" />
-        <div className="pointer-events-none absolute -top-16 left-1/3 h-56 w-56 rounded-full bg-white/[0.015] blur-3xl" />
-
-        <div className="relative flex flex-col gap-8 xl:flex-row xl:items-end xl:justify-between">
-          <div className="min-w-0">
-            <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-[11px] font-extrabold uppercase tracking-[0.35em] text-white/60">
-              <span className="h-2 w-2 rounded-full bg-white/50" />
-              {monthKey}
-            </div>
-
-            <h1 className="mt-4 text-5xl leading-none sm:text-7xl xl:text-8xl font-heading uppercase tracking-[0.04em] text-white">
+      <section className="mt-12">
+        <h1 className="mt-4 font-heading text-[3.6rem] uppercase leading-none text-white sm:text-[6rem]">
               Board of Fame
-            </h1>
+        </h1>
 
-            <div className="mt-4 flex flex-wrap gap-2">
-              <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-[11px] font-extrabold uppercase tracking-[0.22em] text-emerald-100">
-                Starter <span className="text-emerald-100/60">4+</span>
-              </div>
-              <div className="rounded-xl border border-amber-700/25 bg-amber-700/10 px-3 py-2 text-[11px] font-extrabold uppercase tracking-[0.22em] text-amber-100">
-                Bronze <span className="text-amber-100/60">8+</span>
-              </div>
-              <div className="rounded-xl border border-zinc-300/15 bg-zinc-200/10 px-3 py-2 text-[11px] font-extrabold uppercase tracking-[0.22em] text-zinc-100">
-                Silver <span className="text-zinc-100/60">12+</span>
-              </div>
-              <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/10 px-3 py-2 text-[11px] font-extrabold uppercase tracking-[0.22em] text-yellow-100">
-                Gold <span className="text-yellow-100/60">16+</span>
-              </div>
-            </div>
+        <div className="mt-7 flex w-fit items-center overflow-hidden rounded-full border border-white/10 bg-[#151311] p-1">
+          <button
+            className="grid h-10 w-10 place-items-center rounded-full bg-white/[0.04] text-white/45 transition hover:text-white"
+            onClick={() => setMonthKey((mk) => addMonthsUK(mk, -1))}
+            aria-label="Previous month"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <button
+            className="min-w-[150px] px-4 text-sm font-bold text-white"
+            onClick={() => setMonthKey(monthKeyUK(new Date()))}
+          >
+            • {formatMonthLabel(monthKey)}
+          </button>
+          <button
+            className="grid h-10 w-10 place-items-center rounded-full text-white/30 transition hover:bg-white/[0.04] hover:text-white"
+            onClick={() => setMonthKey((mk) => addMonthsUK(mk, 1))}
+            aria-label="Next month"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
+      </section>
 
-            <div className="mt-4 max-w-2xl text-sm sm:text-base text-white/45">
-              Monthly attendance rankings for Zero Alpha members.
+      <section className="mt-7 overflow-hidden rounded-[28px] border border-white/10 bg-[#151311] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.35)]">
+        <div className="grid grid-cols-[64px_1fr_auto] items-center gap-4">
+          <div className="rounded-full border-2 border-[#f2eee8] bg-[#765f4b] p-1">
+            <UserAvatar name={myRow?.name || appUser?.name || "Member"} photoURL={myRow?.photoURL || profilePhotoURL} size={52} />
+          </div>
+          <div className="min-w-0">
+            <p className="text-[12px] font-bold uppercase tracking-[0.28em] text-white/34">
+              Your rank
+            </p>
+            <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <span className="font-mono text-4xl font-bold leading-none text-white">
+                {myIndex >= 0 ? `#${myIndex + 1}` : "—"}
+              </span>
+              {myRow ? (
+                <span className="font-mono text-sm text-emerald-300">
+                  ▲ {myCount} this month
+                </span>
+              ) : null}
             </div>
           </div>
-
-          <div className="flex flex-col gap-3 xl:items-end">
-            <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:justify-end">
-              <button
-                className="rounded-2xl border border-neutral-700 bg-neutral-950/80 px-4 py-3 text-sm font-semibold text-white/80 transition hover:bg-neutral-900"
-                onClick={() => setMonthKey((mk) => addMonthsUK(mk, -1))}
-              >
-                ← Prev
-              </button>
-
-              <button
-                className="rounded-2xl border border-neutral-700 bg-neutral-950/80 px-4 py-3 text-sm font-semibold text-white/80 transition hover:bg-neutral-900"
-                onClick={() => setMonthKey(monthKeyUK(new Date()))}
-              >
-                This month
-              </button>
-
-              <button
-                className="rounded-2xl border border-neutral-700 bg-neutral-950/80 px-4 py-3 text-sm font-semibold text-white/80 transition hover:bg-neutral-900"
-                onClick={() => setMonthKey((mk) => addMonthsUK(mk, 1))}
-              >
-                Next →
-              </button>
-            </div>
-
-            <button
-              className="inline-flex items-center justify-center gap-2 self-start rounded-2xl border border-neutral-700 bg-neutral-950/80 px-4 py-3 text-sm font-semibold text-white/80 transition hover:bg-neutral-900 disabled:opacity-50 xl:self-end"
-              onClick={load}
-              disabled={loading}
-              title="Refresh"
-            >
-              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-              {loading ? "Loading…" : "Refresh"}
-            </button>
+          <div className="text-right">
+            <div className="font-mono text-4xl font-bold leading-none text-white">{myCount}</div>
+            <div className="mt-1 text-[10px] font-bold uppercase tracking-[0.18em] text-white/34">Classes</div>
           </div>
         </div>
-      </div>
+        <div className="mt-5 flex items-center justify-between gap-3 text-[12px] font-bold uppercase tracking-[0.18em] text-white/40">
+          <span>{myBadge?.label || "Unranked"} · {myCount}/{nextTarget || myCount}</span>
+          <span>{Math.max(0, nextTarget - myCount)} more to {nextTierLabel}</span>
+        </div>
+        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/10">
+          <div className="h-full rounded-full bg-[#f2eee8]" style={{ width: `${progressPct}%` }} />
+        </div>
+      </section>
 
-      {/* Podium */}
-      <div className="mt-8">
-        <div className="mb-3 text-sm font-semibold text-white/80">Podium</div>
+      <section className="mt-10">
+        <div className="mb-5 flex items-center justify-between gap-4">
+          <h2 className="text-[12px] font-bold uppercase tracking-[0.32em] text-white/54">Podium</h2>
+          <button
+            className="inline-flex items-center gap-2 rounded-full text-sm font-bold text-white/42 transition hover:text-white disabled:opacity-45"
+            onClick={load}
+            disabled={loading}
+            title="Refresh"
+          >
+            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+            Refresh
+          </button>
+        </div>
 
         {!top1 ? (
-          <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-6 text-sm text-white/60">
+          <div className="rounded-[28px] border border-white/10 bg-[#151311] p-6 text-sm font-medium text-white/44">
             No check-ins yet for this month.
           </div>
         ) : (
-          <>
-            {/* Mobile */}
-            <div className="space-y-4 md:hidden">
-              <div className="mx-0">
-                <PodiumCard place={1} row={top1} isMe={Boolean(user?.uid && top1.userId === user.uid)} />
-              </div>
-
+          <div className="grid grid-cols-3 items-end gap-3">
               {top2 ? (
-                <div className="mx-3">
-                  <PodiumCard place={2} row={top2} isMe={Boolean(user?.uid && top2.userId === user.uid)} />
-                </div>
+              <PodiumCard place={2} row={top2} isMe={Boolean(user?.uid && top2.userId === user.uid)} />
               ) : (
-                <div className="mx-3 flex items-center justify-center rounded-2xl border border-neutral-800 bg-neutral-950 p-6 text-white/40">
+              <div className="flex min-h-[168px] items-center justify-center rounded-[22px] border border-white/10 bg-[#151311] p-4 text-center text-sm font-bold text-white/30">
                   No #2 yet
                 </div>
               )}
 
+            <PodiumCard place={1} row={top1} isMe={Boolean(user?.uid && top1.userId === user.uid)} />
+
               {top3 ? (
-                <div className="mx-6">
-                  <PodiumCard place={3} row={top3} isMe={Boolean(user?.uid && top3.userId === user.uid)} />
-                </div>
+              <PodiumCard place={3} row={top3} isMe={Boolean(user?.uid && top3.userId === user.uid)} />
               ) : (
-                <div className="mx-6 flex items-center justify-center rounded-2xl border border-neutral-800 bg-neutral-950 p-6 text-white/40">
+              <div className="flex min-h-[168px] items-center justify-center rounded-[22px] border border-white/10 bg-[#151311] p-4 text-center text-sm font-bold text-white/30">
                   No #3 yet
                 </div>
               )}
             </div>
-
-            {/* Desktop */}
-            <div className="hidden gap-4 md:grid md:grid-cols-3 md:items-end">
-              {top2 ? (
-                <PodiumCard place={2} row={top2} isMe={Boolean(user?.uid && top2.userId === user.uid)} />
-              ) : (
-                <div className="flex min-h-[200px] items-center justify-center rounded-2xl border border-neutral-800 bg-neutral-950 p-6 text-white/40">
-                  No #2 yet
-                </div>
-              )}
-
-              <div className="md:scale-[1.02] md:-translate-y-1">
-                <PodiumCard place={1} row={top1} isMe={Boolean(user?.uid && top1.userId === user.uid)} />
-              </div>
-
-              {top3 ? (
-                <PodiumCard place={3} row={top3} isMe={Boolean(user?.uid && top3.userId === user.uid)} />
-              ) : (
-                <div className="flex min-h-[180px] items-center justify-center rounded-2xl border border-neutral-800 bg-neutral-950 p-6 text-white/40">
-                  No #3 yet
-                </div>
-              )}
-            </div>
-          </>
         )}
-      </div>
+      </section>
 
-      {/* Full rankings */}
-      <div className="mt-10 overflow-hidden rounded-2xl border border-neutral-800 bg-neutral-950">
-        <div className="flex items-center justify-between border-b border-neutral-800 px-4 py-3">
-          <div className="text-sm font-semibold text-white/80">Full rankings</div>
-          {err ? <div className="text-sm text-red-300">{err}</div> : null}
+      <section className="mt-10">
+        <div className="mb-4 flex items-end justify-between gap-4">
+          <h2 className="text-[12px] font-bold uppercase tracking-[0.32em] text-white/54">Full rankings</h2>
+          <span className="text-sm font-bold text-white/40">{rows.length} members</span>
         </div>
+        {err ? <div className="mb-4 rounded-[18px] border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">{err}</div> : null}
 
         {!err && !loading && rows.length === 0 && (
-          <div className="px-4 py-6 text-sm text-white/60">No members yet.</div>
+          <div className="rounded-[28px] border border-white/10 bg-[#151311] p-6 text-sm font-medium text-white/44">No members yet.</div>
         )}
 
         {rows.length > 0 && (
-          <div className="divide-y divide-neutral-800">
+          <div className="overflow-hidden rounded-[28px] border border-white/10 bg-[#151311] shadow-[0_24px_60px_rgba(0,0,0,0.28)]">
             {rows.map((r, idx) => {
               const isMe = Boolean(user?.uid && r.userId === user.uid);
               const rank = idx + 1;
@@ -485,49 +397,59 @@ return (
               return (
                 <div
                   key={r.userId}
-                  className={`flex items-center justify-between px-4 py-3 ${isMe ? "bg-neutral-900/40" : ""}`}
+                  className={[
+                    "grid grid-cols-[44px_1fr_auto] items-center gap-3 border-b border-white/10 px-4 py-4 last:border-b-0",
+                    isMe ? "bg-white/[0.035]" : "",
+                  ].join(" ")}
                 >
+                  <div className="text-center font-mono text-base font-bold text-white">
+                    {rank}
+                  </div>
                   <div className="flex min-w-0 items-center gap-3">
-                    <div className="w-12 text-center text-sm font-extrabold text-white/80">
-                      #{rank}
-                    </div>
-
-                    <div className="shrink-0">
-                      <UserAvatar
-                        name={r.name || "Member"}
-                        photoURL={r.photoURL}
-                        size={40}
-                      />
-                    </div>
-
+                    <UserAvatar name={r.name || "Member"} photoURL={r.photoURL} size={44} />
                     <div className="min-w-0">
-                      <div className="flex min-w-0 flex-wrap items-center gap-2">
-                        <div className="truncate text-sm font-semibold text-white/90">
-                          {r.name || "Member"} {isMe ? <span className="text-white/50">(you)</span> : null}
-                        </div>
-
-                        <div className="shrink-0">
-                          <AttendanceBadge count={Number(r.attendedCount || 0)} />
-                        </div>
+                      <div className="truncate text-base font-bold text-white">
+                        {r.name || "Member"} {isMe ? <span className="text-white/45">(you)</span> : null}
+                      </div>
+                      <div className="mt-1">
+                        <AttendanceBadge count={Number(r.attendedCount || 0)} />
                       </div>
                     </div>
                   </div>
-
-                  <div className="flex items-baseline gap-2">
-                    <div className="text-2xl font-extrabold tracking-tight">
-                      {Number(r.attendedCount || 0)}
-                    </div>
-                    <div className="text-xs font-semibold uppercase tracking-[0.35em] text-white/50">
-                      classes
-                    </div>
+                  <div className="font-mono text-2xl font-bold text-white">
+                    {Number(r.attendedCount || 0)}
                   </div>
                 </div>
               );
             })}
           </div>
         )}
+      </section>
+    </main>
+
+    <nav
+      className="fixed inset-x-4 bottom-4 z-40 mx-auto max-w-xl rounded-[28px] border border-white/45 bg-white/90 px-3 py-3 shadow-[0_18px_60px_rgba(0,0,0,0.35)] backdrop-blur-xl sm:max-w-2xl"
+      style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
+      aria-label="Primary"
+    >
+      <div className="flex gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {navItems.map(({ to, label, icon: NavIcon }) => (
+          <NavLink
+            key={to}
+            to={to}
+            className={({ isActive }) =>
+                [
+                  "flex min-w-[76px] shrink-0 flex-col items-center gap-1.5 rounded-2xl px-2 py-2 text-[11px] font-bold transition",
+                  isActive ? "bg-black/10 text-black" : "text-black hover:bg-black/5",
+                ].join(" ")
+              }
+            >
+            <NavIcon className="h-5 w-5 text-black" />
+            <span className="max-w-full truncate">{label}</span>
+          </NavLink>
+        ))}
       </div>
-    </div>
+    </nav>
   </div>
 );
 }

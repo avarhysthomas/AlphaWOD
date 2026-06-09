@@ -23,7 +23,7 @@ import {
   updateMemberStrengthBlock,
 } from "../services/access";
 import { getInsightsSummary } from "../services/insights";
-import UserTopNav from "../../../components/layout/UserTopNav";
+import AppBottomNav from "../../../components/layout/AppBottomNav";
 
 type Summary = Awaited<ReturnType<typeof getInsightsSummary>>;
 
@@ -34,10 +34,10 @@ function RankBadge({ index }: { index: number }) {
     rank === 1
       ? "border-amber-400/30 bg-amber-400/10 text-amber-200"
       : rank === 2
-      ? "border-neutral-300/20 bg-neutral-300/10 text-neutral-200"
+      ? "border-neutral-300/20 bg-neutral-300/10 text-white/72"
       : rank === 3
       ? "border-orange-500/20 bg-orange-500/10 text-orange-200"
-      : "border-white/10 bg-white/[0.04] text-white/60";
+      : "border-white/8 bg-white/[0.035] text-white/60";
 
   return (
     <div
@@ -255,27 +255,26 @@ export default function AdminInsights() {
 
   return (
     <AdminOnly>
-      <div className="min-h-screen bg-black text-white">
-        <UserTopNav />
+      <div className="carbon-fiber-bg min-h-screen overflow-x-hidden font-barlow text-[#f4f0ea]">
 
-        <div className="px-3 py-5 sm:px-6 lg:px-8">
+        <div className="px-3 pb-36 pt-5 sm:px-6 lg:px-8">
           <div className="mx-auto max-w-7xl">
-            <div className="relative overflow-hidden rounded-[1.75rem] border border-white/10 bg-neutral-950 p-4 sm:rounded-[2rem] sm:p-8">
-              <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(245,158,11,0.14),transparent_30%),radial-gradient(circle_at_bottom_right,rgba(239,68,68,0.10),transparent_28%)]" />
-              <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-amber-400/50 to-transparent" />
+            <div className="relative overflow-hidden rounded-[24px] border border-white/8 bg-[#11100f] p-4 sm:rounded-[28px] sm:p-8">
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_72%_0%,rgba(255,255,255,0.05),transparent_30%),linear-gradient(180deg,rgba(255,255,255,0.025),transparent_48%)]" />
+              <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/18 to-transparent" />
 
               <div className="relative z-10 flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
                 <div className="max-w-2xl min-w-0">
-                  <div className="inline-flex items-center gap-2 rounded-full border border-amber-500/20 bg-amber-500/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] text-amber-200 sm:text-[11px] sm:tracking-[0.28em]">
+                  <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.045] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] text-white/58 sm:text-[11px] sm:tracking-[0.28em]">
                     <Activity className="h-3.5 w-3.5 shrink-0" />
                     Admin Insights
                   </div>
 
-                  <h1 className="mt-4 text-2xl font-heading tracking-tight sm:text-4xl">
+                  <h1 className="mt-4 text-[2.75rem] font-bold leading-none sm:text-6xl">
                     Member Pulse
                   </h1>
 
-                  <p className="mt-3 max-w-xl text-sm leading-6 text-neutral-400 sm:text-base">
+                  <p className="mt-3 max-w-xl text-sm leading-6 text-white/42 sm:text-base">
                     Track engagement, identify your most consistent members, and
                     catch who is drifting before they disappear.
                   </p>
@@ -283,8 +282,8 @@ export default function AdminInsights() {
 
                 {!loading && data ? (
                   <div className="grid w-full grid-cols-2 gap-3 lg:w-auto lg:min-w-[520px] lg:grid-cols-5">
-                    <div className="rounded-2xl border border-white/10 bg-black/40 px-3 py-3 backdrop-blur sm:px-4">
-                      <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 sm:text-[11px] sm:tracking-[0.25em]">
+                    <div className="rounded-2xl border border-white/8 bg-[#050505]/55 px-3 py-3 backdrop-blur sm:px-4">
+                      <div className="text-[10px] uppercase tracking-[0.2em] text-white/30 sm:text-[11px] sm:tracking-[0.25em]">
                         Members
                       </div>
                       <div className="mt-2 text-xl font-semibold text-white sm:text-2xl">
@@ -292,8 +291,8 @@ export default function AdminInsights() {
                       </div>
                     </div>
 
-                    <div className="rounded-2xl border border-white/10 bg-black/40 px-3 py-3 backdrop-blur sm:px-4">
-                      <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 sm:text-[11px] sm:tracking-[0.25em]">
+                    <div className="rounded-2xl border border-white/8 bg-[#050505]/55 px-3 py-3 backdrop-blur sm:px-4">
+                      <div className="text-[10px] uppercase tracking-[0.2em] text-white/30 sm:text-[11px] sm:tracking-[0.25em]">
                         Active
                       </div>
                       <div className="mt-2 text-xl font-semibold text-white sm:text-2xl">
@@ -301,8 +300,8 @@ export default function AdminInsights() {
                       </div>
                     </div>
 
-                    <div className="rounded-2xl border border-white/10 bg-black/40 px-3 py-3 backdrop-blur sm:px-4">
-                      <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 sm:text-[11px] sm:tracking-[0.25em]">
+                    <div className="rounded-2xl border border-white/8 bg-[#050505]/55 px-3 py-3 backdrop-blur sm:px-4">
+                      <div className="text-[10px] uppercase tracking-[0.2em] text-white/30 sm:text-[11px] sm:tracking-[0.25em]">
                         This month
                       </div>
                       <div className="mt-2 text-xl font-semibold text-white sm:text-2xl">
@@ -310,8 +309,8 @@ export default function AdminInsights() {
                       </div>
                     </div>
 
-                    <div className="rounded-2xl border border-white/10 bg-black/40 px-3 py-3 backdrop-blur sm:px-4">
-                      <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 sm:text-[11px] sm:tracking-[0.25em]">
+                    <div className="rounded-2xl border border-white/8 bg-[#050505]/55 px-3 py-3 backdrop-blur sm:px-4">
+                      <div className="text-[10px] uppercase tracking-[0.2em] text-white/30 sm:text-[11px] sm:tracking-[0.25em]">
                         Attention
                       </div>
                       <div className="mt-2 text-xl font-semibold text-white sm:text-2xl">
@@ -319,8 +318,8 @@ export default function AdminInsights() {
                       </div>
                     </div>
 
-                    <div className="rounded-2xl border border-white/10 bg-black/40 px-3 py-3 backdrop-blur sm:px-4">
-                      <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 sm:text-[11px] sm:tracking-[0.25em]">
+                    <div className="rounded-2xl border border-white/8 bg-[#050505]/55 px-3 py-3 backdrop-blur sm:px-4">
+                      <div className="text-[10px] uppercase tracking-[0.2em] text-white/30 sm:text-[11px] sm:tracking-[0.25em]">
                         Pending
                       </div>
                       <div className="mt-2 text-xl font-semibold text-white sm:text-2xl">
@@ -333,11 +332,11 @@ export default function AdminInsights() {
             </div>
 
             {loading ? (
-              <div className="mt-6 rounded-3xl border border-white/10 bg-neutral-950 p-6 text-neutral-400 sm:mt-8">
+              <div className="mt-6 rounded-[22px] border border-white/8 bg-[#11100f] p-6 text-white/42 sm:mt-8">
                 Loading insights...
               </div>
             ) : !data ? (
-              <div className="mt-6 rounded-3xl border border-white/10 bg-neutral-950 p-6 text-neutral-400 sm:mt-8">
+              <div className="mt-6 rounded-[22px] border border-white/8 bg-[#11100f] p-6 text-white/42 sm:mt-8">
                 No data available.
               </div>
             ) : (
@@ -364,7 +363,7 @@ export default function AdminInsights() {
                   <AdminSectionCard title="Invite New Member">
                     <form onSubmit={handleInviteSubmit} className="space-y-4">
                       <div className="max-w-xl">
-                        <label className="mb-2 block text-sm font-medium text-neutral-300">
+                        <label className="mb-2 block text-sm font-medium text-white/58">
                           Email address
                         </label>
                         <div className="flex flex-col gap-3 sm:flex-row">
@@ -376,7 +375,7 @@ export default function AdminInsights() {
                             autoComplete="email"
                             inputMode="email"
                             required
-                            className="w-full rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-white outline-none transition placeholder:text-neutral-500 focus:border-amber-400/40 focus:bg-white/[0.06]"
+                            className="w-full rounded-2xl border border-white/8 bg-white/[0.035] px-4 py-3 text-white outline-none transition placeholder:text-white/30 focus:border-white/22 focus:bg-white/[0.06]"
                           />
                           <button
                             type="submit"
@@ -400,7 +399,7 @@ export default function AdminInsights() {
                         </div>
                       ) : null}
 
-                      <p className="text-sm leading-6 text-neutral-400">
+                      <p className="text-sm leading-6 text-white/42">
                         This sends a sign-up link to the new member so they can create
                         their own account before appearing in pending approvals.
                       </p>
@@ -428,7 +427,7 @@ export default function AdminInsights() {
                           return (
                             <div
                               key={user.id}
-                              className="flex flex-col gap-4 rounded-2xl border border-white/8 bg-white/[0.02] px-4 py-4 sm:flex-row sm:items-center sm:justify-between"
+                              className="flex flex-col gap-4 rounded-2xl border border-white/8 bg-white/[0.025] px-4 py-4 sm:flex-row sm:items-center sm:justify-between"
                             >
                               <div className="flex min-w-0 items-center gap-3">
                                 <UserAvatar
@@ -441,7 +440,7 @@ export default function AdminInsights() {
                                   <div className="truncate text-sm font-medium text-white sm:text-base">
                                     {user.name || "Unnamed member"}
                                   </div>
-                                  <div className="truncate text-xs text-neutral-500 sm:text-sm">
+                                  <div className="truncate text-xs text-white/30 sm:text-sm">
                                     {user.email || "No email"}
                                   </div>
                                 </div>
@@ -472,14 +471,14 @@ export default function AdminInsights() {
                   <AdminSectionCard title="Top Attenders This Month">
                     <div className="space-y-3">
                       {data.topAttenders.length === 0 ? (
-                        <div className="text-sm text-neutral-400">
+                        <div className="text-sm text-white/42">
                           No member activity yet.
                         </div>
                       ) : (
                         data.topAttenders.map((user, index) => (
                           <div
                             key={user.id}
-                            className="group w-full overflow-hidden rounded-2xl border border-white/8 bg-white/[0.02] px-3 py-3 transition hover:border-white/15 hover:bg-white/[0.04] sm:px-4 sm:py-4"
+                            className="group w-full overflow-hidden rounded-2xl border border-white/8 bg-white/[0.025] px-3 py-3 transition hover:border-white/15 hover:bg-white/[0.035] sm:px-4 sm:py-4"
                           >
                             <div className="flex min-w-0 items-center gap-3 sm:gap-4">
                               <RankBadge index={index} />
@@ -498,10 +497,10 @@ export default function AdminInsights() {
                               </div>
 
                               <div className="min-w-0 flex-1">
-                                <div className="truncate text-sm font-medium text-white transition group-hover:text-amber-100 sm:text-base">
+                                <div className="truncate text-sm font-medium text-white transition group-hover:text-white sm:text-base">
                                   {user.name || "Unnamed member"}
                                 </div>
-                                <div className="truncate text-xs text-neutral-500 sm:text-sm">
+                                <div className="truncate text-xs text-white/30 sm:text-sm">
                                   {user.email || "No email"}
                                 </div>
                               </div>
@@ -510,7 +509,7 @@ export default function AdminInsights() {
                                 <div className="text-base font-semibold text-white sm:text-lg">
                                   {user.stats?.monthCheckIns?.[data.monthKey] ?? 0}
                                 </div>
-                                <div className="text-[10px] uppercase tracking-[0.14em] text-neutral-500 sm:text-[11px] sm:tracking-[0.2em]">
+                                <div className="text-[10px] uppercase tracking-[0.14em] text-white/30 sm:text-[11px] sm:tracking-[0.2em]">
                                   check-ins
                                 </div>
                               </div>
@@ -531,7 +530,7 @@ export default function AdminInsights() {
                         {data.inactiveMembers.map((user) => (
                           <div
                             key={user.id}
-                            className="group w-full overflow-hidden rounded-2xl border border-white/8 bg-white/[0.02] px-3 py-3 transition hover:border-amber-400/20 hover:bg-white/[0.04] sm:px-4 sm:py-4"
+                            className="group w-full overflow-hidden rounded-2xl border border-white/8 bg-white/[0.025] px-3 py-3 transition hover:border-white/16 hover:bg-white/[0.035] sm:px-4 sm:py-4"
                           >
                             <div className="flex min-w-0 items-center gap-3 sm:gap-4">
                               <div className="relative shrink-0">
@@ -546,10 +545,10 @@ export default function AdminInsights() {
                               </div>
 
                               <div className="min-w-0 flex-1">
-                                <div className="truncate text-sm font-medium text-white transition group-hover:text-amber-100 sm:text-base">
+                                <div className="truncate text-sm font-medium text-white transition group-hover:text-white sm:text-base">
                                   {user.name || "Unnamed member"}
                                 </div>
-                                <div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-neutral-500 sm:text-sm">
+                                <div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-white/30 sm:text-sm">
                                   <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
                                   <span className="truncate">
                                     Last check-in: {user.stats?.lastCheckInDate || "Never"}
@@ -592,12 +591,12 @@ export default function AdminInsights() {
                         value={memberSearch}
                         onChange={(e) => setMemberSearch(e.target.value)}
                         placeholder="Search members to assign SGPT or suspend..."
-                        className="w-full rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-white outline-none transition placeholder:text-neutral-500 focus:border-red-400/40 focus:bg-white/[0.06]"
+                        className="w-full rounded-2xl border border-white/8 bg-white/[0.035] px-4 py-3 text-white outline-none transition placeholder:text-white/30 focus:border-white/22 focus:bg-white/[0.06]"
                       />
 
                       {normalizedSearch ? (
                         searchableMembers.length === 0 ? (
-                          <div className="rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-4 text-sm text-neutral-400">
+                          <div className="rounded-2xl border border-white/8 bg-white/[0.025] px-4 py-4 text-sm text-white/42">
                             No matching active members found.
                           </div>
                         ) : (
@@ -605,7 +604,7 @@ export default function AdminInsights() {
                             {searchableMembers.slice(0, 6).map((user) => (
                               <div
                                 key={user.id}
-                                className="flex flex-col gap-4 rounded-2xl border border-white/8 bg-white/[0.02] px-4 py-4 sm:flex-row sm:items-center sm:justify-between"
+                                className="flex flex-col gap-4 rounded-2xl border border-white/8 bg-white/[0.025] px-4 py-4 sm:flex-row sm:items-center sm:justify-between"
                               >
                                 <div className="flex min-w-0 items-center gap-3">
                                   <UserAvatar
@@ -618,7 +617,7 @@ export default function AdminInsights() {
                                     <div className="truncate text-sm font-medium text-white sm:text-base">
                                       {user.name || "Unnamed member"}
                                     </div>
-                                    <div className="truncate text-xs text-neutral-500 sm:text-sm">
+                                    <div className="truncate text-xs text-white/30 sm:text-sm">
                                       {user.email || "No email"}
                                     </div>
                                   </div>
@@ -686,7 +685,7 @@ export default function AdminInsights() {
                     </div>
 
                     {data.bannedMembers.length === 0 ? (
-                      <div className="rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-5 text-sm text-neutral-400">
+                      <div className="rounded-2xl border border-white/8 bg-white/[0.025] px-4 py-5 text-sm text-white/42">
                         No suspended members right now.
                       </div>
                     ) : (
@@ -707,7 +706,7 @@ export default function AdminInsights() {
                                 <div className="truncate text-sm font-medium text-white sm:text-base">
                                   {user.name || "Unnamed member"}
                                 </div>
-                                <div className="truncate text-xs text-neutral-500 sm:text-sm">
+                                <div className="truncate text-xs text-white/30 sm:text-sm">
                                   {user.email || "No email"}
                                 </div>
                               </div>
@@ -736,41 +735,41 @@ export default function AdminInsights() {
                 <div className="mt-6 grid gap-6 lg:mt-8 lg:grid-cols-[1.1fr_0.9fr] [&>*]:min-w-0">
                   <AdminSectionCard title="Attendance Signal">
                     <div className="grid gap-4 sm:grid-cols-3">
-                      <div className="rounded-2xl border border-white/8 bg-white/[0.02] p-4 sm:p-5">
-                        <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-neutral-500 sm:text-[11px] sm:tracking-[0.28em]">
+                      <div className="rounded-2xl border border-white/8 bg-white/[0.025] p-4 sm:p-5">
+                        <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-white/30 sm:text-[11px] sm:tracking-[0.28em]">
                           <Users className="h-4 w-4 shrink-0 text-sky-300" />
                           Total base
                         </div>
                         <div className="mt-3 text-2xl font-semibold text-white sm:text-3xl">
                           {data.totalMembers}
                         </div>
-                        <p className="mt-2 text-sm text-neutral-400">
+                        <p className="mt-2 text-sm text-white/42">
                           Current member count in the system.
                         </p>
                       </div>
 
-                      <div className="rounded-2xl border border-white/8 bg-white/[0.02] p-4 sm:p-5">
-                        <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-neutral-500 sm:text-[11px] sm:tracking-[0.28em]">
+                      <div className="rounded-2xl border border-white/8 bg-white/[0.025] p-4 sm:p-5">
+                        <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-white/30 sm:text-[11px] sm:tracking-[0.28em]">
                           <Activity className="h-4 w-4 shrink-0 text-emerald-300" />
                           Active
                         </div>
                         <div className="mt-3 text-2xl font-semibold text-white sm:text-3xl">
                           {data.activeMembers}
                         </div>
-                        <p className="mt-2 text-sm text-neutral-400">
+                        <p className="mt-2 text-sm text-white/42">
                           Checked in during the last 30 days.
                         </p>
                       </div>
 
-                      <div className="rounded-2xl border border-white/8 bg-white/[0.02] p-4 sm:p-5">
-                        <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-neutral-500 sm:text-[11px] sm:tracking-[0.28em]">
+                      <div className="rounded-2xl border border-white/8 bg-white/[0.025] p-4 sm:p-5">
+                        <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-white/30 sm:text-[11px] sm:tracking-[0.28em]">
                           <Flame className="h-4 w-4 shrink-0 text-red-300" />
                           Attention
                         </div>
                         <div className="mt-3 text-2xl font-semibold text-white sm:text-3xl">
                           {data.inactiveMembers.length}
                         </div>
-                        <p className="mt-2 text-sm text-neutral-400">
+                        <p className="mt-2 text-sm text-white/42">
                           Members showing signs of disengagement.
                         </p>
                       </div>
@@ -783,7 +782,7 @@ export default function AdminInsights() {
                         <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-amber-200 sm:text-[11px] sm:tracking-[0.28em]">
                           Current read
                         </div>
-                        <p className="mt-2 text-sm leading-6 text-neutral-300">
+                        <p className="mt-2 text-sm leading-6 text-white/58">
                           Your strongest attendance momentum is sitting with the
                           members at the top of this month’s board, while the
                           attention list shows exactly who may need a nudge
@@ -791,11 +790,11 @@ export default function AdminInsights() {
                         </p>
                       </div>
 
-                      <div className="rounded-2xl border border-white/8 bg-white/[0.02] p-4">
-                        <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-neutral-500 sm:text-[11px] sm:tracking-[0.28em]">
+                      <div className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
+                        <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/30 sm:text-[11px] sm:tracking-[0.28em]">
                           Suggested next step
                         </div>
-                        <p className="mt-2 text-sm leading-6 text-neutral-400">
+                        <p className="mt-2 text-sm leading-6 text-white/42">
                           Next upgrade here should be clickable member insight
                           rows that jump into a full member profile with both
                           attendance and performance history together.
@@ -808,6 +807,7 @@ export default function AdminInsights() {
             )}
           </div>
         </div>
+        <AppBottomNav />
       </div>
     </AdminOnly>
   );

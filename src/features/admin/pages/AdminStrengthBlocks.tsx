@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { CalendarDays, Dumbbell, LoaderCircle, Search, Users } from "lucide-react";
 import AdminOnly from "../../../components/guards/AdminOnly";
-import UserTopNav from "../../../components/layout/UserTopNav";
+import AppBottomNav from "../../../components/layout/AppBottomNav";
 import UserAvatar from "../../../components/ui/UserAvatar";
 import AdminKpiCard from "../components/AdminKpiCard";
 import AdminSectionCard from "../components/AdminSectionCard";
@@ -60,7 +60,7 @@ function MemberCard({
   onChange: (userId: string, strengthBlock: StrengthBlock) => void;
 }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 transition hover:border-white/15 hover:bg-white/[0.05]">
+    <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4 transition hover:border-white/15 hover:bg-white/[0.05]">
       <div className="flex items-center gap-3">
         <UserAvatar name={user.name || "Member"} photoURL={user.photoURL} size={44} />
 
@@ -68,7 +68,7 @@ function MemberCard({
           <div className="truncate text-sm font-semibold text-white sm:text-base">
             {user.name || "Unnamed member"}
           </div>
-          <div className="truncate text-xs text-neutral-500 sm:text-sm">
+          <div className="truncate text-xs text-white/30 sm:text-sm">
             {user.email || "No email"}
           </div>
         </div>
@@ -84,14 +84,14 @@ function MemberCard({
       </div>
 
       <div className="mt-4">
-        <label className="mb-2 block text-[10px] font-semibold uppercase tracking-[0.22em] text-neutral-500">
+        <label className="mb-2 block text-[10px] font-semibold uppercase tracking-[0.22em] text-white/30">
           Strength block
         </label>
         <select
           value={user.strengthBlock}
           onChange={(e) => onChange(user.id, e.target.value as StrengthBlock)}
           disabled={busy}
-          className="w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-white outline-none transition focus:border-amber-400/30"
+          className="w-full rounded-2xl border border-white/8 bg-[#050505]/50 px-4 py-3 text-sm text-white outline-none transition focus:border-white/22"
         >
           <option value="none">No block access</option>
           <option value="A">Block A</option>
@@ -188,27 +188,26 @@ export default function AdminStrengthBlocks() {
 
   return (
     <AdminOnly>
-      <div className="min-h-screen bg-black text-white">
-        <UserTopNav />
+      <div className="carbon-fiber-bg min-h-screen overflow-x-hidden font-barlow text-[#f4f0ea]">
 
-        <div className="px-3 py-5 sm:px-6 lg:px-8">
+        <div className="px-3 pb-36 pt-5 sm:px-6 lg:px-8">
           <div className="mx-auto max-w-7xl">
-            <div className="relative overflow-hidden rounded-[1.75rem] border border-white/10 bg-neutral-950 p-4 sm:rounded-[2rem] sm:p-8">
-              <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(14,165,233,0.14),transparent_32%),radial-gradient(circle_at_bottom_right,rgba(245,158,11,0.12),transparent_28%)]" />
-              <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-sky-400/50 to-transparent" />
+            <div className="relative overflow-hidden rounded-[24px] border border-white/8 bg-[#11100f] p-4 sm:rounded-[28px] sm:p-8">
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_72%_0%,rgba(255,255,255,0.05),transparent_30%),linear-gradient(180deg,rgba(255,255,255,0.025),transparent_48%)]" />
+              <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/18 to-transparent" />
 
               <div className="relative z-10 flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
                 <div className="max-w-2xl min-w-0">
-                  <div className="inline-flex items-center gap-2 rounded-full border border-sky-500/20 bg-sky-500/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] text-sky-200 sm:text-[11px] sm:tracking-[0.28em]">
+                  <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.045] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] text-white/58 sm:text-[11px] sm:tracking-[0.28em]">
                     <Dumbbell className="h-3.5 w-3.5" />
                     Strength Blocks
                   </div>
 
-                  <h1 className="mt-4 text-2xl font-heading tracking-tight sm:text-4xl">
+                  <h1 className="mt-4 text-[2.75rem] font-bold leading-none sm:text-6xl">
                     Strength Block Control
                   </h1>
 
-                  <p className="mt-3 max-w-xl text-sm leading-6 text-neutral-400 sm:text-base">
+                  <p className="mt-3 max-w-xl text-sm leading-6 text-white/42 sm:text-base">
                     Assign people to Block A or Block B, keep the split balanced,
                     and see who currently has no access to strength-block classes.
                   </p>
@@ -226,13 +225,13 @@ export default function AdminStrengthBlocks() {
             </div>
 
             {error ? (
-              <div className="mt-6 rounded-3xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200 sm:mt-8">
+              <div className="mt-6 rounded-[22px] border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200 sm:mt-8">
                 {error}
               </div>
             ) : null}
 
             {loading ? (
-              <div className="mt-6 rounded-3xl border border-white/10 bg-neutral-950 p-6 text-neutral-400 sm:mt-8">
+              <div className="mt-6 rounded-[22px] border border-white/8 bg-[#11100f] p-6 text-white/42 sm:mt-8">
                 Loading strength blocks...
               </div>
             ) : (
@@ -263,21 +262,21 @@ export default function AdminStrengthBlocks() {
                   </AdminSectionCard>
 
                   <AdminSectionCard title="Member Search">
-                    <label className="mb-2 block text-[10px] font-semibold uppercase tracking-[0.22em] text-neutral-500">
+                    <label className="mb-2 block text-[10px] font-semibold uppercase tracking-[0.22em] text-white/30">
                       Find a member
                     </label>
                     <div className="relative">
-                      <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-500" />
+                      <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-white/30" />
                       <input
                         type="search"
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
                         placeholder="Search by name or email"
-                        className="w-full rounded-2xl border border-white/10 bg-white/[0.04] py-3 pl-11 pr-4 text-white outline-none transition placeholder:text-neutral-500 focus:border-sky-400/30 focus:bg-white/[0.06]"
+                        className="w-full rounded-2xl border border-white/8 bg-white/[0.035] py-3 pl-11 pr-4 text-white outline-none transition placeholder:text-white/30 focus:border-white/22 focus:bg-white/[0.06]"
                       />
                     </div>
 
-                    <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-neutral-400">
+                    <div className="mt-4 rounded-2xl border border-white/8 bg-white/[0.03] p-4 text-sm text-white/42">
                       Showing {filteredMembers.length} of {members.length} managed members.
                     </div>
                   </AdminSectionCard>
@@ -287,20 +286,20 @@ export default function AdminStrengthBlocks() {
                   {(["A", "B", "none"] as StrengthBlock[]).map((blockKey) => (
                     <AdminSectionCard key={blockKey} title={BLOCK_META[blockKey].title}>
                       <div
-                        className={`rounded-2xl border border-white/10 bg-gradient-to-br ${BLOCK_META[blockKey].accent} p-4`}
+                        className={`rounded-2xl border border-white/8 bg-gradient-to-br ${BLOCK_META[blockKey].accent} p-4`}
                       >
                         <div className="inline-flex items-center gap-2 text-sm font-semibold text-white">
                           <Users className="h-4 w-4" />
                           {grouped[blockKey].length} member{grouped[blockKey].length === 1 ? "" : "s"}
                         </div>
-                        <div className="mt-2 text-sm text-neutral-300">
+                        <div className="mt-2 text-sm text-white/58">
                           {BLOCK_META[blockKey].subtitle}
                         </div>
                       </div>
 
                       <div className="mt-4 space-y-3">
                         {grouped[blockKey].length === 0 ? (
-                          <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-5 text-sm text-neutral-400">
+                          <div className="rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-5 text-sm text-white/42">
                             No members in this group for the current filter.
                           </div>
                         ) : (
@@ -321,6 +320,7 @@ export default function AdminStrengthBlocks() {
             )}
           </div>
         </div>
+        <AppBottomNav />
       </div>
     </AdminOnly>
   );

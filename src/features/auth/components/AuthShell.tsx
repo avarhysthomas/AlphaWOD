@@ -109,7 +109,7 @@ export default function AuthShell({
   const canShowInstallButton = Boolean(deferredPrompt) || (isIosBrowser() && !isStandalone);
 
   return (
-    <div className="auth-screen min-h-screen bg-[#050505] px-4 py-5 text-white sm:px-6 lg:px-8">
+    <div className="auth-screen carbon-fiber-bg min-h-screen px-4 py-5 text-white sm:px-6 lg:px-8">
       <div className="mx-auto flex min-h-[calc(100vh-2.5rem)] max-w-xl items-center justify-center">
         <section className="relative w-full overflow-hidden rounded-[2rem] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(217,119,6,0.16),transparent_28%),linear-gradient(180deg,rgba(18,18,18,0.98),rgba(5,5,5,0.98))] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.45)] backdrop-blur sm:p-6 lg:p-8">
           <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-amber-400/55 to-transparent" />

@@ -1,5 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, NavLink, useParams } from "react-router-dom";
+import {
+  Bell,
+  Check,
+  Plus,
+  RefreshCcw,
+  UserCheck,
+  UserMinus,
+  Users,
+  X,
+} from "lucide-react";
 import {
   doc,
   getDoc,
@@ -13,7 +23,8 @@ import { getAuth } from "firebase/auth";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { db } from "../../../firebase";
 import UserAvatar from "../../../components/ui/UserAvatar";
-import UserTopNav from "../../../components/layout/UserTopNav";
+import { getUserNavItems } from "../../../components/layout/UserTopNav";
+import { useAuth } from "../../../context/AuthContext";
 
 type BookingStatus = "booked" | "checked_in" | "authorised_absence" | "dip";
 
@@ -79,26 +90,27 @@ function normalizeStatus(r: BookingRow): BookingStatus {
 
 function StatusPill({ status }: { status: BookingStatus }) {
   const base =
-    "text-xs uppercase tracking-widest px-3 py-1 rounded-full border inline-flex items-center gap-2";
+    "text-[10px] uppercase tracking-[0.16em] px-2.5 py-1 rounded-md inline-flex items-center gap-2 font-black";
 
   if (status === "checked_in") {
-    return <span className={`${base} border-emerald-500/60 text-emerald-200`}>Checked in</span>;
+    return <span className={`${base} bg-emerald-300 text-black`}>In</span>;
   }
 
   if (status === "dip") {
-    return <span className={`${base} border-red-500/50 text-red-200`}>Dip</span>;
+    return <span className={`${base} bg-red-400/90 text-black`}>Dip</span>;
   }
 
   if (status === "authorised_absence") {
-    return <span className={`${base} border-sky-500/50 text-sky-200`}>Auth abs</span>;
+    return <span className={`${base} bg-sky-300 text-black`}>Auth</span>;
   }
 
-  return <span className={`${base} border-white/15 text-white/60`}>Booked</span>;
+  return <span className={`${base} bg-white/[0.08] text-white/58`}>Booked</span>;
 }
 
 export default function ClassRoster() {
   const { classId } = useParams<{ classId: string }>();
   const auth = getAuth();
+  const { user, appUser } = useAuth();
 
   const [classTitle, setClassTitle] = useState("Class");
   const [classMeta, setClassMeta] = useState("");
@@ -157,7 +169,7 @@ export default function ClassRoster() {
         ? start.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })
         : "";
 
-      setClassMeta([date, time, d.location].filter(Boolean).join(" • "));
+      setClassMeta([date, time].filter(Boolean).join(" • "));
     })();
   }, [classId]);
 
@@ -409,75 +421,118 @@ export default function ClassRoster() {
   const canBulkCheckIn = !loadingRoster && !bulkBusy && rows.some((r) => normalizeStatus(r) !== "checked_in");
   const canBulkUncheck = !loadingRoster && !bulkBusy && rows.some((r) => normalizeStatus(r) === "checked_in");
   const canBulkSelected = !loadingRoster && !bulkBusy && selectedIds.length > 0;
+  const navItems = getUserNavItems(appUser?.role);
+  const firstName = appUser?.name?.split(" ")[0] || appUser?.email?.split("@")[0] || "A";
+  const profilePhotoURL = appUser?.photoURL || user?.photoURL || "";
 
   return (
-    <div className="min-h-screen bg-black text-white p-6">
-      <UserTopNav />
-      <div className="max-w-5xl mx-auto space-y-6">
-        <div className="rounded-3xl border border-neutral-800 bg-gradient-to-b from-neutral-950 to-black p-7 shadow-[0_0_40px_rgba(0,0,0,0.6)]">
-          <div className="flex items-start justify-between gap-6">
-            <div className="min-w-0">
-              <h1 className="font-heading uppercase text-white break-words leading-[0.9] text-4xl tracking-[0.25em] sm:text-6xl sm:tracking-widest">
-                {classTitle}
-              </h1>
-              <div className="text-white/50 mt-2">{classMeta}</div>
-            </div>
+    <div className="carbon-fiber-bg min-h-screen overflow-x-hidden text-[#f4f0ea]">
+      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_top_right,rgba(120,95,70,0.16),transparent_34%),linear-gradient(180deg,rgba(255,255,255,0.025),transparent_22%)]" />
+      <main className="relative mx-auto min-h-screen max-w-xl px-5 pb-36 pt-7 sm:max-w-3xl sm:px-8">
+        <header className="flex items-center justify-between" style={{ paddingTop: "env(safe-area-inset-top)" }}>
+          <Link to="/dashboard" aria-label="Zero Alpha home" className="block">
+            <img src="/ZERO-ALPHA.png" alt="ZERO-ALPHA" className="h-20 w-auto object-contain" />
+          </Link>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              aria-label="Notifications"
+              className="grid h-12 w-12 place-items-center rounded-full border border-white/10 bg-white/[0.04] text-white/55 transition hover:bg-white/[0.08] hover:text-white"
+            >
+              <Bell className="h-5 w-5" />
+            </button>
+            <Link
+              to="/profile"
+              aria-label="Profile"
+              className="grid h-12 w-12 overflow-hidden rounded-full border border-[#8b725b]/60 bg-[#765f4b] text-sm font-bold uppercase text-[#f8efe5]"
+            >
+              {profilePhotoURL ? (
+                <img
+                  src={profilePhotoURL}
+                  alt={appUser?.name ? `${appUser.name}'s profile` : "Profile"}
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <span className="grid h-full w-full place-items-center">{firstName.slice(0, 1)}</span>
+              )}
+            </Link>
+          </div>
+        </header>
 
-            <div className="shrink-0 text-right">
-              <div className="text-xs uppercase tracking-widest text-white/40">Checked in</div>
-              <div className="text-5xl font-bold">
-                {checkedInShown}
-                <span className="text-white/30">/{totalShown}</span>
-              </div>
+        <section className="mt-11">
+          <Link to="/schedule" className="text-sm font-bold text-white/34 transition hover:text-white/70">
+            ← Schedule
+          </Link>
+          <h1 className="mt-8 font-heading text-[4.5rem] uppercase leading-none text-white sm:text-[6rem]">
+            {classTitle}
+          </h1>
+          <p className="mt-5 max-w-lg text-base font-medium leading-7 text-white/52">{classMeta}</p>
+        </section>
+
+        <section className="mt-8 overflow-hidden rounded-[28px] border border-white/10 bg-[#151311] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.35)]">
+          <div className="grid grid-cols-3 divide-x divide-white/10 text-center">
+            <div>
+              <div className="font-mono text-4xl font-bold leading-none text-white">{checkedInShown}</div>
+              <div className="mt-3 text-[10px] font-black uppercase tracking-[0.16em] text-white/34">Checked in</div>
+            </div>
+            <div>
+              <div className="font-mono text-4xl font-bold leading-none text-white">{totalShown}</div>
+              <div className="mt-3 text-[10px] font-black uppercase tracking-[0.16em] text-white/34">Booked</div>
+            </div>
+            <div>
+              <div className="font-mono text-4xl font-bold leading-none text-white">{progressPct}%</div>
+              <div className="mt-3 text-[10px] font-black uppercase tracking-[0.16em] text-white/34">Progress</div>
             </div>
           </div>
-
-          <div className="mt-5">
-            <div className="h-2 rounded-full bg-white/10 overflow-hidden">
-              <div className="h-full bg-emerald-500/40 transition-all duration-500" style={{ width: `${progressPct}%` }} />
-            </div>
-            <div className="mt-2 text-xs text-white/40 uppercase tracking-widest">{progressPct}% checked in</div>
+          <div className="mt-6 h-1.5 overflow-hidden rounded-full bg-white/10">
+            <div className="h-full rounded-full bg-[#f2eee8] transition-all duration-500" style={{ width: `${progressPct}%` }} />
           </div>
-        </div>
+        </section>
 
-        <div className="rounded-3xl border border-neutral-800 bg-neutral-950 p-6">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-            <div className="text-xl font-semibold">Attendees</div>
+        <section className="mt-6">
+          <div className="mb-4 flex items-end justify-between gap-4">
+            <h2 className="text-[12px] font-bold uppercase tracking-[0.32em] text-white/82">
+              Attendees
+            </h2>
+            <span className="text-sm font-bold text-white/40">
+              {loadingRoster ? "Loading" : `${sortedRows.length} total`}
+            </span>
+          </div>
 
-            <div className="flex flex-wrap gap-2 sm:ml-auto sm:items-center">
+          <div className="mb-4 flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               <button
                 onClick={() => {
                   setSelectMode((v) => !v);
                   clearSelected();
                 }}
                 disabled={loadingRoster || bulkBusy}
-                className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-semibold text-white/70 hover:bg-white/[0.06] disabled:text-white/40"
+                className={[
+                  "inline-flex shrink-0 items-center gap-2 rounded-full border px-4 py-3 text-sm font-bold transition disabled:opacity-35",
+                  selectMode
+                    ? "border-[#f2eee8] bg-[#f2eee8] text-black"
+                    : "border-white/10 bg-[#151311] text-white/68 hover:bg-white/[0.06]",
+                ].join(" ")}
               >
+                <Users className="h-4 w-4" />
                 {selectMode ? "Done selecting" : "Select"}
               </button>
 
               <button
                 onClick={checkInAll}
                 disabled={!canBulkCheckIn}
-                className={`rounded-xl border px-4 py-2 text-sm font-semibold transition ${
-                  canBulkCheckIn
-                    ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/15"
-                    : "border-white/10 bg-white/[0.03] text-white/40"
-                }`}
+                className="inline-flex shrink-0 items-center gap-2 rounded-full border border-white/10 bg-[#151311] px-4 py-3 text-sm font-bold text-white/68 transition hover:bg-white/[0.06] disabled:opacity-35"
               >
-                {bulkBusy ? "Working…" : "Check in all"}
+                <UserCheck className="h-4 w-4" />
+                {bulkBusy ? "Working..." : "Check in all"}
               </button>
 
               <button
                 onClick={uncheckAll}
                 disabled={!canBulkUncheck}
-                className={`rounded-xl border px-4 py-2 text-sm font-semibold transition ${
-                  canBulkUncheck
-                    ? "border-red-500/40 bg-red-500/10 text-red-200 hover:bg-red-500/15"
-                    : "border-white/10 bg-white/[0.03] text-white/40"
-                }`}
+                className="inline-flex shrink-0 items-center gap-2 rounded-full border border-white/10 bg-[#151311] px-4 py-3 text-sm font-bold text-white/68 transition hover:bg-white/[0.06] disabled:opacity-35"
               >
-                {bulkBusy ? "Working…" : "Uncheck all"}
+                <UserMinus className="h-4 w-4" />
+                {bulkBusy ? "Working..." : "Uncheck all"}
               </button>
 
               <button
@@ -487,36 +542,34 @@ export default function ClassRoster() {
                   setShowAddMemberModal(true);
                 }}
                 disabled={loadingRoster || bulkBusy}
-                className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm font-semibold text-amber-200 hover:bg-amber-500/15 disabled:text-white/40"
+                className="inline-flex shrink-0 items-center gap-2 rounded-full border border-white/10 bg-[#151311] px-4 py-3 text-sm font-bold text-white/68 transition hover:bg-white/[0.06] disabled:opacity-35"
               >
-                + Add member
+                <Plus className="h-4 w-4" />
+                Add member
               </button>
 
               <button
                 onClick={loadRoster}
                 disabled={loadingRoster || bulkBusy}
-                className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-semibold text-white/70 hover:bg-white/[0.06] disabled:text-white/40"
+                className="inline-flex shrink-0 items-center gap-2 rounded-full border border-white/10 bg-[#151311] px-4 py-3 text-sm font-bold text-white/68 transition hover:bg-white/[0.06] disabled:opacity-35"
               >
+                <RefreshCcw className="h-4 w-4" />
                 {loadingRoster ? "Loading..." : "Refresh"}
               </button>
-            </div>
           </div>
 
           {selectMode && (
-            <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.03] p-4 flex flex-col gap-3 sm:flex-row sm:items-center">
-              <div className="text-sm text-white/70">
-                Selected: <span className="text-white font-semibold">{selectedIds.length}</span>
+            <div className="mb-4 rounded-[24px] border border-white/10 bg-[#151311] p-4">
+              <div className="mb-3 flex items-center justify-between text-sm font-bold">
+                <span className="text-white/46">Selected</span>
+                <span className="text-white">{selectedIds.length}</span>
               </div>
 
-              <div className="flex flex-wrap gap-2 sm:ml-auto">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                 <button
                   onClick={() => bulkSetStatus("checked_in")}
                   disabled={!canBulkSelected}
-                  className={`rounded-xl border px-4 py-2 text-sm font-semibold transition ${
-                    canBulkSelected
-                      ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/15"
-                      : "border-white/10 bg-white/[0.03] text-white/40"
-                  }`}
+                  className="rounded-[14px] border border-white/10 bg-white/[0.04] px-3 py-3 text-sm font-bold text-white transition hover:bg-white/[0.07] disabled:opacity-35"
                 >
                   Check in
                 </button>
@@ -524,23 +577,15 @@ export default function ClassRoster() {
                 <button
                   onClick={() => bulkSetStatus("authorised_absence")}
                   disabled={!canBulkSelected}
-                  className={`rounded-xl border px-4 py-2 text-sm font-semibold transition ${
-                    canBulkSelected
-                      ? "border-sky-500/40 bg-sky-500/10 text-sky-200 hover:bg-sky-500/15"
-                      : "border-white/10 bg-white/[0.03] text-white/40"
-                  }`}
+                  className="rounded-[14px] border border-white/10 bg-white/[0.04] px-3 py-3 text-sm font-bold text-white transition hover:bg-white/[0.07] disabled:opacity-35"
                 >
-                  Authorised absence
+                  Auth absence
                 </button>
 
                 <button
                   onClick={() => bulkSetStatus("dip")}
                   disabled={!canBulkSelected}
-                  className={`rounded-xl border px-4 py-2 text-sm font-semibold transition ${
-                    canBulkSelected
-                      ? "border-red-500/40 bg-red-500/10 text-red-200 hover:bg-red-500/15"
-                      : "border-white/10 bg-white/[0.03] text-white/40"
-                  }`}
+                  className="rounded-[14px] border border-white/10 bg-white/[0.04] px-3 py-3 text-sm font-bold text-white transition hover:bg-white/[0.07] disabled:opacity-35"
                 >
                   Dip
                 </button>
@@ -548,7 +593,7 @@ export default function ClassRoster() {
                 <button
                   onClick={clearSelected}
                   disabled={loadingRoster || bulkBusy}
-                  className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-semibold text-white/70 hover:bg-white/[0.06] disabled:text-white/40"
+                  className="rounded-[14px] border border-white/10 bg-white/[0.04] px-3 py-3 text-sm font-bold text-white transition hover:bg-white/[0.07] disabled:opacity-35"
                 >
                   Clear
                 </button>
@@ -557,11 +602,15 @@ export default function ClassRoster() {
           )}
 
           {loadingRoster ? (
-            <div className="mt-6 text-white/50">Loading roster…</div>
+            <div className="rounded-[28px] border border-white/10 bg-[#151311] p-6 text-sm font-medium text-white/44">
+              Loading roster...
+            </div>
           ) : sortedRows.length === 0 ? (
-            <div className="mt-6 text-white/60">No bookings yet.</div>
+            <div className="rounded-[28px] border border-white/10 bg-[#151311] p-6 text-sm font-medium text-white/44">
+              No bookings yet.
+            </div>
           ) : (
-            <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="overflow-hidden rounded-[28px] border border-white/10 bg-[#151311] shadow-[0_24px_60px_rgba(0,0,0,0.28)]">
               {sortedRows.map((r) => {
                 const status = normalizeStatus(r);
                 const isBusy = busyUserId === r.userId || bulkBusy;
@@ -570,26 +619,25 @@ export default function ClassRoster() {
                 return (
                   <div
                     key={r.userId}
-                    className={`
-                      group rounded-2xl border p-5 text-left transition
-                      ${status === "checked_in" ? "border-emerald-500/60 bg-emerald-500/10" : ""}
-                      ${status === "dip" ? "border-red-500/60 bg-red-500/15 shadow-[0_0_20px_rgba(239,68,68,0.2)]" : ""}
-                      ${status === "booked" ? "border-white/10 bg-white/[0.03]" : ""}
-                      ${isBusy ? "opacity-60" : "hover:border-white/20 hover:bg-white/[0.05] hover:-translate-y-[1px]"}
-                    `}
+                    className={[
+                      "group border-b border-white/10 px-4 py-4 last:border-b-0 transition hover:bg-white/[0.025]",
+                      status === "dip" ? "bg-red-500/[0.04]" : "",
+                      isBusy ? "opacity-55" : "",
+                    ].join(" ")}
                   >
-                    <div className="flex items-center gap-4 min-w-0">
+                    <div className="grid grid-cols-[1fr_auto] gap-4">
+                      <div className="flex min-w-0 items-center gap-3">
                       {selectMode && (
                         <button
                           type="button"
                           onClick={() => toggleSelected(r.userId)}
-                          className={`
-                            shrink-0 h-6 w-6 rounded-md border flex items-center justify-center
-                            ${isSelected ? "border-emerald-500/60 bg-emerald-500/15" : "border-white/15 bg-white/[0.03]"}
-                          `}
+                          className={[
+                            "grid h-7 w-7 shrink-0 place-items-center rounded-lg border",
+                            isSelected ? "border-[#f2eee8] bg-[#f2eee8] text-black" : "border-white/12 bg-white/[0.03] text-white/30",
+                          ].join(" ")}
                           aria-label="Select attendee"
                         >
-                          {isSelected ? <span className="text-emerald-200 text-sm">✓</span> : null}
+                          {isSelected ? <Check className="h-4 w-4" /> : null}
                         </button>
                       )}
 
@@ -607,75 +655,124 @@ export default function ClassRoster() {
                       </div>
 
                       <div className="min-w-0 flex-1">
-                        <div className="font-semibold truncate text-white">{r.name ?? "Member"}</div>
-                        <div className="text-xs text-white/50 truncate">{r.email ?? ""}</div>
+                        <div className="truncate text-base font-extrabold text-white">{r.name ?? "Member"}</div>
+                        <div className="mt-1 truncate text-sm font-medium text-white/38">{r.email ?? ""}</div>
                       </div>
-                    </div>
+                      </div>
 
-                    <div className="mt-4 flex items-center justify-between gap-3">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <StatusPill status={status} />
-                        {r.addedByAdmin && (
-                          <span className="text-[10px] uppercase tracking-widest px-2 py-1 rounded-full border border-amber-500/40 text-amber-200 bg-amber-500/10">
-                            Admin add
-                          </span>
+                      <div className="flex shrink-0 flex-col items-end gap-2">
+                        <div className="flex items-center gap-2">
+                          {r.addedByAdmin && (
+                            <span className="rounded-md bg-[#f2eee8] px-2 py-1 text-[10px] font-black uppercase tracking-[0.08em] text-black">
+                              Admin
+                            </span>
+                          )}
+                          <StatusPill status={status} />
+                        </div>
+                        {!selectMode && (
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => setStatus(r.userId, status === "checked_in" ? "booked" : "checked_in")}
+                              disabled={isBusy}
+                              className="grid h-9 w-9 place-items-center rounded-full text-white/38 transition hover:bg-white/[0.07] hover:text-white disabled:opacity-35"
+                              aria-label={status === "checked_in" ? "Uncheck member" : "Check in member"}
+                            >
+                              {status === "checked_in" ? <X className="h-4 w-4" /> : <Check className="h-4 w-4" />}
+                            </button>
+                            <button
+                              onClick={() => setStatus(r.userId, "authorised_absence")}
+                              disabled={isBusy}
+                              className="grid h-9 w-9 place-items-center rounded-full text-white/38 transition hover:bg-white/[0.07] hover:text-white disabled:opacity-35"
+                              aria-label="Mark authorised absence"
+                            >
+                              A
+                            </button>
+                            <button
+                              onClick={() => setStatus(r.userId, "dip")}
+                              disabled={isBusy}
+                              className="grid h-9 w-9 place-items-center rounded-full text-white/30 transition hover:bg-red-500/10 hover:text-red-200 disabled:opacity-35"
+                              aria-label="Mark dip"
+                            >
+                              D
+                            </button>
+                          </div>
                         )}
                       </div>
-                      <span className="text-xs text-white/30 font-mono">{r.checkedInAt ? "✓" : ""}</span>
                     </div>
-
-                    {!selectMode && (
-                      <div className="mt-3 grid grid-cols-3 gap-2">
-                        <button
-                          onClick={() => setStatus(r.userId, status === "checked_in" ? "booked" : "checked_in")}
-                          disabled={isBusy}
-                          className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-white/70 hover:bg-white/[0.06] disabled:text-white/40"
-                        >
-                          {status === "checked_in" ? "Uncheck" : "Check in"}
-                        </button>
-
-                        <button
-                          onClick={() => setStatus(r.userId, "authorised_absence")}
-                          disabled={isBusy}
-                          className="rounded-xl border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs font-semibold text-sky-200 hover:bg-sky-500/15 disabled:text-white/40"
-                        >
-                          Absence
-                        </button>
-
-                        <button
-                          onClick={() => setStatus(r.userId, "dip")}
-                          disabled={isBusy}
-                          className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-200 hover:bg-red-500/15 disabled:text-white/40"
-                        >
-                          Dip
-                        </button>
-                      </div>
-                    )}
                   </div>
                 );
               })}
             </div>
           )}
+        </section>
+      </main>
+
+      <nav
+        className="fixed inset-x-4 bottom-4 z-40 mx-auto max-w-xl rounded-[28px] border border-white/45 bg-white/90 px-3 py-3 shadow-[0_18px_60px_rgba(0,0,0,0.35)] backdrop-blur-xl sm:max-w-2xl"
+        style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
+        aria-label="Primary"
+      >
+        <div className="flex gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {navItems.map(({ to, label, icon: NavIcon }) => (
+            <NavLink
+              key={to}
+              to={to}
+              className={({ isActive }) =>
+                [
+                  "flex min-w-[76px] shrink-0 flex-col items-center gap-1.5 rounded-2xl px-2 py-2 text-[11px] font-bold transition",
+                  isActive ? "bg-black/10 text-black" : "text-black hover:bg-black/5",
+                ].join(" ")
+              }
+            >
+              <NavIcon className="h-5 w-5 text-black" />
+              <span className="max-w-full truncate">{label}</span>
+            </NavLink>
+          ))}
         </div>
-      </div>
+      </nav>
 
       {showAddMemberModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <div className="w-full max-w-md rounded-3xl border border-neutral-800 bg-neutral-950 p-6 shadow-[0_0_40px_rgba(0,0,0,0.6)]">
-            <div className="mb-4">
-              <h2 className="text-xl font-semibold text-white">Add member to class</h2>
-              <p className="mt-1 text-sm text-white/50">
-                This bypasses the usual booking deadline and adds them as an admin exception.
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/72 backdrop-blur-sm">
+          <button
+            type="button"
+            className="absolute inset-0 cursor-default"
+            aria-label="Close add member"
+            onClick={() => {
+              setShowAddMemberModal(false);
+              setSelectedUserId("");
+              setAddMemberError("");
+            }}
+          />
+          <div className="relative max-h-[86vh] w-full max-w-xl overflow-y-auto rounded-t-[32px] border border-white/10 bg-[#151311] p-5 shadow-[0_-24px_80px_rgba(0,0,0,0.55)] sm:max-w-2xl">
+            <div className="mx-auto mb-6 h-1.5 w-16 rounded-full bg-white/22" />
+            <button
+              type="button"
+              onClick={() => {
+                setShowAddMemberModal(false);
+                setSelectedUserId("");
+                setAddMemberError("");
+              }}
+              className="absolute right-5 top-12 z-20 grid h-12 w-12 place-items-center rounded-full bg-white/[0.08] text-white/72 transition hover:bg-white/[0.12] hover:text-white"
+              aria-label="Close add member"
+            >
+              <X className="h-6 w-6" />
+            </button>
+
+            <div className="mb-7 pr-16">
+              <p className="text-[12px] font-bold uppercase tracking-[0.28em] text-white/38">
+                Add member
               </p>
+              <h2 className="mt-3 text-4xl font-bold tracking-[-0.05em] text-white">Class roster</h2>
+              <p className="mt-2 text-base font-medium text-white/40">Admin exception · {classTitle}</p>
             </div>
 
-            <label className="mb-2 block text-sm font-semibold text-white/70">Select member</label>
+            <label className="mb-3 block text-[12px] font-bold uppercase tracking-[0.24em] text-white/34">Select member</label>
 
             <select
               value={selectedUserId}
               onChange={(e) => setSelectedUserId(e.target.value)}
               disabled={addingMember}
-              className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-white outline-none focus:border-white/20"
+              className="w-full rounded-[18px] border border-white/10 bg-[#211e1b] px-4 py-4 text-white outline-none [color-scheme:dark] focus:border-white/22"
             >
               <option value="">Choose a member...</option>
               {addableUsers.map((u) => (
@@ -686,18 +783,18 @@ export default function ClassRoster() {
             </select>
 
             {addableUsers.length === 0 && (
-              <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white/60">
+              <div className="mt-4 rounded-[18px] border border-white/10 bg-white/[0.04] px-4 py-3 text-sm font-medium text-white/50">
                 No additional members available to add.
               </div>
             )}
 
             {addMemberError ? (
-              <div className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+              <div className="mt-4 rounded-[18px] border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
                 {addMemberError}
               </div>
             ) : null}
 
-            <div className="mt-6 flex justify-end gap-3">
+            <div className="mt-8 grid grid-cols-[0.9fr_1.4fr] gap-3 pb-2">
               <button
                 onClick={() => {
                   setShowAddMemberModal(false);
@@ -705,7 +802,7 @@ export default function ClassRoster() {
                   setAddMemberError("");
                 }}
                 disabled={addingMember}
-                className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-semibold text-white/70 hover:bg-white/[0.06] disabled:text-white/40"
+                className="rounded-full border border-white/12 px-5 py-4 text-base font-bold text-white transition hover:bg-white/[0.05] disabled:opacity-35"
               >
                 Cancel
               </button>
@@ -713,7 +810,7 @@ export default function ClassRoster() {
               <button
                 onClick={handleAdminAddMember}
                 disabled={addingMember || addableUsers.length === 0}
-                className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm font-semibold text-amber-200 hover:bg-amber-500/15 disabled:text-white/40"
+                className="rounded-full bg-[#f2eee8] px-5 py-4 text-base font-extrabold text-black transition hover:bg-white disabled:opacity-35"
               >
                 {addingMember ? "Adding..." : "Add member"}
               </button>

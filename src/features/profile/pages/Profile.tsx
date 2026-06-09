@@ -1,22 +1,18 @@
 // src/pages/Profile.tsx
 import React, { useEffect, useMemo, useState } from "react";
-import { getAuth, updateEmail, updateProfile } from "firebase/auth";
+import { getAuth, signOut, updateEmail, updateProfile } from "firebase/auth";
+import { Link, NavLink, useNavigate } from "react-router-dom";
 import {
-  collection,
   doc,
   getDoc,
-  getDocs,
-  query,
   serverTimestamp,
   setDoc,
-  where,
-  documentId,
-  Timestamp,
 } from "firebase/firestore";
 import { getDownloadURL, getStorage, ref, uploadBytes } from "firebase/storage";
 import { db } from "../../../firebase";
-import { Camera, Save, AlertTriangle, Flame, Trophy, CheckCircle2, Dumbbell, Activity, Calendar } from "lucide-react";
-import UserTopNav from "../../../components/layout/UserTopNav";
+import { AlertTriangle, Bell, Plus, Save } from "lucide-react";
+import { getUserNavItems } from "../../../components/layout/UserTopNav";
+import { useAuth } from "../../../context/AuthContext";
 
 
 type UserStats = {
@@ -35,25 +31,6 @@ type UserDoc = {
   stats?: UserStats;
 };
 
-type BookingDoc = {
-  classId: string;
-  userId: string;
-  userName?: string;
-  status: "booked" | "cancelled";
-  createdAt?: Timestamp;
-  cancelledAt?: Timestamp;
-};
-
-type ClassDoc = {
-  title?: string;
-  timezone?: string;
-  startTime: Timestamp;
-  endTime?: Timestamp;
-  coachName?: string;
-  location?: string;
-  status?: "scheduled" | "cancelled";
-};
-
 function monthKeyLondon(d: Date) {
   // "YYYY-MM" in Europe/London
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -65,26 +42,6 @@ function monthKeyLondon(d: Date) {
   const y = parts.find((p) => p.type === "year")?.value ?? "0000";
   const m = parts.find((p) => p.type === "month")?.value ?? "00";
   return `${y}-${m}`;
-}
-
-function StatPill({
-  label,
-  value,
-  icon,
-}: {
-  label: string;
-  value: React.ReactNode;
-  icon?: React.ReactNode;
-}) {
-  return (
-    <div className="rounded-2xl border border-neutral-800 bg-neutral-900/30 p-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="text-xs uppercase tracking-[0.35em] text-white/50 font-semibold">{label}</div>
-        {icon ? <div className="text-white/60">{icon}</div> : null}
-      </div>
-      <div className="mt-2 text-3xl font-extrabold tracking-tight text-white">{value}</div>
-    </div>
-  );
 }
 
 function getAttendanceTier(count: number) {
@@ -154,111 +111,11 @@ function TierChip({ count }: { count: number }) {
   );
 }
 
-function ProgressCard({
-  monthCount,
-}: {
-  monthCount: number;
-}) {
-  const tier = getAttendanceTier(monthCount);
-  const nextTarget = tier.nextTarget;
-  const remaining = nextTarget ? Math.max(0, nextTarget - monthCount) : 0;
-  const progressPct = nextTarget
-    ? Math.max(0, Math.min(100, (monthCount / nextTarget) * 100))
-    : 100;
-
-  return (
-    <div className="rounded-3xl border border-neutral-800 bg-neutral-950/90 p-5">
-      <div className="text-xs font-semibold uppercase tracking-[0.35em] text-white/50">
-        This month
-      </div>
-
-      <div className="mt-3 flex items-center justify-between gap-3">
-        <div>
-          <div className="text-3xl font-extrabold tracking-tight text-white">{monthCount}</div>
-          <div className="mt-1 text-sm text-white/55">Classes attended</div>
-        </div>
-
-        <TierChip count={monthCount} />
-      </div>
-
-      <div className="mt-5">
-        <div className="flex items-center justify-between text-xs text-white/45">
-          <span>Progress</span>
-          <span>
-            {nextTarget ? `${monthCount}/${nextTarget}` : "Top tier reached"}
-          </span>
-        </div>
-
-        <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/10">
-          <div
-            className="h-full rounded-full bg-white/40 transition-all duration-500"
-            style={{ width: `${progressPct}%` }}
-          />
-        </div>
-      </div>
-
-      <div className="mt-4 text-sm text-white/65">
-        {nextTarget
-          ? `${remaining} more ${remaining === 1 ? "class" : "classes"} to reach ${getAttendanceTier(nextTarget).label}.`
-          : "You’ve reached the top attendance tier this month."}
-      </div>
-    </div>
-  );
-}
-
-function fmtDateShort(d: Date, timeZone: string) {
-  return new Intl.DateTimeFormat("en-GB", {
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-    timeZone,
-  }).format(d);
-}
-
-function fmtTimeShort(d: Date, timeZone: string) {
-  return new Intl.DateTimeFormat("en-GB", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-    timeZone,
-  }).format(d);
-}
-
-function classIcon(title?: string) {
-  const t = (title || "").toLowerCase();
-
-  if (t.includes("hyrox")) {
-    return <Flame className="h-5 w-5 text-yellow-400" />;
-  }
-
-  if (t.includes("strength")) {
-    return <Dumbbell className="h-5 w-5 text-sky-400" />;
-  }
-
-  if (t.includes("bags")) {
-    return <Activity className="h-5 w-5 text-orange-400" />;
-  }
-
-  return <Calendar className="h-5 w-5 text-white/50" />;
-}
-
-function timeUntil(start: Date) {
-  const now = Date.now();
-  const diff = start.getTime() - now;
-
-  if (diff <= 0) return "Starting soon";
-
-  const mins = Math.floor(diff / 60000);
-  const hours = Math.floor(mins / 60);
-  const m = mins % 60;
-
-  if (hours > 0) return `Starts in ${hours}h ${m}m`;
-  return `Starts in ${m}m`;
-}
-
 export default function Profile() {
   const auth = useMemo(() => getAuth(), []);
   const storage = useMemo(() => getStorage(), []);
+  const navigate = useNavigate();
+  const { appUser } = useAuth();
   const user = auth.currentUser;
 
   const [loading, setLoading] = useState(true);
@@ -276,8 +133,6 @@ export default function Profile() {
 
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-
-  const [upcomingClasses, setUpcomingClasses] = useState<Array<{ id: string; data: ClassDoc }>>([]);
 
   function onPickFile(f: File | null) {
     setErr(null);
@@ -356,52 +211,6 @@ export default function Profile() {
             longestStreak: 0,
           });
         }
-
-        const bookingsRef = collection(db, "bookings");
-        const bookingsQ = query(
-          bookingsRef,
-          where("userId", "==", user.uid),
-          where("status", "==", "booked")
-        );
-
-        const bookingsSnap = await getDocs(bookingsQ);
-        const activeBookings = bookingsSnap.docs.map((d) => d.data() as BookingDoc);
-
-        const classIds = Array.from(new Set(activeBookings.map((b) => b.classId).filter(Boolean)));
-
-        if (classIds.length) {
-          const classDocs: Array<{ id: string; data: ClassDoc }> = [];
-
-          for (let i = 0; i < classIds.length; i += 10) {
-            const chunk = classIds.slice(i, i + 10);
-            const classesQ = query(collection(db, "classes"), where(documentId(), "in", chunk));
-            const classesSnap = await getDocs(classesQ);
-
-            classesSnap.forEach((d) => {
-              classDocs.push({
-                id: d.id,
-                data: d.data() as ClassDoc,
-              });
-            });
-          }
-
-          const now = Date.now();
-
-          const upcoming = classDocs
-            .filter((c) => {
-              const start = c.data.startTime?.toDate?.();
-              return (
-                !!start &&
-                start.getTime() > now &&
-                (c.data.status ?? "scheduled") === "scheduled"
-              );
-            })
-            .sort((a, b) => a.data.startTime.toDate().getTime() - b.data.startTime.toDate().getTime());
-
-          setUpcomingClasses(upcoming);
-        } else {
-          setUpcomingClasses([]);
-        }
       } catch (e: any) {
         setErr(e?.message ?? "Failed to load profile.");
       } finally {
@@ -479,275 +288,213 @@ export default function Profile() {
     }
   }
 
+  async function onSignOut() {
+    await signOut(auth);
+    navigate("/login");
+  }
+
   if (loading) {
-    return <div className="text-white/80 p-6">Loading profile…</div>;
+    return (
+      <div className="carbon-fiber-bg min-h-screen p-6 text-white/80">
+        Loading profile...
+      </div>
+    );
   }
 
   const mk = monthKeyLondon(new Date());
   const monthCount = stats?.monthCheckIns?.[mk] ?? 0;
-  const currentStreak = stats?.currentStreak ?? 0;
-  const longestStreak = stats?.longestStreak ?? 0;
   const totalCheckIns = stats?.totalCheckIns ?? 0;
+  const navItems = getUserNavItems(appUser?.role);
+  const firstName = displayName.split(" ")[0] || email.split("@")[0] || "A";
+  const initials =
+    displayName
+      .split(" ")
+      .map((part) => part[0])
+      .filter(Boolean)
+      .slice(0, 2)
+      .join("")
+      .toUpperCase() || "ZA";
+  const handle = email ? `@${email.split("@")[0]}` : "@member";
 
-    return (
-    <div className="min-h-screen bg-black text-white">
-      <UserTopNav />
-
-      <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
-        {/* Hero */}
-        <div className="relative overflow-hidden rounded-[28px] border border-neutral-800 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.03),transparent_35%),linear-gradient(180deg,rgba(15,15,15,0.97),rgba(0,0,0,0.99))] px-6 py-6 sm:px-8 sm:py-8 shadow-[0_0_50px_rgba(0,0,0,0.45)]">
-          <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.02),transparent_60%)]" />
-          <div className="pointer-events-none absolute -top-16 left-1/4 h-56 w-56 rounded-full bg-white/[0.015] blur-3xl" />
-
-          <div className="relative">
-            <div className="text-xs font-semibold uppercase tracking-[0.35em] text-white/55">
-              Profile
-            </div>
-
-            <div className="mt-3 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-              <div>
-                <h1 className="text-5xl leading-none sm:text-7xl font-heading uppercase tracking-[0.04em] text-white">
-                  Your Account
-                </h1>
-
-                <div className="mt-4 flex flex-wrap items-center gap-3">
-                  <TierChip count={monthCount} />
-                  <div className="text-sm text-white/45">
-                    {monthCount} classes this month • {totalCheckIns} lifetime
-                  </div>
-                </div>
-              </div>
-            </div>
+  return (
+    <div className="carbon-fiber-bg min-h-screen overflow-x-hidden text-[#f4f0ea]">
+      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_top_right,rgba(120,95,70,0.16),transparent_34%),linear-gradient(180deg,rgba(255,255,255,0.025),transparent_22%)]" />
+      <main className="relative mx-auto min-h-screen max-w-xl px-5 pb-36 pt-7 sm:max-w-3xl sm:px-8">
+        <header className="flex items-center justify-between" style={{ paddingTop: "env(safe-area-inset-top)" }}>
+          <Link to="/dashboard" aria-label="Zero Alpha home" className="block">
+            <img src="/ZERO-ALPHA.png" alt="ZERO-ALPHA" className="h-20 w-auto object-contain" />
+          </Link>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              aria-label="Notifications"
+              className="grid h-12 w-12 place-items-center rounded-full border border-white/10 bg-white/[0.04] text-white/55 transition hover:bg-white/[0.08] hover:text-white"
+            >
+              <Bell className="h-5 w-5" />
+            </button>
+            <Link
+              to="/profile"
+              aria-label="Profile"
+              className="grid h-12 w-12 overflow-hidden rounded-full border border-[#8b725b]/60 bg-[#765f4b] text-sm font-bold uppercase text-[#f8efe5]"
+            >
+              {photoURL || previewURL ? (
+                <img
+                  src={previewURL || photoURL}
+                  alt={displayName ? `${displayName}'s profile` : "Profile"}
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <span className="grid h-full w-full place-items-center">{firstName.slice(0, 1)}</span>
+              )}
+            </Link>
           </div>
-        </div>
+        </header>
 
-        {/* Top dashboard row */}
-        <div className="mt-8 grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
-          {/* Stats block */}
-          <div className="rounded-3xl border border-neutral-800 bg-neutral-950 p-6 sm:p-7">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-[0.35em] text-white/50">
-                  Performance
-                </div>
-                <div className="mt-2 text-2xl font-bold text-white/95">
-                  Your training stats
-                </div>
-              </div>
+        <section className="mt-12">
+          <p className="text-[12px] font-bold uppercase tracking-[0.3em] text-white/34">
+            Account
+          </p>
+          <h1 className="mt-4 text-5xl font-bold leading-none tracking-[-0.06em] text-white sm:text-6xl">
+            Profile
+          </h1>
+        </section>
 
-              <TierChip count={monthCount} />
-            </div>
-
-            <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <StatPill
-                label="Streak"
-                value={currentStreak}
-                icon={<Flame className="h-4 w-4 text-orange-400" />}
-              />
-
-              <StatPill
-                label="Longest"
-                value={longestStreak}
-                icon={<Trophy className="h-4 w-4 text-yellow-400" />}
-              />
-
-              <StatPill
-                label="Month"
-                value={monthCount}
-                icon={<CheckCircle2 className="h-4 w-4 text-blue-400" />}
-              />
-
-              <StatPill
-                label="Total"
-                value={totalCheckIns}
-                icon={<CheckCircle2 className="h-4 w-4 text-emerald-400" />}
-              />
-            </div>
-          </div>
-
-          {/* Progress block */}
-          <ProgressCard monthCount={monthCount} />
-        </div>
-
-        {/* Main account card */}
-        <div className="mt-8 rounded-3xl border border-neutral-800 bg-neutral-950 p-6 sm:p-8">
-          <div className="grid gap-8 lg:grid-cols-[220px_1fr]">
-            {/* Avatar / identity rail */}
-            <div className="flex flex-col items-center lg:items-start">
-              <div className="relative">
-                <div className="h-40 w-40 overflow-hidden rounded-full border border-neutral-800 bg-neutral-900/40 shadow-[0_10px_40px_rgba(0,0,0,0.45)]">
+        <section className="mt-8 overflow-hidden rounded-[28px] border border-white/10 bg-[#151311] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.35)]">
+          <div className="grid grid-cols-[128px_1fr] items-center gap-5">
+            <div className="relative">
+              <div className="h-28 w-28 overflow-hidden rounded-full border-2 border-[#8b725b]/80 bg-[#765f4b] shadow-[0_14px_45px_rgba(0,0,0,0.36)]">
+                {previewURL || photoURL ? (
                   <img
-                    src={previewURL || photoURL || "https://dummyimage.com/256x256/111/fff&text=ZA"}
+                    src={previewURL || photoURL}
                     alt={displayName ? `${displayName}'s profile picture` : "Profile"}
                     className="h-full w-full object-cover"
                   />
-                </div>
-
-                <label className="absolute -bottom-3 left-1/2 inline-flex -translate-x-1/2 cursor-pointer items-center gap-2 rounded-2xl border border-neutral-800 bg-neutral-900 px-4 py-2 text-sm font-semibold text-white/90 hover:bg-neutral-800">
-                  <Camera className="h-4 w-4" />
-                  Change
-                  <input
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={(e) => onPickFile(e.target.files?.[0] ?? null)}
-                  />
-                </label>
+                ) : (
+                  <div className="grid h-full w-full place-items-center text-4xl font-black text-white">
+                    {initials}
+                  </div>
+                )}
               </div>
-
-              {file && (
-                <div className="mt-6 max-w-[220px] text-center text-xs text-white/65 lg:text-left">
-                  Selected: <span className="font-semibold text-white/90">{file.name}</span>
-                </div>
-              )}
-
-              <div className="mt-8 w-full rounded-2xl border border-neutral-800 bg-neutral-900/30 p-4">
-                <div className="text-xs font-semibold uppercase tracking-[0.3em] text-white/45">
-                  Member status
-                </div>
-                <div className="mt-3 text-lg font-bold text-white/95">
-                  {getAttendanceTier(monthCount).label} Tier
-                </div>
-                <div className="mt-1 text-sm text-white/55">
-                  Based on your monthly attendance.
-                </div>
-              </div>
+              <label className="absolute bottom-0 right-4 grid h-10 w-10 cursor-pointer place-items-center rounded-full bg-[#f6dd62] text-black shadow-[0_8px_24px_rgba(0,0,0,0.35)]">
+                <Plus className="h-5 w-5" />
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => onPickFile(e.target.files?.[0] ?? null)}
+                />
+              </label>
             </div>
 
-            {/* Form */}
-            <div className="space-y-5">
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-[0.35em] text-white/50">
-                  Display name
-                </label>
-                <input
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
-                  placeholder="Your name"
-                  className="mt-2 w-full rounded-2xl border border-neutral-800 bg-neutral-900/40 px-5 py-4 text-lg font-semibold text-white outline-none transition focus:border-white/25"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-[0.35em] text-white/50">
-                  Email
-                </label>
-                <input
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@email.com"
-                  className="mt-2 w-full rounded-2xl border border-neutral-800 bg-neutral-900/40 px-5 py-4 text-lg font-semibold text-white outline-none transition focus:border-white/25"
-                />
-                <div className="mt-3 flex items-center gap-2 text-xs text-white/45">
-                  <AlertTriangle className="h-4 w-4" />
-                  Changing email may require you to log out and back in.
-                </div>
-              </div>
-
-              {(err || msg) && (
-                <div
-                  className={[
-                    "rounded-2xl border px-4 py-3 text-sm",
-                    err
-                      ? "border-red-900/60 bg-red-950/30 text-red-200"
-                      : "border-emerald-900/60 bg-emerald-950/30 text-emerald-200",
-                  ].join(" ")}
-                >
-                  {err ?? msg}
-                </div>
-              )}
-
-              <div className="pt-2">
-                <button
-                  onClick={onSave}
-                  disabled={saving}
-                  className="inline-flex items-center gap-3 rounded-2xl bg-white px-6 py-4 text-sm font-extrabold uppercase tracking-[0.25em] text-black transition hover:bg-white/90 disabled:opacity-60"
-                >
-                  <Save className="h-4 w-4" />
-                  {saving ? "Saving…" : "Save changes"}
-                </button>
+            <div className="min-w-0">
+              <h2 className="text-3xl font-bold leading-none tracking-[-0.05em] text-white">
+                {displayName || "Member"}
+              </h2>
+              <p className="mt-2 truncate font-mono text-sm text-white/36">
+                {handle}
+              </p>
+              <div className="mt-5 flex flex-wrap items-center gap-3">
+                <TierChip count={monthCount} />
+                <span className="font-mono text-sm text-white/38">{totalCheckIns} lifetime</span>
               </div>
             </div>
           </div>
-        </div>
-
-        {/* Upcoming classes card */}
-        <div className="mt-8 rounded-3xl border border-neutral-800 bg-neutral-950 p-6 sm:p-7">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <div className="text-xs font-semibold uppercase tracking-[0.35em] text-white/50">
-                Upcoming
-              </div>
-              <div className="mt-2 text-2xl font-bold text-white/95">
-                My upcoming classes
-              </div>
+          {file ? (
+            <div className="mt-4 rounded-[16px] border border-white/10 bg-white/[0.04] px-4 py-3 text-xs font-medium text-white/56">
+              Selected: <span className="font-bold text-white/78">{file.name}</span>
             </div>
+          ) : null}
+        </section>
 
-            <div className="flex items-center gap-2">
-              <div className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-semibold uppercase tracking-[0.25em] text-white/55">
-                {upcomingClasses.length} booked
-              </div>
-            </div>
+        <section className="mt-10">
+          <h2 className="mb-4 text-[12px] font-bold uppercase tracking-[0.32em] text-white/54">
+            Sign-in
+          </h2>
+          <div className="overflow-hidden rounded-[28px] border border-white/10 bg-[#151311]">
+            <label className="block border-b border-white/10 px-5 py-4">
+              <span className="block text-[11px] font-black uppercase tracking-[0.22em] text-white/34">
+                Display name
+              </span>
+              <input
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                placeholder="Your name"
+                className="mt-2 w-full bg-transparent text-xl font-bold text-white outline-none placeholder:text-white/20"
+              />
+            </label>
+            <label className="block px-5 py-4">
+              <span className="block text-[11px] font-black uppercase tracking-[0.22em] text-white/34">
+                Email
+              </span>
+              <input
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@email.com"
+                className="mt-2 w-full bg-transparent text-xl font-bold text-white outline-none placeholder:text-white/20"
+              />
+            </label>
+          </div>
+          <div className="mt-3 flex items-center gap-2 text-xs font-medium text-white/38">
+            <AlertTriangle className="h-4 w-4" />
+            Changing email may require a fresh sign-in.
           </div>
 
-          {upcomingClasses.length === 0 ? (
-            <div className="mt-6 rounded-2xl border border-neutral-800 bg-neutral-900/30 p-5 text-sm text-white/60">
-              You’ve got no upcoming classes booked right now.
+          {(err || msg) && (
+            <div
+              className={[
+                "mt-4 rounded-[18px] border px-4 py-3 text-sm",
+                err
+                  ? "border-red-500/20 bg-red-500/10 text-red-200"
+                  : "border-emerald-400/20 bg-emerald-400/10 text-emerald-100",
+              ].join(" ")}
+            >
+              {err ?? msg}
             </div>
-          ) : (
-            <>
-              {/* Upcoming list */}
-              <div className="mt-6 grid gap-3">
-                {upcomingClasses.map(({ id, data }) => {
-                  const tz = data.timezone || "Europe/London";
-                  const start = data.startTime.toDate();
-                  const end = data.endTime?.toDate?.();
-
-                  return (
-                    <div
-                      key={id}
-                      className="rounded-2xl border border-neutral-800 bg-neutral-900/30 p-4 transition hover:border-white/15 hover:bg-neutral-900/40"
-                    >
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-3">
-                            {classIcon(data.title)}
-
-                            <div>
-                              <div className="text-lg font-bold text-white">
-                                {data.title || "Class"}
-                              </div>
-
-                              <div className="mt-1 text-sm text-white/55">
-                                {fmtDateShort(start, tz)} • {fmtTimeShort(start, tz)}
-                                {end ? `–${fmtTimeShort(end, tz)}` : ""} • {data.location || "Main Floor"}
-                              </div>
-
-                              <div className="mt-1 text-sm text-white/40">
-                                Coach: {data.coachName || "TBC"}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-3 sm:flex-col sm:items-end">
-                          <div className="text-xs font-semibold uppercase tracking-wider text-white/45">
-                            {timeUntil(start)}
-                          </div>
-
-                          <div className="shrink-0 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-extrabold uppercase tracking-[0.25em] text-emerald-200">
-                            Booked
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </>
           )}
+
+          <div className="mt-6 grid gap-3">
+            <button
+              onClick={onSave}
+              disabled={saving}
+              className="inline-flex w-full items-center justify-center gap-3 rounded-full bg-[#f2eee8] px-6 py-4 text-base font-extrabold text-black transition hover:bg-white disabled:opacity-60"
+            >
+              <Save className="h-4 w-4" />
+              {saving ? "Saving..." : "Save changes"}
+            </button>
+            <button
+              onClick={onSignOut}
+              className="w-full rounded-full border border-white/12 px-6 py-4 text-base font-bold text-white transition hover:bg-white/[0.05]"
+            >
+              Sign out
+            </button>
+          </div>
+        </section>
+
+      </main>
+
+      <nav
+        className="fixed inset-x-4 bottom-4 z-40 mx-auto max-w-xl rounded-[28px] border border-white/45 bg-white/90 px-3 py-3 shadow-[0_18px_60px_rgba(0,0,0,0.35)] backdrop-blur-xl sm:max-w-2xl"
+        style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
+        aria-label="Primary"
+      >
+        <div className="flex gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {navItems.map(({ to, label, icon: NavIcon }) => (
+            <NavLink
+              key={to}
+              to={to}
+              className={({ isActive }) =>
+                [
+                  "flex min-w-[76px] shrink-0 flex-col items-center gap-1.5 rounded-2xl px-2 py-2 text-[11px] font-bold transition",
+                  isActive ? "bg-black/10 text-black" : "text-black hover:bg-black/5",
+                ].join(" ")
+              }
+            >
+              <NavIcon className="h-5 w-5 text-black" />
+              <span className="max-w-full truncate">{label}</span>
+            </NavLink>
+          ))}
         </div>
-      </div>
+      </nav>
     </div>
   );
 }

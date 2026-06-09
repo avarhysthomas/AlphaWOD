@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
+  Bell,
   ChevronLeft,
   ChevronRight,
+  CheckCircle2,
   Clock3,
   Flame,
   ImagePlus,
@@ -14,10 +16,7 @@ import {
   Trophy,
   Waves,
 } from "lucide-react";
-import {
-} from "firebase/firestore";
 import { getDownloadURL, getStorage, ref, uploadBytes } from "firebase/storage";
-import UserTopNav from "../../../components/layout/UserTopNav";
 import { useAuth } from "../../../context/AuthContext";
 import MovementCombobox from "../components/MovementCombobox";
 import { getDateInputValueInTimeZone } from "../../../utils/date";
@@ -111,6 +110,8 @@ const cardioModes = [
 
 type CardioMode = (typeof cardioModes)[number]["value"];
 
+const cardioTimePresets = ["5:00", "10:00", "20:00", "30:00"];
+
 const cardioDistanceOptions: Record<CardioMode, Array<{ label: string; value: string }>> = {
   run: [
     { label: "1k", value: "1000" },
@@ -163,10 +164,6 @@ function currentTimeValue() {
 
 function tidyNumberInput(value: string) {
   return value.replace(/[^\d:.]/g, "");
-}
-
-function tidyDigits(value: string, maxLength = 2) {
-  return value.replace(/\D/g, "").slice(0, maxLength);
 }
 
 async function readImageFileDimensions(file: File) {
@@ -269,7 +266,7 @@ function parseRunTimeToSeconds(value: string) {
   const trimmed = value.trim();
   if (!trimmed) return null;
 
-  const parts = trimmed.split(":").map((part) => Number(part));
+  const parts = getTimeParts(trimmed).map((part) => Number(part));
   if (parts.some((part) => Number.isNaN(part))) return null;
 
   if (parts.length === 1) return parts[0];
@@ -278,52 +275,42 @@ function parseRunTimeToSeconds(value: string) {
   return null;
 }
 
-function parseRunTimeParts(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return { hours: "", minutes: "", seconds: "" };
-  }
-
-  const parts = trimmed.split(":");
-
-  if (parts.length === 3) {
-    return {
-      hours: tidyDigits(parts[0]),
-      minutes: tidyDigits(parts[1]),
-      seconds: tidyDigits(parts[2]),
-    };
-  }
-
-  if (parts.length === 2) {
-    return {
-      hours: "",
-      minutes: tidyDigits(parts[0]),
-      seconds: tidyDigits(parts[1]),
-    };
-  }
-
-  return {
-    hours: "",
-    minutes: "",
-    seconds: tidyDigits(parts[0]),
-  };
+function tidyTimeInput(value: string) {
+  return value
+    .replace(/[^\d:.]/g, "")
+    .split(/[:.]/)
+    .slice(0, 3)
+    .join(value.includes(".") && !value.includes(":") ? "." : ":");
 }
 
-function buildRunTimeValue(hours: string, minutes: string, seconds: string) {
-  const cleanHours = tidyDigits(hours);
-  const cleanMinutes = tidyDigits(minutes);
-  const cleanSeconds = tidyDigits(seconds);
+function getTimeParts(value: string) {
+  return value.replace(/\./g, ":").split(":").filter((part) => part !== "");
+}
 
-  if (!cleanHours && !cleanMinutes && !cleanSeconds) return "";
-  if (cleanHours) {
-    return [
-      cleanHours,
-      cleanMinutes.padStart(2, "0"),
-      cleanSeconds.padStart(2, "0"),
-    ].join(":");
+function normalizeRunTimeInput(value: string) {
+  const cleaned = tidyTimeInput(value).trim();
+  if (!cleaned) return "";
+
+  const parts = getTimeParts(cleaned);
+  if (!parts.length) return "";
+
+  if (parts.length === 1) {
+    const digits = parts[0].replace(/\D/g, "");
+    if (digits.length <= 2) return digits;
+    if (digits.length <= 4) {
+      return `${digits.slice(0, -2)}:${digits.slice(-2).padStart(2, "0")}`;
+    }
+    return `${digits.slice(0, -4)}:${digits.slice(-4, -2).padStart(2, "0")}:${digits
+      .slice(-2)
+      .padStart(2, "0")}`;
   }
 
-  return [cleanMinutes || "0", cleanSeconds.padStart(2, "0")].join(":");
+  const [first, second, third] = parts.map((part) => part.replace(/\D/g, ""));
+  if (parts.length === 2) {
+    return `${first || "0"}:${(second || "0").padStart(2, "0")}`;
+  }
+
+  return `${first || "0"}:${(second || "0").padStart(2, "0")}:${(third || "0").padStart(2, "0")}`;
 }
 
 function formatRunPace(distanceMeters: string, runTimeValue: string) {
@@ -460,7 +447,6 @@ export default function WorkoutComposer() {
 
   const typeMeta = workoutTypeMeta[type];
   const TypeIcon = typeMeta.icon;
-  const runTimeParts = useMemo(() => parseRunTimeParts(runTime), [runTime]);
   const cardioDistanceChoices = cardioDistanceOptions[cardioMode];
   const cardioDistanceIsPreset = cardioDistanceChoices.some((item) => item.value === runDistance);
   const runPace = useMemo(
@@ -634,18 +620,6 @@ export default function WorkoutComposer() {
     }
 
     setSelfiePreview(file ? URL.createObjectURL(file) : null);
-  }
-
-  function updateRunTimePart(
-    part: "hours" | "minutes" | "seconds",
-    nextValue: string
-  ) {
-    const nextParts = {
-      ...runTimeParts,
-      [part]: tidyDigits(nextValue),
-    };
-
-    setRunTime(buildRunTimeValue(nextParts.hours, nextParts.minutes, nextParts.seconds));
   }
 
   function validateCurrentStep() {
@@ -867,43 +841,77 @@ export default function WorkoutComposer() {
   }
 
   return (
-    <div className="min-h-screen bg-black text-white">
-      <UserTopNav />
+    <div className="carbon-fiber-bg min-h-screen overflow-x-hidden font-barlow text-[#f4f0ea]">
+      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_72%_0%,rgba(255,255,255,0.045),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.018),transparent_26%)]" />
 
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
-        <section className="relative overflow-hidden rounded-[32px] border border-white/10 bg-neutral-950 shadow-[0_30px_80px_rgba(0,0,0,0.45)]">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_14%,rgba(59,130,246,0.16),transparent_28%),radial-gradient(circle_at_78%_10%,rgba(245,158,11,0.16),transparent_28%),linear-gradient(135deg,rgba(255,255,255,0.03),transparent_55%)]" />
-          <div className="relative p-6 sm:p-8 lg:p-10">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.3em] text-white/72">
-                  Training
-                </div>
-              </div>
-
-              <Link
-                to="/workouts"
-                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/25 px-5 py-3 text-sm font-semibold text-white/85 transition hover:border-white/20 hover:bg-black/35 hover:text-white"
-              >
-                <ChevronLeft className="h-4 w-4" />
-                Workouts
-              </Link>
-            </div>
-
-            <div className="mt-6 flex flex-wrap gap-3 text-[11px] font-semibold uppercase tracking-[0.22em] text-white/45">
-              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">
-                {completionLabel}
-              </span>
-              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5">
-                {visibility === "members" ? "Shared to feed" : "Private log"}
-              </span>
-            </div>
+      <main className="relative mx-auto min-h-screen max-w-xl px-5 pb-36 pt-7 sm:max-w-3xl sm:px-8">
+        <header className="flex items-center justify-between" style={{ paddingTop: "env(safe-area-inset-top)" }}>
+          <Link to="/dashboard" aria-label="Zero Alpha home" className="block">
+            <img src="/ZERO-ALPHA.png" alt="ZERO-ALPHA" className="h-20 w-auto object-contain" />
+          </Link>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              aria-label="Notifications"
+              className="grid h-12 w-12 place-items-center rounded-full border border-white/10 bg-white/[0.04] text-white/55 transition hover:bg-white/[0.08] hover:text-white"
+            >
+              <Bell className="h-5 w-5" />
+            </button>
+            <Link
+              to="/profile"
+              aria-label="Profile"
+              className="grid h-12 w-12 overflow-hidden rounded-full border border-[#8b725b]/60 bg-[#765f4b] text-sm font-bold uppercase text-[#f8efe5]"
+            >
+              {appUser?.photoURL || user?.photoURL ? (
+                <img
+                  src={appUser?.photoURL || user?.photoURL || ""}
+                  alt={appUser?.name ? `${appUser.name}'s profile` : "Profile"}
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <span className="grid h-full w-full place-items-center">
+                  {(appUser?.name || user?.displayName || "A").slice(0, 1)}
+                </span>
+              )}
+            </Link>
           </div>
+        </header>
+
+        <div className="mt-7 flex items-center justify-between gap-4">
+          <Link
+            to="/workouts"
+            className="text-base font-bold text-white/45 transition hover:text-white"
+          >
+            Cancel
+          </Link>
+          <span className="font-mono text-sm text-white/34">Step {step + 1} of 3</span>
+        </div>
+
+        <section className="mt-7">
+          <p className="text-[12px] font-bold uppercase tracking-[0.28em] text-white/34">
+            Log workout
+          </p>
+          <h1 className="mt-4 font-heading text-[2.6rem] uppercase leading-none text-white sm:text-[6rem]">
+            {step === 0
+              ? "What did you train?"
+              : step === 1
+              ? headlineForType(type)
+              : "Final touch and save"}
+          </h1>
+          <p className="mt-4 max-w-md text-[17px] leading-7 text-white/42">
+            {step === 0
+              ? "We'll tailor the next step to match sets and reps for strength, distance and pace for cardio."
+              : step === 1
+              ? completionLabel
+              : visibility === "members"
+              ? "This will post to the members feed once it saves."
+              : "This will stay private in your training history."}
+          </p>
         </section>
 
         <form
           onSubmit={(event) => event.preventDefault()}
-          className="space-y-6 rounded-[30px] border border-white/10 bg-neutral-950/95 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.35)] sm:p-6"
+          className="mt-8 space-y-6"
         >
           {saveError ? (
             <div className="rounded-[20px] border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-100">
@@ -913,40 +921,45 @@ export default function WorkoutComposer() {
 
           {step === 0 ? (
             <section className="space-y-5">
-              <div>
-                <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/40">
-                  Select
-                </div>
-                <h2 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-white">
-                  What did you train?
-                </h2>
-              </div>
+              <div className="grid grid-cols-2 gap-3">
+                {workoutTypes.map((option) => {
+                  const meta = workoutTypeMeta[option];
+                  const Icon = meta.icon;
+                  const isActive = option === type;
 
-              <div className="space-y-4 rounded-[24px] border border-white/10 bg-black/20 p-4">
-                <div className="grid grid-cols-2 gap-3">
-                  {workoutTypes.map((option) => {
-                    const meta = workoutTypeMeta[option];
-                    const Icon = meta.icon;
-                    const isActive = option === type;
-
-                    return (
-                      <button
-                        key={option}
-                        type="button"
-                        onClick={() => applyType(option)}
-                        className={[
-                          "rounded-[24px] border p-4 text-left transition",
-                          isActive
-                            ? "border-amber-400/25 bg-amber-400/[0.08] text-white"
-                            : "border-white/10 bg-neutral-950/80 text-white/78 hover:border-white/20 hover:bg-neutral-950",
-                        ].join(" ")}
-                      >
+                  return (
+                    <button
+                      key={option}
+                      type="button"
+                      onClick={() => applyType(option)}
+                      className={[
+                        "relative min-h-[142px] rounded-[20px] border p-5 text-left transition",
+                        isActive
+                          ? "border-[#f2eee8] bg-[#1b1917] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+                          : "border-white/8 bg-[#11100f] text-white/62 hover:border-white/18 hover:bg-[#171513]",
+                      ].join(" ")}
+                    >
+                      <span className="grid h-10 w-10 place-items-center rounded-xl bg-white/[0.055] text-white/60">
                         <Icon className="h-5 w-5" />
-                        <div className="mt-3 text-base font-semibold">{meta.label}</div>
-                      </button>
-                    );
-                  })}
-                </div>
+                      </span>
+                      {isActive ? (
+                        <CheckCircle2 className="absolute right-5 top-5 h-5 w-5 text-[#f2eee8]" />
+                      ) : null}
+                      <span className="mt-7 block text-[1.35rem] font-bold leading-none text-white">
+                        {meta.label}
+                      </span>
+                      <span className="mt-2 block text-sm leading-5 text-white/34">
+                        {option === "run"
+                          ? "Distance/time"
+                          : option === "strength"
+                          ? "Sets & reps"
+                          : option === "amrap"
+                          ? "Rounds in time"
+                          : "Per-minute"}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             </section>
           ) : null}
@@ -954,17 +967,17 @@ export default function WorkoutComposer() {
           {step === 1 ? (
             <section className="space-y-5">
               <div>
-                <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.22em] text-white/52">
+                <div className="inline-flex items-center gap-2 rounded-full border border-white/8 bg-white/[0.035] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.22em] text-white/45">
                   <TypeIcon className="h-3.5 w-3.5" />
                   {typeMeta.label}
                 </div>
-                <h2 className="mt-3 text-2xl font-semibold tracking-[-0.03em] text-white">
+                <h2 className="mt-3 text-2xl font-bold tracking-[-0.01em] text-white">
                   {headlineForType(type)}
                 </h2>
               </div>
 
               {type === "run" ? (
-                <div className="space-y-4 rounded-[24px] border border-white/10 bg-black/20 p-4">
+                <div className="max-w-full space-y-4 overflow-hidden rounded-[22px] border border-white/8 bg-[#11100f]/92 p-4">
                   <div>
                     <div className="text-sm font-semibold text-white">Result</div>
                     <div className="text-sm text-white/52">
@@ -995,8 +1008,8 @@ export default function WorkoutComposer() {
                           className={[
                             "rounded-full border px-3.5 py-2 text-sm font-semibold transition",
                             isActive
-                              ? "border-amber-400/25 bg-amber-400/[0.1] text-white"
-                              : "border-white/10 bg-neutral-950/80 text-white/72 hover:border-white/20 hover:text-white",
+                              ? "border-[#f2eee8] bg-white/[0.08] text-white"
+                              : "border-white/8 bg-[#11100f] text-white/48 hover:border-white/16 hover:text-white/75",
                           ].join(" ")}
                         >
                           {mode.label}
@@ -1005,13 +1018,13 @@ export default function WorkoutComposer() {
                     })}
                   </div>
 
-                  <div className="grid gap-4 md:grid-cols-[1fr_1fr_0.9fr]">
-                    <label className="block">
+                  <div className="grid min-w-0 gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.9fr)]">
+                    <label className="block min-w-0">
                       <span className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.22em] text-white/44">
                         Distance
                       </span>
                       <div className="space-y-2">
-                        <div className="flex flex-wrap gap-2">
+                        <div className="flex max-w-full flex-wrap gap-2">
                           {cardioDistanceChoices.map((option) => {
                             const isActive = runDistance === option.value && !customCardioDistance;
 
@@ -1029,8 +1042,8 @@ export default function WorkoutComposer() {
                                 className={[
                                   "rounded-full border px-3 py-2 text-sm font-semibold transition",
                                   isActive
-                                    ? "border-amber-400/25 bg-amber-400/[0.1] text-white"
-                                    : "border-white/10 bg-neutral-950/80 text-white/72 hover:border-white/20 hover:text-white",
+                                    ? "border-[#f2eee8] bg-white/[0.08] text-white"
+                                    : "border-white/8 bg-[#11100f] text-white/48 hover:border-white/16 hover:text-white/75",
                                 ].join(" ")}
                               >
                                 {option.label}
@@ -1041,10 +1054,10 @@ export default function WorkoutComposer() {
                             type="button"
                             onClick={() => setCustomCardioDistance(true)}
                             className={[
-                              "rounded-full border px-3 py-2 text-sm font-semibold transition",
+                              "shrink-0 rounded-full border px-3 py-2 text-sm font-semibold transition",
                               customCardioDistance || (!!runDistance && !cardioDistanceIsPreset)
-                                ? "border-amber-400/25 bg-amber-400/[0.1] text-white"
-                                : "border-white/10 bg-neutral-950/80 text-white/72 hover:border-white/20 hover:text-white",
+                                ? "border-[#f2eee8] bg-white/[0.08] text-white"
+                                : "border-white/8 bg-[#11100f] text-white/48 hover:border-white/16 hover:text-white/75",
                             ].join(" ")}
                           >
                             Custom
@@ -1056,7 +1069,7 @@ export default function WorkoutComposer() {
                               value={runDistance}
                               onChange={(event) => setRunDistance(tidyNumberInput(event.target.value))}
                               placeholder="1500"
-                              className="w-full rounded-[18px] border border-white/10 bg-black/85 px-4 py-3 pr-12 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-neutral-950"
+                              className="w-full rounded-[18px] border border-white/10 bg-[#090909] px-4 py-3 pr-12 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-[#0d0d0d]"
                             />
                             <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-xs font-semibold uppercase tracking-[0.18em] text-white/35">
                               m
@@ -1066,57 +1079,50 @@ export default function WorkoutComposer() {
                       </div>
                     </label>
 
-                    <label className="block">
+                    <label className="block min-w-0">
                       <span className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.22em] text-white/44">
                         Time
                       </span>
-                      <div className="grid grid-cols-[0.8fr_auto_0.8fr_auto_0.8fr] items-center gap-2 rounded-[20px] border border-white/10 bg-black/85 px-3 py-3">
-                        <div>
-                          <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/34">
-                            Hr
-                          </div>
+                      <div className="w-full max-w-full overflow-hidden rounded-[20px] border border-white/10 bg-[#090909] px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <Timer className="h-5 w-5 shrink-0 text-white/28" />
                           <input
-                            inputMode="numeric"
-                            value={runTimeParts.hours}
-                            onChange={(event) => updateRunTimePart("hours", event.target.value)}
-                            placeholder="0"
-                            className="w-full bg-transparent text-center text-base font-semibold text-white outline-none placeholder:text-white/18"
+                            inputMode="decimal"
+                            value={runTime}
+                            onChange={(event) => setRunTime(tidyTimeInput(event.target.value))}
+                            onBlur={() => setRunTime((current) => normalizeRunTimeInput(current))}
+                            placeholder="24:18"
+                            aria-label="Elapsed time"
+                            className="min-w-0 flex-1 bg-transparent font-mono text-[2rem] font-bold leading-none text-white outline-none placeholder:text-white/18"
                           />
+                          <span className="hidden shrink-0 text-[11px] font-bold uppercase tracking-[0.18em] text-white/28 sm:inline">
+                            mm:ss
+                          </span>
                         </div>
-                        <div className="pt-4 text-center text-lg font-semibold text-white/45">:</div>
-                        <div>
-                          <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/34">
-                            Min
-                          </div>
-                          <input
-                            inputMode="numeric"
-                            value={runTimeParts.minutes}
-                            onChange={(event) => updateRunTimePart("minutes", event.target.value)}
-                            placeholder="24"
-                            className="w-full bg-transparent text-center text-base font-semibold text-white outline-none placeholder:text-white/18"
-                          />
-                        </div>
-                        <div className="pt-4 text-center text-lg font-semibold text-white/45">:</div>
-                        <div>
-                          <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/34">
-                            Sec
-                          </div>
-                          <input
-                            inputMode="numeric"
-                            value={runTimeParts.seconds}
-                            onChange={(event) => updateRunTimePart("seconds", event.target.value)}
-                            placeholder="18"
-                            className="w-full bg-transparent text-center text-base font-semibold text-white outline-none placeholder:text-white/18"
-                          />
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {cardioTimePresets.map((preset) => (
+                            <button
+                              key={preset}
+                              type="button"
+                              onClick={() => setRunTime(preset)}
+                              className={[
+                                "shrink-0 rounded-full border px-3 py-1.5 font-mono text-xs font-bold transition",
+                                runTime === preset
+                                  ? "border-[#f2eee8] bg-white/[0.08] text-white"
+                                  : "border-white/8 bg-white/[0.03] text-white/40 hover:text-white/70",
+                              ].join(" ")}
+                            >
+                              {preset}
+                            </button>
+                          ))}
                         </div>
                       </div>
-                      <div className="mt-2 flex items-center gap-2 text-xs text-white/38">
-                        <Timer className="h-3.5 w-3.5" />
-                        Elapsed time
+                      <div className="mt-2 text-xs text-white/34">
+                        Type 2430, 24:30, or 1.23.40.
                       </div>
                     </label>
 
-                    <div className="rounded-[20px] border border-white/10 bg-neutral-950/85 px-4 py-3.5">
+                    <div className="min-w-0 rounded-[20px] border border-white/8 bg-[#11100f] px-4 py-3.5">
                       <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/40">
                         Pace
                       </div>
@@ -1126,8 +1132,8 @@ export default function WorkoutComposer() {
                     </div>
                   </div>
 
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <label className="block">
+                  <div className="grid min-w-0 gap-4 md:grid-cols-2">
+                    <label className="block min-w-0">
                       <span className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-white/44">
                         <MapPinned className="h-3.5 w-3.5" />
                         Route / machine
@@ -1136,11 +1142,11 @@ export default function WorkoutComposer() {
                         value={runArea}
                         onChange={(event) => setRunArea(event.target.value)}
                         placeholder=""
-                        className="w-full rounded-[20px] border border-white/10 bg-black/85 px-4 py-3.5 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-neutral-950"
+                        className="w-full rounded-[20px] border border-white/10 bg-[#090909] px-4 py-3.5 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-[#0d0d0d]"
                       />
                     </label>
 
-                    <label className="block">
+                    <label className="block min-w-0">
                       <span className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.22em] text-white/44">
                         Title
                       </span>
@@ -1148,7 +1154,7 @@ export default function WorkoutComposer() {
                         value={title}
                         onChange={(event) => setTitle(event.target.value)}
                         placeholder={defaultCardioTitle(cardioMode, runDistance)}
-                        className="w-full rounded-[20px] border border-white/10 bg-black/85 px-4 py-3.5 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-neutral-950"
+                        className="w-full rounded-[20px] border border-white/10 bg-[#090909] px-4 py-3.5 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-[#0d0d0d]"
                       />
                     </label>
                   </div>
@@ -1161,7 +1167,7 @@ export default function WorkoutComposer() {
                       type="date"
                       value={sessionDate}
                       onChange={(event) => setSessionDate(event.target.value)}
-                      className="w-full rounded-[20px] border border-white/10 bg-black/85 px-4 py-3.5 text-sm text-white outline-none transition [color-scheme:dark] focus:border-white/20 focus:bg-neutral-950"
+                      className="w-full rounded-[20px] border border-white/10 bg-[#090909] px-4 py-3.5 text-sm text-white outline-none transition [color-scheme:dark] focus:border-white/20 focus:bg-[#0d0d0d]"
                     />
                   </label>
                 </div>
@@ -1175,7 +1181,7 @@ export default function WorkoutComposer() {
                       value={title}
                       onChange={(event) => setTitle(event.target.value)}
                       placeholder={typeMeta.titlePlaceholder}
-                      className="w-full rounded-[20px] border border-white/10 bg-black/85 px-4 py-3.5 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-neutral-950"
+                      className="w-full rounded-[20px] border border-white/10 bg-[#090909] px-4 py-3.5 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-[#0d0d0d]"
                     />
                   </label>
 
@@ -1187,7 +1193,7 @@ export default function WorkoutComposer() {
                       type="date"
                       value={sessionDate}
                       onChange={(event) => setSessionDate(event.target.value)}
-                      className="w-full rounded-[20px] border border-white/10 bg-black/85 px-4 py-3.5 text-sm text-white outline-none transition [color-scheme:dark] focus:border-white/20 focus:bg-neutral-950"
+                      className="w-full rounded-[20px] border border-white/10 bg-[#090909] px-4 py-3.5 text-sm text-white outline-none transition [color-scheme:dark] focus:border-white/20 focus:bg-[#0d0d0d]"
                     />
                   </label>
                 </div>
@@ -1206,8 +1212,8 @@ export default function WorkoutComposer() {
                       className={[
                         "rounded-full border px-3.5 py-2 text-sm font-semibold transition",
                         loggingMode === option.value
-                          ? "border-amber-400/25 bg-amber-400/[0.1] text-white"
-                          : "border-white/10 bg-neutral-950/80 text-white/72 hover:border-white/20 hover:text-white",
+                          ? "border-[#f2eee8] bg-white/[0.08] text-white"
+                          : "border-white/8 bg-[#11100f] text-white/48 hover:border-white/16 hover:text-white/75",
                       ].join(" ")}
                     >
                       {option.label}
@@ -1226,13 +1232,13 @@ export default function WorkoutComposer() {
                     onChange={(event) => setSessionText(event.target.value)}
                     rows={7}
                     placeholder="Write the session however you want: movements, sets, rounds, weights, or just a quick note."
-                    className="w-full resize-none rounded-[20px] border border-white/10 bg-black/85 px-4 py-3.5 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-neutral-950"
+                    className="w-full resize-none rounded-[20px] border border-white/10 bg-[#090909] px-4 py-3.5 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-[#0d0d0d]"
                   />
                 </label>
               ) : null}
 
               {type === "strength" && loggingMode === "structured" ? (
-                <div className="space-y-3 rounded-[22px] border border-white/10 bg-black/20 p-3.5">
+                <div className="space-y-3 rounded-[22px] border border-white/8 bg-[#11100f]/92 p-3.5">
                   <div className="flex flex-wrap items-end justify-between gap-3">
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-semibold text-white">Strength movements</div>
@@ -1256,7 +1262,7 @@ export default function WorkoutComposer() {
                     {strengthMovements.map((item, index) => (
                       <div
                         key={`strength-${index}`}
-                        className="space-y-2.5 rounded-[18px] border border-white/10 bg-neutral-950/85 p-2.5"
+                        className="space-y-2.5 rounded-[18px] border border-white/8 bg-[#11100f] p-2.5"
                       >
                         <MovementCombobox
                           items={strengthLibrary}
@@ -1285,7 +1291,7 @@ export default function WorkoutComposer() {
                                 })
                               }
                               placeholder="kg"
-                              className="w-full rounded-[14px] border border-white/10 bg-black/85 px-3 py-2.5 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-neutral-950"
+                              className="w-full rounded-[14px] border border-white/10 bg-[#090909] px-3 py-2.5 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-[#0d0d0d]"
                             />
                           </label>
 
@@ -1301,7 +1307,7 @@ export default function WorkoutComposer() {
                                 })
                               }
                               placeholder="8"
-                              className="w-full rounded-[14px] border border-white/10 bg-black/85 px-3 py-2.5 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-neutral-950"
+                              className="w-full rounded-[14px] border border-white/10 bg-[#090909] px-3 py-2.5 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-[#0d0d0d]"
                             />
                           </label>
 
@@ -1317,7 +1323,7 @@ export default function WorkoutComposer() {
                                 })
                               }
                               placeholder="4"
-                              className="w-full rounded-[14px] border border-white/10 bg-black/85 px-3 py-2.5 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-neutral-950"
+                              className="w-full rounded-[14px] border border-white/10 bg-[#090909] px-3 py-2.5 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-[#0d0d0d]"
                             />
                           </label>
 
@@ -1345,7 +1351,7 @@ export default function WorkoutComposer() {
               ) : null}
 
               {(type === "amrap" || type === "emom") && loggingMode === "structured" ? (
-                <div className="space-y-4 rounded-[24px] border border-white/10 bg-black/20 p-4">
+                <div className="space-y-4 rounded-[24px] border border-white/8 bg-[#11100f]/92 p-4">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <div className="text-sm font-semibold text-white">Session movements</div>
@@ -1370,7 +1376,7 @@ export default function WorkoutComposer() {
                     {sessionMovements.map((item, index) => (
                       <div
                         key={`session-${index}`}
-                        className="grid gap-3 rounded-[22px] border border-white/10 bg-neutral-950/85 p-3 md:grid-cols-[1.1fr_0.7fr_0.7fr_auto]"
+                        className="grid gap-3 rounded-[22px] border border-white/8 bg-[#11100f] p-3 md:grid-cols-[1.1fr_0.7fr_0.7fr_auto]"
                       >
                         <MovementCombobox
                           items={metconLibrary}
@@ -1393,7 +1399,7 @@ export default function WorkoutComposer() {
                               metric: event.target.value as WorkoutMovementEntryMetric,
                             })
                           }
-                          className="rounded-[18px] border border-white/10 bg-black/85 px-4 py-3 text-sm text-white outline-none transition focus:border-white/20 focus:bg-neutral-950"
+                          className="rounded-[18px] border border-white/10 bg-[#090909] px-4 py-3 text-sm text-white outline-none transition focus:border-white/20 focus:bg-[#0d0d0d]"
                         >
                           {metricOptionsForEntry(item).map((option) => (
                             <option key={option.value} value={option.value}>
@@ -1410,7 +1416,7 @@ export default function WorkoutComposer() {
                             })
                           }
                           placeholder="Value"
-                          className="rounded-[18px] border border-white/10 bg-black/85 px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-neutral-950"
+                          className="rounded-[18px] border border-white/10 bg-[#090909] px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-[#0d0d0d]"
                         />
 
                         <button
@@ -1442,7 +1448,7 @@ export default function WorkoutComposer() {
                         value={totalTime}
                         onChange={(event) => setTotalTime(tidyNumberInput(event.target.value))}
                         placeholder="20"
-                        className="w-full rounded-[20px] border border-white/10 bg-black/85 px-4 py-3.5 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-neutral-950"
+                        className="w-full rounded-[20px] border border-white/10 bg-[#090909] px-4 py-3.5 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-[#0d0d0d]"
                       />
                     </label>
 
@@ -1455,7 +1461,7 @@ export default function WorkoutComposer() {
                           value={totalRounds}
                           onChange={(event) => setTotalRounds(tidyNumberInput(event.target.value))}
                           placeholder="5"
-                          className="w-full rounded-[20px] border border-white/10 bg-black/85 px-4 py-3.5 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-neutral-950"
+                          className="w-full rounded-[20px] border border-white/10 bg-[#090909] px-4 py-3.5 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-[#0d0d0d]"
                         />
                       </label>
                     ) : null}
@@ -1487,11 +1493,11 @@ export default function WorkoutComposer() {
                       onChange={(event) => setNotes(event.target.value)}
                       rows={3}
                       placeholder="Anything worth keeping from the session?"
-                      className="w-full resize-none rounded-[18px] border border-white/10 bg-black/85 px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-neutral-950"
+                      className="w-full resize-none rounded-[18px] border border-white/10 bg-[#090909] px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/22 focus:border-white/20 focus:bg-[#0d0d0d]"
                     />
                   </label>
 
-                  <label className="block rounded-[20px] border border-white/10 bg-black/20 p-3.5">
+                  <label className="block rounded-[20px] border border-white/8 bg-[#11100f]/92 p-3.5">
                     <div className="mb-3 flex items-center justify-between gap-3">
                       <span className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-white/44">
                         <ImagePlus className="h-3.5 w-3.5" />
@@ -1519,14 +1525,14 @@ export default function WorkoutComposer() {
                         type="file"
                         accept="image/*"
                         onChange={(event) => onPickSelfie(event.target.files?.[0] ?? null)}
-                        className="block w-full rounded-[16px] border border-white/10 bg-black/85 px-3 py-2.5 text-sm text-white file:mr-3 file:rounded-full file:border-0 file:bg-white/10 file:px-3 file:py-1.5 file:text-sm file:font-semibold file:text-white"
+                        className="block w-full rounded-[16px] border border-white/10 bg-[#090909] px-3 py-2.5 text-sm text-white file:mr-3 file:rounded-full file:border-0 file:bg-white/10 file:px-3 file:py-1.5 file:text-sm file:font-semibold file:text-white"
                       />
                     </div>
                   </label>
                 </div>
 
                 <div className="space-y-4">
-                  <div className="rounded-[20px] border border-white/10 bg-black/20 p-3.5">
+                  <div className="rounded-[20px] border border-white/8 bg-[#11100f]/92 p-3.5">
                     <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/40">
                       Preview
                     </div>
@@ -1551,8 +1557,8 @@ export default function WorkoutComposer() {
                       className={[
                         "w-full rounded-[20px] border px-4 py-3 text-left transition",
                         visibility === "members"
-                          ? "border-orange-400/25 bg-orange-400/[0.08] text-white"
-                          : "border-white/10 bg-neutral-950/80 text-white/78 hover:border-white/20",
+                          ? "border-[#f2eee8] bg-white/[0.08] text-white"
+                          : "border-white/8 bg-[#11100f] text-white/58 hover:border-white/16 hover:text-white/82",
                       ].join(" ")}
                     >
                       <div className="flex items-center justify-between gap-3">
@@ -1568,7 +1574,7 @@ export default function WorkoutComposer() {
                         <div
                           className={[
                             "h-2.5 w-2.5 rounded-full transition",
-                            visibility === "members" ? "bg-orange-300" : "bg-white/15",
+                            visibility === "members" ? "bg-[#f2eee8]" : "bg-white/15",
                           ].join(" ")}
                         />
                       </div>
@@ -1580,8 +1586,8 @@ export default function WorkoutComposer() {
                       className={[
                         "w-full rounded-[20px] border px-4 py-3 text-left transition",
                         visibility === "private"
-                          ? "border-sky-400/25 bg-sky-400/[0.08] text-white"
-                          : "border-white/10 bg-neutral-950/80 text-white/78 hover:border-white/20",
+                          ? "border-[#f2eee8] bg-white/[0.08] text-white"
+                          : "border-white/8 bg-[#11100f] text-white/58 hover:border-white/16 hover:text-white/82",
                       ].join(" ")}
                     >
                       <div className="flex items-center justify-between gap-3">
@@ -1597,7 +1603,7 @@ export default function WorkoutComposer() {
                         <div
                           className={[
                             "h-2.5 w-2.5 rounded-full transition",
-                            visibility === "private" ? "bg-sky-300" : "bg-white/15",
+                            visibility === "private" ? "bg-[#f2eee8]" : "bg-white/15",
                           ].join(" ")}
                         />
                       </div>
@@ -1608,26 +1614,29 @@ export default function WorkoutComposer() {
             </section>
           ) : null}
 
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="fixed inset-x-4 bottom-4 z-40 mx-auto max-w-xl rounded-[28px] border border-white/10 bg-[#191715]/95 px-5 py-4 shadow-[0_20px_70px_rgba(0,0,0,0.5)] backdrop-blur-xl sm:max-w-2xl">
+            <div className="mb-4 h-1 rounded-full bg-white/10">
+              <div
+                className="h-full rounded-full bg-[#f2eee8] transition-all"
+                style={{ width: `${((step + 1) / 3) * 100}%` }}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-3">
             <button
               type="button"
               onClick={previousStep}
               disabled={step === 0}
-              className="inline-flex items-center gap-2 rounded-[20px] border border-white/10 bg-white/[0.04] px-5 py-3 text-sm font-semibold text-white/72 transition hover:border-white/20 hover:text-white disabled:cursor-not-allowed disabled:opacity-45"
+              className="inline-flex items-center gap-2 rounded-[20px] px-5 py-3 text-base font-bold text-white/42 transition hover:text-white disabled:cursor-not-allowed disabled:opacity-45"
             >
               <ChevronLeft className="h-4 w-4" />
               Back
             </button>
 
-            <div className="text-sm text-white/45">
-              Step {step + 1} of 3
-            </div>
-
             {step < 2 ? (
               <button
                 type="button"
                 onClick={nextStep}
-                className="inline-flex items-center gap-2 rounded-[20px] bg-[linear-gradient(135deg,#fde68a,#f59e0b)] px-5 py-3.5 text-sm font-semibold text-black transition hover:brightness-105"
+                className="inline-flex min-w-[190px] items-center justify-center gap-2 rounded-full bg-[#f2eee8] px-7 py-4 text-base font-bold text-black transition hover:brightness-95"
               >
                 Continue
                 <ChevronRight className="h-4 w-4" />
@@ -1637,15 +1646,16 @@ export default function WorkoutComposer() {
                 type="button"
                 onClick={() => void saveWorkout()}
                 disabled={isSaving}
-                className="inline-flex items-center gap-2 rounded-[20px] bg-[linear-gradient(135deg,#fde68a,#f59e0b)] px-5 py-3.5 text-sm font-semibold text-black transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex min-w-[190px] items-center justify-center gap-2 rounded-full bg-[#f2eee8] px-7 py-4 text-base font-bold text-black transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isSaving ? "Saving..." : "Save workout"}
                 <ChevronRight className="h-4 w-4" />
               </button>
             )}
+            </div>
           </div>
         </form>
-      </div>
+      </main>
     </div>
   );
 }

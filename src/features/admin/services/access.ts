@@ -1,6 +1,15 @@
 import { getFunctions, httpsCallable } from "firebase/functions";
+import app from "../../../firebase";
 
-const functions = getFunctions(undefined, "europe-west1");
+const functions = getFunctions(app, "europe-west1");
+
+function describeFirebaseError(err: any) {
+  const code = String(err?.code || "");
+  const message = String(err?.message || "");
+  const details = err?.details ? ` ${JSON.stringify(err.details)}` : "";
+
+  return [code, message].filter(Boolean).join(": ") + details;
+}
 
 function getApprovalErrorMessage(err: any) {
   const code = String(err?.code || "");
@@ -25,6 +34,7 @@ function getApprovalErrorMessage(err: any) {
 function getInviteErrorMessage(err: any) {
   const code = String(err?.code || "");
   const message = String(err?.message || "");
+  const diagnostic = describeFirebaseError(err);
 
   if (
     code.includes("internal") ||
@@ -39,7 +49,7 @@ function getInviteErrorMessage(err: any) {
     return "This account does not have permission to invite members.";
   }
 
-  return message || "Failed to send invite email.";
+  return diagnostic || message || "Failed to send invite email.";
 }
 
 export async function approveUserAccess(userId: string) {
@@ -56,14 +66,21 @@ export async function approveUserAccess(userId: string) {
 }
 
 export async function inviteMemberByEmail(email: string) {
+  const normalisedEmail = email.trim().toLowerCase();
+
+  if (!normalisedEmail) {
+    throw new Error("Email address is required.");
+  }
+
   const callable = httpsCallable<
     { email: string; origin: string },
     { ok: boolean; signUpUrl: string }
   >(functions, "inviteMemberByEmail");
 
   try {
-    return await callable({ email, origin: window.location.origin });
+    return await callable({ email: normalisedEmail, origin: window.location.origin });
   } catch (err: any) {
+    console.error("inviteMemberByEmail failed", err);
     throw new Error(getInviteErrorMessage(err));
   }
 }
