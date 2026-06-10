@@ -1,5 +1,5 @@
 // src/features/dashboard/pages/Dashboard.tsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Link, NavLink } from "react-router-dom";
 import {
   collection,
@@ -11,7 +11,6 @@ import {
   Timestamp,
   where,
 } from "firebase/firestore";
-import { getAuth, onAuthStateChanged, User } from "firebase/auth";
 import { db } from "../../../firebase";
 import { useAuth } from "../../../context/AuthContext";
 import { getUserNavItems } from "../../../components/layout/UserTopNav";
@@ -435,11 +434,9 @@ function capacityPercent(bookedCount?: number, capacity?: number) {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
-  const { appUser } = useAuth();
-  const auth = getAuth();
+  const { user, appUser } = useAuth();
   const isBanned = appUser?.role === "banned";
 
-  const [user, setUser] = useState<User | null>(auth.currentUser);
   const [stats, setStats] = useState<UserStats | null>(null);
   const [bookedClasses, setBookedClasses] = useState<ClassWithId[]>([]);
   const [loadingClasses, setLoadingClasses] = useState(true);
@@ -448,11 +445,6 @@ export default function Dashboard() {
   const [shareOpen, setShareOpen] = useState(false);
   const [calculatorWeight, setCalculatorWeight] = useState("");
   const [percentageInput, setPercentageInput] = useState("75");
-
-  // Track auth user
-  useEffect(() => {
-    return onAuthStateChanged(auth, (u) => setUser(u));
-  }, [auth]);
 
   // Fetch user stats once
   useEffect(() => {
@@ -526,16 +518,69 @@ export default function Dashboard() {
   }, [user]);
 
   useEffect(() => {
-    const todayRef = doc(db, "wods", todayKeyLondon());
-    return onSnapshot(
-      todayRef,
-      (snap) => setTodayProgramming(snap.exists() ? (snap.data() as Record<string, any>) : null),
-      (error) => console.error("Dashboard programming fetch error:", error)
-    );
+    let isMounted = true;
+
+    async function loadTodayProgramming() {
+      try {
+        const snap = await getDoc(doc(db, "wods", todayKeyLondon()));
+        if (!isMounted) return;
+        setTodayProgramming(snap.exists() ? (snap.data() as Record<string, any>) : null);
+      } catch (error) {
+        if (!isMounted) return;
+        console.error("Dashboard programming fetch error:", error);
+      }
+    }
+
+    loadTodayProgramming();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const firstName = appUser?.name?.split(" ")[0] || appUser?.email?.split("@")[0] || "there";
   const profilePhotoURL = appUser?.photoURL || user?.photoURL || "";
+
+  const todayKey = todayKeyLondon();
+  const { todayClasses, upcomingClasses } = useMemo(() => {
+    const todayRows: ClassWithId[] = [];
+    const upcomingRows: ClassWithId[] = [];
+
+    for (const classRow of bookedClasses) {
+      if (datekeyLondon(classRow.data.startTime.toDate()) === todayKey) {
+        todayRows.push(classRow);
+      } else {
+        upcomingRows.push(classRow);
+      }
+    }
+
+    return { todayClasses: todayRows, upcomingClasses: upcomingRows };
+  }, [bookedClasses, todayKey]);
+
+  const sessionCards: DashboardSessionCard[] = useMemo(() => (["AM", "PM"] as SessionKey[]).map((key) => {
+    const payload = getDashboardSessionPayload(todayProgramming?.[key], key, todayKey);
+    const emptyLabel = key === "AM" ? "6AM" : "6PM";
+
+    if (!payload) {
+      return {
+        key,
+        timeLabel: emptyLabel,
+        title: "Coming soon",
+        meta: "Programming not published yet",
+        detail: "Check back later for today’s session.",
+        payload: null,
+      };
+    }
+
+    return {
+      key,
+      timeLabel: payload.sessionTimeLabel || emptyLabel,
+      title: payload.title,
+      meta: `${payload.sessionType} · ${payload.sessionStyle}`,
+      detail: payload.stationsLabel,
+      payload,
+    };
+  }), [todayKey, todayProgramming]);
 
   if (isBanned) {
     return (
@@ -563,40 +608,7 @@ export default function Dashboard() {
     );
   }
 
-  const todayKey = todayKeyLondon();
-  const todayClasses = bookedClasses.filter(
-    (c) => datekeyLondon(c.data.startTime.toDate()) === todayKey
-  );
-  const upcomingClasses = bookedClasses.filter(
-    (c) => datekeyLondon(c.data.startTime.toDate()) !== todayKey
-  );
-
   const thisMonthCount = stats?.monthCheckIns?.[monthKeyLondon()] ?? 0;
-  const sessionCards: DashboardSessionCard[] = (["AM", "PM"] as SessionKey[]).map((key) => {
-    const payload = getDashboardSessionPayload(todayProgramming?.[key], key, todayKey);
-    const emptyLabel = key === "AM" ? "6AM" : "6PM";
-
-    if (!payload) {
-      return {
-        key,
-        timeLabel: emptyLabel,
-        title: "Coming soon",
-        meta: "Programming not published yet",
-        detail: "Check back later for today’s session.",
-        payload: null,
-      };
-    }
-
-    return {
-      key,
-      timeLabel: payload.sessionTimeLabel || emptyLabel,
-      title: payload.title,
-      meta: `${payload.sessionType} · ${payload.sessionStyle}`,
-      detail: payload.stationsLabel,
-      payload,
-    };
-  });
-
   const nextUp = todayClasses[0] ?? upcomingClasses[0] ?? null;
   const nextUpMeta = nextUp ? typeMeta(nextUp.data.title) : null;
   const nextUpStart = nextUp?.data.startTime.toDate();

@@ -2,8 +2,6 @@ import React, { useEffect, useMemo, useState } from "react";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { Bell, ChevronLeft, ChevronRight, Flame, RefreshCw } from "lucide-react";
 import {useAuth} from "../../../context/AuthContext";
-import { collection, documentId, getDocs, query, where } from "firebase/firestore";
-import { db } from "../../../firebase";
 import UserAvatar from "../../../components/ui/UserAvatar";
 import { Link, NavLink } from "react-router-dom";
 import { getUserNavItems } from "../../../components/layout/UserTopNav";
@@ -52,26 +50,6 @@ function formatMonthLabel(monthKey: string) {
   });
 }
 
-type UserProfile = {
-  name?: string;
-  photoURL?: string;
-};
-
-async function fetchUserProfiles(uids: string[]) {
-  const map = new Map<string, UserProfile>();
-  const unique = Array.from(new Set(uids.filter(Boolean)));
-  if (!unique.length) return map;
-
-  for (let i = 0; i < unique.length; i += 10) {
-    const chunk = unique.slice(i, i + 10);
-    const q = query(collection(db, "users"), where(documentId(), "in", chunk));
-    const snap = await getDocs(q);
-    snap.forEach((d) => map.set(d.id, d.data() as UserProfile));
-  }
-
-  return map;
-}
-
 export default function DipLeaderboard() {
   const { user, appUser } = useAuth();
   const functions = useMemo(() => getFunctions(undefined, "europe-west1"), []);
@@ -92,21 +70,7 @@ export default function DipLeaderboard() {
 
     try {
       const res = await getMonthlyDipLeaderboard({ monthKey, limit: 200 });
-      const baseRows: DipRow[] = res.data?.rows || [];
-
-      const uids = baseRows.map((r) => r.userId);
-      const profiles = await fetchUserProfiles(uids);
-
-      const merged = baseRows.map((r) => {
-        const p = profiles.get(r.userId);
-        return {
-          ...r,
-          name: p?.name ?? r.name ?? "Member",
-          photoURL: p?.photoURL ?? r.photoURL,
-        };
-      });
-
-      setRows(merged);
+      setRows(res.data?.rows || []);
     } catch (e: any) {
       console.error(e);
       setErr(e?.message || "Failed to load Board of Shame");
@@ -120,7 +84,7 @@ export default function DipLeaderboard() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [monthKey]);
 
-  const rankedRows = rows.filter((r) => r.dipCount > 0);
+  const rankedRows = useMemo(() => rows.filter((r) => r.dipCount > 0), [rows]);
   const top1 = rankedRows[0];
   const top2 = rankedRows[1];
   const top3 = rankedRows[2];

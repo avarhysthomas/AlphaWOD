@@ -107,6 +107,15 @@ type LeaderboardUserDoc = {
   updatedAt: admin.firestore.FieldValue | admin.firestore.Timestamp;
 };
 
+type DipLeaderboardUserDoc = {
+  userId: string;
+  name: string;
+  email: string;
+  photoURL: string;
+  dipCount: number;
+  updatedAt: admin.firestore.FieldValue | admin.firestore.Timestamp;
+};
+
 type InviteDoc = {
   email: string;
   invitedBy: string;
@@ -209,6 +218,86 @@ function canUserAccessClass(user: Partial<UserDoc>, classData: Partial<ClassDoc>
   const strengthBlock = normaliseStrengthBlock(user.strengthBlock);
   if (user.role === "admin" && strengthBlock === "none") return true;
   return strengthBlock === slot;
+}
+
+function getClassStart(classData: Partial<ClassDoc>) {
+  const start = classData.startTime?.toDate?.();
+  if (!start) return null;
+
+  return DateTime.fromJSDate(start, {
+    zone: String(classData.timezone || "Europe/London"),
+  });
+}
+
+function getBookingClosesAt(classData: Partial<ClassDoc>) {
+  const start = getClassStart(classData);
+  if (!start) return null;
+
+  if (start.hour === 5 || start.hour === 6) {
+    return start.minus({days: 1}).set({
+      hour: 21,
+      minute: 0,
+      second: 0,
+      millisecond: 0,
+    });
+  }
+
+  if (start.hour === 18) {
+    return start.set({
+      hour: 15,
+      minute: 0,
+      second: 0,
+      millisecond: 0,
+    });
+  }
+
+  return start.minus({hours: 2});
+}
+
+function assertBookingWindowOpen(classData: Partial<ClassDoc>, message: string) {
+  const start = getClassStart(classData);
+  const closesAt = getBookingClosesAt(classData);
+  if (!start || !closesAt) return;
+
+  const now = DateTime.now().setZone(start.zone);
+  if (now >= start || now >= closesAt) {
+    throw new HttpsError("failed-precondition", message);
+  }
+}
+
+async function updateDipLeaderboardCount(
+  tx: admin.firestore.Transaction,
+  monthKey: string,
+  userId: string,
+  user: Partial<UserDoc>,
+  bookingUserName: string | undefined,
+  delta: number
+) {
+  if (delta === 0) return;
+
+  const ref = db
+    .collection("leaderboards")
+    .doc(monthKey)
+    .collection("dipUsers")
+    .doc(userId);
+  const snap = await tx.get(ref);
+  const current = snap.exists ?
+    Number((snap.data() as Partial<DipLeaderboardUserDoc>).dipCount ?? 0) :
+    0;
+  const nextCount = Math.max(0, current + delta);
+
+  tx.set(
+    ref,
+    {
+      userId,
+      name: user.name ?? bookingUserName ?? "Member",
+      email: user.email ?? "",
+      photoURL: user.photoURL ?? "",
+      dipCount: nextCount,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    } satisfies DipLeaderboardUserDoc,
+    {merge: true}
+  );
 }
 
 function buildInviteEmailHtml(signUpUrl: string) {
@@ -515,6 +604,8 @@ export const bookClass = onCall(async (request) => {
       );
     }
 
+    assertBookingWindowOpen(classData, "Booking closed");
+
     const capacity = Number(classData.capacity ?? 0);
     const bookedCount = Number(classData.bookedCount ?? 0);
 
@@ -565,7 +656,10 @@ export const cancelBooking = onCall(async (request) => {
     const booking = bookingSnap.data() as BookingDoc;
     if (booking.status !== "booked") throw new HttpsError("failed-precondition", "No active booking found");
 
-    const classData = classSnap.exists ? (classSnap.data() as Partial<ClassDoc>) : {};
+    if (!classSnap.exists) throw new HttpsError("not-found", "Class not found");
+
+    const classData = classSnap.data() as Partial<ClassDoc>;
+    assertBookingWindowOpen(classData, "Cancellation closed");
     const bookedCount = Number(classData.bookedCount ?? 0);
 
     tx.update(bookingRef, {
@@ -703,11 +797,36 @@ export const checkInBooking = onCall(async (request) => {
       // If attended isn't changing, we still allow updating checkedInBy timestamp if you want,
       // but leaderboard should not change.
       const prevAttended = booking.attended === true;
+      const prevAttendanceStatus = booking.attendanceStatus ?? (prevAttended ? "checked_in" : "none");
+      const nextAttendanceStatus = nextAttended ? "checked_in" : "none";
+      const dipDelta = prevAttendanceStatus === "dip" ? -1 : 0;
+
       if (prevAttended === nextAttended) {
+        if (dipDelta !== 0) {
+          const classRef = db.collection("classes").doc(booking.classId);
+          const classSnap = await tx.get(classRef);
+          if (!classSnap.exists) throw new HttpsError("not-found", "Class not found.");
+
+          const classDoc = classSnap.data() as ClassDoc;
+          const monthKey = ukMonthKeyFromDate(classDoc.startTime.toDate());
+          const userRef = db.collection("users").doc(booking.userId);
+          const userSnap = await tx.get(userRef);
+          const u = (userSnap.data() || {}) as UserDoc;
+
+          await updateDipLeaderboardCount(
+            tx,
+            monthKey,
+            booking.userId,
+            u,
+            booking.userName,
+            dipDelta
+          );
+        }
+
         tx.update(bookingRef, {
           checkedInBy: callerUid,
           checkedInAt: prevAttended ? admin.firestore.FieldValue.serverTimestamp() : booking.checkedInAt ?? null,
-          attendanceStatus: prevAttended ? "checked_in" : "none",
+          attendanceStatus: nextAttendanceStatus,
         });
         return {ok: true, leaderboardChanged: false};
       }
@@ -743,6 +862,15 @@ export const checkInBooking = onCall(async (request) => {
       const userRef = db.collection("users").doc(booking.userId);
       const userSnap = await tx.get(userRef);
       const u = (userSnap.data() || {}) as UserDoc;
+
+      await updateDipLeaderboardCount(
+        tx,
+        monthKey,
+        booking.userId,
+        u,
+        booking.userName,
+        dipDelta
+      );
 
       // ---- Tier 1 Stats: totals + streaks (UK local day key) ----
       const today = ukDateKeyNow();
@@ -935,6 +1063,9 @@ export const markBookingStatus = onCall(async (request) => {
     }
 
     const delta = (nextAttended ? 1 : 0) - (prevAttended ? 1 : 0);
+    const dipDelta =
+      (nextAttendanceStatus === "dip" ? 1 : 0) -
+      (prevAttendanceStatus === "dip" ? 1 : 0);
 
     // Update leaderboard + user stats ONLY if attended changed
     if (delta !== 0) {
@@ -982,6 +1113,15 @@ export const markBookingStatus = onCall(async (request) => {
         // do not fully recompute streak on removal
       }
 
+      await updateDipLeaderboardCount(
+        tx,
+        monthKey,
+        userId,
+        u,
+        booking.userName,
+        dipDelta
+      );
+
       tx.set(
         lbUserRef,
         {
@@ -1007,6 +1147,15 @@ export const markBookingStatus = onCall(async (request) => {
           },
         },
         {merge: true}
+      );
+    } else if (dipDelta !== 0) {
+      await updateDipLeaderboardCount(
+        tx,
+        monthKey,
+        userId,
+        u,
+        booking.userName,
+        dipDelta
       );
     }
 
@@ -1239,6 +1388,26 @@ export const getMonthlyDipLeaderboard = onCall(async (request) => {
     typeof request.data?.limit === "number" && request.data.limit > 0 ?
       Math.min(500, Math.floor(request.data.limit)) :
       200;
+
+  const dipRollupSnap = await db
+    .collection("leaderboards")
+    .doc(monthKey)
+    .collection("dipUsers")
+    .get();
+
+  if (!dipRollupSnap.empty) {
+    const rows = dipRollupSnap.docs
+      .map((doc) => doc.data() as DipLeaderboardUserDoc)
+      .filter((row) => Number(row.dipCount || 0) > 0)
+      .sort((a, b) => {
+        const diff = Number(b.dipCount || 0) - Number(a.dipCount || 0);
+        if (diff !== 0) return diff;
+        return String(a.name || "Member").localeCompare(String(b.name || "Member"));
+      })
+      .slice(0, limit);
+
+    return {monthKey, total: rows.length, rows};
+  }
 
   const usersSnap = await db.collection("users").get();
 

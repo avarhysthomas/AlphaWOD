@@ -1,16 +1,11 @@
 // src/pages/Schedule.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
-import { getAuth, onAuthStateChanged, User } from "firebase/auth";
 import {
   collection,
-  doc,
-  increment,
   onSnapshot,
   orderBy,
   query,
-  runTransaction,
-  serverTimestamp,
   Timestamp,
   where,
 } from "firebase/firestore";
@@ -18,6 +13,7 @@ import { db } from "../../../firebase";
 import { useAuth } from "../../../context/AuthContext";
 import { getUserNavItems } from "../../../components/layout/UserTopNav";
 import { Flame, Dumbbell, PersonStanding, Award, Activity, Bell, Search } from "lucide-react";
+import { bookClass as bookClassCallable, cancelBooking as cancelBookingCallable } from "../services/bookings";
 
 type ClassDoc = {
   title: string;
@@ -91,10 +87,6 @@ function fmtRemaining(ms: number) {
   const h = Math.floor(mins / 60);
   const m = mins % 60;
   return h ? `${h}h ${m}m` : `${m}m`;
-}
-
-function classIdToBookingId(classId: string, userId: string) {
-  return `${classId}_${userId}`;
 }
 
 function normalizeStrengthBlock(value: unknown): StrengthBlock {
@@ -270,12 +262,10 @@ function scheduleWindowWithSaturdayCutover(now = new Date()) {
 
 export default function Schedule() {
   const navigate = useNavigate();
-  const auth = getAuth();
 
-  const { appUser } = useAuth();
+  const { user, appUser } = useAuth();
   const isAdmin = appUser?.role === "admin";
 
-  const [user, setUser] = useState<User | null>(auth.currentUser);
   const [classes, setClasses] = useState<Array<{ id: string; data: ClassDoc }>>([]);
   const [activeBookingsByClassId, setActiveBookingsByClassId] = useState<Record<string, BookingDoc>>(
     {}
@@ -290,11 +280,6 @@ export default function Schedule() {
       ? dayKey(today)
       : dayKey(windowLocal.from);
   });
-
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => setUser(u));
-    return () => unsub();
-  }, [auth]);
 
   // Next calendar week only
   const windowLocal = useMemo(() => scheduleWindowWithSaturdayCutover(new Date()), []);
@@ -415,70 +400,17 @@ export default function Schedule() {
 
     setBusyClassId(classId);
     try {
-      const classRef = doc(db, "classes", classId);
-      const bookingId = classIdToBookingId(classId, user.uid);
-      const bookingRef = doc(db, "bookings", bookingId);
-
-      await runTransaction(db, async (tx) => {
-        const [classSnap, bookingSnap] = await Promise.all([tx.get(classRef), tx.get(bookingRef)]);
-        if (!classSnap.exists()) throw new Error("Class not found");
-
-        const classData = classSnap.data() as ClassDoc;
-        if (!canAccessClass(classData, memberStrengthBlock, isAdmin)) {
-          const err: any = new Error("Strength block access denied");
-          err.code = "strength-block";
-          throw err;
-        }
-
-        //Enforce booking close rules server-side (transaction)
-        const bs = bookingStatus(classData.startTime);
-        if (bs.state === "closed" || bs.state === "started") {
-          const err: any = new Error("Booking closed");
-          err.code = "closed";
-          throw err;
-        }
-
-        const capacity = Number(classData.capacity ?? 0);
-        const bookedCount = Number(classData.bookedCount ?? 0);
-
-        if (bookingSnap.exists()) {
-          const b = bookingSnap.data() as BookingDoc;
-          if (b.status === "booked") {
-            const err: any = new Error("Already booked");
-            err.code = "already-booked";
-            throw err;
-          }
-        }
-
-        if (capacity > 0 && bookedCount >= capacity) {
-          const err: any = new Error("Class is full");
-          err.code = "full";
-          throw err;
-        }
-
-        tx.set(
-          bookingRef,
-          {
-            classId,
-            userId: user.uid,
-            userName: user.displayName || user.email || "Member",
-            status: "booked",
-            createdAt: serverTimestamp(),
-          } as BookingDoc,
-          { merge: true }
-        );
-
-        tx.update(classRef, { bookedCount: increment(1) });
-      });
+      await bookClassCallable({ classId });
     } catch (e: any) {
       console.error("Book failed:", e);
-      if (e?.code === "already-booked" || e?.message === "Already booked") return alert("Already booked");
-      if (e?.code === "full" || e?.message === "Class is full") return alert("Class is full");
-      if (e?.code === "closed" || e?.message === "Booking closed") return alert("Booking closed for this class");
-      if (e?.code === "strength-block" || e?.message === "Strength block access denied") {
+      const message = String(e?.message ?? "");
+      if (e?.code === "already-exists" || message.includes("Already booked")) return alert("Already booked");
+      if (e?.code === "failed-precondition" && message.includes("Class is full")) return alert("Class is full");
+      if (e?.code === "failed-precondition" && message.includes("Booking closed")) return alert("Booking closed for this class");
+      if (e?.code === "permission-denied" || message.includes("strength block")) {
         return alert("You are not assigned to the strength block for this class.");
       }
-      alert(e?.message || "Booking failed");
+      alert(message || "Booking failed");
     } finally {
       setBusyClassId(null);
     }
@@ -489,45 +421,14 @@ export default function Schedule() {
 
     setBusyClassId(classId);
     try {
-      const classRef = doc(db, "classes", classId);
-      const bookingId = classIdToBookingId(classId, user.uid);
-      const bookingRef = doc(db, "bookings", bookingId);
-
-      await runTransaction(db, async (tx) => {
-        const [classSnap, bookingSnap] = await Promise.all([tx.get(classRef), tx.get(bookingRef)]);
-
-        if (!bookingSnap.exists()) {
-          const err: any = new Error("No active booking found");
-          err.code = "no-booking";
-          throw err;
-        }
-
-        const bookingData = bookingSnap.data() as BookingDoc;
-        if (bookingData.status !== "booked") {
-          const err: any = new Error("No active booking found");
-          err.code = "no-booking";
-          throw err;
-        }
-
-        if (!classSnap.exists()) throw new Error("Class not found");
-
-          const classData = classSnap.data() as ClassDoc;
-          const cs = cancelStatus(classData.startTime);
-          if (cs.state === "closed" || cs.state === "started") {
-            const err: any = new Error("Cancellation closed");
-            err.code = "cancel-closed";
-            throw err;
-          }
-
-        tx.update(bookingRef, { status: "cancelled", cancelledAt: serverTimestamp() });
-        tx.update(classRef, { bookedCount: increment(-1) });
-      });
+      await cancelBookingCallable({ classId });
     } catch (e: any) {
       console.error("Cancel failed:", e);
-      if (e?.code === "no-booking" || e?.message === "No active booking found") return alert("No active booking found");
-      if (e?.code === "cancel-closed" || e?.message === "Cancellation closed")
+      const message = String(e?.message ?? "");
+      if (e?.code === "not-found" || message.includes("No active booking") || message.includes("No booking")) return alert("No active booking found");
+      if (e?.code === "failed-precondition" && message.includes("Cancellation closed"))
         return alert("Too late to cancel — cancellations close 1 hour before class.");
-      alert(e?.message || "Cancel failed");
+      alert(message || "Cancel failed");
     } finally {
       setBusyClassId(null);
     }

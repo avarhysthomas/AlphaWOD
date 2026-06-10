@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "../../../firebase";
@@ -32,6 +32,7 @@ const WODDisplay = () => {
   const [shareOpen, setShareOpen] = useState(false);
   const [controlsOpen, setControlsOpen] = useState(false);
   const latestFetchRequestRef = useRef(0);
+  const wodCacheRef = useRef<Map<string, Record<string, any> | null>>(new Map());
 
   const selectedDateObj = useMemo(() => {
     if (!selectedDate) return null;
@@ -47,18 +48,24 @@ const WODDisplay = () => {
   // You can change this later if you want Tue=Upper Thu=Lower etc
   const strengthTitle = "Strength";
 
-  const fetchWODForDate = async (dateString: string, key: SessionKey) => {
+  const fetchWODForDate = useCallback(async (dateString: string, key: SessionKey) => {
     const requestId = latestFetchRequestRef.current + 1;
     latestFetchRequestRef.current = requestId;
     setLoading(true);
     try {
-      const docRef = doc(db, "wods", dateString);
-      const docSnap = await getDoc(docRef);
+      let data = wodCacheRef.current.get(dateString);
+
+      if (!wodCacheRef.current.has(dateString)) {
+        const docRef = doc(db, "wods", dateString);
+        const docSnap = await getDoc(docRef);
+        data = docSnap.exists() ? (docSnap.data() as Record<string, any>) : null;
+        wodCacheRef.current.set(dateString, data);
+      }
+
       if (latestFetchRequestRef.current !== requestId) return;
 
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        const sessionData = (data as any)[key];
+      if (data) {
+        const sessionData = data[key];
         setWod(sessionData || null);
       } else {
         setWod(null);
@@ -72,7 +79,7 @@ const WODDisplay = () => {
         setLoading(false);
       }
     }
-  };
+  }, []);
 
   useEffect(() => {
     setSelectedDate(getDateInputValueInTimeZone(new Date(), timeZone));
@@ -80,8 +87,7 @@ const WODDisplay = () => {
 
   useEffect(() => {
     if (selectedDate) fetchWODForDate(selectedDate, sessionKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedDate, sessionKey]);
+  }, [fetchWODForDate, selectedDate, sessionKey]);
 
   const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSelectedDate(e.target.value);

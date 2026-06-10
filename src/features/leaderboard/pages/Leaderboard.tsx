@@ -2,8 +2,6 @@ import React, {useEffect, useMemo, useState} from "react";
 import {getFunctions, httpsCallable} from "firebase/functions";
 import {Bell, ChevronLeft, ChevronRight, RefreshCw} from "lucide-react";
 import {useAuth} from "../../../context/AuthContext";
-import { collection, documentId, getDocs, query, where } from "firebase/firestore";
-import { db } from "../../../firebase";
 import UserAvatar from "../../../components/ui/UserAvatar";
 import { Link, NavLink } from "react-router-dom";
 import { getUserNavItems } from "../../../components/layout/UserTopNav";
@@ -51,27 +49,6 @@ function formatMonthLabel(monthKey: string) {
     year: "numeric",
     timeZone: "Europe/London",
   });
-}
-
-type UserProfile = {
-  name?: string;
-  photoURL?: string;
-};
-
-async function fetchUserProfiles(uids: string[]) {
-  const map = new Map<string, UserProfile>();
-  const unique = Array.from(new Set(uids.filter(Boolean)));
-  if (!unique.length) return map;
-
-  // Firestore "in" query limit is 10
-  for (let i = 0; i < unique.length; i += 10) {
-    const chunk = unique.slice(i, i + 10);
-    const q = query(collection(db, "users"), where(documentId(), "in", chunk));
-    const snap = await getDocs(q);
-    snap.forEach((d) => map.set(d.id, d.data() as UserProfile));
-  }
-
-  return map;
 }
 
 function getAttendanceBadge(count: number) {
@@ -193,24 +170,7 @@ export default function Leaderboard() {
 
   try {
     const res = await getMonthlyLeaderboard({ monthKey, limit: 200 });
-    const baseRows: LeaderboardRow[] = res.data?.rows || [];
-
-    // Pull profiles for everyone on this leaderboard
-    const uids = baseRows.map((r) => r.userId);
-    const profiles = await fetchUserProfiles(uids);
-
-    const merged = baseRows.map((r) => {
-      const p = profiles.get(r.userId);
-
-      return {
-        ...r,
-        // Your Firestore uses `name`, so prefer that
-        name: p?.name ?? r.name ?? "Member",
-        photoURL: p?.photoURL ?? r.photoURL,
-      };
-    });
-
-    setRows(merged);
+    setRows(res.data?.rows || []);
   } catch (e: any) {
     console.error(e);
     setErr(e?.message || "Failed to load leaderboard");

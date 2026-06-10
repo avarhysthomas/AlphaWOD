@@ -1,4 +1,3 @@
-// src/App.tsx
 import React from "react";
 import {
   Routes,
@@ -8,34 +7,8 @@ import {
   useLocation,
 } from "react-router-dom";
 
-import WODEditor from "./features/wod/pages/WODEditor";
-import WODDisplay from "./features/wod/pages/WODDisplay";
-import DipLeaderboard from "./features/leaderboard/pages/DipLeaderboard";
-import Login from "./features/auth/pages/Login";
-import PendingApproval from "./features/auth/pages/PendingApproval";
-import Signup from "./features/auth/pages/Signup";
 import WaiverGate from "./features/auth/components/WaiverGate";
-import Dashboard from "./features/dashboard/pages/Dashboard";
-import SgptDashboard from "./features/dashboard/pages/SgptDashboard";
-import Schedule from "./features/bookings/pages/Schedule";
-import ClassRoster from "./features/bookings/pages/ClassRoster";
-import Leaderboard from "./features/leaderboard/pages/Leaderboard";
-import Training from "./features/training/pages/Training";
-import TrainingCategory from "./features/training/pages/TrainingCategory";
-import TrainingMovement from "./features/training/pages/TrainingMovement";
-import Profile from "./features/profile/pages/Profile";
-import Feed from "./features/workouts/pages/Feed";
-import Workouts from "./features/workouts/pages/Workouts";
-import WorkoutComposer from "./features/workouts/pages/WorkoutComposer";
-import WorkoutDetail from "./features/workouts/pages/WorkoutDetail";
 import { useAuth } from "./context/AuthContext";
-
-import AdminInsights from "./features/admin/pages/AdminInsights";
-import AdminPerformance from "./features/admin/pages/AdminPerformance";
-import AdminMemberPerformance from "./features/admin/pages/AdminMemberPerformance";
-import AdminMetricPerformance from "./features/admin/pages/AdminMetricPerformance";
-import AdminMetricIndex from "./features/admin/pages/AdminMetricIndex";
-import AdminStrengthBlocks from "./features/admin/pages/AdminStrengthBlocks";
 import {
   canAccessTraining,
   hasPerformanceAccess,
@@ -43,6 +16,32 @@ import {
   isGeneralMemberRole,
   isSgptRole,
 } from "./lib/roles";
+
+const WODEditor = React.lazy(() => import("./features/wod/pages/WODEditor"));
+const WODDisplay = React.lazy(() => import("./features/wod/pages/WODDisplay"));
+const DipLeaderboard = React.lazy(() => import("./features/leaderboard/pages/DipLeaderboard"));
+const Login = React.lazy(() => import("./features/auth/pages/Login"));
+const PendingApproval = React.lazy(() => import("./features/auth/pages/PendingApproval"));
+const Signup = React.lazy(() => import("./features/auth/pages/Signup"));
+const Dashboard = React.lazy(() => import("./features/dashboard/pages/Dashboard"));
+const SgptDashboard = React.lazy(() => import("./features/dashboard/pages/SgptDashboard"));
+const Schedule = React.lazy(() => import("./features/bookings/pages/Schedule"));
+const ClassRoster = React.lazy(() => import("./features/bookings/pages/ClassRoster"));
+const Leaderboard = React.lazy(() => import("./features/leaderboard/pages/Leaderboard"));
+const Training = React.lazy(() => import("./features/training/pages/Training"));
+const TrainingCategory = React.lazy(() => import("./features/training/pages/TrainingCategory"));
+const TrainingMovement = React.lazy(() => import("./features/training/pages/TrainingMovement"));
+const Profile = React.lazy(() => import("./features/profile/pages/Profile"));
+const Feed = React.lazy(() => import("./features/workouts/pages/Feed"));
+const Workouts = React.lazy(() => import("./features/workouts/pages/Workouts"));
+const WorkoutComposer = React.lazy(() => import("./features/workouts/pages/WorkoutComposer"));
+const WorkoutDetail = React.lazy(() => import("./features/workouts/pages/WorkoutDetail"));
+const AdminInsights = React.lazy(() => import("./features/admin/pages/AdminInsights"));
+const AdminPerformance = React.lazy(() => import("./features/admin/pages/AdminPerformance"));
+const AdminMemberPerformance = React.lazy(() => import("./features/admin/pages/AdminMemberPerformance"));
+const AdminMetricPerformance = React.lazy(() => import("./features/admin/pages/AdminMetricPerformance"));
+const AdminMetricIndex = React.lazy(() => import("./features/admin/pages/AdminMetricIndex"));
+const AdminStrengthBlocks = React.lazy(() => import("./features/admin/pages/AdminStrengthBlocks"));
 
 /** ---------- Route guards ---------- */
 
@@ -169,6 +168,7 @@ export default function App() {
 
   return (
     <WaiverGate>
+    <React.Suspense fallback={<LoadingScreen />}>
     <Routes>
       {/* Public */}
       <Route
@@ -400,6 +400,7 @@ export default function App() {
         element={<Navigate to={isAuthed ? getAuthedHome(appUser) : "/"} replace />}
       />
     </Routes>
+    </React.Suspense>
     </WaiverGate>
   );
 }

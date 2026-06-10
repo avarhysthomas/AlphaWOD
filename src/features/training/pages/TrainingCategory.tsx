@@ -6,7 +6,7 @@ import {
   ChevronRight,
   Search,
 } from "lucide-react";
-import { collection, onSnapshot, orderBy, query, where } from "firebase/firestore";
+import { collection, getDocs, orderBy, query, where } from "firebase/firestore";
 import { db } from "../../../firebase";
 import { useAuth } from "../../../context/AuthContext";
 import { getUserNavItems } from "../../../components/layout/UserTopNav";
@@ -116,16 +116,22 @@ export default function TrainingCategory() {
       return;
     }
 
-    const logsRef = collection(db, "users", user.uid, "trainingLogs");
-    const logsQuery = query(
-      logsRef,
-      where("category", "==", selectedCategory.key),
-      orderBy("date", "desc")
-    );
+    let isMounted = true;
+    const uid = user.uid;
+    const categoryKey = selectedCategory.key;
 
-    return onSnapshot(
-      logsQuery,
-      (snap) => {
+    async function loadLogs() {
+      try {
+        const logsRef = collection(db, "users", uid, "trainingLogs");
+        const logsQuery = query(
+          logsRef,
+          where("category", "==", categoryKey),
+          orderBy("date", "desc")
+        );
+        const snap = await getDocs(logsQuery);
+
+        if (!isMounted) return;
+
         setLogs(
           snap.docs.map((doc) => {
             const data = doc.data();
@@ -141,9 +147,17 @@ export default function TrainingCategory() {
             };
           })
         );
-      },
-      (error) => console.error("Category logs fetch error:", error)
-    );
+      } catch (error) {
+        if (!isMounted) return;
+        console.error("Category logs fetch error:", error);
+      }
+    }
+
+    loadLogs();
+
+    return () => {
+      isMounted = false;
+    };
   }, [selectedCategory, user]);
 
   const navItems = getUserNavItems(appUser?.role);

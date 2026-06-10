@@ -128,6 +128,7 @@ export default function ClassRoster() {
   const [selected, setSelected] = useState<Record<string, boolean>>({});
 
   const [allUsers, setAllUsers] = useState<GymUser[]>([]);
+  const [allUsersLoaded, setAllUsersLoaded] = useState(false);
   const [showAddMemberModal, setShowAddMemberModal] = useState(false);
   const [selectedUserId, setSelectedUserId] = useState("");
   const [addingMember, setAddingMember] = useState(false);
@@ -174,6 +175,8 @@ export default function ClassRoster() {
   }, [classId]);
 
   useEffect(() => {
+    if (!showAddMemberModal || allUsersLoaded) return;
+
     (async () => {
       try {
         const snap = await getDocs(collection(db, "users"));
@@ -184,11 +187,12 @@ export default function ClassRoster() {
 
         users.sort((a, b) => (a.name ?? a.email ?? "").localeCompare(b.name ?? b.email ?? ""));
         setAllUsers(users);
+        setAllUsersLoaded(true);
       } catch (err) {
         console.error("Failed to load users for add-member picker:", err);
       }
     })();
-  }, []);
+  }, [allUsersLoaded, showAddMemberModal]);
 
   const loadRoster = useCallback(async () => {
     if (!classId) return;

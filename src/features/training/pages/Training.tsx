@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, NavLink } from "react-router-dom";
-import { collection, onSnapshot, orderBy, query } from "firebase/firestore";
+import { collection, getDocs, orderBy, query } from "firebase/firestore";
 import {
   Bell,
   ChevronRight,
@@ -58,12 +58,18 @@ export default function Training() {
       return;
     }
 
-    const logsRef = collection(db, "users", user.uid, "trainingLogs");
-    const logsQuery = query(logsRef, orderBy("date", "desc"));
+    let isMounted = true;
+    const uid = user.uid;
+    setLoadingLogs(true);
 
-    return onSnapshot(
-      logsQuery,
-      (snap) => {
+    async function loadLogs() {
+      try {
+        const logsRef = collection(db, "users", uid, "trainingLogs");
+        const logsQuery = query(logsRef, orderBy("date", "desc"));
+        const snap = await getDocs(logsQuery);
+
+        if (!isMounted) return;
+
         setLogs(
           snap.docs.map((doc) => ({
             id: doc.id,
@@ -71,12 +77,18 @@ export default function Training() {
           }))
         );
         setLoadingLogs(false);
-      },
-      (error) => {
+      } catch (error) {
+        if (!isMounted) return;
         console.error("Training logs fetch error:", error);
         setLoadingLogs(false);
       }
-    );
+    }
+
+    loadLogs();
+
+    return () => {
+      isMounted = false;
+    };
   }, [user]);
 
   const navItems = getUserNavItems(appUser?.role);

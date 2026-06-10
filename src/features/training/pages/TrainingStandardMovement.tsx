@@ -11,7 +11,7 @@ import {
   collection,
   deleteDoc,
   doc,
-  onSnapshot,
+  getDocs,
   orderBy,
   query,
   serverTimestamp,
@@ -319,17 +319,24 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
 
     setLoadError("");
 
-    const logsRef = collection(db, "users", user.uid, "trainingLogs");
-    const q = query(
-      logsRef,
-      where("category", "==", selectedCategory.key),
-      where("movementSlug", "==", movement.slug),
-      orderBy("date", "desc")
-    );
+    let isMounted = true;
+    const uid = user.uid;
+    const categoryKey = selectedCategory.key;
+    const movementSlug = movement.slug;
 
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
+    async function loadLogs() {
+      try {
+        const logsRef = collection(db, "users", uid, "trainingLogs");
+        const q = query(
+          logsRef,
+          where("category", "==", categoryKey),
+          where("movementSlug", "==", movementSlug),
+          orderBy("date", "desc")
+        );
+        const snapshot = await getDocs(q);
+
+        if (!isMounted) return;
+
         const nextLogs: TrainingLog[] = snapshot.docs.map((doc) => {
           const data = doc.data();
 
@@ -348,14 +355,18 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
         });
 
         setLogs(nextLogs);
-      },
-      (error) => {
+      } catch (error: any) {
+        if (!isMounted) return;
         console.error("Error loading training logs:", error);
         setLoadError(error.message || "Could not load training logs.");
       }
-    );
+    }
 
-    return () => unsubscribe();
+    loadLogs();
+
+    return () => {
+      isMounted = false;
+    };
   }, [selectedCategory, movement, user]);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -404,7 +415,7 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
 
       const logsRef = collection(db, "users", user.uid, "trainingLogs");
 
-      await addDoc(logsRef, {
+      const newLog = {
         userId: user.uid,
         category: selectedCategory.key,
         movementSlug: movement.slug,
@@ -416,7 +427,27 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
         date,
         notes: notes.trim(),
         createdAt: serverTimestamp(),
-      });
+      };
+
+      const docRef = await addDoc(logsRef, newLog);
+
+      setLogs((current) =>
+        [
+          {
+            id: docRef.id,
+            category: selectedCategory.key,
+            movementSlug: movement.slug,
+            movementName: movement.name,
+            metricType,
+            value: submittedValue,
+            unit: submittedUnit,
+            reps: reps.trim(),
+            date,
+            notes: notes.trim(),
+          },
+          ...current,
+        ].sort((a, b) => b.date.localeCompare(a.date))
+      );
 
       setIsNewPB(Boolean(nextIsPB));
 
@@ -456,6 +487,7 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
       setSaveError("");
 
       await deleteDoc(doc(db, "users", user.uid, "trainingLogs", logId));
+      setLogs((current) => current.filter((log) => log.id !== logId));
 
       if (sharePayload && filteredLogs.some((log) => log.id === logId)) {
         setShareOpen(false);
