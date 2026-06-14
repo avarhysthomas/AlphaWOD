@@ -1,6 +1,4 @@
 import React, { useMemo, useState } from "react";
-import { doc, serverTimestamp, setDoc } from "firebase/firestore";
-import { db } from "../../../firebase";
 import { useAuth } from "../../../context/AuthContext";
 
 const WAIVER_VERSION = "2026-30-05";
@@ -78,6 +76,10 @@ export default function WaiverGate({ children }: { children: React.ReactNode }) 
     try {
       setSubmitting(true);
       setError("");
+      const [{ doc, serverTimestamp, setDoc }, { db }] = await Promise.all([
+        import("firebase/firestore"),
+        import("../../../firebase"),
+      ]);
       await setDoc(
         doc(db, "users", user.uid),
         {

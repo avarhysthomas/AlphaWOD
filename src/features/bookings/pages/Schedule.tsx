@@ -1,9 +1,9 @@
 // src/pages/Schedule.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import {
   collection,
-  onSnapshot,
+  getDocs,
   orderBy,
   query,
   Timestamp,
@@ -35,6 +35,8 @@ type BookingDoc = {
   createdAt?: Timestamp;
   cancelledAt?: Timestamp;
 };
+
+type ClassRow = { id: string; data: ClassDoc };
 
 const DEFAULT_TZ = "Europe/London";
 type StrengthBlock = "A" | "B" | "none";
@@ -260,13 +262,27 @@ function scheduleWindowWithSaturdayCutover(now = new Date()) {
   return { from, to, showNextWeek };
 }
 
+function adjustClassBookedCount(rows: ClassRow[], classId: string, delta: number) {
+  return rows.map((row) => {
+    if (row.id !== classId) return row;
+
+    return {
+      ...row,
+      data: {
+        ...row.data,
+        bookedCount: Math.max(0, Number(row.data.bookedCount ?? 0) + delta),
+      },
+    };
+  });
+}
+
 export default function Schedule() {
   const navigate = useNavigate();
 
   const { user, appUser } = useAuth();
   const isAdmin = appUser?.role === "admin";
 
-  const [classes, setClasses] = useState<Array<{ id: string; data: ClassDoc }>>([]);
+  const [classes, setClasses] = useState<ClassRow[]>([]);
   const [activeBookingsByClassId, setActiveBookingsByClassId] = useState<Record<string, BookingDoc>>(
     {}
   );
@@ -284,8 +300,10 @@ export default function Schedule() {
   // Next calendar week only
   const windowLocal = useMemo(() => scheduleWindowWithSaturdayCutover(new Date()), []);
 
-  // live classes feed for next calendar week
+  // Load the visible week once. Keeping this live made Schedule re-render whenever
+  // anyone booked/cancelled, which is costly on the busiest screen.
   useEffect(() => {
+    let isMounted = true;
     const classesRef = collection(db, "classes");
     const q = query(
       classesRef,
@@ -294,22 +312,30 @@ export default function Schedule() {
       orderBy("startTime", "asc")
     );
 
-    const unsub = onSnapshot(
-      q,
-      (snap) => {
+    async function loadClasses() {
+      try {
+        const snap = await getDocs(q);
+        if (!isMounted) return;
         const rows = snap.docs.map((d) => ({
           id: d.id,
           data: d.data() as ClassDoc,
         }));
         setClasses(rows);
-      },
-      (err) => console.error("classes onSnapshot error:", err)
-    );
+      } catch (err) {
+        if (!isMounted) return;
+        console.error("classes fetch error:", err);
+      }
+    }
 
-    return () => unsub();
+    loadClasses();
+
+    return () => {
+      isMounted = false;
+    };
   }, [windowLocal.from, windowLocal.to]);
 
-  // live bookings for this user (only ACTIVE ones)
+  // Load this user's active bookings once. Successful book/cancel actions update
+  // local state immediately, avoiding an always-on listener while scrolling.
   useEffect(() => {
     if (!user) {
       setActiveBookingsByClassId({});
@@ -319,20 +345,28 @@ export default function Schedule() {
     const bookingsRef = collection(db, "bookings");
     const q = query(bookingsRef, where("userId", "==", user.uid), where("status", "==", "booked"));
 
-    const unsub = onSnapshot(
-      q,
-      (snap) => {
+    async function loadBookings() {
+      try {
+        const snap = await getDocs(q);
+        if (!isMounted) return;
         const map: Record<string, BookingDoc> = {};
         snap.docs.forEach((d) => {
           const b = d.data() as BookingDoc;
           if (b?.classId) map[b.classId] = b;
         });
         setActiveBookingsByClassId(map);
-      },
-      (err) => console.error("bookings onSnapshot error:", err)
-    );
+      } catch (err) {
+        if (!isMounted) return;
+        console.error("bookings fetch error:", err);
+      }
+    }
 
-    return () => unsub();
+    let isMounted = true;
+    loadBookings();
+
+    return () => {
+      isMounted = false;
+    };
   }, [user]);
 
   const memberStrengthBlock = normalizeStrengthBlock(appUser?.strengthBlock);
@@ -387,7 +421,7 @@ export default function Schedule() {
     );
   }, [searchTerm, selectedDayClasses]);
 
-  async function handleBook(classId: string) {
+  const handleBook = useCallback(async (classId: string) => {
     if (!user) return alert("Log in first.");
 
     const classRow = classes.find((item) => item.id === classId);
@@ -401,6 +435,16 @@ export default function Schedule() {
     setBusyClassId(classId);
     try {
       await bookClassCallable({ classId });
+      setActiveBookingsByClassId((current) => ({
+        ...current,
+        [classId]: {
+          classId,
+          userId: user.uid,
+          userName: appUser?.name,
+          status: "booked",
+        },
+      }));
+      setClasses((current) => adjustClassBookedCount(current, classId, 1));
     } catch (e: any) {
       console.error("Book failed:", e);
       const message = String(e?.message ?? "");
@@ -414,14 +458,20 @@ export default function Schedule() {
     } finally {
       setBusyClassId(null);
     }
-  }
+  }, [appUser?.name, classes, isAdmin, memberStrengthBlock, user]);
 
-  async function handleCancel(classId: string) {
+  const handleCancel = useCallback(async (classId: string) => {
     if (!user) return alert("Log in first.");
 
     setBusyClassId(classId);
     try {
       await cancelBookingCallable({ classId });
+      setActiveBookingsByClassId((current) => {
+        const next = { ...current };
+        delete next[classId];
+        return next;
+      });
+      setClasses((current) => adjustClassBookedCount(current, classId, -1));
     } catch (e: any) {
       console.error("Cancel failed:", e);
       const message = String(e?.message ?? "");
@@ -432,7 +482,7 @@ export default function Schedule() {
     } finally {
       setBusyClassId(null);
     }
-  }
+  }, [user]);
 
   const weekLabel = useMemo(() => {
     const a = windowLocal.from.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
@@ -440,6 +490,10 @@ export default function Schedule() {
     const b = endMinus1.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
     return `${a} - ${b}`;
   }, [windowLocal.from, windowLocal.to]);
+
+  const handleRoster = useCallback((classId: string) => {
+    navigate(`/admin/classes/${classId}`);
+  }, [navigate]);
 
   const navItems = getUserNavItems(appUser?.role);
   const firstName = appUser?.name?.split(" ")[0] || appUser?.email?.split("@")[0] || "there";
@@ -568,127 +622,26 @@ export default function Schedule() {
             </div>
           ) : (
             <div className="space-y-4">
-              {filteredSelectedDayClasses.map(({ id, data }) => {
-                const tz = data.timezone || DEFAULT_TZ;
-                const start = data.startTime.toDate();
-                const end = data.endTime.toDate();
-                const capacity = Number(data.capacity ?? 0);
-                const bookedCount = Number(data.bookedCount ?? 0);
-                const booked = Boolean(activeBookingsByClassId[id]);
-                const full = capacity > 0 && bookedCount >= capacity;
-                const bs = bookingStatus(data.startTime);
-                const bookingClosed = bs.state === "closed" || bs.state === "started";
-                const cs = cancelStatus(data.startTime);
-                const cancelClosed = cs.state === "closed" || cs.state === "started";
-                const meta = typeMeta(data.title);
-                const Icon = meta.icon;
-                const showChili = isTuesdayHyroxClass(data);
-                const percent = capacityPercent(bookedCount, capacity);
-                const waitlist = capacity > 0 ? Math.max(0, bookedCount - capacity) : 0;
-
-                return (
-                  <article key={id} className="rounded-[24px] border border-white/10 bg-[#151311] p-4 shadow-[0_18px_50px_rgba(0,0,0,0.22)]">
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 font-mono text-[13px] font-bold leading-none text-white/78">
-                            {fmtTime(start, tz)} - {fmtTime(end, tz)}
-                          </span>
-                          <span className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[11px] font-black uppercase tracking-[0.18em] text-white/42">
-                            {waitlist > 0 ? "Waitlist" : "Spots"} {bookedCount}/{capacity || "-"}
-                          </span>
-                        </div>
-                        <h3 className="mt-4 font-heading text-3xl uppercase leading-none text-white sm:text-4xl">
-                          {meta.label}
-                        </h3>
-                        <p className="mt-3 truncate text-[15px] font-medium text-white/44">
-                          {[data.coachName, data.location].filter(Boolean).join(" · ") || "AlphaFIT"}
-                        </p>
-                      </div>
-                      <div className={`grid h-11 w-11 shrink-0 place-items-center rounded-xl border ${meta.iconWrap}`}>
-                        {showChili ? (
-                          <span role="img" aria-label="Chili pepper" className="text-[1.35rem] leading-none">
-                            🌶️
-                          </span>
-                        ) : (
-                          <Icon className="h-5 w-5" />
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="mt-5 h-1.5 overflow-hidden rounded-full bg-white/8">
-                      <div className={`h-full rounded-full ${meta.accent}`} style={{ width: `${percent}%` }} />
-                    </div>
-
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      {booked ? (
-                        <span className="rounded-full bg-emerald-400/12 px-4 py-2 text-[12px] font-bold uppercase tracking-[0.12em] text-emerald-200">
-                          Booked
-                        </span>
-                      ) : null}
-                      {!booked && full ? (
-                        <span className="rounded-full bg-red-400/12 px-4 py-2 text-[12px] font-bold uppercase tracking-[0.12em] text-red-200">
-                          Full
-                        </span>
-                      ) : null}
-                      {!booked && !full && bs.state === "open" && bs.msLeft != null ? (
-                        <span className="rounded-full bg-[#8a633e]/24 px-4 py-2 text-[12px] font-bold uppercase tracking-[0.12em] text-[#f4b16d]">
-                          Closes in {fmtRemaining(bs.msLeft)}
-                        </span>
-                      ) : null}
-                      {!booked && bookingClosed ? (
-                        <span className="rounded-full bg-white/[0.06] px-4 py-2 text-[12px] font-bold uppercase tracking-[0.12em] text-white/36">
-                          Booking closed
-                        </span>
-                      ) : null}
-                      {booked && cancelClosed ? (
-                        <span className="rounded-full bg-white/[0.06] px-4 py-2 text-[12px] font-bold uppercase tracking-[0.12em] text-white/36">
-                          Cancellation closed
-                        </span>
-                      ) : null}
-                    </div>
-
-                    <div className="mt-5 flex flex-col gap-3 border-t border-white/8 pt-4 sm:flex-row">
-                      {isAdmin ? (
-                        <button
-                          type="button"
-                          onClick={() => navigate(`/admin/classes/${id}`)}
-                          className="rounded-full bg-white/[0.06] px-5 py-4 text-sm font-bold text-white transition hover:bg-white/[0.1] sm:min-w-[120px]"
-                        >
-                          Roster
-                        </button>
-                      ) : null}
-
-                      {booked ? (
-                        <button
-                          type="button"
-                          onClick={() => handleCancel(id)}
-                          disabled={busyClassId === id || cancelClosed}
-                          className="rounded-full bg-[#f2eee8] px-5 py-4 text-sm font-bold text-black transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-35 sm:min-w-[150px]"
-                        >
-                          {cancelClosed ? "Too late" : busyClassId === id ? "Cancelling..." : "Cancel booking"}
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => handleBook(id)}
-                          disabled={busyClassId === id || full || bookingClosed}
-                          className="rounded-full bg-[#f2eee8] px-5 py-4 text-sm font-bold text-black transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-35 sm:min-w-[150px]"
-                        >
-                          {bookingClosed ? "Closed" : busyClassId === id ? "Booking..." : full ? "Join queue" : "Book session"}
-                        </button>
-                      )}
-                    </div>
-                  </article>
-                );
-              })}
+              {filteredSelectedDayClasses.map(({ id, data }) => (
+                <ScheduleClassCard
+                  key={id}
+                  id={id}
+                  data={data}
+                  booked={Boolean(activeBookingsByClassId[id])}
+                  busy={busyClassId === id}
+                  isAdmin={isAdmin}
+                  onBook={handleBook}
+                  onCancel={handleCancel}
+                  onRoster={handleRoster}
+                />
+              ))}
             </div>
           )}
         </section>
       </main>
 
       <nav
-        className="fixed inset-x-3 z-40 mx-auto max-w-[27rem] rounded-[22px] border border-white/40 bg-white/90 px-2 py-1.5 shadow-[0_12px_34px_rgba(0,0,0,0.28)] backdrop-blur-xl sm:max-w-xl"
+        className="fixed inset-x-3 z-40 mx-auto max-w-[27rem] rounded-[22px] border border-white/35 bg-white/95 px-2 py-1.5 shadow-[0_8px_24px_rgba(0,0,0,0.22)] sm:max-w-xl"
         style={{ bottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
         aria-label="Primary"
       >
@@ -713,3 +666,138 @@ export default function Schedule() {
     </div>
   );
 }
+
+const ScheduleClassCard = React.memo(function ScheduleClassCard({
+  id,
+  data,
+  booked,
+  busy,
+  isAdmin,
+  onBook,
+  onCancel,
+  onRoster,
+}: {
+  id: string;
+  data: ClassDoc;
+  booked: boolean;
+  busy: boolean;
+  isAdmin: boolean;
+  onBook: (classId: string) => void;
+  onCancel: (classId: string) => void;
+  onRoster: (classId: string) => void;
+}) {
+  const tz = data.timezone || DEFAULT_TZ;
+  const start = data.startTime.toDate();
+  const end = data.endTime.toDate();
+  const capacity = Number(data.capacity ?? 0);
+  const bookedCount = Number(data.bookedCount ?? 0);
+  const full = capacity > 0 && bookedCount >= capacity;
+  const bs = bookingStatus(data.startTime);
+  const bookingClosed = bs.state === "closed" || bs.state === "started";
+  const cs = cancelStatus(data.startTime);
+  const cancelClosed = cs.state === "closed" || cs.state === "started";
+  const meta = typeMeta(data.title);
+  const Icon = meta.icon;
+  const showChili = isTuesdayHyroxClass(data);
+  const percent = capacityPercent(bookedCount, capacity);
+  const waitlist = capacity > 0 ? Math.max(0, bookedCount - capacity) : 0;
+
+  return (
+    <article
+      className="rounded-[24px] border border-white/10 bg-[#151311] p-4 shadow-[0_12px_34px_rgba(0,0,0,0.18)]"
+      style={{ contentVisibility: "auto", containIntrinsicSize: "220px" } as React.CSSProperties}
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 font-mono text-[13px] font-bold leading-none text-white/78">
+              {fmtTime(start, tz)} - {fmtTime(end, tz)}
+            </span>
+            <span className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[11px] font-black uppercase tracking-[0.18em] text-white/42">
+              {waitlist > 0 ? "Waitlist" : "Spots"} {bookedCount}/{capacity || "-"}
+            </span>
+          </div>
+          <h3 className="mt-4 font-heading text-3xl uppercase leading-none text-white sm:text-4xl">
+            {meta.label}
+          </h3>
+          <p className="mt-3 truncate text-[15px] font-medium text-white/44">
+            {[data.coachName, data.location].filter(Boolean).join(" · ") || "AlphaFIT"}
+          </p>
+        </div>
+        <div className={`grid h-11 w-11 shrink-0 place-items-center rounded-xl border ${meta.iconWrap}`}>
+          {showChili ? (
+            <span role="img" aria-label="Chili pepper" className="text-[1.35rem] leading-none">
+              🌶️
+            </span>
+          ) : (
+            <Icon className="h-5 w-5" />
+          )}
+        </div>
+      </div>
+
+      <div className="mt-5 h-1.5 overflow-hidden rounded-full bg-white/8">
+        <div className={`h-full rounded-full ${meta.accent}`} style={{ width: `${percent}%` }} />
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        {booked ? (
+          <span className="rounded-full bg-emerald-400/12 px-4 py-2 text-[12px] font-bold uppercase tracking-[0.12em] text-emerald-200">
+            Booked
+          </span>
+        ) : null}
+        {!booked && full ? (
+          <span className="rounded-full bg-red-400/12 px-4 py-2 text-[12px] font-bold uppercase tracking-[0.12em] text-red-200">
+            Full
+          </span>
+        ) : null}
+        {!booked && !full && bs.state === "open" && bs.msLeft != null ? (
+          <span className="rounded-full bg-[#8a633e]/24 px-4 py-2 text-[12px] font-bold uppercase tracking-[0.12em] text-[#f4b16d]">
+            Closes in {fmtRemaining(bs.msLeft)}
+          </span>
+        ) : null}
+        {!booked && bookingClosed ? (
+          <span className="rounded-full bg-white/[0.06] px-4 py-2 text-[12px] font-bold uppercase tracking-[0.12em] text-white/36">
+            Booking closed
+          </span>
+        ) : null}
+        {booked && cancelClosed ? (
+          <span className="rounded-full bg-white/[0.06] px-4 py-2 text-[12px] font-bold uppercase tracking-[0.12em] text-white/36">
+            Cancellation closed
+          </span>
+        ) : null}
+      </div>
+
+      <div className="mt-5 flex flex-col gap-3 border-t border-white/8 pt-4 sm:flex-row">
+        {isAdmin ? (
+          <button
+            type="button"
+            onClick={() => onRoster(id)}
+            className="rounded-full bg-white/[0.06] px-5 py-4 text-sm font-bold text-white transition hover:bg-white/[0.1] sm:min-w-[120px]"
+          >
+            Roster
+          </button>
+        ) : null}
+
+        {booked ? (
+          <button
+            type="button"
+            onClick={() => onCancel(id)}
+            disabled={busy || cancelClosed}
+            className="rounded-full bg-[#f2eee8] px-5 py-4 text-sm font-bold text-black transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-35 sm:min-w-[150px]"
+          >
+            {cancelClosed ? "Too late" : busy ? "Cancelling..." : "Cancel booking"}
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => onBook(id)}
+            disabled={busy || full || bookingClosed}
+            className="rounded-full bg-[#f2eee8] px-5 py-4 text-sm font-bold text-black transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-35 sm:min-w-[150px]"
+          >
+            {bookingClosed ? "Closed" : busy ? "Booking..." : full ? "Join queue" : "Book session"}
+          </button>
+        )}
+      </div>
+    </article>
+  );
+});
