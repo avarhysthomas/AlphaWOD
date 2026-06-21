@@ -125,6 +125,11 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    match /appSettings/{settingsId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
     match /wods/{wodDate} {
       allow read: if isSignedIn();
       allow write: if isAdmin();

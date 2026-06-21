@@ -1,11 +1,13 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { CalendarDays, Dumbbell, LoaderCircle, Search, Users } from "lucide-react";
+import { doc, getDoc } from "firebase/firestore";
 import AdminOnly from "../../../components/guards/AdminOnly";
 import AppBottomNav from "../../../components/layout/AppBottomNav";
 import UserAvatar from "../../../components/ui/UserAvatar";
+import { db } from "../../../firebase";
 import AdminKpiCard from "../components/AdminKpiCard";
 import AdminSectionCard from "../components/AdminSectionCard";
-import { updateMemberStrengthBlock } from "../services/access";
+import { updateMemberStrengthBlock, updateStrengthBlockSettings } from "../services/access";
 import { getAdminUsers } from "../services/insights";
 import type { AdminUser } from "../types";
 
@@ -39,8 +41,14 @@ const BLOCK_META: Record<
   },
 };
 
+const BOOKING_SETTINGS_REF = doc(db, "appSettings", "booking");
+
 function normalizeStrengthBlock(value: unknown): StrengthBlock {
   return value === "A" || value === "B" ? value : "none";
+}
+
+function normalizeStrengthBlocksEnabled(value: unknown) {
+  return value === false ? false : true;
 }
 
 function toManagedMember(user: AdminUser): BlockMember {
@@ -114,6 +122,9 @@ export default function AdminStrengthBlocks() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [busyUserId, setBusyUserId] = useState<string | null>(null);
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const [strengthBlocksEnabled, setStrengthBlocksEnabled] = useState(true);
+  const [settingsSaving, setSettingsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -121,7 +132,10 @@ export default function AdminStrengthBlocks() {
 
     (async () => {
       try {
-        const users = await getAdminUsers();
+        const [users, settingsSnap] = await Promise.all([
+          getAdminUsers(),
+          getDoc(BOOKING_SETTINGS_REF),
+        ]);
         if (!alive) return;
 
         const managedMembers = users
@@ -131,10 +145,16 @@ export default function AdminStrengthBlocks() {
           .sort((a, b) => (a.name ?? a.email ?? "").localeCompare(b.name ?? b.email ?? ""));
 
         setMembers(managedMembers);
+        setStrengthBlocksEnabled(
+          normalizeStrengthBlocksEnabled(settingsSnap.data()?.strengthBlocksEnabled)
+        );
       } catch (err: any) {
         if (alive) setError(err?.message ?? "Failed to load strength blocks.");
       } finally {
-        if (alive) setLoading(false);
+        if (alive) {
+          setLoading(false);
+          setSettingsLoading(false);
+        }
       }
     })();
 
@@ -183,6 +203,22 @@ export default function AdminStrengthBlocks() {
       setError(err?.message ?? "Failed to update strength block.");
     } finally {
       setBusyUserId(null);
+    }
+  }
+
+  async function handleStrengthBlocksEnabledChange(enabled: boolean) {
+    const previous = strengthBlocksEnabled;
+
+    try {
+      setStrengthBlocksEnabled(enabled);
+      setSettingsSaving(true);
+      setError(null);
+      await updateStrengthBlockSettings(enabled);
+    } catch (err: any) {
+      setStrengthBlocksEnabled(previous);
+      setError(err?.message ?? "Failed to update strength block settings.");
+    } finally {
+      setSettingsSaving(false);
     }
   }
 
@@ -238,6 +274,47 @@ export default function AdminStrengthBlocks() {
               <>
                 <div className="mt-6 grid gap-6 lg:mt-8 lg:grid-cols-[1.2fr_0.8fr]">
                   <AdminSectionCard title="Strength Block Rules">
+                    <div className="mb-4 rounded-2xl border border-white/8 bg-white/[0.035] p-4">
+                      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <div className="text-sm font-semibold text-white">
+                            Block restrictions
+                          </div>
+                          <div className="mt-1 text-sm leading-6 text-white/42">
+                            {strengthBlocksEnabled
+                              ? "Members can only book the strength classes assigned to their block."
+                              : "All members can book every strength class."}
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={strengthBlocksEnabled}
+                          disabled={settingsLoading || settingsSaving}
+                          onClick={() =>
+                            handleStrengthBlocksEnabledChange(!strengthBlocksEnabled)
+                          }
+                          className={[
+                            "inline-flex h-11 w-full shrink-0 items-center rounded-full border p-1 transition disabled:cursor-not-allowed disabled:opacity-60 sm:w-[88px]",
+                            strengthBlocksEnabled
+                              ? "justify-end border-sky-400/35 bg-sky-500/20"
+                              : "justify-start border-white/10 bg-white/[0.06]",
+                          ].join(" ")}
+                        >
+                          <span className="grid h-9 w-9 place-items-center rounded-full bg-white text-[#11100f] shadow-lg">
+                            {settingsSaving ? (
+                              <LoaderCircle className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <span className="text-[10px] font-bold uppercase">
+                                {strengthBlocksEnabled ? "On" : "Off"}
+                              </span>
+                            )}
+                          </span>
+                        </button>
+                      </div>
+                    </div>
+
                     <div className="grid gap-4 md:grid-cols-2">
                       <div className="rounded-2xl border border-sky-500/20 bg-sky-500/10 p-4">
                         <div className="inline-flex items-center gap-2 text-sm font-semibold text-sky-100">

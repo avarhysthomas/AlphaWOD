@@ -76,6 +76,12 @@ type ClassDoc = {
   updatedAt?: admin.firestore.FieldValue | admin.firestore.Timestamp;
 };
 
+type BookingSettingsDoc = {
+  strengthBlocksEnabled?: boolean;
+  updatedAt?: admin.firestore.FieldValue | admin.firestore.Timestamp;
+  updatedBy?: string;
+};
+
 type BookingDoc = {
   classId: string;
   userId: string;
@@ -211,7 +217,17 @@ function getStrengthSlotForClass(classData: Partial<ClassDoc>): StrengthSlot {
   return null;
 }
 
-function canUserAccessClass(user: Partial<UserDoc>, classData: Partial<ClassDoc>) {
+function normaliseStrengthBlocksEnabled(value: unknown) {
+  return value === false ? false : true;
+}
+
+function canUserAccessClass(
+  user: Partial<UserDoc>,
+  classData: Partial<ClassDoc>,
+  strengthBlocksEnabled: boolean
+) {
+  if (!strengthBlocksEnabled) return true;
+
   const slot = getStrengthSlotForClass(classData);
   if (!slot) return true;
 
@@ -586,18 +602,31 @@ export const bookClass = onCall(async (request) => {
   const classRef = db.collection("classes").doc(classId);
   const bookingRef = db.collection("bookings").doc(bookingIdFor(classId, uid));
   const userRef = db.collection("users").doc(uid);
+  const bookingSettingsRef = db.collection("appSettings").doc("booking");
 
   return db.runTransaction(async (tx) => {
-    const [classSnap, existingBookingSnap, userSnap] = await Promise.all([
+    const [
+      classSnap,
+      existingBookingSnap,
+      userSnap,
+      bookingSettingsSnap,
+    ] = await Promise.all([
       tx.get(classRef),
       tx.get(bookingRef),
       tx.get(userRef),
+      tx.get(bookingSettingsRef),
     ]);
 
     if (!classSnap.exists) throw new HttpsError("not-found", "Class not found");
 
     const classData = classSnap.data() as Partial<ClassDoc>;
-    if (!canUserAccessClass(member, classData)) {
+    const bookingSettings =
+      bookingSettingsSnap.data() as Partial<BookingSettingsDoc> | undefined;
+    const strengthBlocksEnabled = normaliseStrengthBlocksEnabled(
+      bookingSettings?.strengthBlocksEnabled
+    );
+
+    if (!canUserAccessClass(member, classData, strengthBlocksEnabled)) {
       throw new HttpsError(
         "permission-denied",
         "This member is not assigned to the strength block for this class."
@@ -1557,6 +1586,28 @@ export const updateMemberStrengthBlock = onCall(async (request) => {
   }, {merge: true});
 
   return {ok: true};
+});
+
+export const updateStrengthBlockSettings = onCall(async (request) => {
+  const callerUid = requireAuth(request);
+  await requireAdmin(callerUid);
+
+  if (typeof request.data?.strengthBlocksEnabled !== "boolean") {
+    throw new HttpsError(
+      "invalid-argument",
+      "strengthBlocksEnabled must be a boolean."
+    );
+  }
+
+  const strengthBlocksEnabled = request.data.strengthBlocksEnabled;
+
+  await db.collection("appSettings").doc("booking").set({
+    strengthBlocksEnabled,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedBy: callerUid,
+  } satisfies BookingSettingsDoc, {merge: true});
+
+  return {ok: true, strengthBlocksEnabled};
 });
 
 export const inviteMemberByEmail = onCall({secrets: [resendApiKey, resendFromEmail]}, async (request) => {

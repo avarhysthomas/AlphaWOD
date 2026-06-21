@@ -153,3 +153,36 @@ export async function updateMemberStrengthBlock(
     throw new Error(getStrengthBlockUpdateErrorMessage(err));
   }
 }
+
+function getStrengthBlockSettingsUpdateErrorMessage(err: any) {
+  const code = String(err?.code || "");
+  const message = String(err?.message || "");
+
+  if (
+    code.includes("internal") ||
+    code.includes("unavailable") ||
+    message.includes("404") ||
+    message.toLowerCase().includes("cors")
+  ) {
+    return "The strength block settings function is not available yet. Deploy the latest Cloud Functions, or restart the Functions emulator if you're testing locally.";
+  }
+
+  if (code.includes("permission-denied")) {
+    return "This account does not have permission to change strength block settings.";
+  }
+
+  return message || "Failed to update strength block settings.";
+}
+
+export async function updateStrengthBlockSettings(strengthBlocksEnabled: boolean) {
+  const callable = httpsCallable<
+    { strengthBlocksEnabled: boolean },
+    { ok: boolean; strengthBlocksEnabled: boolean }
+  >(functions, "updateStrengthBlockSettings");
+
+  try {
+    return await callable({ strengthBlocksEnabled });
+  } catch (err: any) {
+    throw new Error(getStrengthBlockSettingsUpdateErrorMessage(err));
+  }
+}

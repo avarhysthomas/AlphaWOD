@@ -3,7 +3,9 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import {
   collection,
+  doc,
   getDocs,
+  getDoc,
   orderBy,
   query,
   Timestamp,
@@ -113,8 +115,11 @@ function getStrengthSlotForClass(classData: ClassDoc): "A" | "B" | null {
 function canAccessClass(
   classData: ClassDoc,
   strengthBlock: StrengthBlock,
-  isAdmin: boolean
+  isAdmin: boolean,
+  strengthBlocksEnabled: boolean
 ) {
+  if (!strengthBlocksEnabled) return true;
+
   const slot = getStrengthSlotForClass(classData);
   if (!slot) return true;
 
@@ -276,6 +281,12 @@ function adjustClassBookedCount(rows: ClassRow[], classId: string, delta: number
   });
 }
 
+function normalizeStrengthBlocksEnabled(value: unknown) {
+  return value === false ? false : true;
+}
+
+const BOOKING_SETTINGS_REF = doc(db, "appSettings", "booking");
+
 export default function Schedule() {
   const navigate = useNavigate();
 
@@ -289,6 +300,7 @@ export default function Schedule() {
   const [busyClassId, setBusyClassId] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
+  const [strengthBlocksEnabled, setStrengthBlocksEnabled] = useState(true);
   const [selectedDayKey, setSelectedDayKey] = useState(() => {
     const windowLocal = scheduleWindowWithSaturdayCutover(new Date());
     const today = new Date();
@@ -334,6 +346,29 @@ export default function Schedule() {
     };
   }, [windowLocal.from, windowLocal.to]);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadBookingSettings() {
+      try {
+        const snap = await getDoc(BOOKING_SETTINGS_REF);
+        if (!isMounted) return;
+        setStrengthBlocksEnabled(
+          normalizeStrengthBlocksEnabled(snap.data()?.strengthBlocksEnabled)
+        );
+      } catch (err) {
+        if (!isMounted) return;
+        console.error("booking settings fetch error:", err);
+      }
+    }
+
+    loadBookingSettings();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   // Load this user's active bookings once. Successful book/cancel actions update
   // local state immediately, avoiding an always-on listener while scrolling.
   useEffect(() => {
@@ -373,9 +408,9 @@ export default function Schedule() {
   const visibleClasses = useMemo(
     () =>
       classes.filter(({ data }) =>
-        canAccessClass(data, memberStrengthBlock, isAdmin)
+        canAccessClass(data, memberStrengthBlock, isAdmin, strengthBlocksEnabled)
       ),
-    [classes, isAdmin, memberStrengthBlock]
+    [classes, isAdmin, memberStrengthBlock, strengthBlocksEnabled]
   );
 
   const weekDays = useMemo(
@@ -427,7 +462,7 @@ export default function Schedule() {
     const classRow = classes.find((item) => item.id === classId);
     if (
       classRow &&
-      !canAccessClass(classRow.data, memberStrengthBlock, isAdmin)
+      !canAccessClass(classRow.data, memberStrengthBlock, isAdmin, strengthBlocksEnabled)
     ) {
       return alert("You are not assigned to the strength block for this class.");
     }
@@ -458,7 +493,7 @@ export default function Schedule() {
     } finally {
       setBusyClassId(null);
     }
-  }, [appUser?.name, classes, isAdmin, memberStrengthBlock, user]);
+  }, [appUser?.name, classes, isAdmin, memberStrengthBlock, strengthBlocksEnabled, user]);
 
   const handleCancel = useCallback(async (classId: string) => {
     if (!user) return alert("Log in first.");
