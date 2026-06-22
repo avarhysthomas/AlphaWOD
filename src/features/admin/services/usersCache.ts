@@ -17,7 +17,7 @@ export type CachedAdminUser = {
   };
 };
 
-const USERS_CACHE_TTL_MS = 60_000;
+const USERS_CACHE_TTL_MS = 5 * 60_000;
 
 let usersCache:
   | {

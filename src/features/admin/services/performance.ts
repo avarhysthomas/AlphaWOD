@@ -49,7 +49,24 @@ function getCreatedAtMs(raw: any) {
   return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
 }
 
+const PERFORMANCE_CACHE_TTL_MS = 5 * 60_000;
+
+let performanceCache: {
+  expiresAt: number;
+  data: Awaited<ReturnType<typeof _fetchPerformanceSummary>>;
+} | null = null;
+
 export async function getPerformanceSummary() {
+  const now = Date.now();
+  if (performanceCache && performanceCache.expiresAt > now) {
+    return performanceCache.data;
+  }
+  const data = await _fetchPerformanceSummary();
+  performanceCache = { expiresAt: now + PERFORMANCE_CACHE_TTL_MS, data };
+  return data;
+}
+
+async function _fetchPerformanceSummary() {
   const [users, logsSnap, countSnap] = await Promise.all([
     getCachedAdminUsers(),
     getDocs(
