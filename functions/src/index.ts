@@ -1259,6 +1259,15 @@ export const getClassRoster = onCall(async (request) => {
     .get();
 
   const attendees = snap.docs.map((d) => d.data() as BookingDoc);
+  const profileRefs = Array.from(new Set(attendees.map((b) => b.userId).filter(Boolean)))
+    .map((userId) => db.collection("users").doc(userId));
+  const profileSnaps = profileRefs.length ? await db.getAll(...profileRefs) : [];
+  const profiles = new Map(
+    profileSnaps.map((profileSnap) => [
+      profileSnap.id,
+      (profileSnap.data() || {}) as UserDoc,
+    ])
+  );
 
   const checkedInCount = attendees.filter((b) => b.attended === true).length;
 
@@ -1267,14 +1276,22 @@ export const getClassRoster = onCall(async (request) => {
     total: attendees.length,
     checkedInCount,
     attendees: attendees
-      .map((b) => ({
-        userId: b.userId,
-        userName: b.userName,
-        attended: Boolean(b.attended),
-        attendanceStatus: b.attendanceStatus ?? (b.attended ? "checked_in" : "none"),
-        checkedInAt: b.checkedInAt ?? null,
-      }))
-      .sort((a, b) => a.userName.localeCompare(b.userName)),
+      .map((b) => {
+        const profile = profiles.get(b.userId);
+        const name = profile?.name || b.userName || "Member";
+
+        return {
+          userId: b.userId,
+          userName: name,
+          name,
+          email: profile?.email ?? "",
+          photoURL: profile?.photoURL ?? "",
+          attended: Boolean(b.attended),
+          attendanceStatus: b.attendanceStatus ?? (b.attended ? "checked_in" : "none"),
+          checkedInAt: b.checkedInAt ?? null,
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name)),
   };
 });
 

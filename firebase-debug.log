@@ -1,0 +1,35 @@
+[debug] [2026-06-22T12:29:55.080Z] ----------------------------------------------------------------------
+[debug] [2026-06-22T12:29:55.081Z] Command:       /Users/avarhysthomas/.nvm/versions/node/v24.13.1/bin/node /Users/avarhysthomas/.nvm/versions/node/v24.13.1/bin/firebase deploy --only functions
+[debug] [2026-06-22T12:29:55.081Z] CLI Version:   15.5.1
+[debug] [2026-06-22T12:29:55.081Z] Platform:      darwin
+[debug] [2026-06-22T12:29:55.081Z] Node Version:  v24.13.1
+[debug] [2026-06-22T12:29:55.081Z] Time:          Mon Jun 22 2026 13:29:55 GMT+0100 (British Summer Time)
+[debug] [2026-06-22T12:29:55.081Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-06-22T12:29:55.653Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-06-22T12:29:55.653Z] > authorizing via signed-in user (avarhysthomasbiz@gmail.com)
+[debug] [2026-06-22T12:29:55.653Z] [iam] checking project alphawod-d1f2f for permissions ["cloudfunctions.functions.create","cloudfunctions.functions.delete","cloudfunctions.functions.get","cloudfunctions.functions.list","cloudfunctions.functions.update","cloudfunctions.operations.get","firebase.projects.get"]
+[debug] [2026-06-22T12:29:55.653Z] Checked if tokens are valid: false, expires at: 1782118662338
+[debug] [2026-06-22T12:29:55.653Z] Checked if tokens are valid: false, expires at: 1782118662338
+[debug] [2026-06-22T12:29:55.653Z] > refreshing access token with scopes: []
+[debug] [2026-06-22T12:29:55.654Z] >>> [apiv2][query] POST https://www.googleapis.com/oauth2/v3/token [none]
+[debug] [2026-06-22T12:29:55.654Z] >>> [apiv2][body] POST https://www.googleapis.com/oauth2/v3/token [omitted]
+[debug] [2026-06-22T12:29:55.803Z] <<< [apiv2][status] POST https://www.googleapis.com/oauth2/v3/token 200
+[debug] [2026-06-22T12:29:55.803Z] <<< [apiv2][body] POST https://www.googleapis.com/oauth2/v3/token [omitted]
+[debug] [2026-06-22T12:29:55.814Z] >>> [apiv2][query] POST https://cloudresourcemanager.googleapis.com/v1/projects/alphawod-d1f2f:testIamPermissions [none]
+[debug] [2026-06-22T12:29:55.814Z] >>> [apiv2][(partial)header] POST https://cloudresourcemanager.googleapis.com/v1/projects/alphawod-d1f2f:testIamPermissions  x-goog-user-project=alphawod-d1f2f
+[debug] [2026-06-22T12:29:55.815Z] >>> [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/alphawod-d1f2f:testIamPermissions {"permissions":["cloudfunctions.functions.create","cloudfunctions.functions.delete","cloudfunctions.functions.get","cloudfunctions.functions.list","cloudfunctions.functions.update","cloudfunctions.operations.get","firebase.projects.get"]}
+[debug] [2026-06-22T12:29:56.052Z] <<< [apiv2][status] POST https://cloudresourcemanager.googleapis.com/v1/projects/alphawod-d1f2f:testIamPermissions 200
+[debug] [2026-06-22T12:29:56.052Z] <<< [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/alphawod-d1f2f:testIamPermissions {"permissions":["cloudfunctions.functions.create","cloudfunctions.functions.delete","cloudfunctions.functions.get","cloudfunctions.functions.list","cloudfunctions.functions.update","cloudfunctions.operations.get","firebase.projects.get"]}
+[debug] [2026-06-22T12:29:56.052Z] Checked if tokens are valid: true, expires at: 1782134994803
+[debug] [2026-06-22T12:29:56.052Z] Checked if tokens are valid: true, expires at: 1782134994803
+[debug] [2026-06-22T12:29:56.053Z] >>> [apiv2][query] POST https://iam.googleapis.com/v1/projects/alphawod-d1f2f/serviceAccounts/alphawod-d1f2f@appspot.gserviceaccount.com:testIamPermissions [none]
+[debug] [2026-06-22T12:29:56.053Z] >>> [apiv2][body] POST https://iam.googleapis.com/v1/projects/alphawod-d1f2f/serviceAccounts/alphawod-d1f2f@appspot.gserviceaccount.com:testIamPermissions {"permissions":["iam.serviceAccounts.actAs"]}
+[debug] [2026-06-22T12:29:56.724Z] <<< [apiv2][status] POST https://iam.googleapis.com/v1/projects/alphawod-d1f2f/serviceAccounts/alphawod-d1f2f@appspot.gserviceaccount.com:testIamPermissions 200
+[debug] [2026-06-22T12:29:56.724Z] <<< [apiv2][body] POST https://iam.googleapis.com/v1/projects/alphawod-d1f2f/serviceAccounts/alphawod-d1f2f@appspot.gserviceaccount.com:testIamPermissions {"permissions":["iam.serviceAccounts.actAs"]}
+[info] 
+[info] === Deploying to 'alphawod-d1f2f'...
+[info] 
+[info] i  deploying functions 
+[info] Running command: npm --prefix "$RESOURCE_DIR" run lint
+[info] Running command: npm --prefix "$RESOURCE_DIR" run build

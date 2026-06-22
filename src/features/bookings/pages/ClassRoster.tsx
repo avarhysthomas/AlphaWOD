@@ -14,10 +14,7 @@ import {
   doc,
   getDoc,
   collection,
-  documentId,
   getDocs,
-  query,
-  where,
 } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 import { getFunctions, httpsCallable } from "firebase/functions";
@@ -32,6 +29,7 @@ type AttendanceStatus = "none" | "checked_in" | "dip";
 
 type BookingRow = {
   userId: string;
+  userName?: string;
   name?: string;
   email?: string;
   photoURL?: string;
@@ -51,12 +49,6 @@ type RosterResponse = {
   attendees: BookingRow[];
 };
 
-type UserProfile = {
-  name?: string;
-  email?: string;
-  photoURL?: string;
-};
-
 type GymUser = {
   id: string;
   name?: string;
@@ -65,21 +57,6 @@ type GymUser = {
   role?: string;
   approvalStatus?: "approved" | "pending";
 };
-
-async function fetchUserProfiles(uids: string[]) {
-  const map = new Map<string, UserProfile>();
-  const unique = Array.from(new Set(uids.filter(Boolean)));
-  if (!unique.length) return map;
-
-  for (let i = 0; i < unique.length; i += 10) {
-    const chunk = unique.slice(i, i + 10);
-    const q = query(collection(db, "users"), where(documentId(), "in", chunk));
-    const snap = await getDocs(q);
-    snap.forEach((d) => map.set(d.id, d.data() as UserProfile));
-  }
-
-  return map;
-}
 
 function normalizeStatus(r: BookingRow): BookingStatus {
   if (r.attendanceStatus === "dip") return "dip";
@@ -207,16 +184,12 @@ export default function ClassRoster() {
       const data = res.data;
       const attendees = data.attendees || [];
 
-      const profiles = await fetchUserProfiles(attendees.map((a) => a.userId));
-
       const enriched: BookingRow[] = attendees.map((r) => {
-        const u = profiles.get(r.userId);
-
         return {
           ...r,
-          name: u?.name ?? r.name ?? "Member",
-          email: u?.email ?? r.email ?? "",
-          photoURL: u?.photoURL ?? r.photoURL,
+          name: r.name ?? r.userName ?? "Member",
+          email: r.email ?? "",
+          photoURL: r.photoURL,
           attendanceStatus:
             r.attendanceStatus ??
             ((r as any).status === "dip" ? "dip" : r.attended === true ? "checked_in" : "none"),
@@ -499,7 +472,11 @@ export default function ClassRoster() {
               Attendees
             </h2>
             <span className="text-sm font-bold text-white/40">
-              {loadingRoster ? "Loading" : `${sortedRows.length} total`}
+              {loadingRoster
+                ? sortedRows.length > 0
+                  ? "Refreshing"
+                  : "Loading"
+                : `${sortedRows.length} total`}
             </span>
           </div>
 
@@ -605,7 +582,7 @@ export default function ClassRoster() {
             </div>
           )}
 
-          {loadingRoster ? (
+          {loadingRoster && sortedRows.length === 0 ? (
             <div className="rounded-[28px] border border-white/10 bg-[#151311] p-6 text-sm font-medium text-white/44">
               Loading roster...
             </div>
