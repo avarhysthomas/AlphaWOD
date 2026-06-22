@@ -5,6 +5,7 @@ import { db } from "../../../firebase";
 import { Dumbbell, Flame, Home, MonitorPlay, Moon, Settings2, Share, Sun } from "lucide-react";
 import SessionShareModal from "../components/SessionShareModal";
 import { getDateInputValueInTimeZone } from "../../../utils/date";
+import { formatStationForShare } from "../utils/sessionShare";
 
 type SessionKey = "AM" | "PM" | "930AM";
 type TimerMode = "timed" | "stationControlled";
@@ -214,14 +215,7 @@ const WODDisplay = () => {
 
     const items = stations
       .map((station: Station, index: number) => {
-        const title = (station.title || `Station ${index + 1}`).trim();
-        const movementNames = station.movements
-          .map((movement) => String(movement.name ?? "").trim())
-          .filter(Boolean)
-          .slice(0, 2)
-          .join(" + ");
-
-        return movementNames ? `${title} • ${movementNames}` : title;
+        return formatStationForShare(station, index);
       })
       .filter(Boolean);
 
@@ -303,15 +297,13 @@ const WODDisplay = () => {
     : "Stay sharp. Rotate clean. Chase standards.";
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#030303] font-body text-[#f4f0ea]">
-      <div className="absolute inset-0 carbon-fiber-bg opacity-70" />
-      <div className="absolute inset-0 bg-[linear-gradient(115deg,rgba(255,255,255,0.06),transparent_28%,rgba(20,184,166,0.13)_60%,transparent_82%)]" />
-      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/35 to-transparent" />
+    <div className="relative min-h-screen overflow-hidden bg-[#050505] font-body text-[#f4f4f4]">
+      <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.04),transparent_36%,rgba(45,212,191,0.05)_72%,transparent_90%)]" />
       <img
         src="/ZERO-ALPHA.png"
         alt=""
         aria-hidden="true"
-        className="pointer-events-none absolute -right-12 top-1/2 hidden w-[44vw] max-w-[760px] -translate-y-1/2 select-none opacity-[0.035] mix-blend-screen lg:block"
+        className="pointer-events-none absolute -right-12 top-1/2 hidden w-[44vw] max-w-[760px] -translate-y-1/2 select-none opacity-[0.035]"
       />
 
       <AdminControls
@@ -325,13 +317,13 @@ const WODDisplay = () => {
         onShare={() => setShareOpen(true)}
       />
 
-      <main className="relative z-10 flex min-h-screen items-stretch p-4 md:p-6 xl:p-8">
+      <main className="relative z-10 flex min-h-screen items-stretch p-3 md:p-5 xl:p-6">
         {!selectedDate ? null : loading ? (
           <DisplayState title="Loading session" detail="Pulling the latest board from AlphaFIT." />
         ) : !wod ? (
           <DisplayState title="No session found" detail="Open controls to choose a different date or class time." />
         ) : (
-          <div className="grid min-h-[calc(100vh-2rem)] w-full grid-rows-[auto_1fr_auto] gap-4 md:min-h-[calc(100vh-3rem)] xl:min-h-[calc(100vh-4rem)]">
+          <div className="relative grid min-h-[calc(100vh-1.5rem)] w-full grid-rows-[auto_1fr_auto] overflow-hidden rounded-[18px] border border-white/18 bg-[#050505] shadow-[0_18px_45px_rgba(0,0,0,0.38)] md:min-h-[calc(100vh-2.5rem)] xl:min-h-[calc(100vh-3rem)]">
             <TVHeader
               selectedDate={selectedDateObj}
               sessionKey={sessionKey}
@@ -342,24 +334,35 @@ const WODDisplay = () => {
               subtitle={displaySubtitle}
             />
 
-            <section className="grid min-h-0 gap-4 xl:grid-cols-[minmax(390px,0.88fr)_minmax(620px,1.42fr)] 2xl:grid-cols-[minmax(440px,0.82fr)_minmax(760px,1.55fr)]">
-              <div className="relative min-h-0 overflow-hidden rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(21,19,17,0.94),rgba(8,8,8,0.96))] p-5 shadow-[0_26px_90px_rgba(0,0,0,0.50)] xl:p-7">
-                <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-teal-300/70 to-transparent" />
-                <div className="flex items-start justify-between gap-4">
+            <section className="grid min-h-0 border-y border-white/18 xl:grid-cols-[minmax(390px,0.88fr)_minmax(620px,1.42fr)] 2xl:grid-cols-[minmax(440px,0.82fr)_minmax(760px,1.55fr)]">
+              <div className="relative min-h-0 overflow-hidden border-b border-white/18 bg-[#050505] p-5 xl:border-b-0 xl:border-r xl:p-7">
+                <div className="pointer-events-none absolute -left-8 top-20 hidden -rotate-6 font-heading text-[12rem] uppercase leading-none text-white/[0.035] xl:text-[14rem]">
+                  ZA
+                </div>
+                <div className="pointer-events-none absolute -right-20 top-9 hidden rotate-12 border-y border-[#050505] bg-[#f4f4f4] px-20 py-2 font-heading text-[2.1rem] uppercase leading-none text-[#050505]">
+                  AlphaFIT Live
+                </div>
+                <div className="relative flex items-start justify-between gap-4">
                   <div className="min-w-0">
-                    <div className="text-[11px] font-black uppercase tracking-[0.34em] text-white/34">
-                      Zero Alpha Made
+                    <div className="inline-flex items-center gap-2 text-[11px] font-black uppercase leading-none text-[#a7fff2]">
+                      <span className="h-2 w-2 rounded-full bg-[#5ef2dd] shadow-[0_0_18px_rgba(94,242,221,0.75)]" />
+                      Zero Alpha Fitness
                     </div>
-                    <h1 className="mt-3 max-w-[12ch] font-heading text-[3.35rem] uppercase leading-[0.92] text-white md:text-[4.7rem] xl:text-[4.4rem] 2xl:text-[5.8rem]">
-                      Zero Alpha Fit.
+                    <h1 className="mt-3 max-w-[11ch] font-heading text-[3.9rem] uppercase leading-[0.84] text-[#f4f4f4] md:text-[5.2rem] xl:text-[5rem] 2xl:text-[6.4rem]">
+                      Today&apos;s Session
                     </h1>
+                    <div className="mt-5 grid max-w-[520px] grid-cols-3 border border-white/22 bg-[#f4f4f4] text-[#050505]">
+                      <div className="px-3 py-3 text-[11px] font-black uppercase leading-tight">{sessionHeaderBits.type}</div>
+                      <div className="border-x border-[#050505]/35 px-3 py-3 text-[11px] font-black uppercase leading-tight">{sessionHeaderBits.style}</div>
+                      <div className="px-3 py-3 text-[11px] font-black uppercase leading-tight">{sessionHeaderBits.extra}</div>
+                    </div>
                   </div>
-                  <div className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl border border-white/10 bg-white/[0.05] text-white/70">
+                  <div className="grid h-14 w-14 shrink-0 place-items-center border border-[#5ef2dd]/50 bg-[#5ef2dd]/10 text-[#bffff5] shadow-[0_0_30px_rgba(94,242,221,0.16)]">
                     <MonitorPlay className="h-7 w-7" />
                   </div>
                 </div>
 
-                <div className="mt-5 xl:mt-8">
+                <div className="relative mt-5 xl:mt-8">
                   {wod.sessionType === "HYROX" ? (
                     timerMode === "timed" ? (
                       roundDurationSeconds && rounds ? (
@@ -391,26 +394,29 @@ const WODDisplay = () => {
                 </div>
               </div>
 
-              <div className="relative min-h-0 overflow-hidden rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(15,14,13,0.92),rgba(4,4,4,0.94))] p-5 shadow-[0_26px_90px_rgba(0,0,0,0.46)] xl:p-7">
-                <div className="absolute inset-y-8 left-0 w-px bg-gradient-to-b from-transparent via-white/18 to-transparent" />
-                <div className="flex items-end justify-between gap-4">
+              <div className="relative min-h-0 overflow-hidden bg-[#050505] p-5 xl:p-7">
+                <div className="pointer-events-none absolute -right-10 bottom-10 hidden rotate-6 font-heading text-[10rem] uppercase leading-none text-white/[0.025]">
+                  WORK
+                </div>
+                <div className="relative flex items-stretch justify-between gap-4 border border-white/18 bg-[#101010]">
                   <div>
-                    <div className="text-[11px] font-black uppercase tracking-[0.34em] text-teal-100/75">
+                    <div className="flex items-center gap-3 border-b border-white/18 px-5 py-3 text-[11px] font-black uppercase leading-none text-white/42">
+                      <span className="h-px w-8 bg-[#5ef2dd]/80" />
                       Workout Board
                     </div>
-                    <h2 className="mt-2 font-heading text-5xl uppercase leading-none text-white md:text-6xl xl:text-7xl">
+                    <h2 className="px-5 py-4 font-heading text-5xl uppercase leading-[0.86] text-[#f4f4f4] md:text-6xl xl:text-7xl">
                       {wod.sessionType === "Strength" ? strengthTitle : "Session Plan"}
                     </h2>
                   </div>
-                  <div className="shrink-0 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-right">
-                    <div className="text-[11px] font-black uppercase tracking-[0.24em] text-white/34">
+                  <div className="flex min-w-[164px] shrink-0 flex-col justify-between border-l border-white/18 bg-[#f4f4f4] px-4 py-3 text-right text-[#050505]">
+                    <div className="text-[11px] font-black uppercase leading-none text-[#050505]/55">
                       Floor
                     </div>
-                    <div className="mt-1 text-xl font-black uppercase text-white">{boardCountLabel}</div>
+                    <div className="font-heading text-3xl uppercase leading-none">{boardCountLabel}</div>
                   </div>
                 </div>
 
-                <div className="mt-5 min-h-0 overflow-hidden xl:mt-7">
+                <div className="relative mt-5 min-h-0 overflow-hidden xl:mt-7">
                   {wod.sessionType === "Strength" ? (
                     <div className="grid max-h-full grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
                       {wod.strengthMovements?.map((sm: any, index: number) => (
@@ -446,11 +452,11 @@ const WODDisplay = () => {
               </div>
             </section>
 
-            <div className="flex items-center justify-between gap-5 rounded-[22px] border border-white/10 bg-black/70 px-5 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
-              <div className="min-w-0 truncate text-base font-semibold text-white/74 xl:text-xl">
+            <div className="flex items-center justify-between gap-5 bg-[#101010] px-5 py-4">
+              <div className="min-w-0 truncate text-base font-black uppercase text-white/78 xl:text-xl">
                 {footerNote}
               </div>
-              <div className="shrink-0 text-[11px] font-black uppercase tracking-[0.35em] text-white/30">
+              <div className="shrink-0 text-[11px] font-black uppercase tracking-[0.28em] text-white/42">
                 AlphaFIT TV Mode
               </div>
             </div>
@@ -505,45 +511,56 @@ function TVHeader({
   subtitle: string;
 }) {
   return (
-    <header className="relative overflow-hidden rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(18,18,18,0.90),rgba(5,5,5,0.88))] px-5 py-4 shadow-[0_24px_80px_rgba(0,0,0,0.40)] xl:px-7">
-      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-teal-500/0 via-teal-200/85 to-teal-500/0" />
-      <div className="flex items-center justify-between gap-5">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-3 text-[11px] font-black uppercase tracking-[0.28em] text-white/44">
-            <span>
-              {selectedDate
-                ? selectedDate.toLocaleDateString("en-GB", {
-                    weekday: "long",
-                    day: "numeric",
-                    month: "short",
-                    year: "numeric",
-                  })
-                : "—"}
-            </span>
-            <span className="h-1 w-1 rounded-full bg-teal-200/75" />
-            <span>{sessionKey}</span>
-            <span className="h-1 w-1 rounded-full bg-teal-200/75" />
-            <span>{type}</span>
-            <span className="h-1 w-1 rounded-full bg-teal-200/75" />
-            <span>{style}</span>
-            <span className="hidden xl:inline">{extra}</span>
-          </div>
-          <div className="mt-2 flex min-w-0 items-end gap-5">
-            <h1 className="truncate font-heading text-5xl uppercase leading-none text-white md:text-6xl xl:text-7xl">
-              {title}
-            </h1>
-            <div className="hidden pb-2 text-2xl font-bold uppercase italic text-white/54 lg:block">
-              {subtitle}
-            </div>
+    <header className="relative grid overflow-hidden bg-[#050505] xl:grid-cols-[1fr_280px]">
+      <div className="relative overflow-hidden p-5 xl:p-7">
+        <div className="absolute -left-8 top-1/2 hidden h-16 w-[58%] -translate-y-1/2 -skew-x-12 border-y border-white/16 bg-white/[0.035]" />
+        <div className="absolute right-5 top-4 hidden font-heading text-[4.5rem] uppercase leading-none text-white/[0.035]">
+          ZAF
+        </div>
+        <div className="relative flex flex-wrap items-center gap-4 text-[12px] font-black uppercase leading-none text-white/62">
+          <span>
+            {selectedDate
+              ? selectedDate.toLocaleDateString("en-GB", {
+                  weekday: "short",
+                  day: "numeric",
+                  month: "short",
+                })
+              : "—"}
+          </span>
+          <span className="h-px w-10 bg-white/32" />
+          <span className="text-[#a7fff2]">{sessionKey}</span>
+          <span className="hidden md:inline">{type}</span>
+          <span className="hidden md:inline">{style}</span>
+          <span className="hidden xl:inline">{extra}</span>
+        </div>
+        <div className="relative mt-5 flex min-w-0 items-end gap-5">
+          <h1 className="truncate font-heading text-[4.2rem] uppercase leading-[0.84] text-[#f4f4f4] md:text-[5.6rem] xl:text-[6.8rem]">
+            {title}
+          </h1>
+          <div className="hidden border-l border-[#5ef2dd]/45 pb-2 pl-4 text-2xl font-black uppercase text-white/62 lg:block">
+            {subtitle}
           </div>
         </div>
+      </div>
 
-        <div className="flex shrink-0 items-center gap-3 rounded-2xl border border-teal-200/25 bg-teal-400/10 px-4 py-3">
-          <span className="relative flex h-3 w-3">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-teal-200 opacity-60" />
-            <span className="relative inline-flex h-3 w-3 rounded-full bg-teal-300" />
-          </span>
-          <span className="text-sm font-black uppercase tracking-[0.28em] text-teal-50">Live</span>
+      <div className="relative hidden min-h-[178px] overflow-hidden border-l border-white/18 bg-[#d8d8d8] xl:block">
+        <img
+          src="/ZERO-ALPHA.png"
+          alt=""
+          aria-hidden="true"
+          draggable={false}
+          className="absolute left-1/2 top-1/2 h-[210px] w-[330px] -translate-x-1/2 -translate-y-1/2 select-none object-contain opacity-[0.28]"
+        />
+        <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(0,0,0,0.72),rgba(0,0,0,0.04)_48%,rgba(0,0,0,0.76))]" />
+        <div className="absolute right-5 top-5 text-right text-[12px] font-black uppercase leading-tight text-[#f4f4f4]/74">
+          Zero Alpha
+          <br />
+          Performance
+        </div>
+        <div className="absolute bottom-5 left-5 font-heading text-[38px] uppercase leading-[0.86] text-[#f4f4f4]">
+          Live
+          <br />
+          Board
         </div>
       </div>
     </header>
@@ -650,8 +667,8 @@ function SessionButton({
 
 function DisplayState({ title, detail }: { title: string; detail: string }) {
   return (
-    <div className="m-auto w-full max-w-2xl rounded-[30px] border border-white/10 bg-[#11100f]/92 p-10 text-center shadow-[0_28px_90px_rgba(0,0,0,0.48)]">
-      <div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl border border-white/10 bg-white/[0.05] text-white/64">
+    <div className="m-auto w-full max-w-2xl border border-white/18 bg-[#101010] p-10 text-center shadow-[0_28px_90px_rgba(0,0,0,0.48)]">
+      <div className="mx-auto grid h-16 w-16 place-items-center border border-white/18 bg-[#050505] text-white/64">
         <MonitorPlay className="h-8 w-8" />
       </div>
       <h1 className="mt-6 font-heading text-5xl uppercase text-white">{title}</h1>
@@ -662,11 +679,11 @@ function DisplayState({ title, detail }: { title: string; detail: string }) {
 
 function TimerEmptyState() {
   return (
-    <div className="rounded-[26px] border border-white/10 bg-white/[0.04] p-7">
-      <div className="text-[11px] font-black uppercase tracking-[0.34em] text-teal-100/75">
+    <div className="border border-white/18 bg-[#101010] p-7">
+      <div className="text-[11px] font-black uppercase leading-none text-white/42">
         Timer not configured
       </div>
-      <div className="mt-4 font-heading text-5xl uppercase leading-none text-white">
+      <div className="mt-4 font-heading text-5xl uppercase leading-[0.88] text-white">
         Set round time
       </div>
       <div className="mt-3 text-base font-medium text-white/54">
@@ -680,9 +697,9 @@ function TimerEmptyState() {
 
 function MetaPill({ label, value }: { label: string; value?: string }) {
   return (
-    <div className="rounded-[18px] border border-white/10 bg-white/[0.045] px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.045)]">
-      <div className="text-[10px] font-black uppercase tracking-[0.26em] text-white/34">{label}</div>
-      <div className="mt-1 truncate text-xl font-black text-white">{value || "—"}</div>
+    <div className="border border-white/18 bg-[#050505] px-4 py-3 shadow-[4px_4px_0_rgba(255,255,255,0.035)]">
+      <div className="text-[10px] font-black uppercase leading-none text-[#5ef2dd]/72">{label}</div>
+      <div className="mt-2 truncate font-heading text-3xl uppercase leading-none text-white">{value || "—"}</div>
     </div>
   );
 }
@@ -700,61 +717,65 @@ function HyroxStationCard({
   isControl: boolean;
 }) {
   const border = isControl
-    ? "border-teal-200/70 shadow-[0_0_44px_rgba(45,212,191,0.18)]"
-    : "border-white/10";
-
-  const badge = isControl ? "text-teal-100" : "text-teal-100/75";
-  const iconColor = isControl ? "text-teal-100" : "text-teal-200";
+    ? "border-white bg-[#f4f4f4] text-[#050505] shadow-[0_0_36px_rgba(94,242,221,0.20)]"
+    : "border-white/18 bg-[#101010] text-[#f4f4f4] shadow-[8px_8px_0_rgba(255,255,255,0.035)]";
 
   const title = (station.title || `Station ${index + 1}`).trim();
   const movements = (station.movements || []).filter((m) => String(m?.name ?? "").trim().length > 0);
-
   return (
-    <div className={`relative min-h-[168px] overflow-hidden rounded-[22px] border ${border} bg-[linear-gradient(180deg,rgba(255,255,255,0.055),rgba(255,255,255,0.025))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]`}>
-      <div className="absolute -right-3 -top-6 font-heading text-[8rem] leading-none text-white/[0.035]">
+    <div
+      className={`relative grid min-h-[168px] grid-cols-[68px_1fr] overflow-hidden border ${border}`}
+    >
+      <div className={`absolute inset-x-0 top-0 h-1 ${isControl ? "bg-[#5ef2dd]" : "bg-white/18"}`} />
+      <div className={`flex items-center justify-center border-r font-heading text-[2.5rem] leading-none ${isControl ? "border-[#050505] bg-[#050505] text-[#f4f4f4]" : "border-white/18 bg-[#050505] text-[#f4f4f4]"}`}>
         {String(index + 1).padStart(2, "0")}
       </div>
-      <div className="relative flex items-start gap-3">
-        <div className="grid h-12 w-12 shrink-0 place-items-center rounded-[18px] border border-white/12 bg-black/42">
-          <Flame className={`h-6 w-6 ${iconColor}`} />
+
+      <div className="relative min-w-0 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className={`text-[11px] font-black uppercase leading-none ${isControl ? "text-[#050505]/58" : "text-white/42"}`}>
+              Station {index + 1}
+            </div>
+
+            <div className={`mt-2 line-clamp-2 font-heading text-[2.1rem] uppercase leading-[0.88] ${isControl ? "text-[#050505]" : "text-[#f4f4f4]"}`}>
+              {title}
+            </div>
+          </div>
+
+          {isControl ? (
+            <div className="shrink-0 border border-[#050505] bg-[#5ef2dd] px-2.5 py-1 text-[10px] font-black uppercase leading-none text-[#050505] shadow-[4px_4px_0_rgba(5,5,5,0.16)]">
+              Control
+            </div>
+          ) : (
+            <Flame className="h-5 w-5 shrink-0 text-[#5ef2dd]/78" />
+          )}
         </div>
 
-        <div className="min-w-0 w-full">
-          <div className="text-[11px] font-black uppercase tracking-[0.26em] text-white/34">
-            Station {index + 1}
-          </div>
+        <div className="mt-3 space-y-2">
+          {movements.length ? (
+            movements.slice(0, 3).map((m, i) => {
+              const name = String(m.name ?? "").trim();
+              const target = String(m.target ?? "").trim();
+              const notes = String(m.notes ?? "").trim();
 
-          <div className="mt-1 line-clamp-2 text-2xl font-black uppercase leading-[1.02] text-white xl:text-[1.7rem]">
-            {title}
-          </div>
-
-          {isControl ? <div className={`mt-2 text-xs font-black uppercase tracking-[0.22em] ${badge}`}>Control Station</div> : null}
-
-          <div className="mt-3 space-y-2">
-            {movements.length ? (
-              movements.slice(0, 3).map((m, i) => {
-                const name = String(m.name ?? "").trim();
-                const target = String(m.target ?? "").trim();
-                const notes = String(m.notes ?? "").trim();
-
-                return (
-                  <div key={m.id ?? i} className="border-t border-white/8 pt-2 first:border-t-0 first:pt-0">
-                    <div className="line-clamp-1 text-base font-bold leading-tight text-white/86 xl:text-lg">
-                      {name || "—"}
-                    </div>
-                    {(target || notes) ? (
-                      <div className="mt-1 line-clamp-1 text-xs font-semibold uppercase tracking-[0.08em] text-white/42">
-                        {target ? <span className="mr-2">Target: {target}</span> : null}
-                        {notes ? <span>• {notes}</span> : null}
-                      </div>
-                    ) : null}
+              return (
+                <div key={m.id ?? i} className={`border-t pt-2 first:border-t-0 first:pt-0 ${isControl ? "border-[#050505]/18" : "border-white/10"}`}>
+                  <div className={`line-clamp-1 text-base font-black leading-tight xl:text-lg ${isControl ? "text-[#050505]" : "text-white/88"}`}>
+                    {name || "—"}
                   </div>
-                );
-              })
-            ) : (
-              <div className="text-sm font-semibold text-white/42">No movements added.</div>
-            )}
-          </div>
+                  {(target || notes) ? (
+                    <div className={`mt-1 line-clamp-1 text-xs font-black uppercase leading-tight ${isControl ? "text-[#050505]/52" : "text-white/42"}`}>
+                      {target ? <span className="mr-2">Target: {target}</span> : null}
+                      {notes ? <span>• {notes}</span> : null}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })
+          ) : (
+            <div className={`text-sm font-semibold ${isControl ? "text-[#050505]/52" : "text-white/42"}`}>No movements added.</div>
+          )}
         </div>
       </div>
     </div>
@@ -784,13 +805,17 @@ function StrengthOverview({
   const cueText = (cue ?? "").trim();
 
   return (
-    <div className="w-full rounded-[26px] border border-white/10 bg-white/[0.04] p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.045)]">
-      <div className="text-[11px] font-black uppercase tracking-[0.34em] text-teal-100/75">
+    <div className="relative w-full overflow-hidden border border-white/18 bg-[#101010] p-6">
+      <div className="pointer-events-none absolute -right-6 top-0 hidden font-heading text-[8rem] uppercase leading-none text-white/[0.04]">
+        LIFT
+      </div>
+      <div className="relative inline-flex items-center gap-2 text-[11px] font-black uppercase leading-none text-[#a7fff2]">
+        <span className="h-2 w-2 rounded-full bg-[#5ef2dd] shadow-[0_0_16px_rgba(94,242,221,0.75)]" />
         Strength Block
       </div>
-      <div className="mt-3 font-heading text-[4.4rem] uppercase leading-none text-white xl:text-[5.6rem]">{title}</div>
+      <div className="relative mt-3 font-heading text-[4.9rem] uppercase leading-[0.84] text-[#f4f4f4] xl:text-[6rem]">{title}</div>
 
-      <div className="mt-6 grid grid-cols-2 gap-3">
+      <div className="relative mt-6 grid grid-cols-2 gap-3">
         <MetaPill label="Stations" value={`${movements.length || 0}`} />
         <MetaPill label="Goal" value={goalText} />
         <MetaPill label="Load" value={loadText} />
@@ -798,9 +823,9 @@ function StrengthOverview({
       </div>
 
       {cueText ? (
-        <div className="mt-5 rounded-[20px] border border-teal-200/16 bg-teal-400/[0.055] p-4">
-          <div className="text-[11px] font-black uppercase tracking-[0.24em] text-teal-50/60">Coaches Notes</div>
-          <div className="mt-2 whitespace-pre-wrap text-base font-semibold leading-6 text-white/70">
+        <div className="relative mt-5 border border-white/18 bg-[#050505] p-4">
+          <div className="text-[11px] font-black uppercase leading-none text-[#5ef2dd]/72">Coaches Notes</div>
+          <div className="mt-2 whitespace-pre-wrap text-base font-bold leading-6 text-white/74">
             {cueText}
           </div>
         </div>
@@ -822,30 +847,32 @@ function StrengthStationCard({
 }) {
   const pct = String(percent ?? "").trim();
   const rr = String(repRange ?? "").trim();
-
   return (
-    <div className="relative min-h-[150px] overflow-hidden rounded-[22px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.055),rgba(255,255,255,0.025))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
-      <div className="absolute -right-3 -top-6 font-heading text-[8rem] leading-none text-white/[0.035]">
+    <div
+      className="relative grid min-h-[150px] grid-cols-[68px_1fr] overflow-hidden border border-white/18 bg-[#101010] text-[#f4f4f4]"
+    >
+      <div className="absolute inset-x-0 top-0 h-1 bg-[#5ef2dd]/70" />
+      <div className="flex items-center justify-center border-r border-white/18 bg-[#050505] font-heading text-[2.5rem] leading-none">
         {String(index + 1).padStart(2, "0")}
       </div>
-      <div className="relative flex items-start justify-between gap-4">
+      <div className="relative flex min-w-0 items-start justify-between gap-4 p-4">
         <div className="min-w-0">
-          <div className="text-[11px] font-black uppercase tracking-[0.26em] text-white/34">
+          <div className="text-[11px] font-black uppercase leading-none text-white/42">
             Station {index + 1}
           </div>
 
-          <div className="mt-2 line-clamp-2 text-3xl font-black uppercase leading-[1.02] text-white">
+          <div className="mt-2 line-clamp-2 font-heading text-[2.1rem] uppercase leading-[0.9] text-[#f4f4f4]">
             {movement || "—"}
           </div>
 
-          <div className="mt-4 text-xl font-black uppercase tracking-[0.06em] text-teal-50/84">
+          <div className="mt-4 text-xl font-black uppercase leading-tight text-white/58">
             {pct ? `${pct}` : "—"}
             {rr ? ` • ${rr}` : ""}
           </div>
         </div>
 
-        <div className="grid h-12 w-12 shrink-0 place-items-center rounded-[18px] border border-white/12 bg-black/42">
-          <Dumbbell className="h-6 w-6 text-teal-100" />
+        <div className="grid h-10 w-10 shrink-0 place-items-center border border-white/18 bg-[#050505]">
+          <Dumbbell className="h-5 w-5 text-white/54" />
         </div>
       </div>
     </div>
@@ -866,28 +893,30 @@ function ControlStationHero({
   const has = controlIndex != null && total > 0 && !!controlName;
 
   return (
-    <div className="relative overflow-hidden rounded-[26px] border border-teal-200/50 bg-teal-400/[0.055] p-6 shadow-[0_0_54px_rgba(45,212,191,0.12),inset_0_1px_0_rgba(255,255,255,0.06)]">
-      <div className="absolute -right-8 top-0 font-heading text-[14rem] leading-none text-teal-50/[0.04]">
+    <div className="relative overflow-hidden border border-white/18 bg-[#101010] p-6">
+      <div className="absolute -right-8 top-0 hidden font-heading text-[14rem] leading-none text-white/[0.04]">
         {has ? String(controlIndex! + 1).padStart(2, "0") : "00"}
       </div>
+      <div className="absolute -left-12 bottom-10 hidden h-16 w-[70%] -skew-x-12 bg-[#5ef2dd]/10" />
       <div className="relative flex items-center justify-between">
-        <div className="text-[11px] font-black uppercase tracking-[0.34em] text-teal-100">
+        <div className="inline-flex items-center gap-2 text-[11px] font-black uppercase leading-none text-[#a7fff2]">
+          <span className="h-2 w-2 rounded-full bg-[#5ef2dd] shadow-[0_0_16px_rgba(94,242,221,0.75)]" />
           Control Station
         </div>
-        <div className="text-[11px] font-black uppercase tracking-[0.25em] text-white/46">
+        <div className="text-[11px] font-black uppercase leading-none text-white/42">
           STATION CONTROL
         </div>
       </div>
 
       <div className="relative mt-7">
-        <div className="font-heading text-[8rem] uppercase leading-[0.84] text-white xl:text-[9.5rem]">
+        <div className="font-heading text-[8rem] uppercase leading-[0.84] text-[#f4f4f4] xl:text-[9.5rem]">
           {has ? `${controlIndex! + 1}/${total}` : "—"}
         </div>
         <div className="mt-5 text-4xl font-black uppercase leading-tight text-white/92">
           {has ? controlName : "Pick a control station in the editor"}
         </div>
-        <div className="mt-6 rounded-[20px] border border-white/10 bg-black/30 p-4">
-          <div className="text-lg font-black uppercase text-white/80">Pace setter</div>
+        <div className="mt-6 border border-white/18 bg-[#050505] p-4">
+          <div className="text-lg font-black uppercase text-[#a7fff2]">Pace setter</div>
           <div className="mt-1 text-base font-semibold leading-6 text-white/54">
             Move on when the group completes the target here.
           </div>
@@ -1011,29 +1040,26 @@ function RoundTimer({
   const label = phase === "WORK" ? "WORK" : phase === "REST" ? "REST" : "FINISHED";
   const labelColor =
     phase === "WORK"
-      ? "text-teal-50"
+      ? "text-[#a7fff2]"
       : phase === "REST"
       ? "text-white"
-      : "text-teal-100";
+      : "text-white/70";
   const ringColor =
     phase === "WORK"
-      ? "rgba(45,212,191,0.95)"
+      ? "rgba(94,242,221,0.96)"
       : phase === "REST"
-      ? "rgba(255,255,255,0.92)"
-      : "rgba(153,246,228,0.94)";
-  const glowColor =
-    phase === "WORK"
-      ? "rgba(45,212,191,0.24)"
-      : phase === "REST"
-      ? "rgba(255,255,255,0.18)"
-      : "rgba(153,246,228,0.20)";
+      ? "rgba(255,255,255,0.70)"
+      : "rgba(244,244,244,0.82)";
   const isUrgent = isRunning && phase !== "FINISHED" && remaining <= 10;
 
   return (
-    <div className="flex flex-col items-center justify-center gap-6">
+    <div className="relative flex flex-col items-center justify-center gap-6 overflow-hidden border border-white/18 bg-[#101010] p-5">
+      <div className="pointer-events-none absolute -left-7 top-5 hidden -rotate-6 font-heading text-[7rem] uppercase leading-none text-white/[0.035]">
+        WORK
+      </div>
+      <div className="pointer-events-none absolute -right-10 bottom-8 hidden h-16 w-[62%] -skew-x-12 bg-[#5ef2dd]/10" />
       <div
         className={`relative flex items-center justify-center rounded-full ${isUrgent ? "animate-pulse" : ""}`}
-        style={{ filter: `drop-shadow(0 0 38px ${glowColor})` }}
       >
         <Ring progress={progress} size={340} stroke={18} color={ringColor} />
 
@@ -1046,20 +1072,20 @@ function RoundTimer({
             {label}{phase !== "FINISHED" ? (isRunning ? "" : " Paused") : ""}
           </div>
 
-          <div className="mt-5 rounded-full border border-white/10 bg-white/[0.05] px-5 py-2 text-sm font-black uppercase tracking-[0.2em] text-white/78">
+          <div className="mt-5 border border-white/18 bg-[#050505] px-5 py-2 text-sm font-black uppercase leading-none text-white/78">
             Round {Math.min(roundIndex, safeRounds)} / {safeRounds}
           </div>
         </div>
       </div>
 
       <div className="w-full max-w-[420px]">
-        <div className="mb-3 flex items-center justify-between text-[10px] font-black uppercase tracking-[0.24em] text-white/34">
+        <div className="mb-3 flex items-center justify-between text-[10px] font-black uppercase leading-none text-white/42">
           <span>{phase === "REST" ? "Rest progress" : "Work progress"}</span>
           <span>{Math.round(progress * 100)}%</span>
         </div>
-        <div className="h-2 overflow-hidden rounded-full bg-white/10">
+        <div className="h-2 overflow-hidden bg-white/10">
           <div
-            className="h-full rounded-full transition-all duration-300"
+            className="h-full transition-all duration-300"
             style={{ width: `${progress * 100}%`, backgroundColor: ringColor }}
           />
         </div>
@@ -1070,7 +1096,7 @@ function RoundTimer({
           <button
             type="button"
             onClick={startOrResume}
-            className="h-11 rounded-2xl border border-white bg-white px-5 text-xs font-black uppercase tracking-[0.2em] text-black"
+            className="h-11 border border-[#5ef2dd] bg-[#5ef2dd] px-5 text-xs font-black uppercase tracking-[0.12em] text-black shadow-[5px_5px_0_rgba(255,255,255,0.16)]"
           >
             {elapsedInPhase === 0 && phase === "WORK" && roundIndex === 1 ? "Start" : "Resume"}
           </button>
@@ -1078,7 +1104,7 @@ function RoundTimer({
           <button
             type="button"
             onClick={pause}
-            className="h-11 rounded-2xl border border-white/12 bg-white/[0.05] px-5 text-xs font-black uppercase tracking-[0.2em] text-white/84 hover:text-white"
+            className="h-11 border border-[#5ef2dd]/45 bg-[#5ef2dd]/10 px-5 text-xs font-black uppercase tracking-[0.12em] text-[#a7fff2] hover:text-white"
           >
             Pause
           </button>
@@ -1088,10 +1114,10 @@ function RoundTimer({
           type="button"
           onClick={advanceToNext}
           disabled={phase === "FINISHED"}
-          className={`h-11 rounded-2xl border border-white/12 px-5 text-xs font-black uppercase tracking-[0.2em] ${
+          className={`h-11 border border-white/18 px-5 text-xs font-black uppercase tracking-[0.12em] ${
             phase === "FINISHED"
               ? "cursor-not-allowed bg-white/[0.025] text-white/25"
-              : "bg-white/[0.05] text-white/78 hover:text-white"
+              : "bg-[#101010] text-white/78 hover:text-white"
           }`}
         >
           Next round
@@ -1100,7 +1126,7 @@ function RoundTimer({
         <button
           type="button"
           onClick={resetToStart}
-          className="h-11 rounded-2xl border border-white/12 bg-white/[0.035] px-5 text-xs font-black uppercase tracking-[0.2em] text-white/54 hover:text-white"
+          className="h-11 border border-white/18 bg-[#101010] px-5 text-xs font-black uppercase tracking-[0.12em] text-white/54 hover:text-white"
         >
           Restart
         </button>

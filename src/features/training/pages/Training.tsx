@@ -1,6 +1,13 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, NavLink } from "react-router-dom";
-import { collection, getDocs, orderBy, query } from "firebase/firestore";
+import {
+  collection,
+  getCountFromServer,
+  getDocs,
+  limit,
+  orderBy,
+  query,
+} from "firebase/firestore";
 import {
   Bell,
   ChevronRight,
@@ -23,6 +30,8 @@ type TrainingLog = {
   reps?: string;
   date?: string;
 };
+
+const TRAINING_HOME_LOG_LIMIT = 200;
 
 function formatLogValue(log: TrainingLog) {
   const value = String(log.value ?? "").trim();
@@ -47,6 +56,7 @@ function relativeDate(date?: string) {
 export default function Training() {
   const { user, appUser } = useAuth();
   const [logs, setLogs] = useState<TrainingLog[]>([]);
+  const [totalLogs, setTotalLogs] = useState(0);
   const [loadingLogs, setLoadingLogs] = useState(true);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
@@ -54,6 +64,7 @@ export default function Training() {
   useEffect(() => {
     if (!user) {
       setLogs([]);
+      setTotalLogs(0);
       setLoadingLogs(false);
       return;
     }
@@ -65,8 +76,10 @@ export default function Training() {
     async function loadLogs() {
       try {
         const logsRef = collection(db, "users", uid, "trainingLogs");
-        const logsQuery = query(logsRef, orderBy("date", "desc"));
-        const snap = await getDocs(logsQuery);
+        const [snap, countSnap] = await Promise.all([
+          getDocs(query(logsRef, orderBy("date", "desc"), limit(TRAINING_HOME_LOG_LIMIT))),
+          getCountFromServer(logsRef),
+        ]);
 
         if (!isMounted) return;
 
@@ -76,6 +89,7 @@ export default function Training() {
             ...(doc.data() as Omit<TrainingLog, "id">),
           }))
         );
+        setTotalLogs(countSnap.data().count);
         setLoadingLogs(false);
       } catch (error) {
         if (!isMounted) return;
@@ -209,7 +223,7 @@ export default function Training() {
               Recently logged
             </p>
             <span className="text-sm font-bold text-white/50">
-              {loadingLogs ? "Loading" : `${logs.length} total`}
+              {loadingLogs ? "Loading" : `${totalLogs} total`}
             </span>
           </div>
 

@@ -1,26 +1,19 @@
 import {
-  collection,
   collectionGroup,
+  getCountFromServer,
   getDocs,
+  limit,
   orderBy,
   query,
   where,
 } from "firebase/firestore";
 import { db } from "../../../firebase";
+import { getCachedAdminUsers } from "./usersCache";
 import {
   formatDisplayValue,
   isTimeDisplay,
   parseChartValue,
 } from "../../training/utils/movementHelpers";
-
-type AdminUser = {
-  id: string;
-  name?: string;
-  email?: string;
-  photoURL?: string;
-  role?: string;
-  approvalStatus?: "approved" | "pending";
-};
 
 type MetricTrainingLog = {
   id: string;
@@ -36,6 +29,8 @@ type MetricTrainingLog = {
   notes?: string;
   createdAt?: any;
 };
+
+const METRIC_LOG_LIMIT = 2000;
 
 function getCreatedAtMs(raw: any) {
   if (!raw) return 0;
@@ -59,22 +54,25 @@ export async function getMetricPerformance(
   movementSlug: string,
   metricType: string
 ) {
-  const [usersSnap, logsSnap] = await Promise.all([
-    getDocs(collection(db, "users")),
+  const metricLogsQuery = query(
+    collectionGroup(db, "trainingLogs"),
+    where("movementSlug", "==", movementSlug),
+    where("metricType", "==", metricType)
+  );
+
+  const [users, logsSnap, countSnap] = await Promise.all([
+    getCachedAdminUsers(),
     getDocs(
       query(
         collectionGroup(db, "trainingLogs"),
         where("movementSlug", "==", movementSlug),
         where("metricType", "==", metricType),
-        orderBy("createdAt", "desc")
+        orderBy("createdAt", "desc"),
+        limit(METRIC_LOG_LIMIT)
       )
     ),
+    getCountFromServer(metricLogsQuery),
   ]);
-
-  const users: AdminUser[] = usersSnap.docs.map((doc) => ({
-    id: doc.id,
-    ...(doc.data() as Omit<AdminUser, "id">),
-  }));
 
   const userMap = new Map(users.map((user) => [user.id, user]));
 
@@ -171,7 +169,7 @@ export async function getMetricPerformance(
     metricType,
     movementSlug,
     category,
-    totalLogs: logs.length,
+    totalLogs: countSnap.data().count,
     totalAthletes: rankings.length,
     lowerIsBetter,
     rankings,

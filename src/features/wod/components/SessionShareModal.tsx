@@ -56,9 +56,7 @@ export default function SessionShareModal({
 
     try {
       setIsExporting(true);
-      const dataUrl = await exportNodeToPng(exportRef.current, {
-        logoOpacity: 0.2,
-      });
+      const dataUrl = await exportNodeToPng(exportRef.current);
 
       const response = await fetch(dataUrl);
       const blob = await response.blob();

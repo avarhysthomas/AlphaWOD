@@ -1,26 +1,13 @@
 import {
   collection,
+  getCountFromServer,
   getDocs,
+  limit,
   orderBy,
   query,
 } from "firebase/firestore";
 import { db } from "../../../firebase";
-
-type AdminUser = {
-  id: string;
-  name?: string;
-  email?: string;
-  photoURL?: string;
-  role?: string;
-  approvalStatus?: "approved" | "pending";
-  stats?: {
-    currentStreak?: number;
-    longestStreak?: number;
-    lastCheckInDate?: string;
-    totalCheckIns?: number;
-    monthCheckIns?: Record<string, number>;
-  };
-};
+import { getCachedAdminUser, type CachedAdminUser } from "./usersCache";
 
 export type MemberTrainingLog = {
   id: string;
@@ -37,6 +24,8 @@ export type MemberTrainingLog = {
   createdAt?: any;
 };
 
+const MEMBER_LOG_LIMIT = 500;
+
 function formatMetricLabel(log: MemberTrainingLog) {
   const movement = log.movementName || "Unknown movement";
   const metric = log.metricType || "";
@@ -52,13 +41,7 @@ function getCreatedAtMs(raw: any) {
 }
 
 export async function getMemberPerformance(userId: string) {
-  const usersSnap = await getDocs(collection(db, "users"));
-  const users: AdminUser[] = usersSnap.docs.map((doc) => ({
-    id: doc.id,
-    ...(doc.data() as Omit<AdminUser, "id">),
-  }));
-
-  const user = users.find((u) => u.id === userId) ?? null;
+  const user = (await getCachedAdminUser(userId)) as CachedAdminUser | null;
 
   if (!user) {
     return {
@@ -71,7 +54,10 @@ export async function getMemberPerformance(userId: string) {
   }
 
   const logsRef = collection(db, "users", userId, "trainingLogs");
-  const logsSnap = await getDocs(query(logsRef, orderBy("createdAt", "desc")));
+  const [logsSnap, countSnap] = await Promise.all([
+    getDocs(query(logsRef, orderBy("createdAt", "desc"), limit(MEMBER_LOG_LIMIT))),
+    getCountFromServer(logsRef),
+  ]);
 
   const logs: MemberTrainingLog[] = logsSnap.docs
     .map((doc) => ({
@@ -106,7 +92,7 @@ export async function getMemberPerformance(userId: string) {
       ...log,
       metricLabel: formatMetricLabel(log),
     })),
-    totalLogs: logs.length,
+    totalLogs: countSnap.data().count,
     categoryCounts,
     metricCounts,
   };

@@ -1,20 +1,13 @@
 import {
-  collection,
   collectionGroup,
+  getCountFromServer,
   getDocs,
+  limit,
   orderBy,
   query,
 } from "firebase/firestore";
 import { db } from "../../../firebase";
-
-type AdminUserLite = {
-  id: string;
-  name?: string;
-  email?: string;
-  photoURL?: string;
-  role?: string;
-  approvalStatus?: "approved" | "pending";
-};
+import { getCachedAdminUsers } from "./usersCache";
 
 export type TrainingLog = {
   id: string;
@@ -30,6 +23,8 @@ export type TrainingLog = {
   notes?: string;
   createdAt?: any;
 };
+
+const PERFORMANCE_LOG_SAMPLE_LIMIT = 1500;
 
 export type TopMetricSummary = {
   label: string;
@@ -55,20 +50,17 @@ function getCreatedAtMs(raw: any) {
 }
 
 export async function getPerformanceSummary() {
-  const [usersSnap, logsSnap] = await Promise.all([
-    getDocs(collection(db, "users")),
+  const [users, logsSnap, countSnap] = await Promise.all([
+    getCachedAdminUsers(),
     getDocs(
       query(
         collectionGroup(db, "trainingLogs"),
-        orderBy("createdAt", "desc")
+        orderBy("createdAt", "desc"),
+        limit(PERFORMANCE_LOG_SAMPLE_LIMIT)
       )
     ),
+    getCountFromServer(collectionGroup(db, "trainingLogs")),
   ]);
-
-  const users: AdminUserLite[] = usersSnap.docs.map((doc) => ({
-    id: doc.id,
-    ...(doc.data() as Omit<AdminUserLite, "id">),
-  }));
 
   const userMap = new Map(users.map((u) => [u.id, u]));
 
@@ -84,7 +76,7 @@ export async function getPerformanceSummary() {
     })
     .sort((a, b) => getCreatedAtMs(b.createdAt) - getCreatedAtMs(a.createdAt));
 
-  const totalLogs = memberLogs.length;
+  const totalLogs = countSnap.data().count;
 
   const athletesLogging = new Set(
     memberLogs.map((log) => log.userId).filter(Boolean)

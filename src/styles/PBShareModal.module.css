@@ -155,7 +155,7 @@
   display: flex;
   justify-content: center;
   align-items: center;
-  min-height: 220px;
+  min-height: 300px;
   overflow: hidden;
 }
 
@@ -338,7 +338,7 @@
   }
 
   .previewStage {
-    min-height: 170px;
+    min-height: 225px;
   }
 
   .previewStage::before {
@@ -398,7 +398,7 @@
   }
 
   .previewStage {
-    min-height: 170px;
+    min-height: 210px;
   }
 
   .previewScale {

@@ -1,4 +1,5 @@
 import React from "react";
+import { BadgeCheck, CalendarDays, UserRound } from "lucide-react";
 import type { WorkoutSection, WorkoutSession } from "../types";
 import { getPrimaryScoreLabel } from "../utils/workoutDisplay";
 
@@ -68,6 +69,7 @@ function isQuickLog(workout: WorkoutSession) {
 
 function buildStatRows(workout: WorkoutSession) {
   const quickLog = isQuickLog(workout);
+  const heartRate = workout.stats.avgHeartRate?.trim();
   const rows = [
     workout.stats.score && !quickLog
       ? { label: getPrimaryScoreLabel(workout), value: workout.stats.score }
@@ -76,7 +78,9 @@ function buildStatRows(workout: WorkoutSession) {
     workout.stats.reps ? { label: "Reps", value: workout.stats.reps } : null,
     workout.stats.distanceM ? { label: "Distance", value: `${workout.stats.distanceM} m` } : null,
     workout.stats.calories ? { label: "Calories", value: workout.stats.calories } : null,
-    workout.stats.avgHeartRate ? { label: "Avg HR", value: `${workout.stats.avgHeartRate} bpm` } : null,
+    heartRate
+      ? { label: "Avg HR", value: /\bbpm\b/i.test(heartRate) ? heartRate : `${heartRate} bpm` }
+      : null,
     workout.stats.area ? { label: "Details", value: workout.stats.area } : null,
     workout.stats.totalRounds ? { label: "Rounds", value: workout.stats.totalRounds } : null,
     workout.durationMin ? { label: "Duration", value: `${workout.durationMin} min` } : null,
@@ -119,27 +123,65 @@ export function getWorkoutShareCardHeight(
   const heroBump = workout.title.trim().length > 22 ? 56 : 0;
   const infoRows = statRows + movementRows + sectionRows + notesRows;
 
-  return Math.max(720, 500 + heroBump + infoRows * 78 + (saluteCount ? 56 : 0));
+  return Math.max(920, 680 + heroBump + infoRows * 72 + (saluteCount ? 48 : 0));
 }
 
-function renderListCard(title: string, items: string[], accent: string) {
+function BrandSocialHeader() {
+  return (
+    <div className="flex h-[58px] items-center justify-between bg-[#f4f4f4] px-4 text-[#050505]">
+      <div className="flex items-center gap-3">
+        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#050505] font-heading text-[12px] text-[#f4f4f4]">
+          ZA
+        </div>
+        <div className="flex items-center gap-1.5 text-[14px] font-bold leading-none">
+          zeroalphafitness
+          <BadgeCheck className="h-4 w-4 fill-[#3f3f3f] text-[#f4f4f4]" />
+        </div>
+      </div>
+      <div className="text-[20px] font-black leading-none">...</div>
+    </div>
+  );
+}
+
+function PosterImage({ workout }: { workout: WorkoutSession }) {
+  if (workout.selfieURL) {
+    return (
+      <img
+        src={workout.selfieURL}
+        alt=""
+        aria-hidden="true"
+        draggable={false}
+        className="absolute inset-0 h-full w-full select-none object-cover grayscale"
+      />
+    );
+  }
+
+  return (
+    <img
+      src="/ZERO-ALPHA.png"
+      alt=""
+      aria-hidden="true"
+      draggable={false}
+      className="absolute left-1/2 top-1/2 h-[270px] w-[420px] -translate-x-1/2 -translate-y-1/2 select-none object-contain opacity-[0.34] grayscale"
+    />
+  );
+}
+
+function renderListCard(title: string, items: string[]) {
   if (!items.length) return null;
 
   return (
-    <div className="rounded-[28px] border border-white/10 bg-white/[0.04] p-5">
-      <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/38">
+    <div className="border border-white/18 bg-[#101010]">
+      <div className="border-b border-white/18 px-5 py-4 text-[12px] font-black uppercase leading-none text-white/46">
         {title}
       </div>
-      <div className="mt-4 space-y-3">
+      <div>
         {items.map((item, index) => (
           <div
             key={`${title}-${index}-${item}`}
-            className="relative overflow-hidden rounded-[22px] border border-white/10 bg-[linear-gradient(135deg,rgba(255,255,255,0.075),rgba(255,255,255,0.02))] px-4 py-3.5"
+            className="border-b border-white/12 px-5 py-4 text-[16px] font-bold leading-snug text-white/84 last:border-b-0"
           >
-            <div className={`absolute inset-y-0 left-0 w-[3px] ${accent}`} />
-            <div className="pl-2 text-[15px] font-medium leading-6 text-white/82">
-              {item}
-            </div>
+            {item}
           </div>
         ))}
       </div>
@@ -160,75 +202,81 @@ export default function WorkoutShareCard({
 
   return (
     <div
-      className="relative w-[720px] overflow-hidden rounded-[40px] border border-white/12 p-10 shadow-[0_24px_60px_rgba(0,0,0,0.45)]"
-      style={{
-        minHeight: `${cardHeight}px`,
-        background:
-          "linear-gradient(180deg, rgba(14,14,16,0.96), rgba(6,6,8,0.98))",
-      }}
+      className="relative w-[720px] overflow-hidden rounded-[18px] bg-[#050505] shadow-[0_30px_80px_rgba(0,0,0,0.55)]"
+      style={{ minHeight: `${cardHeight}px` }}
     >
-      <div className="absolute inset-0 rounded-[40px] bg-[linear-gradient(180deg,rgba(255,255,255,0.045),transparent_24%),radial-gradient(circle_at_top_right,rgba(245,158,11,0.12),transparent_30%),radial-gradient(circle_at_bottom_left,rgba(59,130,246,0.10),transparent_34%)]" />
+      <BrandSocialHeader />
 
-      <img
-        src="/ZERO-ALPHA.png"
-        alt=""
-        aria-hidden="true"
-        draggable={false}
-        data-export-skip="true"
-        className="pointer-events-none absolute left-1/2 top-[56%] h-[400px] w-[600px] -translate-x-1/2 -translate-y-1/2 select-none object-contain opacity-[0.2]"
-      />
+      <div
+        className="relative overflow-hidden bg-[#050505] text-white"
+        style={{ minHeight: `${cardHeight - 58}px` }}
+      >
+        <div className="absolute inset-0 opacity-[0.1] [background-image:radial-gradient(circle_at_10%_20%,#f4f4f4_0_1px,transparent_1px),radial-gradient(circle_at_70%_60%,#f4f4f4_0_1px,transparent_1px)] [background-size:7px_7px,12px_12px]" />
 
-      <div className="relative">
-        <div className="inline-flex w-fit items-center rounded-full border border-white/10 bg-white/[0.05] px-4 py-2 text-[12px] font-semibold uppercase tracking-[0.2em] text-white/72">
-          Workout Share
+        <div className="relative grid h-[260px] grid-cols-[1fr_220px] border-b border-white/18">
+          <div className="relative overflow-hidden bg-[#d8d8d8]">
+            <PosterImage workout={workout} />
+            <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(0,0,0,0.72),rgba(0,0,0,0.12)_50%,rgba(0,0,0,0.78))]" />
+            <div className="absolute bottom-5 left-6 font-heading text-[58px] uppercase leading-[0.82] text-[#f4f4f4]">
+              Logged
+              <br />
+              Work
+            </div>
+          </div>
+
+          <div className="flex flex-col justify-between border-l border-white/18 bg-[#101010] p-5">
+            <div className="text-[11px] font-black uppercase leading-tight text-white/48">
+              {typeLabel}
+            </div>
+            <div className="font-heading text-[55px] uppercase leading-[0.82] text-[#f4f4f4]">
+              ZAF
+              <br />
+              Proof
+            </div>
+            <div className="text-[12px] font-black uppercase leading-tight text-white/62">
+              {workout.userName}
+            </div>
+          </div>
         </div>
 
-        <div className="mt-5 flex flex-wrap items-center gap-3 text-[11px] font-semibold uppercase tracking-[0.22em] text-white/42">
-          <span>{dateLabel}</span>
-          <span className="text-white/20">|</span>
-          <span>{typeLabel}</span>
-          {workout.startTime ? (
-            <>
-              <span className="text-white/20">|</span>
-              <span>{workout.startTime}</span>
-            </>
-          ) : null}
-        </div>
-
-        <h1 className="mt-4 text-[62px] font-black uppercase leading-[0.9] tracking-[-0.055em] text-white">
-          {workout.title}
-        </h1>
-
-        <div className="mt-5 flex flex-wrap items-center gap-3">
-          <div className="inline-flex items-center rounded-full border border-amber-300/20 bg-amber-300/10 px-4 py-2 text-[14px] font-semibold uppercase tracking-[0.18em] text-amber-100">
-            {typeLabel}
+        <div className="relative bg-[#f4f4f4] px-7 py-7 text-[#050505]">
+          <div className="flex flex-wrap items-center gap-3 text-[13px] font-black uppercase leading-none text-[#050505]/62">
+            <span className="inline-flex items-center gap-2">
+              <CalendarDays className="h-4 w-4" />
+              {dateLabel}
+            </span>
+            <span className="h-px w-8 bg-[#050505]/40" />
+            <span>{typeLabel}</span>
+            {workout.startTime ? <span>{workout.startTime}</span> : null}
           </div>
-          <div className="inline-flex items-center rounded-full border border-sky-300/20 bg-sky-300/10 px-4 py-2 text-[14px] font-semibold uppercase tracking-[0.18em] text-sky-100">
-            {workout.userName}
+
+          <h1 className="mt-5 font-heading text-[78px] uppercase leading-[0.84]">
+            {workout.title}
+          </h1>
+
+          <div className="mt-6 grid grid-cols-3 border-y border-[#050505] text-[15px] font-black uppercase leading-tight">
+            <div className="py-4 pr-4">{typeLabel}</div>
+            <div className="flex items-center gap-2 border-x border-[#050505] p-4">
+              <UserRound className="h-4 w-4" />
+              {workout.userName}
+            </div>
+            <div className="py-4 pl-4">
+              {saluteCount ? `${saluteCount} Salutes` : workout.linkedClassTitle || "Session"}
+            </div>
           </div>
-          {workout.linkedClassTitle ? (
-            <div className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.05] px-4 py-2 text-[14px] font-semibold uppercase tracking-[0.16em] text-white/70">
-              {workout.linkedClassTitle}
-            </div>
-          ) : null}
-          {saluteCount ? (
-            <div className="inline-flex items-center rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-[14px] font-semibold uppercase tracking-[0.16em] text-emerald-100">
-              {saluteCount} Salutes
-            </div>
-          ) : null}
         </div>
 
         {statRows.length ? (
-          <div className="mt-8 grid grid-cols-2 gap-4">
-            {statRows.map((stat) => (
+          <div className="relative grid grid-cols-2 border-b border-white/18">
+            {statRows.map((stat, index) => (
               <div
-                key={stat.label}
-                className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"
+                key={`${stat.label}-${index}`}
+                className="border-r border-t border-white/18 bg-[#101010] p-5 odd:border-l-0 even:border-r-0"
               >
-                <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/35">
+                <div className="text-[11px] font-black uppercase leading-none text-white/42">
                   {stat.label}
                 </div>
-                <div className="mt-2 text-[30px] font-black leading-none tracking-[-0.04em] text-white">
+                <div className="mt-3 font-heading text-[38px] uppercase leading-[0.9] text-[#f4f4f4]">
                   {stat.value}
                 </div>
               </div>
@@ -236,31 +284,45 @@ export default function WorkoutShareCard({
           </div>
         ) : null}
 
-        <div className="mt-8 grid gap-5">
-          {renderListCard("Movement Log", movementLines, "bg-gradient-to-b from-amber-300/90 to-sky-300/80")}
-          {renderListCard("Session Notes", sectionLines, "bg-gradient-to-b from-white/80 to-white/30")}
+        <div className="relative grid gap-5 p-7">
+          {renderListCard("Movement Log", movementLines)}
+          {renderListCard("Session Notes", sectionLines)}
 
           {workout.notes.trim() ? (
-            <div className="rounded-[28px] border border-white/10 bg-white/[0.04] p-5">
-              <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/38">
+            <div className="border border-white/18 bg-[#101010] p-5">
+              <div className="text-[12px] font-black uppercase leading-none text-white/46">
                 Athlete Note
               </div>
-              <p className="mt-4 text-[16px] leading-7 text-white/78">
+              <p className="mt-3 text-[18px] font-bold leading-snug text-white/82">
                 {workout.notes.trim()}
               </p>
             </div>
           ) : null}
 
           {!statRows.length && !movementLines.length && !sectionLines.length && !workout.notes.trim() ? (
-            <div className="rounded-[28px] border border-white/10 bg-white/[0.04] p-5">
-              <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/38">
+            <div className="border border-white/18 bg-[#101010] p-5">
+              <div className="text-[12px] font-black uppercase leading-none text-white/46">
                 Session Log
               </div>
-              <p className="mt-4 text-[16px] leading-7 text-white/78">
+              <p className="mt-3 text-[18px] font-bold leading-snug text-white/82">
                 {workout.title} logged by {workout.userName} on {dateLabel}.
               </p>
             </div>
           ) : null}
+        </div>
+
+        <div className="relative flex items-end justify-between gap-5 border-t border-white/18 bg-[#101010] px-7 py-5">
+          <div>
+            <div className="text-[12px] font-black uppercase leading-none text-white">
+              Zero Alpha Fitness
+            </div>
+            <div className="mt-2 text-[11px] font-bold uppercase leading-tight text-white/44">
+              Session proof, built by the athlete
+            </div>
+          </div>
+          <div className="text-right text-[13px] font-black uppercase leading-none text-white">
+            @zeroalphafitness
+          </div>
         </div>
       </div>
     </div>

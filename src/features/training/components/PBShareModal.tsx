@@ -37,9 +37,7 @@ export default function PBShareModal({
 
     try {
       setIsExporting(true);
-      const dataUrl = await exportNodeToPng(exportRef.current, {
-        logoOpacity: 0.22,
-      });
+      const dataUrl = await exportNodeToPng(exportRef.current);
 
       const response = await fetch(dataUrl);
       const blob = await response.blob();

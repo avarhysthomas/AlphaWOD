@@ -4,6 +4,7 @@ import { Link, NavLink } from "react-router-dom";
 import {
   collection,
   doc,
+  documentId,
   getDoc,
   getDocs,
   onSnapshot,
@@ -31,6 +32,7 @@ import {
   Percent,
 } from "lucide-react";
 import SessionShareModal from "../../wod/components/SessionShareModal";
+import { formatStationForShare } from "../../wod/utils/sessionShare";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -323,13 +325,7 @@ function getDashboardSessionPayload(
 
   const items = stations
     .map((station, index) => {
-      const title = (station.title || `Station ${index + 1}`).trim();
-      const movementNames = station.movements
-        .map((movement) => String(movement.name ?? "").trim())
-        .filter(Boolean)
-        .slice(0, 2)
-        .join(" + ");
-      return movementNames ? `${title} • ${movementNames}` : title;
+      return formatStationForShare(station, index);
     })
     .filter(Boolean);
 
@@ -490,7 +486,6 @@ export default function Dashboard() {
         const results: ClassWithId[] = [];
         await Promise.all(
           chunks.map(async (chunk) => {
-            const { documentId } = await import("firebase/firestore");
             const classSnap = await getDocs(
               query(collection(db, "classes"), where(documentId(), "in", chunk))
             );

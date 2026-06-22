@@ -1,5 +1,5 @@
 import React from "react";
-import { Clock3, Moon, Sparkles, Sun } from "lucide-react";
+import { BadgeCheck, Clock3, Moon, Sun } from "lucide-react";
 
 type SessionShareCardProps = {
   dateLabel: string;
@@ -20,8 +20,14 @@ type SessionShareCardProps = {
 export function getSessionShareCardHeight(items: string[], coachNote?: string) {
   const itemCount = items.filter(Boolean).length;
   const extraItems = Math.max(0, itemCount - 4);
-  const perItemHeight = itemCount >= 6 ? 92 : 118;
-  return 960 + extraItems * perItemHeight + (coachNote ? 120 : 0);
+  const perItemHeight = itemCount >= 6 ? 82 : 104;
+  const detailHeight = items.reduce((total, item) => {
+    const detailParts = item.split("•").map((part) => part.trim()).filter(Boolean).slice(1);
+    const detailLength = detailParts.join(" • ").length;
+    return total + Math.max(0, detailParts.length - 1) * 18 + Math.floor(detailLength / 70) * 18;
+  }, 0);
+
+  return 1000 + extraItems * perItemHeight + detailHeight + (coachNote ? 96 : 0);
 }
 
 function splitTitle(input: string) {
@@ -40,14 +46,14 @@ function splitTitle(input: string) {
 
 function SessionIcon({ sessionLabel }: { sessionLabel: string }) {
   if (sessionLabel === "AM") {
-    return <Sun className="h-4 w-4 text-amber-200" />;
+    return <Sun className="h-4 w-4" />;
   }
 
   if (sessionLabel === "PM") {
-    return <Moon className="h-4 w-4 text-sky-200" />;
+    return <Moon className="h-4 w-4" />;
   }
 
-  return <Clock3 className="h-4 w-4 text-white" />;
+  return <Clock3 className="h-4 w-4" />;
 }
 
 function splitSnapshotItem(item: string) {
@@ -61,6 +67,36 @@ function splitSnapshotItem(item: string) {
     label: parts[0],
     detail: parts.slice(1).join(" • "),
   };
+}
+
+function BrandSocialHeader() {
+  return (
+    <div className="flex h-[58px] items-center justify-between bg-[#f4f4f4] px-4 text-[#050505]">
+      <div className="flex items-center gap-3">
+        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#050505] font-heading text-[12px] text-[#f4f4f4]">
+          ZA
+        </div>
+        <div className="flex items-center gap-1.5 text-[14px] font-bold leading-none">
+          zeroalphafitness
+          <BadgeCheck className="h-4 w-4 fill-[#3f3f3f] text-[#f4f4f4]" />
+        </div>
+      </div>
+      <div className="text-[20px] font-black leading-none">...</div>
+    </div>
+  );
+}
+
+function DetailPanel({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="border border-white/18 bg-[#101010] p-5">
+      <div className="text-[11px] font-black uppercase leading-none text-white/42">
+        {label}
+      </div>
+      <div className="mt-3 font-heading text-[34px] uppercase leading-[0.9] text-[#f4f4f4]">
+        {value}
+      </div>
+    </div>
+  );
 }
 
 export default function SessionShareCard({
@@ -85,75 +121,75 @@ export default function SessionShareCard({
 
   return (
     <div
-      className="relative w-[720px] overflow-hidden rounded-[40px] border border-white/12 p-10 shadow-[0_24px_60px_rgba(0,0,0,0.45)]"
-      style={{
-        minHeight: `${cardHeight}px`,
-        background:
-          "linear-gradient(180deg, rgba(14,14,16,0.9), rgba(6,6,8,0.9))",
-      }}
+      className="relative w-[720px] overflow-hidden rounded-[18px] bg-[#050505] shadow-[0_30px_80px_rgba(0,0,0,0.55)]"
+      style={{ minHeight: `${cardHeight}px` }}
     >
-      <div className="absolute inset-0 rounded-[40px] bg-[linear-gradient(180deg,rgba(255,255,255,0.045),transparent_24%),radial-gradient(circle_at_top_right,rgba(250,204,21,0.12),transparent_32%),radial-gradient(circle_at_bottom_left,rgba(14,165,233,0.10),transparent_32%)]" />
+      <BrandSocialHeader />
 
-      <img
-        src="/ZERO-ALPHA.png"
-        alt=""
-        aria-hidden="true"
-        draggable={false}
-        data-export-skip="true"
-        className="pointer-events-none absolute left-1/2 top-[58%] h-[400px] w-[600px] -translate-x-1/2 -translate-y-1/2 select-none object-contain opacity-[0.2]"
-      />
+      <div
+        className="relative overflow-hidden bg-[#050505] text-white"
+        style={{ minHeight: `${cardHeight - 58}px` }}
+      >
+        <div className="absolute inset-0 opacity-[0.1] [background-image:radial-gradient(circle_at_10%_20%,#f4f4f4_0_1px,transparent_1px),radial-gradient(circle_at_70%_60%,#f4f4f4_0_1px,transparent_1px)] [background-size:7px_7px,12px_12px]" />
 
-      <div className="relative">
-        <div className="inline-flex w-fit items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 py-2">
-          <Sparkles className="h-4 w-4 text-white" />
-          <span className="whitespace-nowrap text-[12px] font-semibold uppercase tracking-[0.2em] text-white/72">
-            Session Drop
-          </span>
+        <div className="relative grid grid-cols-[1fr_170px] border-b border-white/18">
+          <div className="px-7 py-7">
+            <div className="flex items-center gap-3 text-[13px] font-black uppercase leading-none text-white/58">
+              <span>{dateLabel}</span>
+              <span className="h-px w-8 bg-white/32" />
+              <span className="inline-flex items-center gap-2">
+                <SessionIcon sessionLabel={sessionLabel} />
+                {sessionTimeLabel || sessionLabel}
+              </span>
+            </div>
+            <div className="mt-5 font-heading text-[76px] uppercase leading-[0.84] text-[#f4f4f4]">
+              Today&apos;s
+              <br />
+              Session
+            </div>
+          </div>
+
+          <div className="relative overflow-hidden border-l border-white/18 bg-[#d8d8d8]">
+            <img
+              src="/ZERO-ALPHA.png"
+              alt=""
+              aria-hidden="true"
+              draggable={false}
+              className="absolute left-1/2 top-1/2 h-[190px] w-[280px] -translate-x-1/2 -translate-y-1/2 select-none object-contain opacity-[0.42] grayscale"
+            />
+            <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(0,0,0,0.72),rgba(0,0,0,0.05)_48%,rgba(0,0,0,0.76))]" />
+          </div>
         </div>
 
-        <div className="mt-5 flex items-center gap-3 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/42">
-          <span>{dateLabel}</span>
-          <span className="text-white/20">|</span>
-          <span className="inline-flex items-center gap-2">
-            <SessionIcon sessionLabel={sessionLabel} />
-            {sessionTimeLabel || sessionLabel}
-          </span>
-        </div>
+        <div className="relative bg-[#f4f4f4] px-7 py-7 text-[#050505]">
+          <h1 className="font-heading text-[88px] uppercase leading-[0.84]">
+            {titleLines.map((line, index) => (
+              <span key={`${line}-${index}`} className="block">
+                {line}
+              </span>
+            ))}
+          </h1>
 
-        <h1 className="mt-4 text-[64px] font-black uppercase leading-[0.9] tracking-[-0.055em] text-white">
-          {titleLines.map((line, index) => (
-            <span key={`${line}-${index}`} className="block">
-              {line}
-            </span>
-          ))}
-        </h1>
-
-        {subtitle ? (
-          <div className="mt-3 max-w-[520px] text-[18px] font-medium text-white/72">
-            {subtitle}
-          </div>
-        ) : null}
-
-        <div className="mt-5 flex flex-wrap items-center gap-3">
-          <div className="inline-flex items-center rounded-full border border-amber-300/20 bg-amber-300/10 px-4 py-2 text-[14px] font-semibold uppercase tracking-[0.2em] text-amber-100">
-            {sessionType}
-          </div>
-          <div className="inline-flex items-center rounded-full border border-sky-300/20 bg-sky-300/10 px-4 py-2 text-[14px] font-semibold uppercase tracking-[0.2em] text-sky-100">
-            {sessionStyle}
-          </div>
-          {sessionExtra ? (
-            <div className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.05] px-4 py-2 text-[14px] font-semibold uppercase tracking-[0.18em] text-white/72">
-              {sessionExtra}
+          {subtitle ? (
+            <div className="mt-3 text-[20px] font-black leading-tight">
+              {subtitle}
             </div>
           ) : null}
+
+          <div className="mt-6 grid grid-cols-3 border-y border-[#050505] text-[15px] font-black uppercase leading-tight">
+            <div className="py-4 pr-4">{sessionType}</div>
+            <div className="border-x border-[#050505] p-4">{sessionStyle}</div>
+            <div className="py-4 pl-4">{sessionExtra || stationsLabel}</div>
+          </div>
         </div>
 
-        <div className="mt-8 grid grid-cols-[1.35fr_0.9fr] gap-5">
-          <div className="rounded-[28px] border border-white/10 bg-white/[0.04] p-5">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/35">
+        <div className="relative grid grid-cols-[1.25fr_0.85fr] gap-0 border-b border-white/18">
+          <div className="border-r border-white/18 p-7">
+            <div className="mb-5 text-[12px] font-black uppercase leading-none text-white/42">
               Session Snapshot
             </div>
-            <div className={`mt-4 ${isCompact ? "space-y-2.5" : "space-y-3"}`}>
+
+            <div className={isCompact ? "space-y-3" : "space-y-4"}>
               {previewItems.length ? (
                 previewItems.map((item, index) => {
                   const snapshot = splitSnapshotItem(item);
@@ -161,79 +197,63 @@ export default function SessionShareCard({
                   return (
                     <div
                       key={`${item}-${index}`}
-                      className={`group relative overflow-hidden border border-white/10 bg-[linear-gradient(135deg,rgba(255,255,255,0.075),rgba(255,255,255,0.025))] shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] ${isCompact ? "rounded-[20px] px-3.5 py-3" : "rounded-[24px] px-4 py-4"}`}
+                      className="grid grid-cols-[56px_1fr] border border-white/18 bg-[#101010]"
                     >
-                      <div className="absolute inset-y-0 left-0 w-[3px] bg-gradient-to-b from-amber-300/90 via-white/70 to-sky-300/90" />
-
-                      <div className={`flex items-start ${isCompact ? "gap-3" : "gap-4"}`}>
-                        <div
-                          className={`flex shrink-0 items-center justify-center border border-white/12 bg-black/25 font-black tracking-[0.18em] text-white/76 ${isCompact ? "h-9 w-9 rounded-[16px] text-[11px]" : "h-11 w-11 rounded-2xl text-[13px]"}`}
-                        >
-                          {String(index + 1).padStart(2, "0")}
+                      <div className="flex items-center justify-center border-r border-white/18 font-heading text-[24px] leading-none text-[#f4f4f4]">
+                        {String(index + 1).padStart(2, "0")}
+                      </div>
+                      <div className={isCompact ? "p-3.5" : "p-4"}>
+                        <div className="text-[18px] font-black leading-tight text-white">
+                          {snapshot.label}
                         </div>
-
-                        <div className="min-w-0 flex-1">
-                          <div
-                            className={`font-semibold uppercase tracking-[0.22em] text-white/35 ${isCompact ? "text-[10px]" : "text-[11px]"}`}
-                          >
-                            Station
+                        {snapshot.detail ? (
+                          <div className="mt-1.5 text-[14px] font-bold leading-snug text-white/58">
+                            {snapshot.detail}
                           </div>
-                          <div
-                            className={`mt-1 font-bold leading-tight text-white ${isCompact ? "text-[16px]" : "text-[18px]"}`}
-                          >
-                            {snapshot.label}
-                          </div>
-                          {snapshot.detail ? (
-                            <div
-                              className={`text-white/60 ${isCompact ? "mt-1.5 text-[12px] leading-[1.45]" : "mt-2 text-[14px] leading-relaxed"}`}
-                            >
-                              {snapshot.detail}
-                            </div>
-                          ) : null}
-                        </div>
+                        ) : null}
                       </div>
                     </div>
                   );
                 })
               ) : (
-                <div className="rounded-[24px] border border-white/8 bg-black/20 px-4 py-4 text-[16px] font-semibold text-white/50">
+                <div className="border border-white/18 bg-[#101010] p-5 text-[16px] font-black text-white/58">
                   Programming coming soon
                 </div>
               )}
             </div>
           </div>
 
-          <div className="space-y-4">
-            <div className="rounded-[28px] border border-amber-300/16 bg-amber-300/[0.08] p-5">
-              <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/35">
-                {highlightLabel}
-              </div>
-              <div className="mt-2 text-[42px] font-black leading-none tracking-[-0.05em] text-white">
-                {highlight}
-              </div>
-            </div>
-
-            <div className="rounded-[28px] border border-sky-300/16 bg-sky-300/[0.08] p-5">
-              <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/35">
-                Format
-              </div>
-              <div className="mt-2 text-[22px] font-bold leading-tight text-white">
-                {stationsLabel}
-              </div>
-            </div>
+          <div className="grid content-start gap-0 p-7">
+            <DetailPanel label={highlightLabel} value={highlight} />
+            <DetailPanel label="Format" value={stationsLabel} />
+            <DetailPanel label="Class Slot" value={sessionTimeLabel || sessionLabel} />
           </div>
         </div>
 
         {coachNote ? (
-          <div className="mt-6 rounded-[28px] border border-white/10 bg-white/[0.04] px-5 py-4">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/35">
+          <div className="relative border-b border-white/18 px-7 py-5">
+            <div className="text-[12px] font-black uppercase leading-none text-white/42">
               Coach Note
             </div>
-            <div className="mt-2 text-[16px] leading-relaxed text-white/76">
+            <div className="mt-3 text-[18px] font-bold leading-snug text-white/82">
               {coachNote}
             </div>
           </div>
         ) : null}
+
+        <div className="relative flex items-end justify-between gap-5 bg-[#101010] px-7 py-5">
+          <div>
+            <div className="text-[12px] font-black uppercase leading-none text-white">
+              Zero Alpha Fitness
+            </div>
+            <div className="mt-2 text-[11px] font-bold uppercase leading-tight text-white/44">
+              Built for the whiteboard and the work
+            </div>
+          </div>
+          <div className="text-right text-[13px] font-black uppercase leading-none text-white">
+            @zeroalphafitness
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -6,7 +6,15 @@ import {
   ChevronRight,
   Search,
 } from "lucide-react";
-import { collection, getDocs, orderBy, query, where } from "firebase/firestore";
+import {
+  collection,
+  getCountFromServer,
+  getDocs,
+  limit,
+  orderBy,
+  query,
+  where,
+} from "firebase/firestore";
 import { db } from "../../../firebase";
 import { useAuth } from "../../../context/AuthContext";
 import { getUserNavItems } from "../../../components/layout/UserTopNav";
@@ -34,6 +42,8 @@ type MovementSummary = {
   latestLog: TrainingLog | null;
   tag: string;
 };
+
+const CATEGORY_LOG_LIMIT = 500;
 
 function daysAgo(date?: string) {
   if (!date) return "No logs";
@@ -105,6 +115,7 @@ export default function TrainingCategory() {
   const { user, appUser } = useAuth();
 
   const [logs, setLogs] = useState<TrainingLog[]>([]);
+  const [totalCategoryLogs, setTotalCategoryLogs] = useState(0);
   const [activeFilter, setActiveFilter] = useState("All");
   const [sortMode, setSortMode] = useState<"default" | "name">("default");
   const [searchOpen, setSearchOpen] = useState(false);
@@ -113,6 +124,7 @@ export default function TrainingCategory() {
   useEffect(() => {
     if (!user || !selectedCategory) {
       setLogs([]);
+      setTotalCategoryLogs(0);
       return;
     }
 
@@ -123,12 +135,17 @@ export default function TrainingCategory() {
     async function loadLogs() {
       try {
         const logsRef = collection(db, "users", uid, "trainingLogs");
+        const categoryQuery = query(logsRef, where("category", "==", categoryKey));
         const logsQuery = query(
           logsRef,
           where("category", "==", categoryKey),
-          orderBy("date", "desc")
+          orderBy("date", "desc"),
+          limit(CATEGORY_LOG_LIMIT)
         );
-        const snap = await getDocs(logsQuery);
+        const [snap, countSnap] = await Promise.all([
+          getDocs(logsQuery),
+          getCountFromServer(categoryQuery),
+        ]);
 
         if (!isMounted) return;
 
@@ -147,6 +164,7 @@ export default function TrainingCategory() {
             };
           })
         );
+        setTotalCategoryLogs(countSnap.data().count);
       } catch (error) {
         if (!isMounted) return;
         console.error("Category logs fetch error:", error);
@@ -203,7 +221,7 @@ export default function TrainingCategory() {
     return rows;
   }, [activeFilter, searchTerm, sortMode, summaries]);
 
-  const recentPrs = logs.length;
+  const recentPrs = totalCategoryLogs;
   const heaviestKg = useMemo(() => {
     const values = logs
       .filter((log) => log.unit === "kg")

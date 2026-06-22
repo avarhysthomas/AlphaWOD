@@ -56,9 +56,7 @@ export default function WorkoutShareModal({
 
     try {
       setIsExporting(true);
-      const dataUrl = await exportNodeToPng(exportRef.current, {
-        logoOpacity: 0.2,
-      });
+      const dataUrl = await exportNodeToPng(exportRef.current);
       const response = await fetch(dataUrl);
       const blob = await response.blob();
       const fileName = `${workout.title.toLowerCase().replace(/[^a-z0-9]+/g, "-") || "workout"}-share.png`;

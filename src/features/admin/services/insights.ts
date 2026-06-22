@@ -1,6 +1,5 @@
-import { collection, getDocs } from "firebase/firestore";
-import { db } from "../../../firebase";
 import type { AdminUser } from "../types";
+import { getCachedAdminUsers } from "./usersCache";
 
 function getMonthKey(date = new Date()) {
   const year = date.getFullYear();
@@ -17,12 +16,7 @@ function daysSince(dateStr?: string) {
 }
 
 export async function getAdminUsers(): Promise<AdminUser[]> {
-  const snap = await getDocs(collection(db, "users"));
-
-  return snap.docs.map((doc) => ({
-    id: doc.id,
-    ...(doc.data() as Omit<AdminUser, "id">),
-  }));
+  return getCachedAdminUsers() as Promise<AdminUser[]>;
 }
 
 export async function getInsightsSummary() {
