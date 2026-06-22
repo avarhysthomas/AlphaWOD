@@ -19,17 +19,7 @@ import { useAuth } from "../../../context/AuthContext";
 import { getUserNavItems } from "../../../components/layout/UserTopNav";
 import { TRAINING_CATEGORIES, getCategoryByKey } from "../../../lib/training";
 
-type TrainingLog = {
-  id: string;
-  category?: string;
-  movementSlug?: string;
-  movementName?: string;
-  metricType?: string;
-  value?: string;
-  unit?: string;
-  reps?: string;
-  date?: string;
-};
+import type { TrainingLog } from "../types";
 
 const TRAINING_HOME_LOG_LIMIT = 200;
 

@@ -24,16 +24,7 @@ import {
   parseChartValue,
 } from "../utils/movementHelpers";
 
-type TrainingLog = {
-  id: string;
-  category: string;
-  movementSlug: string;
-  movementName: string;
-  metricType: string;
-  value: string;
-  unit: string;
-  date: string;
-};
+import type { TrainingLog } from "../types";
 
 type MovementSummary = {
   movement: TrainingMovement;

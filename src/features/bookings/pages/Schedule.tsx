@@ -294,6 +294,7 @@ export default function Schedule() {
   const isAdmin = appUser?.role === "admin";
 
   const [classes, setClasses] = useState<ClassRow[]>([]);
+  const [loadingClasses, setLoadingClasses] = useState(true);
   const [activeBookingsByClassId, setActiveBookingsByClassId] = useState<Record<string, BookingDoc>>(
     {}
   );
@@ -336,6 +337,8 @@ export default function Schedule() {
       } catch (err) {
         if (!isMounted) return;
         console.error("classes fetch error:", err);
+      } finally {
+        if (isMounted) setLoadingClasses(false);
       }
     }
 
@@ -644,7 +647,16 @@ export default function Schedule() {
             </div>
           </div>
 
-          {filteredSelectedDayClasses.length === 0 ? (
+          {loadingClasses ? (
+            <div className="space-y-4">
+              {[0, 1, 2].map((i) => (
+                <div
+                  key={i}
+                  className="h-[220px] animate-pulse rounded-[24px] border border-white/10 bg-[#151311]"
+                />
+              ))}
+            </div>
+          ) : filteredSelectedDayClasses.length === 0 ? (
             <div className="rounded-[24px] border border-white/10 bg-[#151311] p-7">
               <p className="font-heading text-4xl uppercase leading-none text-white">
                 {searchTerm.trim() ? "No matches" : "No sessions"}

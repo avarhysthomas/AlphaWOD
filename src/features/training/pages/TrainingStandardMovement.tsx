@@ -52,18 +52,7 @@ import {
 import { getDateInputValueInTimeZone } from "../../../utils/date";
 import { createPerformanceFeedPost } from "../../workouts/services/workouts";
 
-type TrainingLog = {
-  id: string;
-  category: string;
-  movementSlug: string;
-  movementName: string;
-  metricType: string;
-  value: string;
-  unit: string;
-  reps?: string;
-  date: string;
-  notes: string;
-};
+import type { TrainingLog } from "../types";
 
 type ChartPoint = {
   id: string;

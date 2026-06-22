@@ -596,7 +596,6 @@ export const generateClassOccurrences = onCall(async (request) => {
  * ----------------------------*/
 export const bookClass = onCall(async (request) => {
   const uid = requireAuth(request);
-  const member = await requireApprovedMember(uid);
   const classId = requireString(request.data?.classId, "classId");
 
   const classRef = db.collection("classes").doc(classId);
@@ -618,6 +617,8 @@ export const bookClass = onCall(async (request) => {
     ]);
 
     if (!classSnap.exists) throw new HttpsError("not-found", "Class not found");
+
+    const member = assertApprovedMember(userSnap.data() as UserDoc | undefined);
 
     const classData = classSnap.data() as Partial<ClassDoc>;
     const bookingSettings =
@@ -668,17 +669,20 @@ export const bookClass = onCall(async (request) => {
 
 export const cancelBooking = onCall(async (request) => {
   const uid = requireAuth(request);
-  await requireApprovedMember(uid);
   const classId = requireString(request.data?.classId, "classId");
 
   const classRef = db.collection("classes").doc(classId);
   const bookingRef = db.collection("bookings").doc(bookingIdFor(classId, uid));
+  const userRef = db.collection("users").doc(uid);
 
   return db.runTransaction(async (tx) => {
-    const [bookingSnap, classSnap] = await Promise.all([
+    const [bookingSnap, classSnap, userSnap] = await Promise.all([
       tx.get(bookingRef),
       tx.get(classRef),
+      tx.get(userRef),
     ]);
+
+    assertApprovedMember(userSnap.data() as UserDoc | undefined);
 
     if (!bookingSnap.exists) throw new HttpsError("not-found", "No booking found");
 
@@ -1004,21 +1008,23 @@ async function requireAdmin(uid: string): Promise<UserDoc> {
 
 async function requireApprovedMember(uid: string): Promise<UserDoc> {
   const snap = await db.collection("users").doc(uid).get();
-  const user = (snap.data() || {}) as UserDoc;
+  return assertApprovedMember(snap.data() as UserDoc | undefined);
+}
 
-  if (user.role === "admin") {
-    return user;
-  }
+function assertApprovedMember(user: UserDoc | undefined): UserDoc {
+  const u = user || ({} as UserDoc);
 
-  if (user.role === "banned") {
+  if (u.role === "admin") return u;
+
+  if (u.role === "banned") {
     throw new HttpsError("permission-denied", "Your account is currently suspended.");
   }
 
-  if (user.approvalStatus === "pending") {
+  if (u.approvalStatus === "pending") {
     throw new HttpsError("permission-denied", "Your account is awaiting admin approval.");
   }
 
-  return user;
+  return u;
 }
 
 /**

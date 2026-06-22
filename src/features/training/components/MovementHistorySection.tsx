@@ -1,16 +1,7 @@
 import React from "react";
 import { Newspaper, Share, Trash2 } from "lucide-react";
 import type { AccentClasses } from "../utils/movementHelpers";
-
-type TrainingLog = {
-  id: string;
-  metricType: string;
-  value: string;
-  unit: string;
-  reps?: string;
-  date: string;
-  notes: string;
-};
+import type { TrainingLog } from "../types";
 
 type MovementHistorySectionProps = {
   accent: AccentClasses;
