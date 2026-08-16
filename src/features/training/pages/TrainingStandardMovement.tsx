@@ -50,7 +50,6 @@ import {
   validateTrainingLogForm,
 } from "../utils/movementHelpers";
 import { getDateInputValueInTimeZone } from "../../../utils/date";
-import { createPerformanceFeedPost } from "../../workouts/services/workouts";
 
 import type { TrainingLog } from "../types";
 
@@ -135,7 +134,6 @@ export default function TrainingStandardMovement() {
   const [shareOpen, setShareOpen] = useState(false);
   const [isNewPB, setIsNewPB] = useState(false);
   const [deletingLogId, setDeletingLogId] = useState<string | null>(null);
-  const [postingLogId, setPostingLogId] = useState<string | null>(null);
   const [sharePayload, setSharePayload] = useState<{
     movement: string;
     metricType: string;
@@ -500,34 +498,6 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
     }
   }
 
-  async function handlePostLogToFeed(log: TrainingLog) {
-    if (!user || !selectedCategory || !movement) return;
-
-    try {
-      setPostingLogId(log.id);
-      setSaveError("");
-
-      await createPerformanceFeedPost({
-        actorId: user.uid,
-        actorName: appUser?.name || user.displayName || "Member",
-        actorPhotoURL: user.photoURL || undefined,
-        category: selectedCategory.key,
-        movementSlug: movement.slug,
-        movementName: movement.name,
-        metricType: log.metricType,
-        value: log.value,
-        unit: log.unit,
-        date: log.date,
-        notes: log.notes,
-      });
-    } catch (error) {
-      console.error("Error posting training log to feed:", error);
-      setSaveError("Could not post this PB to the feed. Please try again.");
-    } finally {
-      setPostingLogId(null);
-    }
-  }
-
   if (!selectedCategory || !movement) {
     return <Navigate to="/training" replace />;
   }
@@ -819,7 +789,6 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
             filteredLogs={filteredLogs}
             bestLogId={bestLog?.id}
             deletingLogId={deletingLogId}
-            postingLogId={postingLogId}
             isTimeDisplay={(unitValue, movementNameValue) =>
               isTimeDisplay(unitValue, selectedCategory.key, movementNameValue)
             }
@@ -836,14 +805,6 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
                 dateLabel: prettyDate(log.date),
               });
               setShareOpen(true);
-            }}
-            onPostToFeed={(log) => {
-              void handlePostLogToFeed({
-                ...log,
-                category: selectedCategory.key,
-                movementSlug: movement.slug,
-                movementName: movement.name,
-              });
             }}
             onDeleteLog={handleDeleteLog}
           />

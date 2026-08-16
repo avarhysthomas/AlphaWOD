@@ -27,8 +27,6 @@ import {
   Sun,
   Moon,
   Bell,
-  Newspaper,
-  FileText,
   Percent,
 } from "lucide-react";
 import SessionShareModal from "../../wod/components/SessionShareModal";
@@ -56,13 +54,6 @@ type ClassDoc = {
 };
 
 type ClassWithId = { id: string; data: ClassDoc };
-
-type UserStats = {
-  totalCheckIns?: number;
-  monthCheckIns?: Record<string, number>;
-  currentStreak?: number;
-  longestStreak?: number;
-};
 
 type SessionKey = "AM" | "PM";
 
@@ -124,17 +115,6 @@ function greeting(): string {
 
 function todayKeyLondon(): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(new Date());
-}
-
-function monthKeyLondon(): string {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: TZ,
-    year: "numeric",
-    month: "2-digit",
-  }).formatToParts(new Date());
-  const y = parts.find((p) => p.type === "year")?.value ?? "0000";
-  const m = parts.find((p) => p.type === "month")?.value ?? "00";
-  return `${y}-${m}`;
 }
 
 function datekeyLondon(d: Date): string {
@@ -433,7 +413,6 @@ export default function Dashboard() {
   const { user, appUser } = useAuth();
   const isBanned = appUser?.role === "banned";
 
-  const [stats, setStats] = useState<UserStats | null>(null);
   const [bookedClasses, setBookedClasses] = useState<ClassWithId[]>([]);
   const [loadingClasses, setLoadingClasses] = useState(true);
   const [todayProgramming, setTodayProgramming] = useState<Record<string, any> | null>(null);
@@ -441,17 +420,6 @@ export default function Dashboard() {
   const [shareOpen, setShareOpen] = useState(false);
   const [calculatorWeight, setCalculatorWeight] = useState("");
   const [percentageInput, setPercentageInput] = useState("75");
-
-  // Fetch user stats once
-  useEffect(() => {
-    if (!user) return;
-    getDoc(doc(db, "users", user.uid)).then((snap) => {
-      if (snap.exists()) {
-        const data = snap.data() as { stats?: UserStats };
-        setStats(data.stats ?? null);
-      }
-    });
-  }, [user]);
 
   // Subscribe to active bookings, then fetch corresponding class docs
   useEffect(() => {
@@ -603,7 +571,6 @@ export default function Dashboard() {
     );
   }
 
-  const thisMonthCount = stats?.monthCheckIns?.[monthKeyLondon()] ?? 0;
   const nextUp = todayClasses[0] ?? upcomingClasses[0] ?? null;
   const nextUpMeta = nextUp ? typeMeta(nextUp.data.title) : null;
   const nextUpStart = nextUp?.data.startTime.toDate();
@@ -739,29 +706,6 @@ export default function Dashboard() {
               </Link>
             </div>
           )}
-        </section>
-
-        <section className="mt-5 grid grid-cols-2 gap-4">
-          <Link
-            to="/workouts"
-            className="group rounded-[20px] border border-white/10 bg-[#151311] p-5 transition hover:bg-[#1b1815]"
-          >
-            <div className="grid h-11 w-11 place-items-center rounded-xl bg-white/[0.06] text-white/52">
-              <FileText className="h-5 w-5" />
-            </div>
-            <div className="mt-7 text-[17px] font-bold text-white">Log session</div>
-            <div className="mt-1 text-sm text-white/35">{thisMonthCount} this month</div>
-          </Link>
-          <Link
-            to="/feed"
-            className="group rounded-[20px] border border-white/10 bg-[#151311] p-5 transition hover:bg-[#1b1815]"
-          >
-            <div className="grid h-11 w-11 place-items-center rounded-xl bg-white/[0.06] text-white/52">
-              <Newspaper className="h-5 w-5" />
-            </div>
-            <div className="mt-7 text-[17px] font-bold text-white">Feed</div>
-            <div className="mt-1 text-sm text-white/35">Latest posts</div>
-          </Link>
         </section>
 
         <section className="mt-10">

@@ -11,8 +11,6 @@ import {
   SquarePen,
   BarChart3,
   Activity,
-  Newspaper,
-  ClipboardPen,
   Rows3,
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
@@ -29,8 +27,6 @@ export type NavItem = {
 export const baseNavItems: NavItem[] = [
   { to: "/dashboard", label: "Home", icon: LayoutDashboard },
   { to: "/schedule", label: "Schedule", icon: CalendarDays },
-  { to: "/feed", label: "Feed", icon: Newspaper },
-  { to: "/workouts", label: "Training", icon: ClipboardPen },
   { to: "/training", label: "Perform", icon: Dumbbell },
   { to: "/profile", label: "Profile", icon: User },
   { to: "/leaderboard", label: "Fame", icon: Trophy },

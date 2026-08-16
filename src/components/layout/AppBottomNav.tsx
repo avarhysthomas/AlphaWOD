@@ -20,7 +20,7 @@ export default function AppBottomNav() {
             to={to}
             className={({ isActive }) =>
               [
-                "flex min-w-[56px] shrink-0 flex-col items-center gap-0.5 rounded-[14px] px-1.5 py-1 text-[10px] font-extrabold leading-tight transition",
+                "flex min-h-[44px] min-w-[56px] shrink-0 flex-col items-center justify-center gap-0.5 rounded-[14px] px-1.5 py-1 text-[10px] font-extrabold leading-tight transition",
                 isActive ? "bg-black/12 text-black" : "text-black hover:bg-black/6",
               ].join(" ")
             }

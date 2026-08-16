@@ -8,6 +8,7 @@
 
 import {onCall, HttpsError} from "firebase-functions/v2/https";
 import {onSchedule} from "firebase-functions/v2/scheduler";
+import {onDocumentWritten} from "firebase-functions/v2/firestore";
 import {setGlobalOptions} from "firebase-functions/v2";
 import {defineSecret} from "firebase-functions/params";
 import * as admin from "firebase-admin";
@@ -381,7 +382,7 @@ function buildInviteEmailHtml(signUpUrl: string) {
                                   <br />
                                   2. Wait for admin approval
                                   <br />
-                                  3. Jump into classes, workouts, and progress tracking
+                                  3. Jump into classes, programming, and progress tracking
                                 </div>
                               </td>
                             </tr>
@@ -712,7 +713,7 @@ export const cancelBooking = onCall(async (request) => {
 
 export const adminAddBooking = onCall(async (request) => {
   const callerUid = requireAuth(request);
-  await requireAdmin(callerUid);
+  await requireAdmin(request);
 
   const classId = requireString(request.data?.classId, "classId");
   const userId = requireString(request.data?.userId, "userId");
@@ -793,7 +794,7 @@ export const adminAddBooking = onCall(async (request) => {
  * ----------------------------*/
 export const checkInBooking = onCall(async (request) => {
   const callerUid = requireAuth(request);
-  await requireAdmin(callerUid);
+  await requireAdmin(request);
 
   // Accept either bookingId OR (classId + userId)
   const bookingIdFromPayload =
@@ -997,19 +998,99 @@ export const checkInBooking = onCall(async (request) => {
   }
 });
 
-async function requireAdmin(uid: string): Promise<UserDoc> {
+type TokenClaims = {role?: string; approvalStatus?: string};
+type AuthedRequest = {auth?: {uid?: string; token?: Record<string, unknown>} | null};
+
+function tokenClaims(request: AuthedRequest): TokenClaims | undefined {
+  return request.auth?.token as TokenClaims | undefined;
+}
+
+/**
+ * Admin check. Fast path: custom claims on the ID token (zero Firestore
+ * reads). Falls back to a Firestore read when claims are missing or deny,
+ * so stale/unset claims can never lock out a real admin.
+ */
+async function requireAdmin(request: AuthedRequest): Promise<void> {
+  const uid = requireAuth(request);
+  if (tokenClaims(request)?.role === "admin") return;
+
   const snap = await db.collection("users").doc(uid).get();
   const user = (snap.data() || {}) as UserDoc;
   if (user.role !== "admin") {
     throw new HttpsError("permission-denied", "Admin only.");
   }
-  return user;
 }
 
-async function requireApprovedMember(uid: string): Promise<UserDoc> {
+/**
+ * Approved-member check. Fast path via custom claims; Firestore fallback
+ * when claims are missing or would deny (claims may be stale for up to an
+ * hour after approval).
+ */
+async function requireApprovedMember(request: AuthedRequest): Promise<void> {
+  const uid = requireAuth(request);
+  const token = tokenClaims(request);
+
+  if (token && typeof token.role === "string") {
+    if (token.role === "admin") return;
+    if (token.role !== "banned" && token.approvalStatus === "approved") return;
+    // Claims deny — fall through to Firestore in case they are stale.
+  }
+
   const snap = await db.collection("users").doc(uid).get();
-  return assertApprovedMember(snap.data() as UserDoc | undefined);
+  assertApprovedMember(snap.data() as UserDoc | undefined);
 }
+
+/**
+ * Mirrors role/approvalStatus from the user doc into Auth custom claims so
+ * functions and security rules can authorise from the ID token (zero
+ * Firestore reads) instead of get()-ing the user doc on every request.
+ * Also refreshes the current month's leaderboard summary when fields shown
+ * on the leaderboard change.
+ *
+ * Note: claims land on the client after its next token refresh (up to ~1h,
+ * or immediately via getIdToken(true)). The Firestore fallbacks in
+ * requireAdmin/requireApprovedMember and firestore.rules cover the gap.
+ */
+export const onUserDocWritten = onDocumentWritten("users/{userId}", async (event) => {
+  const after = event.data?.after?.exists ? (event.data.after.data() as UserDoc) : undefined;
+  if (!after) return; // user doc deleted — nothing to sync
+
+  const before = event.data?.before?.exists ? (event.data.before.data() as UserDoc) : undefined;
+
+  const role = after.role ?? "user";
+  const approvalStatus = after.approvalStatus ?? "approved";
+  const claimsChanged =
+    !before ||
+    (before.role ?? "user") !== role ||
+    (before.approvalStatus ?? "approved") !== approvalStatus;
+
+  const leaderboardFieldsChanged =
+    claimsChanged ||
+    (before?.name ?? "") !== (after.name ?? "") ||
+    (before?.photoURL ?? "") !== (after.photoURL ?? "");
+
+  const tasks: Promise<unknown>[] = [];
+
+  if (claimsChanged) {
+    tasks.push(
+      admin.auth().setCustomUserClaims(event.params.userId, {role, approvalStatus})
+        .catch((err) => {
+          // Doc id may not correspond to an Auth user (e.g. seeded data).
+          console.warn("setCustomUserClaims failed for", event.params.userId, err?.message);
+        })
+    );
+  }
+
+  if (leaderboardFieldsChanged) {
+    tasks.push(
+      rebuildLeaderboardSummary(ukMonthKeyFromDate(new Date())).catch((err) => {
+        console.warn("leaderboard summary refresh failed", err?.message);
+      })
+    );
+  }
+
+  if (tasks.length) await Promise.all(tasks);
+});
 
 function assertApprovedMember(user: UserDoc | undefined): UserDoc {
   const u = user || ({} as UserDoc);
@@ -1035,7 +1116,7 @@ function assertApprovedMember(user: UserDoc | undefined): UserDoc {
  */
 export const markBookingStatus = onCall(async (request) => {
   const callerUid = requireAuth(request);
-  await requireAdmin(callerUid);
+  await requireAdmin(request);
 
   const classId = requireString(request.data?.classId, "classId");
   const userId = requireString(request.data?.userId, "userId");
@@ -1243,8 +1324,7 @@ export const getClassRoster = onCall(async (request) => {
     throw new HttpsError("unauthenticated", "Login required.");
   }
 
-  const callerUid = request.auth.uid;
-  await requireAdmin(callerUid);
+  await requireAdmin(request);
 
   const classId = String(request.data?.classId || "").trim();
   if (!classId) {
@@ -1298,39 +1378,25 @@ export const getClassRoster = onCall(async (request) => {
 /**
  * Monthly Leaderboard Generation
  */
-export const getMonthlyLeaderboard = onCall(async (request) => {
-  const uid = requireAuth(request);
-  await requireApprovedMember(uid);
+type LeaderboardSummaryRow = {
+  userId: string;
+  name: string;
+  email: string;
+  photoURL: string;
+  attendedCount: number;
+};
 
-  const monthKey =
-    typeof request.data?.monthKey === "string" && request.data.monthKey.trim() ?
-      request.data.monthKey.trim() :
-      monthKeyFromDate(new Date());
+const LEADERBOARD_SUMMARY_MAX_ROWS = 500;
 
-  const limit =
-    typeof request.data?.limit === "number" && request.data.limit > 0 ?
-      Math.min(500, Math.floor(request.data.limit)) :
-      200;
-
-  // 1) Fetch all users (or only users with role === "user")
-  const usersSnap = await db
-    .collection("users")
-    .get();
-
-  const allUsers = usersSnap.docs.map((d) => ({
-    userId: d.id,
-    name: String((d.data() as any)?.name || "Member"),
-    email: String((d.data() as any)?.email || ""),
-    photoURL: String((d.data() as any)?.photoURL || ""),
-    approvalStatus: String((d.data() as any)?.approvalStatus || "approved"),
-  })).filter((u) => u.approvalStatus !== "pending");
-
-  // 2) Fetch leaderboard entries for this month
-  const lbSnap = await db
-    .collection("leaderboards")
-    .doc(monthKey)
-    .collection("users")
-    .get();
+/**
+ * Builds the merged, ranked leaderboard for a month
+ * (every non-pending user appears, default count 0).
+ */
+async function buildMonthlyLeaderboardRows(monthKey: string): Promise<LeaderboardSummaryRow[]> {
+  const [usersSnap, lbSnap] = await Promise.all([
+    db.collection("users").get(),
+    db.collection("leaderboards").doc(monthKey).collection("users").get(),
+  ]);
 
   const counts = new Map<string, number>();
   lbSnap.forEach((doc) => {
@@ -1338,8 +1404,15 @@ export const getMonthlyLeaderboard = onCall(async (request) => {
     counts.set(doc.id, Number(data.attendedCount || 0));
   });
 
-  // 3) Merge so everyone appears, default 0
-  const rows = allUsers
+  return usersSnap.docs
+    .map((d) => ({
+      userId: d.id,
+      name: String((d.data() as any)?.name || "Member"),
+      email: String((d.data() as any)?.email || ""),
+      photoURL: String((d.data() as any)?.photoURL || ""),
+      approvalStatus: String((d.data() as any)?.approvalStatus || "approved"),
+    }))
+    .filter((u) => u.approvalStatus !== "pending")
     .map((u) => ({
       userId: u.userId,
       name: u.name,
@@ -1351,15 +1424,73 @@ export const getMonthlyLeaderboard = onCall(async (request) => {
       const diff = (b.attendedCount || 0) - (a.attendedCount || 0);
       if (diff !== 0) return diff;
       return a.name.localeCompare(b.name);
-    })
-    .slice(0, limit);
+    });
+}
 
+/**
+ * Precomputes the month's ranked leaderboard into a `summary` field on
+ * `leaderboards/{monthKey}` so clients can read one doc instead of
+ * calling a function that scans the whole users collection.
+ */
+async function rebuildLeaderboardSummary(monthKey: string): Promise<LeaderboardSummaryRow[]> {
+  const rows = await buildMonthlyLeaderboardRows(monthKey);
+
+  await db.collection("leaderboards").doc(monthKey).set(
+    {
+      summary: {
+        rows: rows.slice(0, LEADERBOARD_SUMMARY_MAX_ROWS),
+        total: rows.length,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+    },
+    {merge: true}
+  );
+
+  return rows;
+}
+
+/**
+ * Keeps the precomputed summary fresh whenever a per-user leaderboard
+ * entry changes (check-ins, reconciles, etc.).
+ */
+export const onLeaderboardEntryWritten = onDocumentWritten(
+  "leaderboards/{monthKey}/users/{userId}",
+  async (event) => {
+    await rebuildLeaderboardSummary(event.params.monthKey);
+  }
+);
+
+export const getMonthlyLeaderboard = onCall(async (request) => {
+  requireAuth(request);
+  await requireApprovedMember(request);
+
+  const monthKey =
+    typeof request.data?.monthKey === "string" && request.data.monthKey.trim() ?
+      request.data.monthKey.trim() :
+      monthKeyFromDate(new Date());
+
+  const limit =
+    typeof request.data?.limit === "number" && request.data.limit > 0 ?
+      Math.min(500, Math.floor(request.data.limit)) :
+      200;
+
+  // Fast path: serve the precomputed summary.
+  const monthSnap = await db.collection("leaderboards").doc(monthKey).get();
+  const summary = (monthSnap.data() as any)?.summary;
+  if (summary && Array.isArray(summary.rows)) {
+    const rows = (summary.rows as LeaderboardSummaryRow[]).slice(0, limit);
+    return {monthKey, total: rows.length, rows};
+  }
+
+  // Slow path (summary not built yet): compute and persist it.
+  const allRows = await rebuildLeaderboardSummary(monthKey);
+  const rows = allRows.slice(0, limit);
   return {monthKey, total: rows.length, rows};
 });
 
 export const reconcileMonthlyLeaderboard = onCall(async (request) => {
-  const callerUid = requireAuth(request);
-  await requireAdmin(callerUid);
+  requireAuth(request);
+  await requireAdmin(request);
 
   const monthKey =
     typeof request.data?.monthKey === "string" && request.data.monthKey.trim() ?
@@ -1428,8 +1559,8 @@ export const reconcileMonthlyLeaderboard = onCall(async (request) => {
 });
 
 export const getMonthlyDipLeaderboard = onCall(async (request) => {
-  const uid = requireAuth(request);
-  await requireApprovedMember(uid);
+  requireAuth(request);
+  await requireApprovedMember(request);
 
   const monthKey =
     typeof request.data?.monthKey === "string" && request.data.monthKey.trim() ?
@@ -1512,7 +1643,7 @@ export const getMonthlyDipLeaderboard = onCall(async (request) => {
 
 export const approveUserAccess = onCall(async (request) => {
   const callerUid = requireAuth(request);
-  await requireAdmin(callerUid);
+  await requireAdmin(request);
 
   const userId = requireString(request.data?.userId, "userId");
   const userRef = db.collection("users").doc(userId);
@@ -1538,7 +1669,7 @@ export const approveUserAccess = onCall(async (request) => {
 
 export const updateMemberRole = onCall(async (request) => {
   const callerUid = requireAuth(request);
-  await requireAdmin(callerUid);
+  await requireAdmin(request);
 
   const userId = requireString(request.data?.userId, "userId");
   const role = requireString(request.data?.role, "role") as "user" | "sgpt" | "banned";
@@ -1581,7 +1712,7 @@ export const updateMemberRole = onCall(async (request) => {
 
 export const updateMemberStrengthBlock = onCall(async (request) => {
   const callerUid = requireAuth(request);
-  await requireAdmin(callerUid);
+  await requireAdmin(request);
 
   const userId = requireString(request.data?.userId, "userId");
   const strengthBlock = normaliseStrengthBlock(request.data?.strengthBlock);
@@ -1613,7 +1744,7 @@ export const updateMemberStrengthBlock = onCall(async (request) => {
 
 export const updateStrengthBlockSettings = onCall(async (request) => {
   const callerUid = requireAuth(request);
-  await requireAdmin(callerUid);
+  await requireAdmin(request);
 
   if (typeof request.data?.strengthBlocksEnabled !== "boolean") {
     throw new HttpsError(
@@ -1635,7 +1766,7 @@ export const updateStrengthBlockSettings = onCall(async (request) => {
 
 export const inviteMemberByEmail = onCall({secrets: [resendApiKey, resendFromEmail]}, async (request) => {
   const callerUid = requireAuth(request);
-  await requireAdmin(callerUid);
+  await requireAdmin(request);
 
   const email = requireEmail(request.data?.email, "email");
   const origin = resolveInviteOrigin(request.data?.origin);

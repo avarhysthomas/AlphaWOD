@@ -17,14 +17,6 @@
       ]
     },
     {
-      "collectionGroup": "workoutSessions",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "userId", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
-      ]
-    },
-    {
       "collectionGroup": "trainingLogs",
       "queryScope": "COLLECTION",
       "fields": [
@@ -48,14 +40,6 @@
         { "fieldPath": "movementSlug", "order": "ASCENDING" },
         { "fieldPath": "metricType", "order": "ASCENDING" },
         { "fieldPath": "createdAt", "order": "DESCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "movementLibrary",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "isActive", "order": "ASCENDING" },
-        { "fieldPath": "sortOrder", "order": "ASCENDING" }
       ]
     },
     {

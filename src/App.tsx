@@ -32,10 +32,6 @@ const Training = React.lazy(() => import("./features/training/pages/Training"));
 const TrainingCategory = React.lazy(() => import("./features/training/pages/TrainingCategory"));
 const TrainingMovement = React.lazy(() => import("./features/training/pages/TrainingMovement"));
 const Profile = React.lazy(() => import("./features/profile/pages/Profile"));
-const Feed = React.lazy(() => import("./features/workouts/pages/Feed"));
-const Workouts = React.lazy(() => import("./features/workouts/pages/Workouts"));
-const WorkoutComposer = React.lazy(() => import("./features/workouts/pages/WorkoutComposer"));
-const WorkoutDetail = React.lazy(() => import("./features/workouts/pages/WorkoutDetail"));
 const AdminInsights = React.lazy(() => import("./features/admin/pages/AdminInsights"));
 const AdminPerformance = React.lazy(() => import("./features/admin/pages/AdminPerformance"));
 const AdminMemberPerformance = React.lazy(() => import("./features/admin/pages/AdminMemberPerformance"));
@@ -260,58 +256,6 @@ export default function App() {
           <RequireAuth>
             <RequireApproved>
               <Profile />
-            </RequireApproved>
-          </RequireAuth>
-        }
-      />
-
-      <Route
-        path="/feed"
-        element={
-          <RequireAuth>
-            <RequireApproved>
-              <RequireMember>
-                <Feed />
-              </RequireMember>
-            </RequireApproved>
-          </RequireAuth>
-        }
-      />
-
-      <Route
-        path="/workouts"
-        element={
-          <RequireAuth>
-            <RequireApproved>
-              <RequireMember>
-                <Workouts />
-              </RequireMember>
-            </RequireApproved>
-          </RequireAuth>
-        }
-      />
-
-      <Route
-        path="/workouts/new"
-        element={
-          <RequireAuth>
-            <RequireApproved>
-              <RequireMember>
-                <WorkoutComposer />
-              </RequireMember>
-            </RequireApproved>
-          </RequireAuth>
-        }
-      />
-
-      <Route
-        path="/workouts/:workoutId"
-        element={
-          <RequireAuth>
-            <RequireApproved>
-              <RequireMember>
-                <WorkoutDetail />
-              </RequireMember>
             </RequireApproved>
           </RequireAuth>
         }

@@ -15,14 +15,39 @@ service cloud.firestore {
         exists(/databases/$(database)/documents/users/$(request.auth.uid));
     }
 
+    // Custom-claim fast path: role/approvalStatus are mirrored into the ID
+    // token by the onUserDocWritten Cloud Function, so most requests avoid
+    // the get() below (one billed read + latency per rule evaluation).
+    // The get() fallback keeps users with missing/stale claims working.
+    function tokenRole() {
+      return request.auth.token.get("role", "");
+    }
+
     function isAdmin() {
-      return currentUserExists() &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin";
+      return isSignedIn() && (
+        tokenRole() == "admin" ||
+        (currentUserExists() &&
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin")
+      );
     }
 
     function isSgpt() {
-      return currentUserExists() &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "sgpt";
+      return isSignedIn() && (
+        tokenRole() == "sgpt" ||
+        (currentUserExists() &&
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "sgpt")
+      );
+    }
+
+    function isApprovedMember() {
+      return isSignedIn() && (
+        tokenRole() == "admin" ||
+        (tokenRole() != "banned" &&
+          request.auth.token.get("approvalStatus", "") == "approved") ||
+        (currentUserExists() &&
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("role", "user") != "banned" &&
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("approvalStatus", "approved") != "pending")
+      );
     }
 
     function hasPerformanceAccess() {
@@ -31,14 +56,6 @@ service cloud.firestore {
 
     function affectsOnly(allowedKeys) {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly(allowedKeys);
-    }
-
-    function isReactionUpdate() {
-      return affectsOnly(["reactionUserIds", "reactionUsers", "reactionCount"]);
-    }
-
-    function isCommentUpdate() {
-      return affectsOnly(["comments", "commentCount"]);
     }
 
     function isWaiverUpdate() {
@@ -94,43 +111,17 @@ service cloud.firestore {
       );
     }
 
-    match /workoutSessions/{workoutId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() &&
-        request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isSignedIn() &&
-        resource.data.userId == request.auth.uid;
-    }
-
-    match /feedPosts/{postId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() &&
-        request.resource.data.actorId == request.auth.uid;
-      allow update: if isAdmin() || (
-        isSignedIn() &&
-        (
-          resource.data.actorId == request.auth.uid ||
-          isReactionUpdate() ||
-          isCommentUpdate()
-        )
-      );
-      allow delete: if isAdmin() || (
-        isSignedIn() &&
-        resource.data.actorId == request.auth.uid
-      );
-    }
-
-    match /movementLibrary/{movementId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
-    }
-
     match /appSettings/{settingsId} {
       allow read: if isSignedIn();
       allow write: if isAdmin();
     }
 
     match /wods/{wodDate} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /wodTemplates/{templateId} {
       allow read: if isSignedIn();
       allow write: if isAdmin();
     }
@@ -165,6 +156,14 @@ service cloud.firestore {
       );
 
       allow delete: if false;
+    }
+
+    // Precomputed monthly leaderboard summary (written by Cloud Functions).
+    // Members read this one doc instead of calling getMonthlyLeaderboard.
+    // Deliberately does NOT match the users subcollection.
+    match /leaderboards/{monthKey} {
+      allow read: if isApprovedMember();
+      allow write: if false;
     }
 
     match /{document=**} {

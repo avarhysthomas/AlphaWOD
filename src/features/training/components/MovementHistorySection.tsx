@@ -1,5 +1,5 @@
 import React from "react";
-import { Newspaper, Share, Trash2 } from "lucide-react";
+import { Share, Trash2 } from "lucide-react";
 import type { AccentClasses } from "../utils/movementHelpers";
 import type { TrainingLog } from "../types";
 
@@ -10,12 +10,10 @@ type MovementHistorySectionProps = {
   filteredLogs: TrainingLog[];
   bestLogId?: string | null;
   deletingLogId?: string | null;
-  postingLogId?: string | null;
   isTimeDisplay: (unit?: string, movementName?: string) => boolean;
   formatDisplayValue: (value: string, unit?: string, movementName?: string) => string;
   prettyDate: (date: string) => string;
   onShareLog: (log: TrainingLog) => void;
-  onPostToFeed: (log: TrainingLog) => void;
   onDeleteLog: (logId: string) => void;
 };
 
@@ -26,12 +24,10 @@ export default function MovementHistorySection({
   filteredLogs,
   bestLogId,
   deletingLogId,
-  postingLogId,
   isTimeDisplay,
   formatDisplayValue,
   prettyDate,
   onShareLog,
-  onPostToFeed,
   onDeleteLog,
 }: MovementHistorySectionProps) {
   return (
@@ -54,7 +50,6 @@ export default function MovementHistorySection({
           filteredLogs.map((log, index) => {
             const isBest = bestLogId === log.id;
             const isDeleting = deletingLogId === log.id;
-            const isPosting = postingLogId === log.id;
 
             return (
               <div
@@ -113,7 +108,7 @@ export default function MovementHistorySection({
                         )}
                       </div>
                       <div className="mt-2 text-[10px] font-bold uppercase tracking-[0.18em] text-white/32">
-                        {isDeleting ? "Deleting" : isPosting ? "Posting" : activeMetricFilter || log.metricType}
+                        {isDeleting ? "Deleting" : activeMetricFilter || log.metricType}
                       </div>
                     </div>
 
@@ -121,7 +116,7 @@ export default function MovementHistorySection({
                       <button
                         type="button"
                         onClick={() => onShareLog(log)}
-                        disabled={isDeleting || isPosting}
+                        disabled={isDeleting}
                         className="grid h-9 w-9 place-items-center rounded-full text-white/38 transition hover:bg-white/[0.07] hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
                         aria-label="Share entry"
                       >
@@ -130,18 +125,8 @@ export default function MovementHistorySection({
 
                       <button
                         type="button"
-                        onClick={() => onPostToFeed(log)}
-                        disabled={isDeleting || isPosting}
-                        className="grid h-9 w-9 place-items-center rounded-full text-white/38 transition hover:bg-white/[0.07] hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
-                        aria-label="Post to feed"
-                      >
-                        <Newspaper className="h-4 w-4" />
-                      </button>
-
-                      <button
-                        type="button"
                         onClick={() => onDeleteLog(log.id)}
-                        disabled={isDeleting || isPosting}
+                        disabled={isDeleting}
                         className="grid h-9 w-9 place-items-center rounded-full text-white/30 transition hover:bg-red-500/10 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-35"
                         aria-label="Delete entry"
                       >

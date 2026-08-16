@@ -1,5 +1,7 @@
 import React, {useEffect, useMemo, useState} from "react";
 import {getFunctions, httpsCallable} from "firebase/functions";
+import {doc, getDoc} from "firebase/firestore";
+import {db} from "../../../firebase";
 import {Bell, ChevronLeft, ChevronRight, RefreshCw} from "lucide-react";
 import {useAuth} from "../../../context/AuthContext";
 import UserAvatar from "../../../components/ui/UserAvatar";
@@ -165,19 +167,39 @@ export default function Leaderboard() {
   const [err, setErr] = useState<string | null>(null);
 
   async function load() {
-  setLoading(true);
-  setErr(null);
+    setLoading(true);
+    setErr(null);
 
-  try {
-    const res = await getMonthlyLeaderboard({ monthKey, limit: 200 });
-    setRows(res.data?.rows || []);
-  } catch (e: any) {
-    console.error(e);
-    setErr(e?.message || "Failed to load leaderboard");
-  } finally {
-    setLoading(false);
+    try {
+      // Fast path: read the precomputed summary doc straight from Firestore
+      // (served from the local persistent cache on repeat views, no function
+      // cold start). Falls back to the callable if the summary doesn't exist
+      // yet — the function builds and persists it for next time.
+      let loaded: LeaderboardRow[] | null = null;
+
+      try {
+        const snap = await getDoc(doc(db, "leaderboards", monthKey));
+        const summary = (snap.data() as any)?.summary;
+        if (summary && Array.isArray(summary.rows)) {
+          loaded = (summary.rows as LeaderboardRow[]).slice(0, 200);
+        }
+      } catch (summaryErr) {
+        console.warn("Leaderboard summary read failed, falling back", summaryErr);
+      }
+
+      if (!loaded) {
+        const res = await getMonthlyLeaderboard({ monthKey, limit: 200 });
+        loaded = res.data?.rows || [];
+      }
+
+      setRows(loaded);
+    } catch (e: any) {
+      console.error(e);
+      setErr(e?.message || "Failed to load leaderboard");
+    } finally {
+      setLoading(false);
+    }
   }
-}
 
   useEffect(() => {
     void load();
