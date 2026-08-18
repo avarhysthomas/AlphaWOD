@@ -5,6 +5,8 @@ const assert = require("node:assert/strict");
 
 const {
   BILLING_POLICY,
+  CHECKOUT_ANCHOR_MARGIN_SECONDS,
+  CHECKOUT_CREATION_MARGIN_SECONDS,
   CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION,
   MEMBERSHIP_PLANS,
   PLAN_KEYS,
@@ -20,10 +22,12 @@ const {
   resolveCoolingOffEnd,
   resolveEntitlementForMembership,
   resolveMembershipState,
+  resolvePastDueGraceEndMillis,
   resolveYouthPlanForAge,
   formatPence,
   formatBillingDate,
   formatUnixBillingDate,
+  formatUnixBillingIsoDate,
 } = require("../lib/membershipPlans");
 
 /** Europe/London instant helper: builds a UTC millis value for a London date. */
@@ -54,6 +58,20 @@ test("only Adult Unlimited automatically includes AlphaWOD access", () => {
 
 test("purchase stays closed while the checkout documents are drafts", () => {
   assert.equal(CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION, false);
+});
+
+test("past-due grace persists an exact London-calendar deadline across DST", () => {
+  // Failure is on the Saturday before the UK clocks move back. Three calendar
+  // days of grace end at the final millisecond of Tuesday in Europe/London.
+  const failedAt = Math.floor(new Date("2026-10-24T10:00:00Z").getTime() / 1000);
+  const graceEnd = resolvePastDueGraceEndMillis(failedAt);
+
+  assert.equal(
+    new Date(graceEnd).toISOString(),
+    "2026-10-27T23:59:59.999Z"
+  );
+  assert.equal(isWithinPastDueGrace(failedAt, graceEnd), true);
+  assert.equal(isWithinPastDueGrace(failedAt, graceEnd + 1), false);
 });
 
 test("youth age routing follows the approved boundaries", () => {
@@ -104,7 +122,35 @@ test("a checkout session never outlives the anchor it was created against", () =
   const {anchorUnixSeconds} = resolveBillingCycleAnchor(now);
 
   assert.ok(expiry < anchorUnixSeconds, "expiry must precede the anchor");
-  assert.ok(expiry >= Math.floor(now / 1000) + 1800, "expiry must respect Stripe's 30 minute floor");
+  assert.equal(anchorUnixSeconds - expiry, CHECKOUT_ANCHOR_MARGIN_SECONDS);
+  assert.ok(
+    expiry >= Math.floor(now / 1000) + 1800 + CHECKOUT_CREATION_MARGIN_SECONDS,
+    "expiry must preserve Stripe's floor after network/clock delay"
+  );
+});
+
+test("checkout fails closed when the Stripe minimum cannot fit before the anchor margin", () => {
+  // 22:25:01 London leaves 34m59s before the one-hour anchor margin. That is
+  // below Stripe's 30-minute floor plus the five-minute creation allowance.
+  const tooLate = londonMillis("2026-08-31T21:25:01Z");
+  assert.throws(
+    () => resolveCheckoutSessionExpiry(tooLate),
+    /monthly billing boundary/i
+  );
+});
+
+test("checkout permits the exact safe boundary but never reaches the anchor", () => {
+  const lastSafeInstant = londonMillis("2026-08-31T21:25:00Z");
+  const expiry = resolveCheckoutSessionExpiry(lastSafeInstant);
+  const {anchorUnixSeconds} = resolveBillingCycleAnchor(lastSafeInstant);
+
+  assert.equal(
+    expiry,
+    Math.floor(lastSafeInstant / 1000) + 30 * 60 +
+      CHECKOUT_CREATION_MARGIN_SECONDS
+  );
+  assert.equal(anchorUnixSeconds - expiry, CHECKOUT_ANCHOR_MARGIN_SECONDS);
+  assert.ok(expiry < anchorUnixSeconds);
 });
 
 test("a checkout session is capped at Stripe's 24 hour maximum", () => {
@@ -281,7 +327,9 @@ test("confirmation dates render in London regardless of server timezone", () => 
   // date shown must still be the 1st.
   const bstAnchor = resolveBillingCycleAnchor(new Date("2026-08-18T09:30:00Z").getTime());
   assert.equal(formatUnixBillingDate(bstAnchor.anchorUnixSeconds), "1 September 2026");
+  assert.equal(formatUnixBillingIsoDate(bstAnchor.anchorUnixSeconds), "2026-09-01");
 
   const gmtAnchor = resolveBillingCycleAnchor(new Date("2026-12-09T12:00:00Z").getTime());
   assert.equal(formatUnixBillingDate(gmtAnchor.anchorUnixSeconds), "1 January 2027");
+  assert.equal(formatUnixBillingIsoDate(gmtAnchor.anchorUnixSeconds), "2027-01-01");
 });

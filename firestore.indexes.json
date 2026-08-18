@@ -49,6 +49,14 @@
         { "fieldPath": "dayOfWeek", "order": "ASCENDING" },
         { "fieldPath": "startTime", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "memberships",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "state", "order": "ASCENDING" },
+        { "fieldPath": "nextReconcileAt", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

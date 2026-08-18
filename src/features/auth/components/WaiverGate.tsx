@@ -20,7 +20,13 @@ function needsCurrentWaiver(appUser: ReturnType<typeof useAuth>["appUser"]) {
   );
 }
 
-export default function WaiverGate({ children }: { children: React.ReactNode }) {
+export default function WaiverGate({
+  children,
+  bypass = false,
+}: {
+  children: React.ReactNode;
+  bypass?: boolean;
+}) {
   const { user, appUser, loading, refreshAppUser } = useAuth();
   const [signature, setSignature] = useState("");
   const [acknowledgements, setAcknowledgements] = useState<boolean[]>(
@@ -36,7 +42,10 @@ export default function WaiverGate({ children }: { children: React.ReactNode }) 
     [appUser?.name, user?.displayName]
   );
 
-  if (!user) {
+  // Billing, cancellation and the public legal/purchase routes must remain
+  // reachable even when the participation waiver is outstanding. The waiver
+  // controls workout access; it cannot condition access to payment controls.
+  if (bypass || !user) {
     return <>{children}</>;
   }
 

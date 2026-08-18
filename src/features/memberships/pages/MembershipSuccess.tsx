@@ -4,8 +4,10 @@ import { useAuth } from "../../../context/AuthContext";
 import { COMPANY, MEMBERSHIP_PLANS, POLICY_TEXT } from "../../../lib/membershipPlans";
 import {
   claimMembership,
+  clearCheckoutAttempt,
   clearPendingClaim,
   getMyMemberships,
+  readCheckoutAttemptId,
   rememberPendingClaim,
   type MyMembership,
 } from "../services/membership";
@@ -17,13 +19,7 @@ const EYEBROW = "text-[12px] font-bold uppercase tracking-[0.28em] text-white/34
 const POLL_ATTEMPTS = 6;
 const POLL_INTERVAL_MS = 2000;
 
-/**
- * The approved confirmation wording for the membership just bought. Only Adult
- * Unlimited unlocks the app, so every other plan gets the onboarding message
- * rather than one implying immediate access.
- */
-function successMessageFor(membership: MyMembership | null): string {
-  if (!membership) return POLICY_TEXT.adultOtherSuccess;
+function activeSuccessMessageFor(membership: MyMembership): string {
   if (MEMBERSHIP_PLANS[membership.planKey]?.audience === "youth") {
     return POLICY_TEXT.youthSuccess;
   }
@@ -32,34 +28,150 @@ function successMessageFor(membership: MyMembership | null): string {
     : POLICY_TEXT.adultOtherSuccess;
 }
 
+/** Never let an old payment receipt imply that suspended or ended access is live. */
+function membershipPresentation(membership: MyMembership): {
+  eyebrow: string;
+  message: string;
+  appAccessAvailable: boolean;
+} {
+  if (membership.providerContractStatus === "manual_review") {
+    return {
+      eyebrow: "Membership needs attention",
+      message: `The Stripe subscription details need staff review before access can continue. Contact ${COMPANY.supportEmail} if you need help.`,
+      appAccessAvailable: false,
+    };
+  }
+  if ((membership.state === "active" || membership.state === "past_due_grace") &&
+    membership.grantsAlphaWodAccess && membership.participantIsPayer &&
+    membership.entitlementProjectionStatus !== "applied") {
+    return {
+      eyebrow: "Payment confirmed — access pending",
+      message: `Payment is confirmed, but AlphaWOD access has not been safely applied yet. Contact ${COMPANY.supportEmail} if it does not appear shortly.`,
+      appAccessAvailable: false,
+    };
+  }
+  switch (membership.state) {
+  case "active":
+    return {
+      eyebrow: "Payment confirmed",
+      message: activeSuccessMessageFor(membership),
+      appAccessAvailable: membership.grantsAlphaWodAccess && membership.participantIsPayer,
+    };
+  case "past_due_grace":
+    return {
+      eyebrow: "Membership active — payment needs attention",
+      message: "Your membership remains active during a short payment grace period. Review your billing details from the membership page to avoid suspension.",
+      appAccessAvailable: membership.grantsAlphaWodAccess && membership.participantIsPayer,
+    };
+  case "incomplete":
+    return {
+      eyebrow: "Payment pending",
+      message: "Stripe is still confirming payment for this membership. Its current status is shown on your membership page; access has not been confirmed yet.",
+      appAccessAvailable: false,
+    };
+  case "past_due_suspended":
+    return {
+      eyebrow: "Membership suspended",
+      message: "This membership is currently suspended because payment is overdue. Review your billing details from the membership page.",
+      appAccessAvailable: false,
+    };
+  case "disputed":
+    return {
+      eyebrow: "Membership suspended",
+      message: `This membership is suspended while a payment dispute is open. Contact ${COMPANY.supportEmail} if you need help.`,
+      appAccessAvailable: false,
+    };
+  case "cancelled":
+    return {
+      eyebrow: "Membership ended",
+      message: "This membership is cancelled. Its recorded billing and cancellation details remain available on your membership page.",
+      appAccessAvailable: false,
+    };
+  case "revoked":
+    return {
+      eyebrow: "Membership needs attention",
+      message: `Access for this membership has been revoked. Contact ${COMPANY.supportEmail} if you need help.`,
+      appAccessAvailable: false,
+    };
+  }
+}
+
 export default function MembershipSuccess() {
-  const { user, refreshAppUser } = useAuth();
+  const { user, loading, refreshAppUser } = useAuth();
   const [params] = useSearchParams();
   const sessionId = params.get("session_id");
+  const [checkoutAttemptId] = useState(() => readCheckoutAttemptId());
 
   const [membership, setMembership] = useState<MyMembership | null>(null);
   const [settled, setSettled] = useState(false);
   const [claimError, setClaimError] = useState("");
   const cancelled = useRef(false);
+  const presentation = membership ? membershipPresentation(membership) : null;
 
   // Held locally so the buyer can create an account now and claim from the
   // membership page, without the checkout session id being lost on the way.
   useEffect(() => {
-    if (sessionId) rememberPendingClaim(sessionId);
+    if (!sessionId) return;
+    clearCheckoutAttempt();
+    // The Session id is not sufficient to claim a purchase, but it is still
+    // sensitive billing metadata. Keep it out of copied URLs, browser history
+    // and referrer headers once this page has captured it.
+    const url = new URL(window.location.href);
+    url.searchParams.delete("session_id");
+    window.history.replaceState(
+      window.history.state,
+      "",
+      `${url.pathname}${url.search}${url.hash}`
+    );
   }, [sessionId]);
 
+  useEffect(() => {
+    // A buyer who was already signed in is attached by the webhook itself. Do
+    // not leave that completed checkout behind as a pending claim: the claim
+    // callable quite correctly ignores memberships that already have a payer.
+    if (!sessionId || loading) return;
+    if (user) clearPendingClaim();
+    else rememberPendingClaim(sessionId, checkoutAttemptId);
+  }, [sessionId, checkoutAttemptId, user, loading]);
+
   const attach = useCallback(async () => {
+    if (!sessionId) {
+      setSettled(true);
+      return;
+    }
     for (let attempt = 0; attempt < POLL_ATTEMPTS; attempt += 1) {
       if (cancelled.current) return;
 
       try {
         // Fulfilment runs on the Stripe webhook, which can land a moment after
         // the browser returns, so the claim is retried rather than failed.
-        await claimMembership(sessionId ?? undefined);
+        const claim = await claimMembership(
+          sessionId,
+          checkoutAttemptId ?? undefined
+        );
         clearPendingClaim();
+        const result = await getMyMemberships();
+        const exact = result.memberships.find((entry) =>
+          claim.claimed.includes(entry.subscriptionId)
+        ) ?? null;
+
+        if (exact) {
+          if (cancelled.current) return;
+          setMembership(exact);
+          setSettled(true);
+          await refreshAppUser();
+          return;
+        }
       } catch (error) {
         const code = (error as {code?: string} | null)?.code ?? "";
-        if (code.includes("permission-denied") || code.includes("deadline-exceeded")) {
+        const terminal = [
+          "permission-denied",
+          "deadline-exceeded",
+          "failed-precondition",
+          "already-exists",
+        ].some((value) => code.includes(value));
+        if (terminal) {
+          clearPendingClaim();
           if (!cancelled.current) {
             setClaimError(
               (error as Error).message ||
@@ -72,29 +184,11 @@ export default function MembershipSuccess() {
         // not-found simply means the webhook has not fulfilled it yet.
       }
 
-      try {
-        const result = await getMyMemberships();
-        const latest =
-          result.memberships.find(
-            (entry) => entry.state === "active" || entry.state === "past_due_grace"
-          ) ?? result.memberships[0] ?? null;
-
-        if (latest) {
-          if (cancelled.current) return;
-          setMembership(latest);
-          setSettled(true);
-          await refreshAppUser();
-          return;
-        }
-      } catch (error) {
-        console.error("Could not load membership after checkout:", error);
-      }
-
       await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
     }
 
     if (!cancelled.current) setSettled(true);
-  }, [sessionId, refreshAppUser]);
+  }, [sessionId, checkoutAttemptId, refreshAppUser]);
 
   useEffect(() => {
     cancelled.current = false;
@@ -108,16 +202,22 @@ export default function MembershipSuccess() {
     <div className="carbon-fiber-bg min-h-screen text-[#f4f0ea]">
       <div className="mx-auto flex min-h-screen max-w-xl items-center px-5 py-12">
         <div className={`w-full ${CARD}`}>
-          <p className={EYEBROW}>Payment confirmed</p>
+          <p className={EYEBROW}>
+            {presentation?.eyebrow ?? (sessionId ? "Checkout received" : "Checkout link unavailable")}
+          </p>
           <h1 className="mt-4 font-heading text-3xl uppercase tracking-[0.06em] text-white sm:text-4xl">
-            {membership?.planName ?? "Thank you"}
+            {membership?.planName ?? (sessionId ? "Thank you" : "We need the checkout link")}
           </h1>
 
           <p className="mt-5 text-sm leading-7 text-white/75">
-            {successMessageFor(membership)}
+            {presentation
+              ? presentation.message
+              : sessionId
+                ? "We’re confirming the exact membership from this checkout. No access or payment status is shown as confirmed until that finishes."
+                : `This page has no checkout reference. Return to your membership page or contact ${COMPANY.supportEmail}.`}
           </p>
 
-          {!user && (
+          {sessionId && !loading && !user && (
             <>
               <div className="mt-7 rounded-2xl border border-amber-500/25 bg-amber-500/10 p-5">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-amber-200">
@@ -173,12 +273,14 @@ export default function MembershipSuccess() {
               >
                 View my membership
               </Link>
-              <Link
-                to="/dashboard"
-                className="block text-center text-sm text-white/50 underline underline-offset-4"
-              >
-                Go to AlphaWOD
-              </Link>
+              {(!presentation || presentation.appAccessAvailable) && (
+                <Link
+                  to="/dashboard"
+                  className="block text-center text-sm text-white/50 underline underline-offset-4"
+                >
+                  Go to AlphaWOD
+                </Link>
+              )}
             </div>
           )}
 

@@ -30,8 +30,20 @@ function needsAttention(membership: AdminMembership): boolean {
   return (
     membership.disputeOpen ||
     membership.accessRevoked ||
+    membership.providerContractStatus === "manual_review" ||
+    Boolean(membership.providerContractError) ||
     membership.state === "past_due_suspended" ||
     membership.state === "past_due_grace" ||
+    membership.confirmationEmailStatus === "dead_letter" ||
+    membership.confirmationEmailStatus === "manual_review" ||
+    Boolean(membership.confirmationEmailError) ||
+    membership.cancellationRequestStatus === "manual_review" ||
+    Boolean(membership.cancellationRequestError) ||
+    membership.entitlementProjectionStatus === "manual_review" ||
+    Boolean(membership.entitlementProjectionError) ||
+    (membership.grantsAlphaWodAccess &&
+      membership.entitlementTargetUid !== null &&
+      membership.entitlementProjectionStatus !== "applied") ||
     (membership.grantsAlphaWodAccess && membership.entitlementTargetUid === null)
   );
 }
@@ -195,7 +207,7 @@ export default function AdminMemberships() {
               </span>
             </div>
 
-            <dl className="mt-6 grid gap-4 text-sm sm:grid-cols-3">
+            <dl className="mt-6 grid gap-4 text-sm sm:grid-cols-4">
               <div>
                 <dt className="text-[11px] font-semibold uppercase tracking-[0.2em] text-white/45">
                   Stripe status
@@ -216,6 +228,19 @@ export default function AdminMemberships() {
                 </dt>
                 <dd className="mt-1 text-white/75">{formatUnixDate(membership.cancelAt)}</dd>
               </div>
+              <div>
+                <dt className="text-[11px] font-semibold uppercase tracking-[0.2em] text-white/45">
+                  Confirmation
+                </dt>
+                <dd className="mt-1 text-white/75">
+                  {membership.confirmationEmailStatus?.replaceAll("_", " ") ?? "—"}
+                </dd>
+                {membership.confirmationEmailProviderId && (
+                  <dd className="mt-1 break-all text-xs text-white/40">
+                    {membership.confirmationEmailProviderId}
+                  </dd>
+                )}
+              </div>
             </dl>
 
             {(membership.disputeOpen || membership.accessRevoked) && (
@@ -226,7 +251,65 @@ export default function AdminMemberships() {
               </p>
             )}
 
-            {membership.grantsAlphaWodAccess && membership.entitlementTargetUid === null && (
+            {(membership.providerContractStatus === "manual_review" ||
+              membership.providerContractError) && (
+              <p className="mt-5 rounded-2xl border border-red-500/25 bg-red-500/10 p-4 text-sm leading-6 text-red-100">
+                Stripe subscription contract needs manual review
+                {membership.providerContractError
+                  ? `: ${membership.providerContractError}`
+                  : ". Access was failed closed after the provider contract changed."}
+              </p>
+            )}
+
+            {(membership.confirmationEmailStatus === "dead_letter" ||
+              membership.confirmationEmailStatus === "manual_review" ||
+              membership.confirmationEmailError) && (
+              <p className="mt-5 rounded-2xl border border-red-500/25 bg-red-500/10 p-4 text-sm leading-6 text-red-100">
+                Confirmation email needs review
+                {membership.confirmationEmailError
+                  ? `: ${membership.confirmationEmailError}`
+                  : ". Check the billing audit and Resend delivery before contacting the payer."}
+              </p>
+            )}
+
+            {(membership.cancellationRequestStatus === "manual_review" ||
+              membership.cancellationRequestError) && (
+              <div className="mt-5 rounded-2xl border border-red-500/25 bg-red-500/10 p-4 text-sm leading-6 text-red-100">
+                <p className="font-semibold">
+                  {membership.cancellationRequestStatus === "manual_review"
+                    ? "Cancellation request needs manual review"
+                    : "Cancellation recovery needs attention"}
+                </p>
+                <p className="mt-1 text-xs text-red-100/70">
+                  Status: {membership.cancellationRequestStatus?.replaceAll("_", " ") ?? "unknown"}
+                  {membership.cancellationRequestError
+                    ? ` · ${membership.cancellationRequestError}`
+                    : " · Check the billing audit and Stripe schedule before contacting the payer."}
+                </p>
+              </div>
+            )}
+
+            {(membership.entitlementProjectionStatus === "manual_review" ||
+              membership.entitlementProjectionError ||
+              (membership.grantsAlphaWodAccess &&
+                membership.entitlementTargetUid !== null &&
+                membership.entitlementProjectionStatus !== "applied")) && (
+              <div className="mt-5 rounded-2xl border border-red-500/25 bg-red-500/10 p-4 text-sm leading-6 text-red-100">
+                <p className="font-semibold">
+                  {membership.entitlementProjectionStatus === "manual_review"
+                    ? "AlphaWOD access needs manual review"
+                    : "AlphaWOD access has not been applied"}
+                </p>
+                <p className="mt-1 text-xs text-red-100/70">
+                  {membership.entitlementProjectionError ??
+                    "The paid membership could not be safely projected onto the participant account. Check the billing audit and entitlement owner before making a manual change."}
+                </p>
+              </div>
+            )}
+
+            {membership.grantsAlphaWodAccess &&
+              !membership.participantIsPayer &&
+              membership.entitlementTargetUid === null && (
               <div className="mt-5 rounded-2xl border border-amber-500/25 bg-amber-500/10 p-5">
                 <p className="text-sm leading-6 text-amber-50/90">
                   This membership includes AlphaWOD access but was bought for someone other

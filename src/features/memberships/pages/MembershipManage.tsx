@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { sendEmailVerification } from "firebase/auth";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useAuth } from "../../../context/AuthContext";
 import { COMPANY, POLICY_TEXT } from "../../../lib/membershipPlans";
 import {
   MEMBERSHIP_STATE_LABEL,
@@ -10,6 +12,7 @@ import {
   formatUnixDate,
   getMyMemberships,
   readPendingClaim,
+  readPendingClaimVerifier,
   requestMembershipCancellation,
   type CancellationOutcome,
   type MyMembership,
@@ -50,6 +53,10 @@ function CancellationPreview({ preview }: { preview: CancellationOutcome }) {
 }
 
 export default function MembershipManage() {
+  const { user } = useAuth();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const emailClaimRequested = searchParams.get("claim") === "email";
   const [memberships, setMemberships] = useState<MyMembership[]>([]);
   const [preview, setPreview] = useState<CancellationOutcome | null>(null);
   const [loading, setLoading] = useState(true);
@@ -57,10 +64,13 @@ export default function MembershipManage() {
   const [error, setError] = useState("");
   const [confirming, setConfirming] = useState<string | null>(null);
   const [claiming, setClaiming] = useState(false);
+  const [verificationNeeded, setVerificationNeeded] = useState(false);
+  const [verificationSent, setVerificationSent] = useState(false);
+  const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
+  const [pendingCheckoutAttemptId, setPendingCheckoutAttemptId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      setError("");
       const result = await getMyMemberships();
       setMemberships(result.memberships);
       setPreview(result.cancellationPreview);
@@ -77,45 +87,112 @@ export default function MembershipManage() {
   // checkout session id held since payment, or by matching the verified email
   // Stripe billed. Both are safe to attempt on load; the server rejects a
   // membership that is already owned.
-  const claim = useCallback(async (sessionId?: string) => {
+  const claim = useCallback(async (
+    sessionId?: string,
+    checkoutAttemptId?: string
+  ): Promise<"claimed" | "pending" | "terminal" | "transient"> => {
     try {
       setClaiming(true);
       setError("");
-      await claimMembership(sessionId);
+      await claimMembership(sessionId, checkoutAttemptId);
       clearPendingClaim();
+      setPendingSessionId(null);
+      setPendingCheckoutAttemptId(null);
       await load();
-      return true;
+      return "claimed";
     } catch (claimError: unknown) {
       const code = (claimError as {code?: string} | null)?.code ?? "";
-      if (!code.includes("not-found")) {
-        setError(
-          claimError instanceof Error
-            ? claimError.message
-            : "Could not claim that purchase."
-        );
+      if (code.includes("not-found")) return "pending";
+      const terminal = [
+        "permission-denied",
+        "deadline-exceeded",
+        "failed-precondition",
+        "already-exists",
+      ].some((value) => code.includes(value));
+      if (!sessionId && code.includes("permission-denied")) {
+        setVerificationNeeded(true);
       }
-      return false;
+      if (terminal && sessionId) {
+        clearPendingClaim();
+        setPendingSessionId(null);
+        setPendingCheckoutAttemptId(null);
+      }
+      setError(
+        claimError instanceof Error
+          ? claimError.message
+          : "Could not claim that purchase."
+      );
+      return terminal ? "terminal" : "transient";
     } finally {
       setClaiming(false);
     }
   }, [load]);
 
+  const resendVerification = async () => {
+    if (!user) return;
+    try {
+      setBusy("verification");
+      setError("");
+      await sendEmailVerification(user, {
+        url: `${window.location.origin}/account/membership?claim=email`,
+      });
+      setVerificationSent(true);
+    } catch (verificationError: unknown) {
+      setError(
+        verificationError instanceof Error
+          ? verificationError.message
+          : "Could not send the verification email."
+      );
+    } finally {
+      setBusy("");
+    }
+  };
+
   useEffect(() => {
+    let cancelled = false;
+    let retryTimer: number | undefined;
     void (async () => {
       const pending = readPendingClaim();
       if (pending) {
-        await claim(pending);
+        const pendingVerifier = readPendingClaimVerifier();
+        setPendingSessionId(pending);
+        setPendingCheckoutAttemptId(pendingVerifier);
+        const outcome = await claim(pending, pendingVerifier ?? undefined);
+        // `not-found` can mean either that the webhook has not fulfilled the
+        // checkout yet or that a signed-in checkout was already attached. In
+        // both cases the page must still load the account's current billing
+        // state instead of remaining on its initial loading screen forever.
+        if (outcome !== "claimed") await load();
+        if (!cancelled && (outcome === "pending" || outcome === "transient")) {
+          // One bounded automatic retry covers ordinary webhook lag; the empty
+          // state also keeps a manual retry that uses this exact session id.
+          retryTimer = window.setTimeout(() => {
+            if (!cancelled) void claim(pending, pendingVerifier ?? undefined);
+          }, 2000);
+        }
+        return;
+      }
+      if (emailClaimRequested) {
+        const outcome = await claim();
+        if (outcome !== "claimed") await load();
+        if (!cancelled && outcome === "claimed") {
+          navigate("/account/membership", {replace: true});
+        }
         return;
       }
       await load();
     })();
-  }, [claim, load]);
+    return () => {
+      cancelled = true;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+    };
+  }, [claim, emailClaimRequested, load, navigate]);
 
-  const openPortal = async () => {
+  const openPortal = async (subscriptionId: string) => {
     try {
-      setBusy("portal");
+      setBusy(`portal:${subscriptionId}`);
       setError("");
-      const { portalUrl } = await createCustomerPortalSession();
+      const { portalUrl } = await createCustomerPortalSession(subscriptionId);
       window.location.assign(portalUrl);
     } catch (portalError: unknown) {
       setError(
@@ -125,14 +202,35 @@ export default function MembershipManage() {
     }
   };
 
-  const cancel = async (subscriptionId: string) => {
+  const cancel = async (
+    subscriptionId: string,
+    expectedCancelAtUnixSeconds: number
+  ) => {
     try {
       setBusy(subscriptionId);
       setError("");
-      await requestMembershipCancellation(subscriptionId);
+      await requestMembershipCancellation(subscriptionId, expectedCancelAtUnixSeconds);
       setConfirming(null);
       await load();
     } catch (cancelError: unknown) {
+      const code = (cancelError as {code?: string} | null)?.code ?? "";
+      const reason = (cancelError as {details?: {reason?: string}} | null)
+        ?.details?.reason;
+      if (reason === "cooling_off_manual_review") {
+        setError(
+          "This request is inside the cooling-off period and needs staff review of any proportionate service charge or refund. Contact support for written acknowledgement; the ordinary renewal cancellation was not applied."
+        );
+        setConfirming(null);
+        return;
+      }
+      if (code.includes("failed-precondition")) {
+        setError(
+          "The cancellation dates changed while you were confirming. Review the updated dates and confirm again."
+        );
+        setConfirming(subscriptionId);
+        await load();
+        return;
+      }
       setError(
         cancelError instanceof Error
           ? cancelError.message
@@ -157,6 +255,29 @@ export default function MembershipManage() {
           </div>
         )}
 
+        {verificationNeeded && user && !user.emailVerified && (
+          <div className="mt-6 rounded-2xl border border-amber-500/25 bg-amber-500/10 p-5 text-sm leading-7 text-amber-50/85">
+            <p>
+              Verify this account’s email address, then return here to claim the
+              membership. It must be the same address used at checkout.
+            </p>
+            {verificationSent ? (
+              <p className="mt-3 font-semibold text-amber-100">
+                Verification email sent. Open its link to continue.
+              </p>
+            ) : (
+              <button
+                type="button"
+                onClick={resendVerification}
+                disabled={busy === "verification"}
+                className="mt-4 rounded-2xl border border-amber-200/30 px-5 py-3 text-sm font-bold uppercase tracking-[0.14em] text-amber-100 transition hover:border-amber-100/60 disabled:opacity-50"
+              >
+                {busy === "verification" ? "Sending…" : "Send verification email"}
+              </button>
+            )}
+          </div>
+        )}
+
         {loading && (
           <p className="mt-8 text-sm text-white/50">Loading your memberships…</p>
         )}
@@ -164,16 +285,24 @@ export default function MembershipManage() {
         {!loading && memberships.length === 0 && (
           <div className={`mt-8 ${CARD}`}>
             <p className="text-sm leading-7 text-white/70">
-              You do not have a membership on this account yet. If you have already paid,
-              claim that purchase here — it links by the email address you paid with.
+              {pendingSessionId
+                ? "Your payment is still being confirmed. Try linking it again in a moment."
+                : "You do not have a membership on this account yet. If you have already paid, claim that purchase here — it links by the email address you paid with."}
             </p>
             <button
               type="button"
-              onClick={() => claim()}
+              onClick={() => claim(
+                pendingSessionId ?? undefined,
+                pendingCheckoutAttemptId ?? undefined
+              )}
               disabled={claiming}
               className="mt-6 w-full rounded-2xl border border-white/15 px-5 py-3 text-sm font-bold uppercase tracking-[0.14em] text-white transition hover:border-white/35 disabled:opacity-50"
             >
-              {claiming ? "Claiming…" : "Claim a purchase I already made"}
+              {claiming
+                ? "Claiming…"
+                : pendingSessionId
+                  ? "Try linking my paid membership"
+                  : "Claim a purchase I already made"}
             </button>
             <Link
               to="/memberships"
@@ -186,7 +315,15 @@ export default function MembershipManage() {
 
         <div className="mt-8 space-y-5">
           {memberships.map((membership) => {
-            const scheduled = membership.cancelAt !== null;
+            const cancellationOutcome = membership.cancellationOutcome;
+            const cancellationConfirmed = cancellationOutcome !== null;
+            const cancellationManualReview = Boolean(membership.cancellationManualReview);
+            const cancellationPending = Boolean(
+              membership.cancellationPending &&
+              !cancellationConfirmed &&
+              !cancellationManualReview
+            );
+            const coolingOffActive = membership.coolingOffActive;
             const isConfirming = confirming === membership.subscriptionId;
 
             return (
@@ -214,45 +351,159 @@ export default function MembershipManage() {
                       Next payment
                     </dt>
                     <dd className="mt-1 text-sm text-white/75">
-                      {scheduled ? "None scheduled" : formatUnixDate(membership.currentPeriodEnd)}
+                      {cancellationConfirmed
+                        ? cancellationOutcome.finalPaymentDate
+                          ? formatIsoDate(cancellationOutcome.finalPaymentDate)
+                          : "None scheduled"
+                        : formatUnixDate(membership.currentPeriodEnd)}
                     </dd>
                   </div>
                   <div>
                     <dt className="text-[11px] font-semibold uppercase tracking-[0.2em] text-white/45">
-                      {scheduled ? "Membership ends" : "Status"}
+                      {cancellationConfirmed
+                        ? "Membership ends"
+                        : cancellationPending || cancellationManualReview
+                          ? "Cancellation"
+                          : "Status"}
                     </dt>
                     <dd className="mt-1 text-sm text-white/75">
-                      {scheduled
-                        ? formatUnixDate(membership.cancelAt)
-                        : MEMBERSHIP_STATE_LABEL[membership.state]}
+                      {cancellationConfirmed
+                        ? formatIsoDate(cancellationOutcome.accessEndsOnDate)
+                        : cancellationPending
+                          ? "Pending confirmation"
+                          : cancellationManualReview
+                            ? "Needs support"
+                            : MEMBERSHIP_STATE_LABEL[membership.state]}
                     </dd>
                   </div>
                 </dl>
 
-                {scheduled && membership.cancellationOutcome && (
+                {membership.providerContractStatus === "manual_review" && (
+                  <div className="mt-5 rounded-2xl border border-red-500/25 bg-red-500/10 p-5 text-sm leading-7 text-red-100">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-red-200/70">
+                      Billing details need review
+                    </p>
+                    <p className="mt-3">
+                      Access is temporarily restricted because the Stripe subscription no
+                      longer matches the membership agreed at checkout. Contact{" "}
+                      {COMPANY.supportEmail}.
+                    </p>
+                  </div>
+                )}
+
+                {membership.grantsAlphaWodAccess &&
+                  membership.participantIsPayer &&
+                  membership.entitlementProjectionStatus !== "applied" && (
+                  <div className="mt-5 rounded-2xl border border-red-500/25 bg-red-500/10 p-5 text-sm leading-7 text-red-100">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-red-200/70">
+                      {membership.entitlementProjectionStatus === "manual_review"
+                        ? "AlphaWOD access needs support"
+                        : "AlphaWOD access is still pending"}
+                    </p>
+                    <p className="mt-3">
+                      Payment may be confirmed, but access could not be safely linked to
+                      this account. Contact {COMPANY.supportEmail}.
+                    </p>
+                  </div>
+                )}
+
+                {coolingOffActive && !cancellationConfirmed &&
+                  !cancellationPending && !cancellationManualReview && (
+                  <div className="mt-5 rounded-2xl border border-amber-500/25 bg-amber-500/10 p-5 text-sm leading-7 text-amber-50/85">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-200/70">
+                      Cooling-off cancellation needs staff
+                    </p>
+                    <p className="mt-3">
+                      The ordinary renewal-notice flow is not used during your cooling-off
+                      period because any service charge or refund must be reviewed
+                      proportionately. Contact {COMPANY.supportEmail} and ask for written
+                      acknowledgement.
+                    </p>
+                  </div>
+                )}
+
+                {cancellationConfirmed && (
                   <div className="mt-5 rounded-2xl border border-white/10 bg-black/30 p-5 text-sm leading-7 text-white/70">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-white/45">
                       Cancellation confirmed
                     </p>
                     <p className="mt-3">
-                      {membership.cancellationOutcome.finalPaymentDate
+                      {cancellationOutcome.finalPaymentDate
                         ? `Your final payment is due on ${formatIsoDate(
-                            membership.cancellationOutcome.finalPaymentDate
+                            cancellationOutcome.finalPaymentDate
                           )}. `
                         : "No further payment is due. "}
                       Your access ends on{" "}
-                      {formatIsoDate(membership.cancellationOutcome.accessEndsOnDate)}.
+                      {formatIsoDate(cancellationOutcome.accessEndsOnDate)}.
                     </p>
                   </div>
                 )}
 
-                {!scheduled && preview && isConfirming && (
+                {cancellationPending && (
+                  <div className="mt-5 rounded-2xl border border-amber-500/25 bg-amber-500/10 p-5 text-sm leading-7 text-amber-100">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-200/70">
+                      Cancellation still processing
+                    </p>
+                    <p className="mt-3">
+                      Your request is not confirmed yet. Retry so we can verify the Stripe
+                      schedule and record your final payment and membership end dates.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => preview && cancel(
+                        membership.subscriptionId,
+                        preview.cancelAtUnixSeconds
+                      )}
+                      disabled={!preview || busy === membership.subscriptionId}
+                      className="mt-4 rounded-2xl border border-amber-200/30 px-5 py-3 text-sm font-bold uppercase tracking-[0.14em] text-amber-100 transition hover:border-amber-100/60 disabled:opacity-50"
+                    >
+                      {busy === membership.subscriptionId
+                        ? "Retrying…"
+                        : "Retry cancellation"}
+                    </button>
+                  </div>
+                )}
+
+                {cancellationManualReview && (
+                  <div className="mt-5 rounded-2xl border border-red-500/25 bg-red-500/10 p-5 text-sm leading-7 text-red-100">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-red-200/70">
+                      Cancellation needs support
+                    </p>
+                    <p className="mt-3">
+                      {cancellationConfirmed
+                        ? "The recorded membership end date is retained, but charges or a refund still need staff review. "
+                        : "We could not finish confirming this cancellation automatically. Your original request has been retained for staff review. "}
+                      {membership.cancellationRequestError && (
+                        <>{membership.cancellationRequestError}{" "}</>
+                      )}
+                      Email{" "}
+                      <a
+                        href={`mailto:${COMPANY.supportEmail}`}
+                        className="font-semibold underline underline-offset-4"
+                      >
+                        {COMPANY.supportEmail}
+                      </a>{" "}
+                      from your recorded payer email and include membership reference{" "}
+                      <span className="font-mono text-xs">{membership.subscriptionId}</span>.
+                    </p>
+                  </div>
+                )}
+
+                {!cancellationConfirmed &&
+                  !cancellationPending &&
+                  !cancellationManualReview &&
+                  !coolingOffActive &&
+                  preview &&
+                  isConfirming && (
                   <>
                     <CancellationPreview preview={preview} />
                     <div className="mt-5 flex flex-wrap gap-3">
                       <button
                         type="button"
-                        onClick={() => cancel(membership.subscriptionId)}
+                        onClick={() => cancel(
+                          membership.subscriptionId,
+                          preview.cancelAtUnixSeconds
+                        )}
                         disabled={busy === membership.subscriptionId}
                         className="rounded-2xl bg-red-500/90 px-5 py-3 text-sm font-bold uppercase tracking-[0.14em] text-white transition hover:bg-red-500 disabled:bg-red-500/40"
                       >
@@ -271,7 +522,11 @@ export default function MembershipManage() {
                   </>
                 )}
 
-                {!scheduled && !isConfirming && (
+                {!cancellationConfirmed &&
+                  !cancellationPending &&
+                  !cancellationManualReview &&
+                  !coolingOffActive &&
+                  !isConfirming && (
                   <button
                     type="button"
                     onClick={() => setConfirming(membership.subscriptionId)}
@@ -289,14 +544,26 @@ export default function MembershipManage() {
           <div className={`mt-5 ${CARD}`}>
             <p className={EYEBROW}>Payment method</p>
             <p className="mt-4 text-sm leading-7 text-white/70">{POLICY_TEXT.portalScope}</p>
-            <button
-              type="button"
-              onClick={openPortal}
-              disabled={busy === "portal"}
-              className="mt-6 rounded-2xl border border-white/15 px-5 py-3 text-sm font-bold uppercase tracking-[0.14em] text-white transition hover:border-white/35 disabled:opacity-50"
-            >
-              {busy === "portal" ? "Opening…" : "Open secure portal"}
-            </button>
+            <div className="mt-6 flex flex-wrap gap-3">
+              {memberships.map((membership) => {
+                const portalBusy = busy === `portal:${membership.subscriptionId}`;
+                return (
+                  <button
+                    key={membership.subscriptionId}
+                    type="button"
+                    onClick={() => openPortal(membership.subscriptionId)}
+                    disabled={busy.startsWith("portal:")}
+                    className="rounded-2xl border border-white/15 px-5 py-3 text-sm font-bold uppercase tracking-[0.14em] text-white transition hover:border-white/35 disabled:opacity-50"
+                  >
+                    {portalBusy
+                      ? "Opening…"
+                      : memberships.length === 1
+                        ? "Open secure portal"
+                        : `Portal: ${membership.participantFullName}`}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         )}
 
@@ -310,7 +577,8 @@ export default function MembershipManage() {
           </ul>
           <p className="mt-5 text-xs leading-6 text-white/40">
             If the cancellation flow is unavailable, email {COMPANY.supportEmail} from your
-            recorded payer email. We record when the request reaches us.
+            recorded payer email. Staff will confirm the effective dates in writing; do not
+            assume the request is complete until you receive that confirmation.
           </p>
         </div>
       </div>

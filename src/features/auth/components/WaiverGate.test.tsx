@@ -101,6 +101,19 @@ describe("WaiverGate", () => {
     expect(screen.getByText("Protected app")).toBeInTheDocument();
   });
 
+  it("does not block billing controls behind the participation waiver", () => {
+    mockAuth();
+
+    render(
+      <WaiverGate bypass>
+        <div>Membership billing</div>
+      </WaiverGate>
+    );
+
+    expect(screen.getByText("Membership billing")).toBeInTheDocument();
+    expect(screen.queryByText("Required waiver")).not.toBeInTheDocument();
+  });
+
   it("records acceptance through the callable before opening the app", async () => {
     const refreshAppUser = mockAuth();
     mockedAcceptCurrentWaiver.mockResolvedValue({ ok: true });

@@ -2,179 +2,361 @@
 
 Date: 2026-08-18
 
-## 1) What’s done so far
+This is the current implementation handover. The detailed operating and
+deployment runbook is
+[`docs/billing/phase-1-rollout.md`](billing/phase-1-rollout.md); when the two
+documents differ, use that rollout guide.
 
-Phase 0 security hardening is complete in the codebase. There is currently **no public stripe/checkout membership selection page yet**.
+## 1) Current status
 
-Relevant completed work to preserve:
-- Server-owned auth/profile model in `functions/src/authz.ts`
-- Firestore/Storage hardening in `firestore.rules`, `storage.rules`
-- Compatibility lock files: `firestore.phase0-compat.rules`, `storage.phase0-compat.rules`, `firebase.phase0-compat.json`
-- Frontend auth/route gates in `src/context/AuthContext.tsx` and related route protections
-- New callable contracts now exist for non-sensitive bootstrap/waiver operations
-  - `bootstrapUserProfile`
-  - `acceptCurrentWaiver`
-  - `listStaffUsers`
-  - entitlement mutation callable(s) already present from Phase 0 (`setMemberEntitlement`)
-- Migration and rollout evidence/docs: `functions/scripts/backfillClaims.js`, `docs/security/phase-0-rollout.md`
+Phase 1 is implemented in the local working tree. It has **not** been deployed,
+no live Stripe catalogue, portal, webhook or membership email configuration has
+been created or verified, and no real Stripe or Resend end-to-end test has run.
 
-Important operational caveats from Phase 0: callable freeze and identity-admin freeze need to be honored during any additional rollout/deploy steps. If you are continuing now, follow the runbook order already documented.
+Public purchasing remains closed by two independent controls:
 
-## 2) Current business configuration (must be implemented in Phase 1)
+1. `CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION` is `false` in both plan
+   catalogues because every checkout document is still stamped as a legal-review
+   draft.
+2. `MEMBERSHIP_PURCHASE_ENABLED` must be enabled in the Functions environment.
 
-The team has approved:
+Do not open either control as a shortcut around the other. Legal publication,
+deployment and live provider configuration are still separate release gates.
+Final release test results and counts have not been frozen in this handover.
+Approval must cover immutable document content/URLs and hashes plus the exact
+plan- and role-specific acceptance set rendered to the buyer; changing draft
+version strings is not enough, and the system must not record adult-waiver or
+guardian evidence for an acceptance that did not occur.
 
-### Plans
-- Commercial: no joining fee, no trial, rolling monthly
-- Youth:
-  - Youngstars: 4–11 inclusive
-  - Teenstars: 12–16 inclusive
-- Youngstars/Teenstars are separate options within one youth card/catalogue option
+## 2) Implemented surface
 
-### Checkout/funnel rules
-- Payment methods: Stripe dynamic methods
-- Billing address: no
-- Phone collection: no
-- Payment capture model: one membership purchase per person when active membership is needed
-- Guardian must be payer for youth: yes
-- Adult payer must be participant: no
+The canonical plan, policy and billing calculations live in
+`functions/src/membershipPlans.ts`; `src/lib/membershipPlans.ts` is the frontend
+mirror and a parity test holds the two copies together.
 
-### Membership policy
-- Cancellation notice: 2 weeks (user has approved this text/flow)
-- No cooling-off exception was already approved in policy setup
-- Cancel-at-period-end: no
-- Refund policy: “Payments are non-refundable except where required by law”
-- Pause allowed: no
-- Past-due grace period: 3 days
-- Full refund/dispute revokes access: no
-- Dispute policy approved:
-  - open dispute = suspend access
-  - dispute won = restore access
-  - dispute lost or payment fully refunded = revoke access
+The new Functions surface, none deployed, is:
 
-### Existing-member behavior
-- Existing approved AlphaWOD users remain grandfathered: yes
-- Existing account should log in and claim purchase: yes
-- Block duplicate active subscriptions: yes
-- Admins and SGPT staff retain access independently: yes
-- `alphaWodAccess` independent admin/SGPT behavior should remain intact
+- seven callables: `createMembershipCheckoutSession`,
+  `createCustomerPortalSession`, `getMyMemberships`,
+  `requestMembershipCancellation`, `claimMembership`, `listMemberships`, and
+  `linkMembershipParticipant`;
+- one public HTTP endpoint: `stripeWebhook`;
+- four scheduled workers: `recoverStripeEvents`,
+  `recoverMembershipCancellations`, `reconcilePastDueMemberships`, and
+  `retryMembershipConfirmations`.
 
-### Legal/UX
-- Non-adult post-purchase success message approved:
-  - “Payment confirmed. Zero Alpha Fitness will contact you by email to arrange onboarding and your first session. Questions: support@zeroalphafitness.co.uk.”
-- Typed-name electronic signatures: yes
-- Customer portal enabled: yes
+The seven new server-only Firestore collections are:
 
-### Company/legal identity
-- Trading/business name: ZERO ALPHA FITNESS LTD
-- Company number: 15978998
-- Trading/contact address: Unit 3, Felinfoel Business Hub, Llanelli, SA14 8BE
-- Support email: support@zeroalphafitness.co.uk
-- Confirmation sender: hello@zeroalphafitness.co.uk
+- `memberships`;
+- `membershipIntents`;
+- `membershipCheckoutLocks`;
+- `membershipEntitlementOwners`;
+- `stripeEvents`;
+- `membershipEmailOutbox`;
+- `membershipAudit`.
 
-### Proration (explicit request)
-- User can join mid-cycle (e.g. join on 8th), pay a prorated amount for remaining days in current month, then start regular monthly billing on 1st of following month.
+Every one is denied to clients in `firestore.rules`. The memberships
+reconciler also requires the composite index in `firestore.indexes.json` on
+`state` and `nextReconcileAt`.
 
-## 3) Non-goals for this phase
+The current billing schema version 1 is acceptable only because none of this
+surface has been deployed and first rollout assumes all seven collections are
+empty. Release preflight must prove that assumption. Existing billing documents
+mean stop and design a version bump/migration/backfill; this implementation is
+not a compatibility layer over unknown schema-v1 data.
 
-- Rework core Phase 0 security/auth model
-- Rebuild the waiver process
-- Change existing admin route protections
+The routes are public catalogue `/memberships`, public checkout
+`/memberships/checkout/:planKey`, public return/claim
+`/memberships/success`, signed-in billing management `/account/membership`, and
+admin operations `/admin/memberships`.
 
-Keep this constrained to public membership purchase + Stripe Billing + membership state integration.
+## 3) Money, uniqueness and entitlement invariants
 
-## 4) Phase 1 implementation plan
+Checkout creates deterministic participant locks and, for a signed-in
+Adult Unlimited payer, an AlphaWOD payer lock before calling Stripe. A local
+lock expiry timestamp is never enough to make a replacement sale safe. The
+backend retrieves the Checkout Session and releases the lock only after Stripe
+has reached a terminal expired/failed state. Paid, asynchronous-payment,
+orphaned and uncertain sessions stay blocked for webhook or manual recovery.
+Before a new lock is taken, the configured Stripe Price/Product is retrieved and
+matched to the exact plan name, amount, GBP currency, monthly interval, active
+state and key mode. The validated Price id is frozen on the intent. Paid
+fulfilment also binds the signed Session, frozen intent, Subscription metadata,
+Customer, billing anchor, quantity and sole Price before creating a membership.
+A terminal Checkout event can release locks only after its Session id, mode and
+plan are atomically bound to that same intent. Every later convergence
+revalidates the immutable subscription contract; drift restricts access and is
+staff-visible, but heals when Stripe is safely restored.
 
-### A. Product and pricing mapping (Stripe)
-1. Use sandbox/production CSVs currently in Downloads:
-   - `/Users/avarhysthomas/Downloads/prices.csv`
-   - `/Users/avarhysthomas/Downloads/products.csv`
-2. Normalize and confirm the exact mapping per public plan:
-   - commercial
-   - youth: youngstars
-   - youth: teenstars
-3. Store plan-to-price IDs in config/env (env vars or server config), never hardcode IDs in UI.
-4. Confirm prices are tax-inclusive and VAT handling disabled as requested.
+Final AlphaWOD ownership is also recorded in a deterministic
+`membershipEntitlementOwners` document. Claim, fulfilment and admin linking
+acquire that owner in their Firestore transaction, preventing two concurrent
+paths from assigning blocking AlphaWOD memberships to one user. The same record
+is retained as an `active` or `released` generation tombstone. An ended
+membership releases only its own active generation, so a delayed webhook cannot
+replay its old entitlement over a replacement membership or later manual grant.
+If a target profile is missing or unsafe to project, the ending path still
+releases the owner and sends the membership to audited manual review instead of
+leaving a permanent ownership lock or mutating that profile.
 
-### B. Membership selection page
-1. Create public page route, e.g. `/memberships`.
-2. Show plan cards and age-based youth qualification guard:
-   - if under 12, route to youngstars
-   - 12+ youth route to teenstars
-   - Adult route to commercial
-3. Enforce “guardian pays” for youth before checkout creation.
-4. Add post-checkout success path for non-adults with the approved message.
+`linkMembershipParticipant` is an admin-only, one-shot operation. Linking the
+same target again is idempotent; attempting to replace an existing target is
+rejected until there is a separate audited transfer and entitlement-restoration
+workflow. A successful link acquires durable ownership, applies access
+immediately and writes the audit fields.
 
-### C. Checkout/session creation (backend)
-1. Add/extend callable (Cloud Function callable) for checkout session creation:
-   - Inputs: authenticated user id, selected plan key, requested age, guardian details, maybe source tag
-   - Validate auth + account state + policy eligibility + duplicate active-subscription block
-2. Create Stripe Checkout Session for subscription or payment + subscription schedule strategy that supports the requested proration:
-   - immediate prorata charge for remainder of month
-   - transition to recurring cycle on next 1st
-3. Return `sessionUrl` to UI and redirect.
+The browser's resumable checkout attempt is scoped to its complete context. It
+stores only an opaque attempt id and request hash in `sessionStorage`, not raw
+participant or signature fields. The hash includes the payer uid or anonymous
+state, checkout input and the current `CHECKOUT_DOCUMENTS` versions, so an auth
+change, account switch or document-version change rotates the attempt.
 
-### D. Proration model detail (recommendation)
-Preferred minimal-risk approach:
-1. Compute `trial_end` = first of next month
-2. Add immediate one-time proration invoice item for remaining-days cost
-3. Start recurring phase at first-of-month boundary
+The success page is also session-scoped: it only confirms a membership whose
+subscription id came back from claiming that Checkout Session **with the
+separate browser-held checkout-attempt verifier**, never an older membership on
+the account. The Stripe id alone is not a bearer credential. The pending pair is
+held per tab for no more than 24 hours, the session id is removed from the query
+string/history immediately after capture, and neither is acted on until Auth
+loading resolves. The confirmation email links directly to verified-email
+recovery, and an already-signed-in unverified buyer can resend verification from
+the membership page. The exact membership's current state and actual entitlement
+projection control the return-page copy, so suspended, revoked, ended or
+unapplied access is never described as active. Billing management opens a portal
+for a selected subscription only after the backend verifies that membership's
+payer and Stripe customer; it is not an arbitrary account-level portal lookup.
+The portal configuration is retrieved on every open and must keep both Stripe
+cancellation and subscription switching disabled.
 
-Alternatives are possible but ensure:
-- user charged now for partial period
-- first recurring charge aligns to 1st-of-month, not signup day
+Cancellation freezes its server receipt time and the exact dates shown to the
+member before calling Stripe. A changed preview is rejected for review; an
+existing earlier Stripe date is never lengthened; and revoked app access does
+not block the payer from stopping active billing. `recoverMembershipCancellations`
+runs every five minutes with a ten-minute lease, the original Stripe idempotency
+key and backoff, so a process crash or outage cannot discard a received request.
+Exhausted or malformed requests enter audited manual review and are visible to
+the member and in the admin attention view. A confirmed schedule that later
+disappears or moves later in Stripe is withdrawn from the UI and the same frozen
+request is automatically reasserted under a new repair generation.
+If the promised date has already passed, recovery stops the active Stripe
+subscription immediately and retains audited manual-review evidence for later
+charges and any required refund.
 
-### E. Subscription lifecycle webhooks
-1. Handle these events:
-   - `checkout.session.completed`
-   - `customer.subscription.created` / `updated` / `deleted`
-   - `invoice.paid` / `payment_failed`
-   - `customer.subscription.trial_will_end` (if using trial anchor approach)
-2. On successful payment:
-   - set user entitlement state to active/stripe and record source
-   - store Stripe IDs and renewal metadata on user doc (server-owned)
-3. On failed payment/cancel/dispute states:
-   - apply restricted/disabled outcomes per policy
-   - preserve audit logs for admin review
+## 4) Authoritative Stripe recovery
 
-### F. Cancellation and user self-service
-1. Implement cancellation endpoint/flow with 14-day effective notice semantics (exactly as approved), including edge behavior for mid-month cutovers.
-2. Add Customer Portal links for payment method updates and subscription actions (as approved).
-3. Enforce “cancel-at-period-end: no” behavior if that means immediate request handling vs delayed effective date per policy.
+`stripeWebhook` verifies the raw-body signature before writing or processing an
+event. `stripeEvents` is the durable ledger: an event gets a ten-minute worker
+lease, retry backoff, and a terminal processed or dead-letter state. Failed or
+abandoned events are reclaimed every five minutes by `recoverStripeEvents`,
+which retrieves the event again from Stripe before using the same handler.
 
-### G. Duplicate and entitlement safeguards
-1. Before creating Checkout session or portal session, re-check current user entitlement and active subscriptions.
-2. If active duplicate detected, block with approved messaging.
-3. Continue using server-owned `users` profile fields only; do not trust client writes.
+Membership lifecycle events never apply the event's subscription snapshot as
+truth. A short per-membership convergence lease serialises writers, after which
+the owner retrieves the current subscription from Stripe and commits only while
+it still holds that lease. This prevents delayed or out-of-order webhook events
+from overwriting newer state.
 
-### H. Admin/operations controls
-1. Add minimal admin UI to inspect active/past subscriptions and override entitlement if needed.
-2. Keep claim/profile updates centralized through callable(s), aligned with existing authz checks.
-3. Add admin view for disputed/failures if not already available.
+Disputes are tracked by individual Stripe dispute ids. Closing one dispute does
+not clear another open dispute. `accessRevoked` is sticky: a lost dispute or full
+refund cannot be undone by a delayed invoice or subscription event.
 
-## 5) Phase 1 acceptance criteria
+Stripe may send subscription, invoice, dispute or refund events before Checkout
+has fulfilled locally. If the authoritative subscription carries this app's
+intent metadata but the membership does not yet exist, processing fails
+deliberately so the event remains retryable. Checkout fulfilment performs its own
+authoritative convergence, and the recovery worker can then replay the earlier
+event. Unrelated Stripe objects are ignored.
 
-- Public page exists and shows available plans
-- User can complete checkout from each approved plan path
-- Mid-cycle membership charges prorated correctly and switches to first-of-month recurring billing
-- Refund/dispute and past-due behavior follows approved policy
-- Cancellation respects 14-day notice and 2-week window handling
-- Duplicate active memberships are blocked
-- Youth rules enforce ages + guardian payer requirement
-- Entitlement unlock/lock updates reliably from Stripe state changes
-- Customer Portal available and works for authenticated members
-- No auth-sensitive writes are client-trusted
+Checkout fulfilment records `contractMadeAt` from the verified Stripe event's
+`created` timestamp and derives `coolingOffEndsAt` from that same value. The
+cooling-off window therefore does not drift with webhook delivery or worker
+retry time.
 
-## 6) Useful files to reference first
+Past-due grace is not webhook-only. The earliest unpaid time, exact London-date
+grace deadline and `nextReconcileAt` are persisted. Every 15 minutes,
+`reconcilePastDueMemberships` queries due `past_due_grace` and
+`past_due_suspended` rows using the `state`/`nextReconcileAt` index and retrieves
+the current subscription from Stripe. It suspends debt after grace and also
+keeps checking suspended memberships so a recovered payment can restore access
+without a webhook.
 
-- Frontend: [src/context/AuthContext.tsx](/Users/avarhysthomas/Desktop/Zero Alpha Fitness/AlphaFIT/AlphaWOD/src/context/AuthContext.tsx)
-- Functions auth/claims: [functions/src/authz.ts](/Users/avarhysthomas/Desktop/Zero Alpha Fitness/AlphaFIT/AlphaWOD/functions/src/authz.ts)
-- Stripe/Callable layer: [functions/src/index.ts](/Users/avarhysthomas/Desktop/Zero Alpha Fitness/AlphaFIT/AlphaWOD/functions/src/index.ts)
-- Rules: [firestore.rules](/Users/avarhysthomas/Desktop/Zero Alpha Fitness/AlphaFIT/AlphaWOD/firestore.rules)
-- Migration runbook: [docs/security/phase-0-rollout.md](/Users/avarhysthomas/Desktop/Zero Alpha Fitness/AlphaFIT/AlphaWOD/docs/security/phase-0-rollout.md)
+## 5) Durable confirmation email
 
-## 7) Notes for the next model
+Checkout fulfilment atomically creates the membership and a frozen
+`membershipEmailOutbox` record. Its purchase summary, amount actually returned
+by Stripe, acceptance version ids, typed signature and Resend idempotency key are
+created once; webhook replays cannot rebuild or alter them. Email failure never
+rolls back a paid membership.
 
-You can start Phase 1 assuming this is accepted business data and policy setup. Focus strictly on public purchase/checkout and entitlement effects.
+`retryMembershipConfirmations` runs every five minutes. Each email gets a
+ten-minute worker lease, transient retry with backoff, and a 20-second Resend
+request timeout. The adapter reads Resend's typed provider error name as well as
+its HTTP status:
 
-If anything changes (for example, if legal wants the cancellation wording or proration model adjusted), keep policy text and Stripe configuration in one central constants file so both UI and backend share it.
+- permanent request errors go to `dead_letter`;
+- uncertain/transient errors remain retryable;
+- systemic authentication, validation, quota and rate-limit failures stop the
+  remainder of that worker batch so one provider/configuration fault does not
+  consume every row's attempts;
+- unresolved delivery reaches `manual_review` after 23 hours, one hour inside
+  Resend's 24-hour idempotency window.
+
+Terminal `dead_letter` and `manual_review` paths emit a critical log and a
+`confirmation_email_terminal` entry in `membershipAudit`. Status, latest error
+and provider message id are projected onto the membership and shown to admins;
+the admin attention filter includes terminal confirmation failures.
+
+The current email is not yet the complete durable contract copy: it lists
+document version ids but does not include or attach the immutable approved
+document contents. Before launch, the frozen outbox/confirmation must carry the
+actual accepted documents (with immutable identity/hash evidence), not merely
+identifiers or links whose contents can later change.
+
+## 6) Verification inventory and limits
+
+Run the release checks from the repository root:
+
+```sh
+CI=true npm test -- --watchAll=false
+npm run build
+npm test --prefix functions
+npm run lint --prefix functions
+npm test --prefix rules-tests
+npm run test:compat --prefix rules-tests
+npm run test:emulator --prefix functions
+```
+
+The Phase 1-specific test inventory is:
+
+- frontend catalogue/parity tests:
+  `src/lib/membershipPlans.test.ts` and
+  `src/lib/membershipPlans.parity.test.ts`;
+- frontend service, checkout, success, management and auth-loading tests under
+  `src/features/memberships/` and `src/features/auth/pages/`;
+- pure Functions plan/policy tests in
+  `functions/test/membershipPlans.test.js`;
+- callable and billing-handler emulator coverage in
+  `functions/test-emulator/membership.test.js`, with `fakeStripe.js` at the
+  network boundary and a test confirmation sender;
+- Firestore/Storage and Phase 0 compatibility coverage in
+  `rules-tests/rules.test.mjs` and `rules-tests/compat.rules.test.mjs`.
+
+Current focused coverage includes terminal-only checkout-lock reclamation;
+active/released entitlement-owner generations and missing-profile release/manual
+review; concurrent one-shot admin linking; membership-specific portal ownership;
+runtime Price/Product matching and unsafe portal-configuration refusal;
+automatic collection with no pause/trial drift; automatic-payment grace from
+the signed failure event rather than invoice creation;
+authoritative dispute re-retrieval with sticky revocation; pre-fulfil event
+retry; grace/suspended reconciliation; `contractMadeAt` from Stripe
+`event.created`; checkout-attempt payer scoping and no-PII storage; per-tab
+24-hour claim expiry, success-query stripping and session-scoped confirmation;
+auth-loading behaviour; immutable email payload/idempotency retry; and
+orphan-outbox manual review.
+It also covers terminal Session-to-intent binding, frozen Price rotation,
+healable subscription-contract drift restriction, overdue immediate
+cancellation/refund review, current-state success copy and verified-email resend
+recovery, plus refusal of an ordinary renewal cancellation while the statutory
+cooling-off window is still open.
+
+Before release, add explicit focused cases for convergence-lease contention;
+two simultaneous dispute ids; document-version attempt rotation; confirmation
+ten-minute lease expiry; typed permanent/systemic Resend classification and the
+batch circuit; the 20-second timeout; the 23-hour manual-review boundary; and
+terminal audit/admin projection. Those behaviours are implemented and described
+above, but the present test inventory does not prove them directly.
+
+Do not describe these suites as a real provider end-to-end test. They do not
+open hosted Stripe Checkout, settle a Stripe test-mode payment, receive a
+Stripe-delivered webhook, exercise the real Events API, or send a real Resend
+email. Those seams require a controlled test-mode round trip only after both
+checkout gates can be lawfully opened.
+
+## 7) Release work still required
+
+No item below authorises deployment or opening either purchase gate. Complete
+the applicable legal, abuse and data-lifecycle design before provider testing,
+then follow this order:
+
+1. Replace the draft labels with approved immutable document content, stable
+   URLs and hashes. Render and persist the exact per-plan/per-role set so the
+   record never falsely asserts adult-participant or guardian acceptance. Make
+   the frozen confirmation carry or attach that actual content, not only
+   version ids. Freeze the full validated commercial plan snapshot on the
+   intent/membership/outbox as well; a Price id alone cannot keep an open
+   Session's name and amount aligned with a later code-catalogue deployment.
+   Build the statutory cooling-off route: the current ordinary cancellation
+   path fails closed inside that window and requires staffed immediate-stop,
+   proportionate-service/refund review and durable acknowledgement.
+2. Design and verify controls for anonymous checkout: appropriate App Check,
+   per-source/attempt/participant rate limits, bot/challenge protection,
+   Stripe-session and budget monitoring/alerts, and an incident runbook. App
+   Check alone is not evidence that a buyer is human.
+3. Approve a lawful retention and cleanup policy for terminal intents and
+   redundant outbox PII. Automated cleanup must wait for authoritative Stripe
+   settlement and checkout-lock release, preserve required final evidence, and
+   route uncertain/orphaned records to monitoring/manual review rather than
+   deleting the lock blindly.
+4. Create an isolated staging Firebase project/data plane and app origin, wired
+   only to Stripe test-mode catalogue, portal and webhook configuration. Add a
+   runtime environment/mode guard, including Stripe `livemode` consistency, so
+   test/live credentials and data cannot be mixed. The price-prefix and runtime
+   Price checks are not the full project/environment guard.
+5. Make checkout duplicate checks, claim, and admin participant linking
+   authoritatively converge any relevant existing Stripe subscriptions before
+   their final eligibility transaction, failing closed on provider uncertainty.
+   Also integrate ordinary admin entitlement changes with the active
+   `membershipEntitlementOwners` generation so a later cancellation cannot
+   erase a newer manual decision. Add an idempotent projection-recovery worker
+   or audited repair action; pending/failed projection is visible but does not
+   heal itself after a crash. Add an audited staff intake route for email
+   cancellation requests that freezes receipt time/outcome and enters the same
+   recovery state machine; current copy requires written staff confirmation
+   because no automatic inbound-email intake exists. Add a durable idempotent
+   cancellation-acknowledgement outbox for the online path; the purchase email
+   is not a receipt for a later cancellation request. Disable every
+   Stripe-hosted portal login page that could expose an unsafe/default portal
+   configuration, since runtime checks cover only sessions created by this app.
+6. In that isolated environment, configure the Resend test sender/recipient and
+   run a real hosted Checkout payment, Stripe-delivered webhook and Events
+   recovery plus an actual Resend delivery. The current emulator suite is not
+   this end-to-end proof.
+7. Prepare and verify the separate live Stripe catalogue, prices, locked-down
+   Customer Portal, webhook subscriptions/secrets and verified Resend domain,
+   without enabling purchase.
+8. Prove all seven production billing collections are empty before accepting
+   schema version 1. If they are not, stop for a migration/version plan. Then
+   enter the Phase 0 maintenance, callable-transport and identity-admin freezes
+   with the required backups and IAM restoration manifest.
+9. Deploy the deny-all rules and `state`/`nextReconcileAt` index, then
+   selectively deploy the seven callables, public webhook and four scheduled
+   workers. Create and immediately re-block new callables; keep the webhook
+   public and scheduler IAM separate. Do not use a blanket Functions deploy.
+   The `functions` package's blanket deploy script is deliberately blocked; use
+   the selective manifest with the Phase 0-pinned Firebase CLI 15.5.1.
+10. After final rules and backend contracts are ready, deploy the compatible
+   frontend through the confirmed Vercel production workflow. Only then restore
+   the exact reviewed service-level client-callable transport for the seven
+   callables—never a project-wide invoker grant—and verify IAM, schedules and
+   SPA routing.
+11. Smoke-test every callable through the real Firebase client transport. The
+    anonymous checkout must reach the handler and fail at the closed gate rather
+    than IAM/CORS, while signed-in, ownership and admin paths must enforce their
+    handler boundaries. Record final release results and counts; only after all
+    blockers and provider checks pass may the runtime purchase gate be
+    considered.
+
+Cooling-off self-service and its durable acknowledgement remain launch blockers;
+inside-window requests are failed closed to staffed review rather than passed
+through the ordinary renewal-notice calculation.
+Promotion codes, advance price-change notices, automated youth onboarding, and
+an audited linked-participant transfer workflow are deliberately not built.
+
+## 8) Start here
+
+- Current runbook: `docs/billing/phase-1-rollout.md`
+- Billing implementation: `functions/src/membership.ts`
+- Function exports: `functions/src/index.ts`
+- Policy/catalogue: `functions/src/membershipPlans.ts`
+- Frontend membership service and pages: `src/features/memberships/`
+- Rules and index: `firestore.rules`, `firestore.indexes.json`
+- Phase 0 deployment constraints: `docs/security/phase-0-rollout.md`

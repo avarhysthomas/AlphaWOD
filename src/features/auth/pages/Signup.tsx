@@ -1,19 +1,27 @@
 import React, { useState } from "react";
 import { auth } from "../../../firebase";
-import { createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
+import {
+  createUserWithEmailAndPassword,
+  sendEmailVerification,
+  updateProfile,
+} from "firebase/auth";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import AuthShell from "../components/AuthShell";
 import { bootstrapUserProfile } from "../services/account";
+import { readPendingClaim } from "../../memberships/services/membership";
 
 const Signup = () => {
   const [searchParams] = useSearchParams();
   const invitedEmail = searchParams.get("email")?.trim().toLowerCase() ?? "";
+  const membershipRecoveryRequested = searchParams.get("membership") === "1";
   const [email, setEmail] = useState(invitedEmail);
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+  const hasPendingMembershipClaim =
+    readPendingClaim() !== null || membershipRecoveryRequested;
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -24,8 +32,13 @@ const Signup = () => {
       const credential = await createUserWithEmailAndPassword(auth, email, password);
       await updateProfile(credential.user, { displayName: name.trim() });
       await bootstrapUserProfile(name);
+      if (membershipRecoveryRequested) {
+        await sendEmailVerification(credential.user, {
+          url: `${window.location.origin}/account/membership?claim=email`,
+        });
+      }
 
-      navigate("/pending-approval");
+      navigate(hasPendingMembershipClaim ? "/account/membership" : "/pending-approval");
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -35,18 +48,24 @@ const Signup = () => {
 
   return (
     <AuthShell
-      eyebrow="Request Access"
-      title="Welcome to Zero Alpha."
-      description="New accounts stay in review until an admin approves access."
+      eyebrow={hasPendingMembershipClaim ? "Claim Membership" : "Request Access"}
+      title={hasPendingMembershipClaim ? "Finish setting up your membership." : "Welcome to Zero Alpha."}
+      description={
+        hasPendingMembershipClaim
+          ? "Create your account and we’ll securely link the membership you just purchased."
+          : "New accounts stay in review until an admin approves access."
+      }
       footerPrompt="Already have an account?"
       footerLabel="Log in"
-      footerTo="/"
+      footerTo={membershipRecoveryRequested ? "/?membership=1" : "/"}
     >
       <form onSubmit={handleSignup} className="space-y-5">
         <div>
           <h2 className="text-2xl font-heading tracking-tight text-white">Join Zero Alpha</h2>
           <p className="mt-2 text-sm leading-6 text-neutral-400">
-            New accounts stay in review until an admin approves access.
+            {hasPendingMembershipClaim
+              ? "Use this account to manage your membership and any access included with it."
+              : "New accounts stay in review until an admin approves access."}
           </p>
         </div>
 
@@ -103,7 +122,9 @@ const Signup = () => {
         </label>
 
         <div className="rounded-2xl border border-amber-500/15 bg-amber-500/5 px-4 py-3 text-sm leading-6 text-amber-100/90">
-          After sign-up, you’ll land on a waiting screen until an admin approves your account.
+          {hasPendingMembershipClaim
+            ? "After sign-up, we’ll link your purchase and show its current confirmation status."
+            : "After sign-up, you’ll land on a waiting screen until an admin approves your account."}
         </div>
 
         <button

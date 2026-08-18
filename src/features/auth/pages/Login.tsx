@@ -1,8 +1,9 @@
 import React, { useState } from "react";
-import { signInWithEmailAndPassword } from "firebase/auth";
+import { sendEmailVerification, signInWithEmailAndPassword } from "firebase/auth";
 import { auth } from "../../../firebaseApp";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import AuthShell from "../components/AuthShell";
+import { readPendingClaim } from "../../memberships/services/membership";
 
 const Login = () => {
   const [email, setEmail] = useState("");
@@ -10,6 +11,17 @@ const Login = () => {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const from = (location.state as {
+    from?: {pathname?: unknown; search?: unknown; hash?: unknown};
+  } | null)?.from;
+  const safeReturnPath = typeof from?.pathname === "string" &&
+      from.pathname.startsWith("/") && !from.pathname.startsWith("//") ?
+    `${from.pathname}${typeof from.search === "string" ? from.search : ""}` +
+      `${typeof from.hash === "string" ? from.hash : ""}` : null;
+  const membershipRecoveryRequested = searchParams.get("membership") === "1" ||
+    safeReturnPath?.startsWith("/account/membership?claim=email") === true;
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -17,8 +29,19 @@ const Login = () => {
     try {
       setLoading(true);
       setError("");
-      await signInWithEmailAndPassword(auth, email, password);
-      navigate("/schedule", { replace: true });
+      const credential = await signInWithEmailAndPassword(auth, email, password);
+      if (membershipRecoveryRequested && !credential.user.emailVerified) {
+        await sendEmailVerification(credential.user, {
+          url: `${window.location.origin}/account/membership?claim=email`,
+        });
+      }
+      navigate(
+        safeReturnPath ?? (readPendingClaim() || membershipRecoveryRequested ?
+          "/account/membership" : "/schedule"),
+        {
+          replace: true,
+        }
+      );
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -33,7 +56,7 @@ const Login = () => {
       description="Sign in to Zero Alpha to manage classes, training progress, leaderboards, and your profile."
       footerPrompt="Don’t have an account yet?"
       footerLabel="Create one"
-      footerTo="/signup"
+      footerTo={membershipRecoveryRequested ? "/signup?membership=1" : "/signup"}
     >
       <form onSubmit={handleLogin} className="space-y-5">
         <div>

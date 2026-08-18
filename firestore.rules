@@ -228,9 +228,28 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Deterministic, expiring uniqueness reservations used while Stripe
+    // Checkout is in flight. Client access would let an attacker suppress or
+    // bypass the duplicate-membership guard.
+    match /membershipCheckoutLocks/{lockId} {
+      allow read, write: if false;
+    }
+
+    // One durable owner per AlphaWOD entitlement target. Claims, fulfilment,
+    // and admin links contend on this server-owned record atomically.
+    match /membershipEntitlementOwners/{ownerId} {
+      allow read, write: if false;
+    }
+
     // Webhook idempotency ledger. A client write here could suppress or replay
     // a fulfilment event.
     match /stripeEvents/{eventId} {
+      allow read, write: if false;
+    }
+
+    // Immutable confirmation payloads and retry state. Exposing this would
+    // leak billing email/details and let a client suppress the durable copy.
+    match /membershipEmailOutbox/{messageId} {
       allow read, write: if false;
     }
 

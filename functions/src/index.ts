@@ -36,6 +36,11 @@ import {
   buildClaimMembership,
   buildListMemberships,
   buildLinkMembershipParticipant,
+  buildRecoverMembershipCancellations,
+  buildRecoverStripeEvents,
+  buildReconcilePastDueMemberships,
+  buildRequestMembershipCancellation,
+  buildRetryMembershipConfirmations,
   buildStripeWebhook,
 } from "./membership";
 import {
@@ -2231,10 +2236,23 @@ export {
   createMembershipCheckoutSession,
   createCustomerPortalSession,
   getMyMemberships,
-  requestMembershipCancellation,
 } from "./membership";
 
 export const stripeWebhook = buildStripeWebhook(convergeUserDerivedAccess);
+export const recoverStripeEvents = buildRecoverStripeEvents(convergeUserDerivedAccess);
+export const recoverMembershipCancellations = buildRecoverMembershipCancellations(
+  convergeUserDerivedAccess
+);
+export const reconcilePastDueMemberships = buildReconcilePastDueMemberships(
+  convergeUserDerivedAccess
+);
+export const retryMembershipConfirmations = buildRetryMembershipConfirmations();
+export const requestMembershipCancellation = buildRequestMembershipCancellation(
+  convergeUserDerivedAccess
+);
 export const claimMembership = buildClaimMembership(convergeUserDerivedAccess);
 export const listMemberships = buildListMemberships(requireAdmin);
-export const linkMembershipParticipant = buildLinkMembershipParticipant(requireAdmin);
+export const linkMembershipParticipant = buildLinkMembershipParticipant(
+  requireAdmin,
+  convergeUserDerivedAccess
+);

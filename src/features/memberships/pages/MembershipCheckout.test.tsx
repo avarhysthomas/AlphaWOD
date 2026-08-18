@@ -7,10 +7,16 @@ const mockCreateCheckout = jest.fn();
 let mockPlanKey = "adult_unlimited";
 
 jest.mock("../services/membership", () => ({
+  clearCheckoutAttempt: jest.fn(),
+  resolveCheckoutAttempt: jest.fn(async () => ({
+    id: "attempt_test",
+    fingerprint: "fingerprint_test",
+  })),
   createMembershipCheckoutSession: (...args: unknown[]) => mockCreateCheckout(...args),
 }));
 
 let mockSignedIn = true;
+let mockAuthLoading = false;
 
 jest.mock("../../../context/AuthContext", () => ({
   useAuth: () =>
@@ -18,10 +24,15 @@ jest.mock("../../../context/AuthContext", () => ({
       ? {
           user: { uid: "payer-1", displayName: "Payer One", email: "payer@example.com" },
           appUser: { uid: "payer-1", name: "Payer One" },
-          loading: false,
+          loading: mockAuthLoading,
           refreshAppUser: jest.fn(),
         }
-      : { user: null, appUser: null, loading: false, refreshAppUser: jest.fn() },
+      : {
+          user: null,
+          appUser: null,
+          loading: mockAuthLoading,
+          refreshAppUser: jest.fn(),
+        },
 }));
 
 // react-router-dom v7 is ESM-only and CRA's jest can't resolve it. The page
@@ -46,6 +57,7 @@ function renderCheckout(planKey: string) {
 beforeEach(() => {
   mockCreateCheckout.mockReset();
   mockSignedIn = true;
+  mockAuthLoading = false;
 });
 
 describe("MembershipCheckout", () => {
@@ -63,6 +75,13 @@ describe("MembershipCheckout", () => {
     await userEvent.click(screen.getByRole("button", { name: /Subscribe and pay/i }));
 
     expect(mockCreateCheckout).not.toHaveBeenCalled();
+  });
+
+  it("waits for Auth to resolve before fixing the checkout identity", () => {
+    mockAuthLoading = true;
+    renderCheckout("adult_unlimited");
+
+    expect(screen.getByRole("button", { name: /Checking account/i })).toBeDisabled();
   });
 
   it("asks a youth purchase for guardian details and authority", () => {

@@ -467,7 +467,10 @@ describe("billing collections are server-only", () => {
   const billingPaths = [
     "memberships/sub_test",
     "membershipIntents/intent_test",
+    "membershipCheckoutLocks/participant_test",
+    "membershipEntitlementOwners/member_test",
     "stripeEvents/evt_test",
+    "membershipEmailOutbox/sub_test",
     "membershipAudit/audit_test",
   ];
 

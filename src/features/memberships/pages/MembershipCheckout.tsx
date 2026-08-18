@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import { Link, Navigate, useParams } from "react-router-dom";
 import { useAuth } from "../../../context/AuthContext";
 import {
@@ -12,7 +12,13 @@ import {
   resolveDisplayAge,
   resolveYouthPlanForAge,
 } from "../../../lib/membershipPlans";
-import { createMembershipCheckoutSession } from "../services/membership";
+import {
+  clearCheckoutAttempt,
+  createMembershipCheckoutSession,
+  resolveCheckoutAttempt,
+  type CheckoutAttempt,
+  type CheckoutDetails,
+} from "../services/membership";
 
 const CARD =
   "rounded-[28px] border border-white/10 bg-[#151311] p-7 shadow-[0_26px_80px_rgba(0,0,0,0.42)]";
@@ -23,7 +29,7 @@ const LABEL = "block text-[11px] font-semibold uppercase tracking-[0.2em] text-w
 
 export default function MembershipCheckout() {
   const { planKey } = useParams<{ planKey: string }>();
-  const { user, appUser } = useAuth();
+  const { user, appUser, loading: authLoading } = useAuth();
 
   const [participantFullName, setParticipantFullName] = useState("");
   const [participantDateOfBirth, setParticipantDateOfBirth] = useState("");
@@ -36,6 +42,7 @@ export default function MembershipCheckout() {
   const [signedName, setSignedName] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const checkoutAttempt = useRef<CheckoutAttempt | null>(null);
 
   const plan = isPlanKey(planKey) ? MEMBERSHIP_PLANS[planKey] : null;
   const isYouth = plan?.audience === "youth";
@@ -67,18 +74,21 @@ export default function MembershipCheckout() {
     !ageMismatch &&
     guardianReady &&
     acceptedDocuments &&
+    immediatePerformanceRequested &&
     typedSignature.length >= 2 &&
+    !authLoading &&
     !submitting;
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!canSubmit) return;
+    let submittedAttemptId: string | undefined;
 
     try {
       setSubmitting(true);
       setError("");
 
-      const result = await createMembershipCheckoutSession({
+      const checkoutDetails: CheckoutDetails = {
         planKey: plan.key,
         participantFullName: participantFullName.trim(),
         participantDateOfBirth,
@@ -93,6 +103,18 @@ export default function MembershipCheckout() {
               guardianConfirmsAuthority: true,
             }
           : {}),
+      };
+      const attempt = await resolveCheckoutAttempt(
+        checkoutDetails,
+        checkoutAttempt.current,
+        { payerUid: user?.uid ?? null }
+      );
+      checkoutAttempt.current = attempt;
+      submittedAttemptId = attempt.id;
+
+      const result = await createMembershipCheckoutSession({
+        checkoutAttemptId: attempt.id,
+        ...checkoutDetails,
       });
 
       if (!result.sessionUrl) {
@@ -100,6 +122,12 @@ export default function MembershipCheckout() {
       }
       window.location.assign(result.sessionUrl);
     } catch (submitError: unknown) {
+      const code = (submitError as {code?: unknown} | null)?.code;
+      if (typeof code === "string" &&
+        (code.includes("deadline-exceeded") || code.includes("failed-precondition"))) {
+        clearCheckoutAttempt(submittedAttemptId);
+        checkoutAttempt.current = null;
+      }
       const message =
         submitError instanceof Error ? submitError.message : "Could not start checkout.";
       setError(message);
@@ -338,7 +366,9 @@ export default function MembershipCheckout() {
             disabled={!canSubmit}
             className="w-full rounded-2xl bg-white px-5 py-4 text-sm font-bold uppercase tracking-[0.14em] text-black transition disabled:cursor-not-allowed disabled:bg-white/25 disabled:text-white/45"
           >
-            {submitting ? "Starting checkout…" : "Subscribe and pay"}
+            {authLoading ?
+              "Checking account…" : submitting ?
+                "Starting checkout…" : "Subscribe and pay"}
           </button>
 
           <p className="text-center text-xs leading-6 text-white/40">

@@ -24,9 +24,10 @@
  */
 
 import {onCall, onRequest, HttpsError} from "firebase-functions/v2/https";
+import {onSchedule} from "firebase-functions/v2/scheduler";
 import {defineSecret, defineString} from "firebase-functions/params";
 import * as admin from "firebase-admin";
-import {createHash} from "crypto";
+import {createHash, randomUUID} from "crypto";
 import Stripe from "stripe";
 import {
   BILLING_POLICY,
@@ -35,6 +36,7 @@ import {
   formatBillingDate,
   formatPence,
   formatUnixBillingDate,
+  formatUnixBillingIsoDate,
   CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION,
   MEMBERSHIP_SCHEMA_VERSION,
   MembershipState,
@@ -52,6 +54,7 @@ import {
   resolveCoolingOffEnd,
   resolveEntitlementForMembership,
   resolveMembershipState,
+  resolvePastDueGraceEndMillis,
 } from "./membershipPlans";
 import {
   ACCESS_SCHEMA_VERSION,
@@ -99,8 +102,9 @@ export const MEMBERSHIP_SECRETS = [stripeSecretKey];
 export const MEMBERSHIP_WEBHOOK_SECRETS = [
   stripeSecretKey,
   stripeWebhookSecret,
-  resendApiKey,
 ];
+export const MEMBERSHIP_STRIPE_WORKER_SECRETS = [stripeSecretKey];
+export const MEMBERSHIP_EMAIL_WORKER_SECRETS = [resendApiKey];
 
 /**
  * Firestore and Stripe clients are resolved lazily. `admin.initializeApp()`
@@ -166,27 +170,43 @@ type GuardianRecord = {
   confirmedAuthority: true;
 };
 
-type AcceptanceRecord = {
+type CheckoutAcceptanceRecord = {
   signedName: string;
   documents: typeof CHECKOUT_DOCUMENTS;
   immediatePerformanceRequested: boolean;
-  coolingOffEndsAt: string;
   acceptedAt: admin.firestore.FieldValue | admin.firestore.Timestamp;
   userAgent: string;
 };
 
+type MembershipAcceptanceRecord = CheckoutAcceptanceRecord & {
+  /** Stripe event time at which the paid contract was formed. */
+  contractMadeAt: admin.firestore.Timestamp;
+  coolingOffEndsAt: string;
+};
+
 type MembershipIntentDoc = {
   schemaVersion: number;
+  /** Hash of the client-generated retry key; the raw key is never persisted. */
+  checkoutAttemptHash: string;
+  /** Binds one retry key to one immutable, normalised checkout request. */
+  requestFingerprint: string;
   /** Null until the buyer claims the purchase with an account. */
   payerUid: string | null;
   payerEmail: string | null;
   planKey: PlanKey;
+  /** Exact validated Price frozen for this attempt, even if config later rotates. */
+  stripePriceId: string;
   participant: ParticipantRecord;
   guardian: GuardianRecord | null;
-  acceptances: AcceptanceRecord;
-  checkoutSessionId: string;
-  status: "created" | "fulfilled" | "expired";
+  acceptances: CheckoutAcceptanceRecord;
+  checkoutSessionId: string | null;
+  checkoutSessionUrl: string | null;
+  status: "reserved" | "created" | "payment_pending" | "fulfilled" | "expired" | "failed";
   billingCycleAnchor: number;
+  firstFullChargeDate: string;
+  checkoutExpiresAt: number;
+  reservationExpiresAt: admin.firestore.Timestamp;
+  reservationLockIds: string[];
   createdAt: admin.firestore.FieldValue | admin.firestore.Timestamp;
 };
 
@@ -195,6 +215,8 @@ type MembershipDoc = {
   subscriptionId: string;
   stripeCustomerId: string;
   checkoutSessionId: string;
+  /** Hash of the browser-held one-time verifier for an anonymous claim. */
+  checkoutAttemptHash: string;
   /**
    * The account that owns this membership, or null while it is unclaimed.
    * A membership is bought before an account exists, so this is populated by
@@ -206,11 +228,12 @@ type MembershipDoc = {
   fulfilledAt: admin.firestore.FieldValue | admin.firestore.Timestamp | null;
   claimedAt: admin.firestore.FieldValue | admin.firestore.Timestamp | null;
   planKey: PlanKey;
+  stripePriceId: string;
   planName: string;
   grantsAlphaWodAccess: boolean;
   participant: ParticipantRecord;
   guardian: GuardianRecord | null;
-  acceptances: AcceptanceRecord;
+  acceptances: MembershipAcceptanceRecord;
   state: MembershipState;
   stripeStatus: string;
   entitlementTargetUid: string | null;
@@ -226,14 +249,72 @@ type MembershipDoc = {
   currentPeriodEnd: number | null;
   billingCycleAnchor: number;
   pastDueSince: number | null;
+  pastDueGraceEndsAt: admin.firestore.Timestamp | null;
+  nextReconcileAt?: admin.firestore.Timestamp | null;
+  /** Open Stripe dispute ids; the derived boolean remains for simple queries. */
+  openDisputeIds: string[];
   disputeOpen: boolean;
   accessRevoked: boolean;
+  providerContractStatus?: "verified" | "manual_review";
+  providerContractError?: string;
   cancelAt: number | null;
   cancellationRequestedAt: admin.firestore.Timestamp | admin.firestore.FieldValue | null;
   cancellationOutcome: ReturnType<typeof resolveCancellationOutcome> | null;
+  cancellationRequest?: {
+    id: string;
+    status: "pending" | "applied" | "manual_review";
+    receivedAt: admin.firestore.Timestamp;
+    /** Starts/resets when automatic application or a later drift repair begins. */
+    recoveryStartedAt?: admin.firestore.Timestamp;
+    outcome: ReturnType<typeof resolveCancellationOutcome>;
+    stripeCancelAt?: number;
+    attemptCount?: number;
+    repairGeneration?: number;
+    nextAttemptAt?: admin.firestore.Timestamp;
+    leaseToken?: string;
+    leaseExpiresAt?: admin.firestore.Timestamp;
+    lastError?: string;
+  };
+  entitlementProjectionStatus?: "applied" | "manual_review";
+  entitlementProjectionError?: string;
+  confirmationEmailStatus?: string;
+  confirmationEmailError?: string;
+  confirmationEmailProviderId?: string;
+  confirmationEmailSentAt?: admin.firestore.Timestamp | admin.firestore.FieldValue | null;
   createdAt: admin.firestore.FieldValue | admin.firestore.Timestamp;
   updatedAt: admin.firestore.FieldValue | admin.firestore.Timestamp;
 };
+
+type CancellationOutcome = ReturnType<typeof resolveCancellationOutcome>;
+
+/** Keeps stored customer-facing dates aligned with an earlier Stripe schedule. */
+function alignCancellationOutcome(
+  proposed: CancellationOutcome,
+  effectiveCancelAt: number
+): CancellationOutcome {
+  if (effectiveCancelAt === proposed.cancelAtUnixSeconds) return proposed;
+  const accessEndsOnDate = formatUnixBillingIsoDate(Math.max(0, effectiveCancelAt - 1));
+  return {
+    ...proposed,
+    cancelAtUnixSeconds: effectiveCancelAt,
+    // An earlier provider schedule does not necessarily remove the next
+    // payment. If access crosses the next billing day, that payment remains
+    // part of the frozen customer-facing outcome.
+    finalPaymentDate: accessEndsOnDate >= proposed.nextBillingDate ?
+      proposed.nextBillingDate : null,
+    accessEndsOnDate,
+  };
+}
+
+/** Future cancel_at, or the actual ended_at once Stripe has canceled it. */
+function authoritativeSubscriptionCancellationEnd(
+  subscription: Stripe.Subscription
+): number | null {
+  if (subscription.status === "canceled") {
+    return subscription.ended_at ?? subscription.cancel_at ?? null;
+  }
+  return subscription.cancel_at ?? null;
+}
 
 /** ---------------------------------------------------------------
  * Input validation
@@ -281,6 +362,74 @@ function participantKeyFor(fullName: string, dateOfBirth: string): string {
   return createHash("sha256")
     .update(`${fullName.trim().toLowerCase()}|${dateOfBirth}`)
     .digest("hex");
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+/**
+ * The client keeps this opaque attempt id stable while retrying one checkout.
+ * It is intentionally stricter than a general string because it also feeds a
+ * Stripe idempotency key. The hash, rather than the raw value, is persisted.
+ */
+function requireCheckoutAttemptId(value: unknown): string {
+  const attemptId = typeof value === "string" ? value.trim() : "";
+  if (attemptId.length < 8 || attemptId.length > 255 ||
+    !/^[A-Za-z0-9._:-]+$/.test(attemptId)) {
+    throw new HttpsError(
+      "invalid-argument",
+      "checkoutAttemptId must be an 8–255 character opaque identifier."
+    );
+  }
+  return attemptId;
+}
+
+type CheckoutFingerprintInput = {
+  payerUid: string | null;
+  planKey: PlanKey;
+  participant: ParticipantRecord;
+  guardian: GuardianRecord | null;
+  signedName: string;
+  immediatePerformanceRequested: boolean;
+};
+
+/** Prevents a stable attempt id being replayed with materially different data. */
+function checkoutRequestFingerprint(input: CheckoutFingerprintInput): string {
+  return sha256(JSON.stringify({
+    schemaVersion: MEMBERSHIP_SCHEMA_VERSION,
+    payerUid: input.payerUid,
+    planKey: input.planKey,
+    participant: {
+      fullName: input.participant.fullName,
+      dateOfBirth: input.participant.dateOfBirth,
+      isPayer: input.participant.isPayer,
+      participantKey: input.participant.participantKey,
+    },
+    guardian: input.guardian,
+    signedName: input.signedName,
+    immediatePerformanceRequested: input.immediatePerformanceRequested,
+    documents: CHECKOUT_DOCUMENTS,
+  }));
+}
+
+/**
+ * Stripe does not cache validation failures under an idempotency key because
+ * request execution never began. A validation response therefore proves that
+ * no Checkout Session was created for this attempt; connection/5xx failures
+ * remain ambiguous and deliberately keep their uniqueness locks.
+ */
+function isDefinitiveCheckoutCreateFailure(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as {
+    type?: unknown;
+    rawType?: unknown;
+  };
+  return candidate.type === "StripeInvalidRequestError" ||
+    candidate.rawType === "invalid_request_error" ||
+    candidate.type === "StripeAuthenticationError" ||
+    candidate.rawType === "authentication_error" ||
+    candidate.type === "StripePermissionError";
 }
 
 /**
@@ -332,6 +481,101 @@ function resolvePriceId(planKey: PlanKey): string {
   }
 
   return priceId;
+}
+
+/** Refuses a swapped, inactive, wrongly priced, or wrongly named Stripe Price. */
+async function assertStripePriceMatchesPlan(
+  client: Stripe,
+  priceId: string,
+  plan: ReturnType<typeof getPlan>
+): Promise<void> {
+  let price: Stripe.Price;
+  try {
+    price = await client.prices.retrieve(priceId, {expand: ["product"]});
+  } catch (error) {
+    console.error("Stripe membership price preflight failed", {planKey: plan.key, error});
+    if (isDefinitiveCheckoutCreateFailure(error)) {
+      throw new HttpsError(
+        "failed-precondition",
+        `The billing price for ${plan.name} is not available. Contact support before paying.`
+      );
+    }
+    // A transient provider outage must preserve the browser's stable attempt
+    // id. It may be the only way to recover a Session accepted immediately
+    // before a process/network failure.
+    throw new HttpsError(
+      "unavailable",
+      "Stripe is temporarily unavailable. Retry this same checkout attempt."
+    );
+  }
+
+  const product = typeof price.product === "object" && price.product &&
+      !("deleted" in price.product) ? price.product : null;
+  const expectedLiveMode = stripeSecretKey.value().startsWith("sk_live_");
+  const valid = price.active === true &&
+    price.livemode === expectedLiveMode &&
+    price.currency.toLowerCase() === plan.currency &&
+    price.unit_amount === plan.amountPence &&
+    price.type === "recurring" &&
+    price.recurring?.interval === "month" &&
+    price.recurring.interval_count === 1 &&
+    product?.active === true &&
+    product.name === plan.name;
+  if (!valid) {
+    console.error("CRITICAL_BILLING_PRICE_MISMATCH", {
+      planKey: plan.key,
+      priceId,
+      active: price.active,
+      livemode: price.livemode,
+      currency: price.currency,
+      unitAmount: price.unit_amount,
+      type: price.type,
+      interval: price.recurring?.interval,
+      intervalCount: price.recurring?.interval_count,
+      productName: product?.name ?? null,
+      productActive: product?.active ?? null,
+    });
+    throw new HttpsError(
+      "failed-precondition",
+      `The billing price for ${plan.name} does not match the approved catalogue.`
+    );
+  }
+}
+
+/** Prevents an operator-selected portal configuration bypassing cancellation policy. */
+async function assertPortalConfigurationIsLockedDown(
+  client: Stripe,
+  configurationId: string
+): Promise<void> {
+  let configuration: Stripe.BillingPortal.Configuration;
+  try {
+    configuration = await client.billingPortal.configurations.retrieve(configurationId);
+  } catch (error) {
+    console.error("Stripe portal configuration preflight failed", {
+      configurationId,
+      error,
+    });
+    if (isDefinitiveCheckoutCreateFailure(error)) {
+      throw new HttpsError("failed-precondition", "The billing portal is not configured.");
+    }
+    throw new HttpsError("unavailable", "The billing portal is temporarily unavailable.");
+  }
+  if (configuration.active !== true ||
+    configuration.features.subscription_cancel.enabled !== false ||
+    configuration.features.subscription_update.enabled !== false) {
+    console.error("CRITICAL_BILLING_PORTAL_CONFIGURATION_MISMATCH", {
+      configurationId,
+      active: configuration.active,
+      subscriptionCancellationEnabled:
+        configuration.features.subscription_cancel.enabled,
+      subscriptionUpdateEnabled:
+        configuration.features.subscription_update.enabled,
+    });
+    throw new HttpsError(
+      "failed-precondition",
+      "The billing portal is unavailable because its cancellation controls are unsafe."
+    );
+  }
 }
 
 /**
@@ -388,34 +632,451 @@ async function resolveStripeCustomerId(userId: string): Promise<string> {
   return customer.id;
 }
 
+/** ---------------------------------------------------------------
+ * Atomic checkout reservations
+ * -------------------------------------------------------------- */
+
+const CHECKOUT_LOCK_COLLECTION = "membershipCheckoutLocks";
+const ENTITLEMENT_OWNER_COLLECTION = "membershipEntitlementOwners";
+const CHECKOUT_SETTLEMENT_GRACE_SECONDS = 60 * 60;
+const ASYNC_PAYMENT_RESERVATION_MS = 7 * 24 * 60 * 60 * 1000;
+
+type CheckoutLockKind = "participant" | "alpha_wod_payer";
+
+type CheckoutLockSpec = {
+  id: string;
+  kind: CheckoutLockKind;
+  identityHash: string;
+};
+
+type CheckoutReservationResult = {
+  created: boolean;
+  intent: MembershipIntentDoc;
+};
+
 /**
- * A purchase can be made before an account exists, so the participant identity
- * is the guard that always applies. The payer-level check only runs for a
- * signed-in buyer; for an anonymous one it is repeated at claim time, when the
- * account is finally known.
+ * A purchase can be anonymous, so participant identity is always locked. A
+ * signed-in payer also gets a second deterministic lock when the selected plan
+ * grants AlphaWOD access. Hashes keep UIDs and participant details out of doc
+ * paths while ensuring concurrent transactions contend on the same documents.
  */
-async function findBlockingMemberships(
+function checkoutLockSpecs(
   payerUid: string | null,
   planKey: PlanKey,
   participantKey: string
-): Promise<{sameParticipant: boolean; sameAlphaWodPayer: boolean}> {
-  const [byParticipant, byPayer] = await Promise.all([
-    db().collection("memberships").where("participant.participantKey", "==", participantKey).get(),
-    payerUid ?
-      db().collection("memberships").where("payerUid", "==", payerUid).get() :
-      Promise.resolve({docs: []} as unknown as admin.firestore.QuerySnapshot),
-  ]);
+): CheckoutLockSpec[] {
+  const specs: CheckoutLockSpec[] = [{
+    id: `participant_${participantKey}`,
+    kind: "participant",
+    identityHash: participantKey,
+  }];
 
-  const blocking = (snap: admin.firestore.QuerySnapshot) =>
-    snap.docs.filter((doc) =>
-      isMembershipStateBlockingDuplicate(doc.get("state") as MembershipState)
+  if (payerUid && getPlan(planKey).grantsAlphaWodAccess) {
+    const payerHash = sha256(payerUid);
+    specs.push({
+      id: `alpha_wod_payer_${payerHash}`,
+      kind: "alpha_wod_payer",
+      identityHash: payerHash,
+    });
+  }
+  return specs;
+}
+
+function timestampMillis(value: unknown): number | null {
+  return value instanceof admin.firestore.Timestamp ? value.toMillis() : null;
+}
+
+function isBlockingMembershipDoc(
+  doc: admin.firestore.QueryDocumentSnapshot
+): boolean {
+  if (isMembershipStateBlockingDuplicate(doc.get("state") as MembershipState)) {
+    return true;
+  }
+  const stripeStatus = doc.get("stripeStatus");
+  // Revocation describes access, not whether Stripe has stopped billing. A
+  // refunded/disputed membership can remain provider-active, so it must block
+  // a replacement sale until Stripe is authoritatively terminal. Unknown
+  // provider state also fails closed for legacy/malformed rows.
+  return typeof stripeStatus !== "string" ||
+    (stripeStatus !== "canceled" && stripeStatus !== "incomplete_expired");
+}
+
+function entitlementOwnerRef(userId: string): admin.firestore.DocumentReference {
+  return db().collection(ENTITLEMENT_OWNER_COLLECTION).doc(sha256(userId));
+}
+
+function alphaWodPayerCheckoutLockRef(
+  userId: string
+): admin.firestore.DocumentReference {
+  return db().collection(CHECKOUT_LOCK_COLLECTION)
+    .doc(`alpha_wod_payer_${sha256(userId)}`);
+}
+
+async function hasBlockingPayerCheckoutReservation(
+  tx: admin.firestore.Transaction,
+  userId: string
+): Promise<boolean> {
+  const lock = await tx.get(alphaWodPayerCheckoutLockRef(userId));
+  if (!lock.exists) return false;
+  const intentId = lock.get("intentId");
+  if (typeof intentId !== "string") return true;
+  const intent = await tx.get(db().collection("membershipIntents").doc(intentId));
+  if (!intent.exists) return true;
+  const status = intent.get("status") as MembershipIntentDoc["status"];
+  return status !== "expired" && status !== "failed";
+}
+
+type EntitlementOwnerRead = {
+  ref: admin.firestore.DocumentReference;
+  ownerSubscriptionId: string | null;
+  ownerState: "active" | "released" | null;
+  ownerMembershipBlocks: boolean;
+};
+
+/**
+ * Reads the deterministic entitlement generation. An active generation stays
+ * authoritative until its entitlement transaction has either projected access
+ * or restored the prior grant and marked the generation released.
+ */
+async function readEntitlementOwner(
+  tx: admin.firestore.Transaction,
+  userId: string,
+  requestedSubscriptionId: string
+): Promise<EntitlementOwnerRead> {
+  const ref = entitlementOwnerRef(userId);
+  const owner = await tx.get(ref);
+  const ownerSubscriptionId = owner.exists &&
+      typeof owner.get("subscriptionId") === "string" ?
+    owner.get("subscriptionId") as string : null;
+  const ownerState = ownerSubscriptionId ?
+    (owner.get("state") === "released" ? "released" : "active") : null;
+  if (!ownerSubscriptionId || ownerSubscriptionId === requestedSubscriptionId) {
+    return {ref, ownerSubscriptionId, ownerState, ownerMembershipBlocks: false};
+  }
+  if (ownerState === "released") {
+    return {ref, ownerSubscriptionId, ownerState, ownerMembershipBlocks: false};
+  }
+  // An active generation remains authoritative until its entitlement
+  // transaction restores the user and atomically marks this row released.
+  // Looking only at the membership state would open a gap where a replacement
+  // snapshots the old Stripe grant instead of the original manual/legacy one.
+  return {
+    ref,
+    ownerSubscriptionId,
+    ownerState,
+    ownerMembershipBlocks: true,
+  };
+}
+
+function acquireEntitlementOwner(
+  tx: admin.firestore.Transaction,
+  owner: EntitlementOwnerRead,
+  userId: string,
+  subscriptionId: string
+): void {
+  if (owner.ownerSubscriptionId &&
+    owner.ownerSubscriptionId !== subscriptionId &&
+    owner.ownerMembershipBlocks) {
+    throw new HttpsError("already-exists", POLICY_TEXT.duplicateBlocked);
+  }
+  tx.set(owner.ref, {
+    schemaVersion: MEMBERSHIP_SCHEMA_VERSION,
+    subscriptionId,
+    userIdHash: sha256(userId),
+    state: "active",
+    releasedAt: admin.firestore.FieldValue.delete(),
+    updatedAt: serverTimestamp(),
+    ...(owner.ownerSubscriptionId ? {} : {createdAt: serverTimestamp()}),
+  }, {merge: true});
+}
+
+/**
+ * Atomically reserves every uniqueness key and checks existing memberships.
+ * Stripe is deliberately called only after this transaction has committed.
+ */
+async function reserveCheckoutAttempt(
+  intentRef: admin.firestore.DocumentReference,
+  proposedIntent: MembershipIntentDoc,
+  nowMillis: number
+): Promise<CheckoutReservationResult> {
+  const lockSpecs = checkoutLockSpecs(
+    proposedIntent.payerUid,
+    proposedIntent.planKey,
+    proposedIntent.participant.participantKey
+  );
+  const lockRefs = lockSpecs.map((spec) =>
+    db().collection(CHECKOUT_LOCK_COLLECTION).doc(spec.id)
+  );
+  const participantQuery = db().collection("memberships")
+    .where("participant.participantKey", "==", proposedIntent.participant.participantKey);
+  const payerQuery = proposedIntent.payerUid &&
+      getPlan(proposedIntent.planKey).grantsAlphaWodAccess ?
+    db().collection("memberships").where("payerUid", "==", proposedIntent.payerUid) :
+    null;
+  const targetQuery = proposedIntent.payerUid &&
+      getPlan(proposedIntent.planKey).grantsAlphaWodAccess ?
+    db().collection("memberships")
+      .where("entitlementTargetUid", "==", proposedIntent.payerUid) : null;
+
+  return db().runTransaction(async (tx) => {
+    const existingIntent = await tx.get(intentRef);
+    if (existingIntent.exists) {
+      const stored = existingIntent.data() as MembershipIntentDoc;
+      if (stored.requestFingerprint !== proposedIntent.requestFingerprint) {
+        throw new HttpsError(
+          "failed-precondition",
+          "This checkout attempt was already used with different membership details."
+        );
+      }
+      return {created: false, intent: stored};
+    }
+
+    // All reads precede every write, as Firestore transactions require.
+    const lockSnaps = await Promise.all(lockRefs.map((ref) => tx.get(ref)));
+    const byParticipant = await tx.get(participantQuery);
+    const byPayer = payerQuery ? await tx.get(payerQuery) : null;
+    const byTarget = targetQuery ? await tx.get(targetQuery) : null;
+    const entitlementOwner = proposedIntent.payerUid && payerQuery ?
+      await readEntitlementOwner(tx, proposedIntent.payerUid, intentRef.id) : null;
+    const priorIntentIds = [...new Set(lockSnaps.flatMap((snap) =>
+      snap.exists && typeof snap.get("intentId") === "string" ?
+        [snap.get("intentId") as string] : []
+    ))];
+    const priorIntentSnaps = await Promise.all(priorIntentIds.map((id) =>
+      tx.get(db().collection("membershipIntents").doc(id))
+    ));
+    const priorIntentStatus = new Map(priorIntentSnaps.map((snap) => [
+      snap.id,
+      snap.exists ? snap.get("status") as MembershipIntentDoc["status"] : null,
+    ]));
+
+    const sameParticipant = byParticipant.docs.some(isBlockingMembershipDoc);
+    const sameAlphaWodPayer = Boolean(byPayer?.docs.some((doc) =>
+      isBlockingMembershipDoc(doc) && doc.get("grantsAlphaWodAccess") === true
+    )) || Boolean(byTarget?.docs.some((doc) =>
+      isBlockingMembershipDoc(doc) && doc.get("grantsAlphaWodAccess") === true
+    )) || entitlementOwner?.ownerMembershipBlocks === true;
+    const unsafeReservation = lockSnaps.some((snap) => {
+      if (!snap.exists) return false;
+      const expiresAt = timestampMillis(snap.get("expiresAt"));
+      if (expiresAt === null || expiresAt > nowMillis) return true;
+      const ownerIntentId = snap.get("intentId");
+      if (typeof ownerIntentId !== "string") return true;
+      const ownerStatus = priorIntentStatus.get(ownerIntentId);
+      // Time alone never proves a Checkout Session is unpaid. Only a terminal
+      // intent, normally driven by Stripe's expired/async-failed event, may be
+      // reclaimed. This prevents a delayed paid webhook being stranded behind
+      // a replacement sale.
+      return ownerStatus !== "expired" && ownerStatus !== "failed";
+    });
+
+    if (sameParticipant || sameAlphaWodPayer || unsafeReservation) {
+      throw new HttpsError("already-exists", POLICY_TEXT.duplicateBlocked);
+    }
+
+    tx.create(intentRef, proposedIntent);
+    lockSpecs.forEach((spec, index) => {
+      tx.set(lockRefs[index], {
+        schemaVersion: MEMBERSHIP_SCHEMA_VERSION,
+        kind: spec.kind,
+        identityHash: spec.identityHash,
+        intentId: intentRef.id,
+        status: "reserved",
+        expiresAt: proposedIntent.reservationExpiresAt,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    });
+
+    return {created: true, intent: proposedIntent};
+  });
+}
+
+/**
+ * Releases only locks still owned by this intent. The ownership check matters
+ * when an old webhook arrives after an expired lock has been reused.
+ */
+async function transitionCheckoutReservation(
+  intentRef: admin.firestore.DocumentReference,
+  status: MembershipIntentDoc["status"],
+  updates: Record<string, unknown> = {},
+  releaseLocks = true,
+  stripeSessionBinding?: {
+    sessionId: string;
+    mode: string | null;
+    planKey: string | null;
+  }
+): Promise<boolean> {
+  return db().runTransaction(async (tx) => {
+    const intentSnap = await tx.get(intentRef);
+    if (!intentSnap.exists) return false;
+
+    if (stripeSessionBinding) {
+      const storedSessionId = intentSnap.get("checkoutSessionId");
+      const storedPlanKey = intentSnap.get("planKey");
+      if (!stripeSessionBinding.sessionId ||
+        stripeSessionBinding.mode !== "subscription" ||
+        stripeSessionBinding.planKey !== storedPlanKey ||
+        (storedSessionId !== null && storedSessionId !== undefined &&
+          storedSessionId !== stripeSessionBinding.sessionId)) {
+        throw new Error(
+          `Stripe Checkout Session does not match membership intent ${intentRef.id}.`
+        );
+      }
+    }
+
+    const current = intentSnap.get("status") as MembershipIntentDoc["status"];
+    const allowed: Record<MembershipIntentDoc["status"], MembershipIntentDoc["status"][]> = {
+      reserved: ["reserved", "created", "payment_pending", "fulfilled", "expired", "failed"],
+      created: ["created", "payment_pending", "fulfilled", "expired", "failed"],
+      payment_pending: ["payment_pending", "fulfilled", "expired", "failed"],
+      fulfilled: ["fulfilled"],
+      expired: ["expired"],
+      failed: ["failed"],
+    };
+    if (!allowed[current]?.includes(status)) return false;
+
+    const lockIds = Array.isArray(intentSnap.get("reservationLockIds")) ?
+      intentSnap.get("reservationLockIds") as string[] : [];
+    const lockRefs = lockIds.map((id) =>
+      db().collection(CHECKOUT_LOCK_COLLECTION).doc(id)
     );
+    const lockSnaps = await Promise.all(lockRefs.map((ref) => tx.get(ref)));
 
-  const sameParticipant = blocking(byParticipant).length > 0;
-  const sameAlphaWodPayer = getPlan(planKey).grantsAlphaWodAccess &&
-    blocking(byPayer).some((doc) => doc.get("grantsAlphaWodAccess") === true);
+    if (releaseLocks) {
+      lockSnaps.forEach((snap, index) => {
+        if (snap.exists && snap.get("intentId") === intentRef.id) {
+          tx.delete(lockRefs[index]);
+        }
+      });
+    }
 
-  return {sameParticipant, sameAlphaWodPayer};
+    tx.set(intentRef, {
+      status,
+      ...updates,
+      ...(stripeSessionBinding ? {
+        checkoutSessionId: stripeSessionBinding.sessionId,
+      } : {}),
+      updatedAt: serverTimestamp(),
+    }, {merge: true});
+    return true;
+  });
+}
+
+/** Keeps a completed-but-delayed payment from losing its duplicate guard. */
+async function extendCheckoutReservationForAsyncPayment(
+  intentRef: admin.firestore.DocumentReference
+): Promise<void> {
+  const expiresAt = admin.firestore.Timestamp.fromMillis(
+    Date.now() + ASYNC_PAYMENT_RESERVATION_MS
+  );
+  await db().runTransaction(async (tx) => {
+    const intentSnap = await tx.get(intentRef);
+    if (!intentSnap.exists) return;
+    const current = intentSnap.get("status") as MembershipIntentDoc["status"];
+    if (current !== "reserved" && current !== "created" &&
+      current !== "payment_pending") return;
+    const lockIds = Array.isArray(intentSnap.get("reservationLockIds")) ?
+      intentSnap.get("reservationLockIds") as string[] : [];
+    const lockRefs = lockIds.map((id) =>
+      db().collection(CHECKOUT_LOCK_COLLECTION).doc(id)
+    );
+    const lockSnaps = await Promise.all(lockRefs.map((ref) => tx.get(ref)));
+
+    const ownsEveryLock = lockRefs.length > 0 && lockSnaps.every((snap) =>
+      snap.exists && snap.get("intentId") === intentRef.id
+    );
+    if (!ownsEveryLock) {
+      throw new Error(`Checkout ${intentRef.id} lost its payment reservation.`);
+    }
+    lockSnaps.forEach((_snap, index) => tx.set(lockRefs[index], {
+      status: "payment_pending",
+      expiresAt,
+      updatedAt: serverTimestamp(),
+    }, {merge: true}));
+    tx.set(intentRef, {
+      status: "payment_pending",
+      reservationExpiresAt: expiresAt,
+      updatedAt: serverTimestamp(),
+    }, {merge: true});
+  });
+}
+
+/**
+ * Gives an expired local reservation one authoritative Stripe check before a
+ * replacement purchase is attempted. A timestamp never releases a lock by
+ * itself: terminal intent/Session state does. Paid or uncertain Sessions stay
+ * blocked for webhook/manual recovery.
+ */
+async function reconcileExpiredCheckoutReservations(
+  lockIds: string[],
+  nowMillis = Date.now(),
+  verifyRegardlessOfLockExpiry = false
+): Promise<void> {
+  const lockSnaps = await Promise.all(lockIds.map((id) =>
+    db().collection(CHECKOUT_LOCK_COLLECTION).doc(id).get()
+  ));
+  const ownerIds = [...new Set(lockSnaps.flatMap((snap) => {
+    if (!snap.exists) return [];
+    const expiresAt = timestampMillis(snap.get("expiresAt"));
+    if (!verifyRegardlessOfLockExpiry &&
+      (expiresAt === null || expiresAt > nowMillis)) return [];
+    return typeof snap.get("intentId") === "string" ?
+      [snap.get("intentId") as string] : [];
+  }))];
+
+  for (const ownerId of ownerIds) {
+    const intentRef = db().collection("membershipIntents").doc(ownerId);
+    const intent = await intentRef.get();
+    if (!intent.exists) {
+      console.error("CRITICAL_BILLING_ORPHAN_CHECKOUT_LOCK", {intentId: ownerId});
+      continue;
+    }
+    const status = intent.get("status") as MembershipIntentDoc["status"];
+    if (status === "expired" || status === "failed") {
+      await transitionCheckoutReservation(intentRef, status);
+      continue;
+    }
+    const sessionId = intent.get("checkoutSessionId");
+    if (typeof sessionId !== "string" || !sessionId) {
+      console.error("CRITICAL_BILLING_UNVERIFIED_CHECKOUT_LOCK", {intentId: ownerId});
+      continue;
+    }
+
+    try {
+      let session = await stripe().checkout.sessions.retrieve(sessionId);
+      if (session.status === "open" &&
+        typeof session.expires_at === "number" &&
+        session.expires_at * 1000 <= nowMillis) {
+        session = await stripe().checkout.sessions.expire(sessionId);
+      }
+      if (session.status === "expired") {
+        await transitionCheckoutReservation(intentRef, "expired", {
+          verifiedTerminalAt: serverTimestamp(),
+        });
+      } else if (session.status === "complete") {
+        await extendCheckoutReservationForAsyncPayment(intentRef);
+        if (session.payment_status !== "unpaid") {
+          console.error("CRITICAL_BILLING_PAID_SESSION_AWAITING_FULFILMENT", {
+            intentId: ownerId,
+            checkoutSessionId: sessionId,
+          });
+          await writeAudit({
+            type: "paid_checkout_awaiting_fulfilment",
+            severity: "critical",
+            intentId: ownerId,
+            checkoutSessionId: sessionId,
+          }).catch((auditError) =>
+            console.error("Could not write paid-checkout audit", ownerId, auditError)
+          );
+        }
+      }
+    } catch (error) {
+      // Retrieval uncertainty is deliberately fail-closed; reserveCheckoutAttempt
+      // will keep rejecting the replacement while this owner remains nonterminal.
+      console.error("Checkout reservation verification failed", ownerId, error);
+    }
+  }
 }
 
 /** ---------------------------------------------------------------
@@ -442,7 +1103,7 @@ async function applyMembershipEntitlement(
   membershipRef: admin.firestore.DocumentReference,
   converge: (userId: string) => Promise<void>
 ): Promise<void> {
-  const targetUid = await db().runTransaction(async (tx) => {
+  const outcome = await db().runTransaction(async (tx) => {
     const membershipSnap = await tx.get(membershipRef);
     if (!membershipSnap.exists) return null;
 
@@ -450,16 +1111,67 @@ async function applyMembershipEntitlement(
     const uid = membership.entitlementTargetUid;
     if (!uid) return null;
 
-    const decision = resolveEntitlementForMembership(membership.planKey, membership.state);
+    const decision = membership.providerContractStatus === "manual_review" &&
+      isMembershipStateBlockingDuplicate(membership.state) ? {
+        entitlementStatus: "restricted" as const,
+        entitlementSource: "stripe" as const,
+        reason: "Stripe subscription contract requires manual review.",
+      } : resolveEntitlementForMembership(membership.planKey, membership.state);
     if (!decision) return null;
 
     const userRef = db().collection("users").doc(uid);
     const userSnap = await tx.get(userRef);
-    if (!userSnap.exists) return null;
+    const owner = await readEntitlementOwner(tx, uid, membershipRef.id);
+
+    // Once a replacement membership owns this account, an older cancelled or
+    // revoked membership is no longer authoritative for its entitlement. A
+    // delayed convergence of the old subscription must not erase the valid
+    // replacement grant or restore the old pre-membership snapshot.
+    const membershipBlocks = isMembershipStateBlockingDuplicate(membership.state);
+    if (!membershipBlocks &&
+      (owner.ownerSubscriptionId !== membershipRef.id || owner.ownerState !== "active")) {
+      return null;
+    }
+
+    const releaseOwnerWithoutProjection = (reason: string) => {
+      if (!membershipBlocks && owner.ownerSubscriptionId === membershipRef.id &&
+        owner.ownerState === "active") {
+        tx.set(owner.ref, {
+          schemaVersion: MEMBERSHIP_SCHEMA_VERSION,
+          subscriptionId: membershipRef.id,
+          userIdHash: sha256(uid),
+          state: "released",
+          releasedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        }, {merge: true});
+      }
+      tx.set(membershipRef, {
+        entitlementProjectionStatus: "manual_review",
+        entitlementProjectionError: reason,
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+      return {convergeUid: null, reviewReason: reason, reviewUidHash: sha256(uid)};
+    };
+
+    // An ended membership must release its active generation even when the
+    // target profile can no longer be safely projected. Otherwise a deleted,
+    // malformed or staff-converted profile would block every replacement
+    // membership forever. The profile itself remains untouched for review.
+    if (!userSnap.exists) {
+      return releaseOwnerWithoutProjection("The entitlement target profile is missing.");
+    }
 
     const user = userSnap.data() as Record<string, unknown>;
-    if (!isUserRole(user.role) || !isApprovalStatus(user.approvalStatus)) return null;
-    if (user.role !== "user") return null;
+    if (!isUserRole(user.role) || !isApprovalStatus(user.approvalStatus)) {
+      return releaseOwnerWithoutProjection(
+        "The entitlement target profile has an invalid role or approval status."
+      );
+    }
+    if (user.role !== "user") {
+      return releaseOwnerWithoutProjection(
+        "The entitlement target is now a staff or banned profile and was left unchanged."
+      );
+    }
 
     const current = resolveUserAuthorisation(user as any);
     let nextStatus: EntitlementStatus = decision.entitlementStatus;
@@ -481,7 +1193,11 @@ async function applyMembershipEntitlement(
       nextSource = preMembership.entitlementSource;
     }
 
-    if (!isEntitlementCompatibleWithRole(user.role, nextStatus, nextSource)) return null;
+    if (!isEntitlementCompatibleWithRole(user.role, nextStatus, nextSource)) {
+      return releaseOwnerWithoutProjection(
+        "The resolved membership entitlement is incompatible with the target profile."
+      );
+    }
 
     // A purchase that grants app access also completes approval for that
     // account. This is the only non-admin approval path and it exists solely
@@ -494,6 +1210,22 @@ async function applyMembershipEntitlement(
       entitlementSource: nextSource,
     };
     const access = resolveUserAuthorisation(next);
+
+    if (membershipBlocks) {
+      acquireEntitlementOwner(tx, owner, uid, membershipRef.id);
+    } else {
+      // Keep a released generation as a tombstone. Otherwise a later webhook
+      // for this same ended subscription would see no owner and could replay
+      // the old entitlement restoration over a newer membership/manual grant.
+      tx.set(owner.ref, {
+        schemaVersion: MEMBERSHIP_SCHEMA_VERSION,
+        subscriptionId: membershipRef.id,
+        userIdHash: sha256(uid),
+        state: "released",
+        releasedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+    }
 
     tx.set(userRef, {
       ...next,
@@ -511,13 +1243,31 @@ async function applyMembershipEntitlement(
 
     tx.set(membershipRef, {
       preMembershipEntitlement: preMembership,
+      entitlementProjectionStatus: "applied",
+      entitlementProjectionError: admin.firestore.FieldValue.delete(),
       updatedAt: serverTimestamp(),
     }, {merge: true});
 
-    return uid;
+    return {convergeUid: uid, reviewReason: null, reviewUidHash: null};
   });
 
-  if (targetUid) await converge(targetUid);
+  if (outcome?.reviewReason) {
+    console.error("CRITICAL_BILLING_ENTITLEMENT_PROJECTION_REVIEW", {
+      subscriptionId: membershipRef.id,
+      targetUidHash: outcome.reviewUidHash,
+      reason: outcome.reviewReason,
+    });
+    await writeAudit({
+      type: "entitlement_projection_manual_review",
+      severity: "critical",
+      subscriptionId: membershipRef.id,
+      targetUidHash: outcome.reviewUidHash,
+      reason: outcome.reviewReason,
+    }).catch((error) =>
+      console.error("Could not write entitlement projection audit", membershipRef.id, error)
+    );
+  }
+  if (outcome?.convergeUid) await converge(outcome.convergeUid);
 }
 
 /** ---------------------------------------------------------------
@@ -533,6 +1283,64 @@ function resolveCurrentPeriodEnd(subscription: Stripe.Subscription): number | nu
   return typeof legacy === "number" ? legacy : null;
 }
 
+const MEMBERSHIP_CONVERGENCE_LEASE_MS = 2 * 60 * 1000;
+const SUSPENDED_RECONCILE_INTERVAL_MS = 15 * 60 * 1000;
+
+type MembershipConvergenceOverrides = {
+  pastDueSince?: number | null;
+  accessRevoked?: boolean;
+  dispute?: {id: string; status: Stripe.Dispute.Status};
+};
+
+function isOpenDisputeStatus(status: Stripe.Dispute.Status): boolean {
+  return status !== "won" && status !== "lost" &&
+    status !== "warning_closed" && status !== "prevented";
+}
+
+type MembershipConvergenceLease =
+  | {state: "acquired"; token: string}
+  | {state: "missing"}
+  | {state: "in_progress"};
+
+async function acquireMembershipConvergenceLease(
+  membershipRef: admin.firestore.DocumentReference,
+  nowMillis = Date.now(),
+  token = randomUUID()
+): Promise<MembershipConvergenceLease> {
+  return db().runTransaction(async (tx) => {
+    const snap = await tx.get(membershipRef);
+    if (!snap.exists) return {state: "missing"} as const;
+    const leaseExpiresAt = timestampMillis(snap.get("convergenceLeaseExpiresAt"));
+    if (typeof snap.get("convergenceLeaseToken") === "string" &&
+      leaseExpiresAt !== null && leaseExpiresAt > nowMillis) {
+      return {state: "in_progress"} as const;
+    }
+    tx.set(membershipRef, {
+      convergenceLeaseToken: token,
+      convergenceLeaseExpiresAt: admin.firestore.Timestamp.fromMillis(
+        nowMillis + MEMBERSHIP_CONVERGENCE_LEASE_MS
+      ),
+      updatedAt: serverTimestamp(),
+    }, {merge: true});
+    return {state: "acquired", token} as const;
+  });
+}
+
+async function releaseMembershipConvergenceLease(
+  membershipRef: admin.firestore.DocumentReference,
+  token: string
+): Promise<void> {
+  await db().runTransaction(async (tx) => {
+    const snap = await tx.get(membershipRef);
+    if (!snap.exists || snap.get("convergenceLeaseToken") !== token) return;
+    tx.set(membershipRef, {
+      convergenceLeaseToken: admin.firestore.FieldValue.delete(),
+      convergenceLeaseExpiresAt: admin.firestore.FieldValue.delete(),
+      updatedAt: serverTimestamp(),
+    }, {merge: true});
+  });
+}
+
 /**
  * Re-reads the subscription from Stripe and converges the stored membership.
  *
@@ -543,48 +1351,431 @@ function resolveCurrentPeriodEnd(subscription: Stripe.Subscription): number | nu
 async function convergeMembershipFromStripe(
   subscriptionId: string,
   converge: (userId: string) => Promise<void>,
-  overrides: Partial<Pick<MembershipDoc, "disputeOpen" | "accessRevoked" | "pastDueSince">> = {}
+  overrides: MembershipConvergenceOverrides = {},
+  nowMillis = Date.now()
 ): Promise<void> {
   const membershipRef = db().collection("memberships").doc(subscriptionId);
-  const snap = await membershipRef.get();
-  if (!snap.exists) return;
+  const lease = await acquireMembershipConvergenceLease(membershipRef);
+  if (lease.state === "in_progress") {
+    throw new Error(`Membership ${subscriptionId} is already converging.`);
+  }
 
-  const subscription = await stripe().subscriptions.retrieve(subscriptionId);
-  const stored = snap.data() as MembershipDoc;
+  let subscription: Stripe.Subscription;
+  try {
+    subscription = await stripe().subscriptions.retrieve(subscriptionId);
+  } catch (error) {
+    if (lease.state === "acquired") {
+      await releaseMembershipConvergenceLease(membershipRef, lease.token).catch(() => undefined);
+    }
+    throw error;
+  }
 
-  const disputeOpen = overrides.disputeOpen ?? stored.disputeOpen ?? false;
-  const accessRevoked = overrides.accessRevoked ?? stored.accessRevoked ?? false;
-  const pastDueSince = overrides.pastDueSince !== undefined ?
-    overrides.pastDueSince :
-    (subscription.status === "past_due" ? stored.pastDueSince : null);
+  if (lease.state === "missing") {
+    // Stripe can deliver subscription/invoice/refund events before Checkout
+    // completion. App-owned subscriptions must be retried after fulfilment;
+    // unrelated Stripe objects are intentionally ignored.
+    if (subscription.metadata?.intentId) {
+      throw new Error(
+        `Membership ${subscriptionId} is waiting for Checkout intent ` +
+        `${subscription.metadata.intentId} to fulfil.`
+      );
+    }
+    return;
+  }
 
-  const state = resolveMembershipState({
-    stripeStatus: subscription.status,
-    pastDueSinceUnixSeconds: pastDueSince,
-    disputeOpen,
-    accessRevoked,
-    cancelAtUnixSeconds: subscription.cancel_at,
-  }, Date.now());
+  let convergenceOutcome: {
+    state: MembershipState;
+    disputeOpen: boolean;
+    accessRevoked: boolean;
+    settledCancellation: {
+      requestId: string;
+      payerUid: string | null;
+      outcome: CancellationOutcome;
+    } | null;
+    cancellationDrift: {
+      requestId: string;
+      reason: string;
+      repairQueued: boolean;
+    } | null;
+    providerContractError: string | null;
+  };
+  try {
+    convergenceOutcome = await db().runTransaction(async (tx) => {
+      const fresh = await tx.get(membershipRef);
+      if (!fresh.exists || fresh.get("convergenceLeaseToken") !== lease.token) {
+        throw new Error(`Membership ${subscriptionId} lost its convergence lease.`);
+      }
+      const stored = fresh.data() as MembershipDoc;
+      const currentContractMismatch = stripeSubscriptionContractMismatch(
+        subscription,
+        {
+          planKey: stored.planKey,
+          stripePriceId: stored.stripePriceId,
+          stripeCustomerId: stored.stripeCustomerId,
+          billingCycleAnchor: stored.billingCycleAnchor,
+        }
+      );
+      const providerNeedsManualReview = Boolean(currentContractMismatch);
+      const openDisputeIds = Array.isArray(stored.openDisputeIds) ?
+        [...new Set(stored.openDisputeIds.filter((id) => typeof id === "string"))] : [];
+      if (overrides.dispute) {
+        const index = openDisputeIds.indexOf(overrides.dispute.id);
+        if (isOpenDisputeStatus(overrides.dispute.status) && index < 0) {
+          openDisputeIds.push(overrides.dispute.id);
+        } else if (!isOpenDisputeStatus(overrides.dispute.status) && index >= 0) {
+          openDisputeIds.splice(index, 1);
+        }
+      }
+      const disputeOpen = overrides.dispute ?
+        openDisputeIds.length > 0 :
+        openDisputeIds.length > 0 || stored.disputeOpen === true;
+      // A full refund or lost dispute is irreversible automatically. Support
+      // can correct an exceptional case explicitly, but a delayed event can
+      // never clear revocation and restore access.
+      const accessRevoked = stored.accessRevoked === true ||
+        overrides.accessRevoked === true || overrides.dispute?.status === "lost";
 
-  await membershipRef.set({
-    state,
-    stripeStatus: subscription.status,
-    currentPeriodEnd: resolveCurrentPeriodEnd(subscription),
-    cancelAt: subscription.cancel_at ?? null,
-    disputeOpen,
-    accessRevoked,
-    pastDueSince: pastDueSince ?? null,
-    updatedAt: serverTimestamp(),
-  }, {merge: true});
+      let pastDueSince: number | null = null;
+      if (subscription.status === "past_due") {
+        const detectedAt = Math.floor(nowMillis / 1000);
+        const incoming = typeof overrides.pastDueSince === "number" ?
+          overrides.pastDueSince : null;
+        const storedFailure = typeof stored.pastDueSince === "number" ?
+          stored.pastDueSince : null;
+        const candidates = [incoming, storedFailure].filter(
+          (value): value is number => value !== null
+        );
+        pastDueSince = candidates.length > 0 ? Math.min(...candidates) : detectedAt;
+      }
+      const graceEndMillis = resolvePastDueGraceEndMillis(pastDueSince);
+      const pastDueGraceEndsAt = graceEndMillis === null ?
+        null : admin.firestore.Timestamp.fromMillis(graceEndMillis);
+      const state = resolveMembershipState({
+        stripeStatus: subscription.status,
+        pastDueSinceUnixSeconds: pastDueSince,
+        disputeOpen,
+        accessRevoked,
+        cancelAtUnixSeconds: subscription.cancel_at,
+      }, nowMillis);
+      const nextReconcileAt = state === "past_due_grace" ?
+        pastDueGraceEndsAt : state === "past_due_suspended" ?
+          admin.firestore.Timestamp.fromMillis(
+            nowMillis + SUSPENDED_RECONCILE_INTERVAL_MS
+          ) : null;
+
+      const pendingCancellation = stored.cancellationRequest;
+      const authoritativeCancelAt = authoritativeSubscriptionCancellationEnd(subscription);
+      let projectedCancelAt = authoritativeCancelAt;
+      let settledCancellation: {
+        requestId: string;
+        payerUid: string | null;
+        outcome: CancellationOutcome;
+      } | null = null;
+      let cancellationDrift: {
+        requestId: string;
+        reason: string;
+        repairQueued: boolean;
+      } | null = null;
+      let cancellationUpdate: Record<string, unknown> = {};
+      const validRequest = typeof pendingCancellation?.id === "string" &&
+        pendingCancellation.receivedAt instanceof admin.firestore.Timestamp &&
+        typeof pendingCancellation.outcome?.cancelAtUnixSeconds === "number";
+
+      if (stored.cancellationOutcome) {
+        const promisedCancelAt = stored.cancellationOutcome.cancelAtUnixSeconds;
+        if (authoritativeCancelAt !== null && authoritativeCancelAt <= promisedCancelAt) {
+          const aligned = alignCancellationOutcome(
+            stored.cancellationOutcome,
+            authoritativeCancelAt
+          );
+          projectedCancelAt = authoritativeCancelAt;
+          cancellationUpdate = {
+            cancellationOutcome: aligned,
+            ...(validRequest ? {
+              cancellationRequest: {
+                ...pendingCancellation,
+                status: "applied",
+                outcome: aligned,
+                stripeCancelAt: authoritativeCancelAt,
+                nextAttemptAt: admin.firestore.FieldValue.delete(),
+                leaseToken: admin.firestore.FieldValue.delete(),
+                leaseExpiresAt: admin.firestore.FieldValue.delete(),
+                lastError: admin.firestore.FieldValue.delete(),
+              },
+            } : {}),
+          };
+        } else if (subscription.status === "canceled" &&
+          authoritativeCancelAt !== null &&
+          promisedCancelAt <= Math.floor(nowMillis / 1000)) {
+          const reason =
+            "Stripe ended this subscription after the cancellation date promised to the member. " +
+            "Review charges after that date and issue any required refund.";
+          projectedCancelAt = promisedCancelAt;
+          cancellationDrift = {
+            requestId: validRequest ? pendingCancellation.id : `repair-${subscriptionId}`,
+            reason,
+            repairQueued: false,
+          };
+          cancellationUpdate = {
+            cancellationOutcome: stored.cancellationOutcome,
+            ...(validRequest ? {
+              cancellationRequest: {
+                ...pendingCancellation,
+                status: "manual_review",
+                outcome: stored.cancellationOutcome,
+                stripeCancelAt: authoritativeCancelAt,
+                lastError: reason,
+                manualReviewAt: serverTimestamp(),
+                nextAttemptAt: admin.firestore.FieldValue.delete(),
+                leaseToken: admin.firestore.FieldValue.delete(),
+                leaseExpiresAt: admin.firestore.FieldValue.delete(),
+              },
+            } : {}),
+          };
+        } else {
+          const repairQueued = subscription.status !== "canceled";
+          const requestId = validRequest ?
+            pendingCancellation.id : `repair-${subscriptionId}`;
+          const repairGeneration = typeof pendingCancellation?.repairGeneration === "number" ?
+            pendingCancellation.repairGeneration : 0;
+          const reason = authoritativeCancelAt === null ?
+            "Stripe no longer has the confirmed cancellation schedule." :
+            "Stripe has a later cancellation schedule than the member confirmed.";
+          projectedCancelAt = promisedCancelAt;
+          cancellationDrift = {requestId, reason, repairQueued};
+          cancellationUpdate = {
+            cancellationOutcome: null,
+            cancellationRequest: {
+              ...(pendingCancellation ?? {}),
+              id: requestId,
+              status: repairQueued ? "pending" : "manual_review",
+              receivedAt: validRequest ? pendingCancellation.receivedAt :
+                (stored.cancellationRequestedAt instanceof admin.firestore.Timestamp ?
+                  stored.cancellationRequestedAt :
+                  admin.firestore.Timestamp.fromMillis(nowMillis)),
+              outcome: stored.cancellationOutcome,
+              repairGeneration: pendingCancellation?.status === "pending" ?
+                repairGeneration : repairGeneration + 1,
+              recoveryStartedAt: pendingCancellation?.status === "pending" &&
+                pendingCancellation.recoveryStartedAt instanceof admin.firestore.Timestamp ?
+                pendingCancellation.recoveryStartedAt :
+                admin.firestore.Timestamp.fromMillis(nowMillis),
+              attemptCount: pendingCancellation?.status === "pending" ?
+                (pendingCancellation.attemptCount ?? 0) : 0,
+              lastError: reason,
+              ...(repairQueued ? {
+                nextAttemptAt: admin.firestore.Timestamp.fromMillis(nowMillis),
+              } : {
+                nextAttemptAt: admin.firestore.FieldValue.delete(),
+                manualReviewAt: serverTimestamp(),
+              }),
+              leaseToken: admin.firestore.FieldValue.delete(),
+              leaseExpiresAt: admin.firestore.FieldValue.delete(),
+            },
+          };
+        }
+      } else if ((pendingCancellation?.status === "pending" ||
+        pendingCancellation?.status === "manual_review") && validRequest &&
+        authoritativeCancelAt !== null &&
+        authoritativeCancelAt <= pendingCancellation.outcome.cancelAtUnixSeconds) {
+        settledCancellation = {
+          requestId: pendingCancellation.id,
+          payerUid: stored.payerUid,
+          outcome: alignCancellationOutcome(
+            pendingCancellation.outcome,
+            authoritativeCancelAt
+          ),
+        };
+        projectedCancelAt = authoritativeCancelAt;
+        cancellationUpdate = {
+          cancellationRequestedAt: pendingCancellation.receivedAt,
+          cancellationOutcome: settledCancellation.outcome,
+          cancellationRequest: {
+            ...pendingCancellation,
+            status: "applied",
+            outcome: settledCancellation.outcome,
+            stripeCancelAt: authoritativeCancelAt,
+            appliedAt: serverTimestamp(),
+            nextAttemptAt: admin.firestore.FieldValue.delete(),
+            leaseToken: admin.firestore.FieldValue.delete(),
+            leaseExpiresAt: admin.firestore.FieldValue.delete(),
+            lastError: admin.firestore.FieldValue.delete(),
+          },
+        };
+      } else if (validRequest && subscription.status === "canceled" &&
+        authoritativeCancelAt !== null &&
+        authoritativeCancelAt > pendingCancellation.outcome.cancelAtUnixSeconds &&
+        pendingCancellation.outcome.cancelAtUnixSeconds <= Math.floor(nowMillis / 1000)) {
+        const reason =
+          "Stripe ended this subscription after the cancellation date promised to the member. " +
+          "Review charges after that date and issue any required refund.";
+        projectedCancelAt = pendingCancellation.outcome.cancelAtUnixSeconds;
+        cancellationDrift = {
+          requestId: pendingCancellation.id,
+          reason,
+          repairQueued: false,
+        };
+        cancellationUpdate = {
+          cancellationRequestedAt: pendingCancellation.receivedAt,
+          cancellationOutcome: pendingCancellation.outcome,
+          cancellationRequest: {
+            ...pendingCancellation,
+            status: "manual_review",
+            stripeCancelAt: authoritativeCancelAt,
+            lastError: reason,
+            manualReviewAt: serverTimestamp(),
+            nextAttemptAt: admin.firestore.FieldValue.delete(),
+            leaseToken: admin.firestore.FieldValue.delete(),
+            leaseExpiresAt: admin.firestore.FieldValue.delete(),
+          },
+        };
+      } else if (!stored.cancellationOutcome && validRequest &&
+        subscription.status === "canceled" && authoritativeCancelAt === null) {
+        const reason = "Stripe canceled the subscription without an authoritative end time.";
+        cancellationDrift = {
+          requestId: pendingCancellation.id,
+          reason,
+          repairQueued: false,
+        };
+        cancellationUpdate = {
+          cancellationRequest: {
+            ...pendingCancellation,
+            status: "manual_review",
+            lastError: reason,
+            manualReviewAt: serverTimestamp(),
+            nextAttemptAt: admin.firestore.FieldValue.delete(),
+            leaseToken: admin.firestore.FieldValue.delete(),
+            leaseExpiresAt: admin.firestore.FieldValue.delete(),
+          },
+        };
+      }
+
+      tx.set(membershipRef, {
+        state,
+        stripeStatus: subscription.status,
+        currentPeriodEnd: resolveCurrentPeriodEnd(subscription),
+        cancelAt: projectedCancelAt,
+        openDisputeIds,
+        disputeOpen,
+        accessRevoked,
+        providerContractStatus: providerNeedsManualReview ?
+          "manual_review" : "verified",
+        providerContractError: currentContractMismatch ??
+          admin.firestore.FieldValue.delete(),
+        pastDueSince,
+        pastDueGraceEndsAt,
+        nextReconcileAt,
+        ...cancellationUpdate,
+        convergenceLeaseToken: admin.firestore.FieldValue.delete(),
+        convergenceLeaseExpiresAt: admin.firestore.FieldValue.delete(),
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+      return {
+        state,
+        disputeOpen,
+        accessRevoked,
+        settledCancellation,
+        cancellationDrift,
+        providerContractError: currentContractMismatch,
+      };
+    });
+  } catch (error) {
+    await releaseMembershipConvergenceLease(membershipRef, lease.token).catch(() => undefined);
+    throw error;
+  }
 
   await applyMembershipEntitlement(membershipRef, converge);
   await writeAudit({
     type: "membership_converged",
     subscriptionId,
-    state,
+    state: convergenceOutcome.state,
     stripeStatus: subscription.status,
-    disputeOpen,
-    accessRevoked,
+    disputeOpen: convergenceOutcome.disputeOpen,
+    accessRevoked: convergenceOutcome.accessRevoked,
+  });
+  if (convergenceOutcome.providerContractError) {
+    console.error("CRITICAL_BILLING_PROVIDER_CONTRACT_MISMATCH", {
+      subscriptionId,
+      error: convergenceOutcome.providerContractError,
+    });
+    await writeAudit({
+      type: "provider_contract_mismatch",
+      severity: "critical",
+      subscriptionId,
+      error: convergenceOutcome.providerContractError,
+    });
+  }
+  if (convergenceOutcome.settledCancellation) {
+    await writeAudit({
+      type: "cancellation_requested",
+      subscriptionId,
+      payerUid: convergenceOutcome.settledCancellation.payerUid,
+      requestId: convergenceOutcome.settledCancellation.requestId,
+      outcome: convergenceOutcome.settledCancellation.outcome,
+      settledBy: "stripe_convergence",
+    });
+  }
+  if (convergenceOutcome.cancellationDrift) {
+    console.error("CRITICAL_BILLING_CANCELLATION_DRIFT", {
+      subscriptionId,
+      ...convergenceOutcome.cancellationDrift,
+    });
+    await writeAudit({
+      type: "cancellation_schedule_drift",
+      severity: "critical",
+      subscriptionId,
+      ...convergenceOutcome.cancellationDrift,
+    });
+  }
+}
+
+/** Re-checks memberships whose absolute grace deadline has passed. */
+async function reconcilePastDueMembershipsOnce(
+  converge: (userId: string) => Promise<void>,
+  nowMillis = Date.now(),
+  limit = 100
+): Promise<{processed: number; failed: number}> {
+  const due = await db().collection("memberships")
+    .where("state", "in", ["past_due_grace", "past_due_suspended"])
+    .where("nextReconcileAt", "<=", admin.firestore.Timestamp.fromMillis(nowMillis))
+    .orderBy("nextReconcileAt", "asc")
+    .limit(limit)
+    .get();
+  const result = {processed: 0, failed: 0};
+
+  for (const membership of due.docs) {
+    try {
+      // Stripe is re-read immediately before mutation. A payment that recovered
+      // just before this sweep therefore restores active state instead of being
+      // suspended by a stale Firestore snapshot.
+      await convergeMembershipFromStripe(
+        membership.id,
+        converge,
+        {},
+        Math.max(nowMillis, Date.now())
+      );
+      result.processed += 1;
+    } catch (error) {
+      console.error("Past-due membership reconciliation failed", membership.id, error);
+      result.failed += 1;
+    }
+  }
+
+  return result;
+}
+
+export function buildReconcilePastDueMemberships(
+  converge: (userId: string) => Promise<void>
+) {
+  return onSchedule({
+    region: REGION,
+    schedule: "every 15 minutes",
+    timeZone: "UTC",
+    secrets: MEMBERSHIP_STRIPE_WORKER_SECRETS,
+    timeoutSeconds: 540,
+  }, async () => {
+    const result = await reconcilePastDueMembershipsOnce(converge);
+    console.log("Past-due membership reconciliation result", result);
   });
 }
 
@@ -592,15 +1783,34 @@ async function convergeMembershipFromStripe(
  * Callables
  * -------------------------------------------------------------- */
 
-export const createMembershipCheckoutSession = onCall(
-  {region: REGION, secrets: MEMBERSHIP_SECRETS},
-  async (request) => {
+function buildCreateMembershipCheckoutHandler(
+  assertPurchaseOpen: () => void
+) {
+  return async (request: any) => {
     // Membership is bought before signing in. A visitor with no account can
     // complete checkout; the purchase is attached to an account afterwards by
     // `claimMembership`. A signed-in buyer is linked immediately instead.
     const payerUid = optionalAuthUid(request);
-    requirePurchaseFlowOpen();
+    assertPurchaseOpen();
 
+    const checkoutAttemptId = requireCheckoutAttemptId(request.data?.checkoutAttemptId);
+    const checkoutAttemptHash = sha256(`membership-checkout:${checkoutAttemptId}`);
+    const intentRef = db().collection("membershipIntents")
+      .doc(`attempt_${checkoutAttemptHash}`);
+    if (payerUid) {
+      const profile = await db().collection("users").doc(payerUid).get();
+      if (!profile.exists) {
+        const existing = await intentRef.get();
+        if (existing.exists && existing.get("status") === "reserved" &&
+          !existing.get("checkoutSessionId")) {
+          await transitionCheckoutReservation(intentRef, "failed", {
+            failureKind: "missing_payer_profile",
+            failedAt: serverTimestamp(),
+          });
+        }
+        throw new HttpsError("failed-precondition", "Create your profile before purchasing.");
+      }
+    }
     const planKey = requirePlanKey(request.data?.planKey);
     const plan = getPlan(planKey);
     const participantName = requireBoundedString(
@@ -610,6 +1820,12 @@ export const createMembershipCheckoutSession = onCall(
     const signedName = requireBoundedString(request.data?.signedName, "signedName", 2, 160);
     const participantIsPayer = request.data?.participantIsPayer === true;
     const immediatePerformanceRequested = request.data?.immediatePerformanceRequested === true;
+    if (!immediatePerformanceRequested) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Request immediate membership service before continuing to payment."
+      );
+    }
 
     const now = Date.now();
     const age = resolveAgeFromDateOfBirth(dateOfBirth, now);
@@ -648,22 +1864,6 @@ export const createMembershipCheckoutSession = onCall(
     }
 
     const participantKey = participantKeyFor(participantName, dateOfBirth);
-    const blocking = await findBlockingMemberships(payerUid, planKey, participantKey);
-    if (blocking.sameParticipant || blocking.sameAlphaWodPayer) {
-      throw new HttpsError("already-exists", POLICY_TEXT.duplicateBlocked);
-    }
-
-    // Only a signed-in buyer gets a pre-resolved Stripe customer. For a public
-    // visitor, Checkout creates the customer and collects the billing email,
-    // which becomes the identity the later claim is matched against.
-    const customerId = payerUid ? await resolveStripeCustomerId(payerUid) : null;
-    const payerEmail = payerUid ?
-      (await admin.auth().getUser(payerUid)).email?.trim().toLowerCase() || null :
-      null;
-    const {anchorUnixSeconds, firstFullChargeDate} = resolveBillingCycleAnchor(now);
-    const origin = resolveReturnOrigin();
-    const intentRef = db().collection("membershipIntents").doc();
-
     const participant: ParticipantRecord = {
       fullName: participantName,
       dateOfBirth,
@@ -672,86 +1872,329 @@ export const createMembershipCheckoutSession = onCall(
       participantKey,
     };
 
-    const session = await stripe().checkout.sessions.create({
-      mode: "subscription",
-      ...(customerId ? {customer: customerId} : {}),
-      ...(payerUid ? {client_reference_id: payerUid} : {}),
-      line_items: [{price: resolvePriceId(planKey), quantity: 1}],
-      // Dynamic payment methods are managed from the Stripe Dashboard, so
-      // `payment_method_types` is deliberately omitted.
-      billing_address_collection: BILLING_POLICY.collectBillingAddress ? "required" : "auto",
-      phone_number_collection: {enabled: BILLING_POLICY.collectPhoneNumber},
-      automatic_tax: {enabled: BILLING_POLICY.automaticTaxEnabled},
-      submit_type: "subscribe",
-      locale: "en-GB",
-      expires_at: resolveCheckoutSessionExpiry(now),
-      success_url: `${origin}/memberships/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${origin}/memberships?checkout=cancelled`,
-      subscription_data: {
-        description: plan.name,
-        // Stripe calculates and displays the initial proration for the period
-        // up to the anchor, and bills the full price on the first of each
-        // month thereafter. No proration is computed in this codebase.
-        billing_cycle_anchor: anchorUnixSeconds,
-        proration_behavior: "create_prorations",
+    const requestFingerprint = checkoutRequestFingerprint({
+      payerUid,
+      planKey,
+      participant,
+      guardian,
+      signedName,
+      immediatePerformanceRequested,
+    });
+    const payerEmail = payerUid ?
+      (await admin.auth().getUser(payerUid)).email?.trim().toLowerCase() || null :
+      null;
+
+    let checkoutConfig: {client: Stripe; priceId: string; origin: string} | null = null;
+    const ensureCheckoutConfig = async (frozenPriceId?: string) => {
+      if (checkoutConfig) {
+        if (frozenPriceId && checkoutConfig.priceId !== frozenPriceId) {
+          throw new Error("Checkout attempt changed its frozen Stripe Price.");
+        }
+        return checkoutConfig;
+      }
+      const priceId = frozenPriceId ?? resolvePriceId(planKey);
+      const origin = resolveReturnOrigin();
+      const client = stripe();
+      await assertStripePriceMatchesPlan(client, priceId, plan);
+      checkoutConfig = {client, priceId, origin};
+      return checkoutConfig;
+    };
+
+    let reservation: CheckoutReservationResult;
+    const existingSnap = await intentRef.get();
+    if (existingSnap.exists) {
+      const existing = existingSnap.data() as MembershipIntentDoc;
+      if (existing.requestFingerprint !== requestFingerprint) {
+        throw new HttpsError(
+          "failed-precondition",
+          "This checkout attempt was already used with different membership details."
+        );
+      }
+      reservation = {created: false, intent: existing};
+    } else {
+      // Validate provider configuration before taking a new reservation. An
+      // existing recorded Session can still be returned during a later Stripe
+      // outage without risking its recovery verifier.
+      const validatedConfig = await ensureCheckoutConfig();
+      const {anchorUnixSeconds, firstFullChargeDate} = resolveBillingCycleAnchor(now);
+      let checkoutExpiresAt: number;
+      try {
+        checkoutExpiresAt = resolveCheckoutSessionExpiry(now);
+      } catch (error) {
+        if (!(error instanceof RangeError)) throw error;
+        throw new HttpsError(
+          "failed-precondition",
+          "Membership checkout pauses briefly at the monthly billing boundary. Please try again after midnight."
+        );
+      }
+
+      const reservationLockIds = checkoutLockSpecs(
+        payerUid,
+        planKey,
+        participantKey
+      ).map((spec) => spec.id);
+      const proposedIntent: MembershipIntentDoc = {
+        schemaVersion: MEMBERSHIP_SCHEMA_VERSION,
+        checkoutAttemptHash,
+        requestFingerprint,
+        payerUid,
+        payerEmail,
+        planKey,
+        stripePriceId: validatedConfig.priceId,
+        participant,
+        guardian,
+        acceptances: {
+          signedName,
+          documents: CHECKOUT_DOCUMENTS,
+          immediatePerformanceRequested,
+          acceptedAt: serverTimestamp(),
+          userAgent: String(request.rawRequest.get("user-agent") || "").slice(0, 500),
+        },
+        checkoutSessionId: null,
+        checkoutSessionUrl: null,
+        status: "reserved",
+        billingCycleAnchor: anchorUnixSeconds,
+        firstFullChargeDate,
+        checkoutExpiresAt,
+        reservationExpiresAt: admin.firestore.Timestamp.fromMillis(
+          (checkoutExpiresAt + CHECKOUT_SETTLEMENT_GRACE_SECONDS) * 1000
+        ),
+        reservationLockIds,
+        createdAt: serverTimestamp(),
+      };
+      await reconcileExpiredCheckoutReservations(reservationLockIds, now);
+      reservation = await reserveCheckoutAttempt(intentRef, proposedIntent, now);
+    }
+
+    let intent = reservation.intent;
+    if (intent.requestFingerprint !== requestFingerprint) {
+      throw new HttpsError(
+        "failed-precondition",
+        "This checkout attempt was already used with different membership details."
+      );
+    }
+    const checkoutWindowEnded = () =>
+      intent.checkoutExpiresAt <= Math.floor(Date.now() / 1000) ||
+      intent.checkoutExpiresAt >= intent.billingCycleAnchor;
+
+    // A local clock can tell us to verify a Session, but it can never prove
+    // that payment did not complete. Re-read Stripe before deciding whether a
+    // recorded Session is terminal; this keeps a delayed paid webhook behind
+    // its original uniqueness lock.
+    if (intent.status === "created" && checkoutWindowEnded()) {
+      await reconcileExpiredCheckoutReservations(
+        intent.reservationLockIds,
+        Date.now(),
+        true
+      );
+      const refreshed = await intentRef.get();
+      if (!refreshed.exists) {
+        throw new HttpsError("internal", "The checkout reservation was lost.");
+      }
+      intent = refreshed.data() as MembershipIntentDoc;
+    }
+    if ((intent.status === "created" || intent.status === "payment_pending" ||
+        intent.status === "fulfilled") && intent.checkoutSessionId &&
+      intent.checkoutSessionUrl) {
+      return {
+        ok: true,
+        sessionUrl: intent.checkoutSessionUrl,
+        sessionId: intent.checkoutSessionId,
+        firstFullChargeDate: intent.firstFullChargeDate,
+      };
+    }
+    if (intent.status !== "reserved") {
+      throw new HttpsError(
+        "deadline-exceeded",
+        "This checkout attempt has ended. Start again with a new checkout attempt."
+      );
+    }
+
+    if (typeof intent.stripePriceId !== "string" || !intent.stripePriceId) {
+      throw new HttpsError(
+        "failed-precondition",
+        "This checkout attempt predates the frozen billing-price safety check. Contact support."
+      );
+    }
+    const {client: checkoutStripe, priceId, origin} = await ensureCheckoutConfig(
+      intent.stripePriceId
+    );
+
+    // Only a signed-in buyer gets a pre-resolved Stripe customer. Stripe calls
+    // remain outside the reservation transaction. A retry uses the same hashed
+    // client attempt id, so Stripe returns the same Checkout Session.
+    let customerId: string | null = null;
+    try {
+      customerId = payerUid ? await resolveStripeCustomerId(payerUid) : null;
+    } catch (error) {
+      // Customer setup happens before Checkout creation. It is therefore safe
+      // to terminalise this attempt: no payment Session can exist yet, even if
+      // Stripe created the idempotent Customer before a response was lost.
+      await transitionCheckoutReservation(intentRef, "failed", {
+        failureKind: "stripe_customer_setup",
+        failedAt: serverTimestamp(),
+      });
+      console.error("Membership customer setup failed", {payerUid, error});
+      throw new HttpsError(
+        "deadline-exceeded",
+        "Billing setup could not be completed. Start again with a new checkout attempt."
+      );
+    }
+    let session: Stripe.Checkout.Session;
+    try {
+      session = await checkoutStripe.checkout.sessions.create({
+        mode: "subscription",
+        ...(customerId ? {customer: customerId} : {}),
+        ...(payerUid ? {client_reference_id: payerUid} : {}),
+        line_items: [{price: priceId, quantity: 1}],
+        // Dynamic payment methods are managed from the Stripe Dashboard, so
+        // `payment_method_types` is deliberately omitted.
+        billing_address_collection: BILLING_POLICY.collectBillingAddress ? "required" : "auto",
+        phone_number_collection: {enabled: BILLING_POLICY.collectPhoneNumber},
+        automatic_tax: {enabled: BILLING_POLICY.automaticTaxEnabled},
+        submit_type: "subscribe",
+        locale: "en-GB",
+        expires_at: intent.checkoutExpiresAt,
+        success_url: `${origin}/memberships/success?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${origin}/memberships?checkout=cancelled`,
+        subscription_data: {
+          description: plan.name,
+          // Stripe calculates and displays the initial proration for the period
+          // up to the anchor, and bills the full price on the first of each
+          // month thereafter. No proration is computed in this codebase.
+          billing_cycle_anchor: intent.billingCycleAnchor,
+          proration_behavior: "create_prorations",
+          metadata: {
+            ...(payerUid ? {firebaseUid: payerUid} : {}),
+            planKey,
+            intentId: intentRef.id,
+          },
+        },
         metadata: {
           ...(payerUid ? {firebaseUid: payerUid} : {}),
           planKey,
           intentId: intentRef.id,
         },
-      },
-      metadata: {
-        ...(payerUid ? {firebaseUid: payerUid} : {}),
+      }, {idempotencyKey: `checkout:${checkoutAttemptHash}`});
+    } catch (error) {
+      if (isDefinitiveCheckoutCreateFailure(error)) {
+        await transitionCheckoutReservation(intentRef, "failed", {
+          failureKind: "stripe_checkout_validation",
+          failedAt: serverTimestamp(),
+        });
+        throw new HttpsError(
+          "deadline-exceeded",
+          "Stripe could not create this checkout. Start again with a new checkout attempt."
+        );
+      }
+      // A timeout, connection loss or Stripe 5xx may have happened after the
+      // Session was accepted. Retain the reservation so the same attempt can
+      // replay its idempotency key and recover the exact response.
+      throw error;
+    }
+
+    if (!session.url) {
+      throw new HttpsError("internal", "Stripe did not return a Checkout URL.");
+    }
+
+    const newlyRecorded = await db().runTransaction(async (tx) => {
+      const fresh = await tx.get(intentRef);
+      if (!fresh.exists) {
+        throw new HttpsError("internal", "The checkout reservation was lost.");
+      }
+      const storedSessionId = fresh.get("checkoutSessionId");
+      if (typeof storedSessionId === "string" && storedSessionId !== session.id) {
+        throw new HttpsError(
+          "failed-precondition",
+          "This checkout attempt is already bound to another Stripe session."
+        );
+      }
+      const currentStatus = fresh.get("status") as MembershipIntentDoc["status"];
+      if (currentStatus === "expired" || currentStatus === "failed") {
+        throw new HttpsError(
+          "deadline-exceeded",
+          "This checkout attempt ended before Stripe returned. Start again."
+        );
+      }
+      const alreadyRecorded = storedSessionId === session.id;
+      tx.set(intentRef, {
+        checkoutSessionId: session.id,
+        checkoutSessionUrl: session.url,
+        ...(currentStatus === "reserved" ? {status: "created"} : {}),
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+      return !alreadyRecorded;
+    });
+
+    // A `reserved` row can mean Stripe accepted the idempotent create request
+    // but the process died before recording its response. Replaying the create
+    // above recovers that exact Session. If its window has since ended, verify
+    // the recovered Session now; release occurs only on Stripe-confirmed
+    // terminal state, never on the browser/server clock alone.
+    if (checkoutWindowEnded()) {
+      await reconcileExpiredCheckoutReservations(
+        intent.reservationLockIds,
+        Date.now(),
+        true
+      );
+      const refreshed = await intentRef.get();
+      if (!refreshed.exists) {
+        throw new HttpsError("internal", "The checkout reservation was lost.");
+      }
+      const refreshedStatus = refreshed.get("status") as MembershipIntentDoc["status"];
+      if (refreshedStatus === "expired" || refreshedStatus === "failed") {
+        throw new HttpsError(
+          "deadline-exceeded",
+          "This checkout attempt has ended. Start again after the billing boundary."
+        );
+      }
+    }
+
+    if (newlyRecorded) {
+      await writeAudit({
+        type: "checkout_session_created",
+        payerUid,
         planKey,
         intentId: intentRef.id,
-      },
-    }, {idempotencyKey: `checkout:${intentRef.id}`});
-
-    const intent: MembershipIntentDoc = {
-      schemaVersion: MEMBERSHIP_SCHEMA_VERSION,
-      payerUid,
-      payerEmail,
-      planKey,
-      participant,
-      guardian,
-      acceptances: {
-        signedName,
-        documents: CHECKOUT_DOCUMENTS,
-        immediatePerformanceRequested,
-        coolingOffEndsAt: resolveCoolingOffEnd(now),
-        acceptedAt: serverTimestamp(),
-        userAgent: String(request.rawRequest.get("user-agent") || "").slice(0, 500),
-      },
-      checkoutSessionId: session.id,
-      status: "created",
-      billingCycleAnchor: anchorUnixSeconds,
-      createdAt: serverTimestamp(),
-    };
-    await intentRef.set(intent);
-
-    await writeAudit({
-      type: "checkout_session_created",
-      payerUid,
-      planKey,
-      intentId: intentRef.id,
-      checkoutSessionId: session.id,
-    });
+        checkoutSessionId: session.id,
+      });
+    }
 
     return {
       ok: true,
       sessionUrl: session.url,
       sessionId: session.id,
-      firstFullChargeDate,
+      firstFullChargeDate: intent.firstFullChargeDate,
     };
-  }
+  };
+}
+
+export const createMembershipCheckoutSession = onCall(
+  {region: REGION, secrets: MEMBERSHIP_SECRETS},
+  buildCreateMembershipCheckoutHandler(requirePurchaseFlowOpen)
 );
 
 export const createCustomerPortalSession = onCall(
   {region: REGION, secrets: MEMBERSHIP_SECRETS},
   async (request) => {
     const userId = requireAuthUid(request);
-    const userSnap = await db().collection("users").doc(userId).get();
-    const customerId = userSnap.get("stripeCustomerId");
+    const subscriptionId = requireBoundedString(
+      request.data?.subscriptionId,
+      "subscriptionId",
+      3,
+      255
+    );
+    const membership = await db().collection("memberships").doc(subscriptionId).get();
+    if (!membership.exists) {
+      throw new HttpsError("not-found", "Membership not found.");
+    }
+    if (membership.get("payerUid") !== userId) {
+      throw new HttpsError(
+        "permission-denied",
+        "Only the payer can open this membership's billing portal."
+      );
+    }
+    const customerId = membership.get("stripeCustomerId");
     if (typeof customerId !== "string" || !customerId) {
       throw new HttpsError("failed-precondition", "This account has no billing profile yet.");
     }
@@ -765,7 +2208,9 @@ export const createCustomerPortalSession = onCall(
       throw new HttpsError("failed-precondition", "The billing portal is not configured.");
     }
 
-    const session = await stripe().billingPortal.sessions.create({
+    const portalStripe = stripe();
+    await assertPortalConfigurationIsLockedDown(portalStripe, configuration);
+    const session = await portalStripe.billingPortal.sessions.create({
       customer: customerId,
       configuration,
       return_url: `${resolveReturnOrigin()}/account/membership`,
@@ -782,6 +2227,9 @@ export const getMyMemberships = onCall({region: REGION}, async (request) => {
 
   const memberships = snap.docs.map((doc) => {
     const membership = doc.data() as MembershipDoc;
+    const coolingOffEndsAt = membership.acceptances?.coolingOffEndsAt ?? null;
+    const coolingOffEndMillis = typeof coolingOffEndsAt === "string" ?
+      Date.parse(coolingOffEndsAt) : Number.NaN;
     return {
       subscriptionId: membership.subscriptionId,
       planKey: membership.planKey,
@@ -793,67 +2241,542 @@ export const getMyMemberships = onCall({region: REGION}, async (request) => {
       currentPeriodEnd: membership.currentPeriodEnd ?? null,
       cancelAt: membership.cancelAt ?? null,
       cancellationOutcome: membership.cancellationOutcome ?? null,
+      cancellationPending: membership.cancellationRequest?.status === "pending",
+      cancellationManualReview: membership.cancellationRequest?.status === "manual_review",
+      cancellationRequestError: membership.cancellationRequest?.lastError ?? null,
+      providerContractStatus: membership.providerContractStatus ?? null,
+      providerContractError: membership.providerContractError ?? null,
+      entitlementProjectionStatus: membership.entitlementProjectionStatus ?? null,
+      entitlementProjectionError: membership.entitlementProjectionError ?? null,
+      coolingOffEndsAt,
+      coolingOffActive: Number.isFinite(coolingOffEndMillis) &&
+        Date.now() <= coolingOffEndMillis,
     };
   });
 
   return {ok: true, memberships, cancellationPreview: preview};
 });
 
-export const requestMembershipCancellation = onCall(
-  {region: REGION, secrets: MEMBERSHIP_SECRETS},
-  async (request) => {
-    const userId = requireAuthUid(request);
-    const subscriptionId = requireBoundedString(request.data?.subscriptionId, "subscriptionId", 3, 255);
+const CANCELLATION_RECOVERY_LEASE_MS = 10 * 60 * 1000;
+const CANCELLATION_RECOVERY_MAX_ATTEMPTS = 24;
+const CANCELLATION_RECOVERY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
-    const membershipRef = db().collection("memberships").doc(subscriptionId);
-    const snap = await membershipRef.get();
-    if (!snap.exists) throw new HttpsError("not-found", "Membership not found.");
+type PreparedCancellation = {
+  requestId: string;
+  receivedAt: admin.firestore.Timestamp;
+  outcome: CancellationOutcome;
+  repairGeneration: number;
+};
 
-    const membership = snap.data() as MembershipDoc;
-    if (membership.payerUid !== userId) {
-      throw new HttpsError("permission-denied", "Only the payer can cancel this membership.");
-    }
-    if (membership.cancelAt) {
-      throw new HttpsError("failed-precondition", "This membership is already scheduled to end.");
-    }
-    if (!isMembershipStateBlockingDuplicate(membership.state)) {
-      throw new HttpsError("failed-precondition", "This membership is not active.");
-    }
+function cancellationRetryAtMillis(attemptCount: number, nowMillis: number): number {
+  const delay = Math.min(60 * 60 * 1000, 60 * 1000 * (2 ** Math.min(attemptCount - 1, 6)));
+  return nowMillis + delay;
+}
 
-    // The receipt time recorded here is when the request reached the system,
-    // which is the time the policy makes decisive.
-    const outcome = resolveCancellationOutcome(Date.now());
+/** Applies one frozen cancellation request without ever extending Stripe's date. */
+async function settlePreparedCancellation(
+  membershipRef: admin.firestore.DocumentReference,
+  payerUid: string,
+  prepared: PreparedCancellation,
+  converge: (userId: string) => Promise<void>
+): Promise<{outcome: CancellationOutcome; newlyFinalized: boolean}> {
+  const subscriptionId = membershipRef.id;
+  const before = await membershipRef.get();
+  if (!before.exists) {
+    throw new Error(`Membership ${subscriptionId} disappeared during cancellation.`);
+  }
+  const currentRequest = before.get("cancellationRequest") as {id?: unknown} | undefined;
+  if (currentRequest?.id !== prepared.requestId) {
+    throw new Error(`Membership ${subscriptionId} changed cancellation request.`);
+  }
+  const hadOutcome = Boolean(before.get("cancellationOutcome"));
 
+  const currentSubscription = await stripe().subscriptions.retrieve(subscriptionId);
+  const currentObservedEnd = currentSubscription.status === "canceled" ?
+    (currentSubscription.ended_at ?? currentSubscription.cancel_at ?? null) :
+    (currentSubscription.cancel_at ?? null);
+  const overdue = prepared.outcome.cancelAtUnixSeconds <= Math.floor(Date.now() / 1000);
+  if (currentSubscription.status !== "canceled" && overdue) {
+    // Stripe cannot accept a cancel_at in the past. Honour the member's frozen
+    // request by stopping billing immediately, then route any charges taken
+    // after the promised date to audited refund review.
+    await stripe().subscriptions.cancel(subscriptionId, {
+      prorate: false,
+      invoice_now: false,
+    }, {
+      idempotencyKey:
+        `cancel-now:${subscriptionId}:${prepared.requestId}:g${prepared.repairGeneration}`,
+    });
+  } else if (currentSubscription.status !== "canceled" &&
+    (currentObservedEnd === null ||
+      currentObservedEnd > prepared.outcome.cancelAtUnixSeconds)) {
     await stripe().subscriptions.update(subscriptionId, {
-      cancel_at: outcome.cancelAtUnixSeconds,
+      cancel_at: prepared.outcome.cancelAtUnixSeconds,
       proration_behavior: "none",
       metadata: {
-        cancellationRequestedBy: userId,
-        cancellationNoticeMet: String(outcome.noticeDeadlineMet),
+        cancellationRequestedBy: payerUid,
+        cancellationNoticeMet: String(prepared.outcome.noticeDeadlineMet),
+        cancellationRequestId: prepared.requestId,
+        cancellationRepairGeneration: String(prepared.repairGeneration),
       },
-    }, {idempotencyKey: `cancel:${subscriptionId}:${outcome.cancelAtUnixSeconds}`});
-
-    await membershipRef.set({
-      cancelAt: outcome.cancelAtUnixSeconds,
-      cancellationRequestedAt: serverTimestamp(),
-      cancellationOutcome: outcome,
-      updatedAt: serverTimestamp(),
-    }, {merge: true});
-
-    await writeAudit({
-      type: "cancellation_requested",
-      subscriptionId,
-      payerUid: userId,
-      outcome,
+    }, {
+      idempotencyKey:
+        `cancel:${subscriptionId}:${prepared.requestId}:g${prepared.repairGeneration}`,
     });
-
-    return {ok: true, outcome};
   }
-);
+
+  // Re-read after the idempotent update. Stripe can cache an idempotency result;
+  // only current authoritative state proves that the schedule is now in place.
+  const verifiedSubscription = await stripe().subscriptions.retrieve(subscriptionId);
+  const verifiedEnd = verifiedSubscription.status === "canceled" ?
+    (verifiedSubscription.ended_at ?? verifiedSubscription.cancel_at ?? null) :
+    (verifiedSubscription.cancel_at ?? null);
+  const verified = overdue ?
+    verifiedSubscription.status === "canceled" && verifiedEnd !== null :
+    verifiedEnd !== null && verifiedEnd <= prepared.outcome.cancelAtUnixSeconds;
+  if (!verified) {
+    throw new Error(
+      `Stripe has not applied cancellation request ${prepared.requestId}.`
+    );
+  }
+
+  // The convergence transaction both records the frozen cancellation outcome
+  // and brings state/entitlement up to date, including already-canceled rows.
+  await convergeMembershipFromStripe(subscriptionId, converge);
+  const finalized = await membershipRef.get();
+  const outcome = finalized.get("cancellationOutcome") as CancellationOutcome | null;
+  const finalRequestStatus = finalized.get("cancellationRequest.status");
+  if (!outcome || (finalRequestStatus !== "applied" &&
+    finalRequestStatus !== "manual_review")) {
+    throw new Error(`Membership ${subscriptionId} did not settle its cancellation.`);
+  }
+  return {outcome, newlyFinalized: !hadOutcome};
+}
+
+async function markPendingCancellationFailed(
+  membershipRef: admin.firestore.DocumentReference,
+  requestId: string,
+  error: unknown,
+  nowMillis = Date.now()
+): Promise<boolean> {
+  const message = (error instanceof Error ? error.message : String(error)).slice(0, 1000);
+  const terminal = await db().runTransaction(async (tx) => {
+    const snap = await tx.get(membershipRef);
+    if (!snap.exists || snap.get("cancellationOutcome")) return false;
+    const pending = snap.get("cancellationRequest") as {
+      id?: unknown;
+      status?: unknown;
+      receivedAt?: unknown;
+      recoveryStartedAt?: unknown;
+      attemptCount?: unknown;
+      repairGeneration?: unknown;
+    } | undefined;
+    if (pending?.id !== requestId || pending.status !== "pending") return false;
+    const attemptCount = typeof pending.attemptCount === "number" ? pending.attemptCount : 1;
+    const receivedAt = timestampMillis(pending.receivedAt) ?? nowMillis;
+    const recoveryStartedAt = timestampMillis(pending.recoveryStartedAt) ?? receivedAt;
+    const isTerminal = attemptCount >= CANCELLATION_RECOVERY_MAX_ATTEMPTS ||
+      nowMillis - recoveryStartedAt >= CANCELLATION_RECOVERY_MAX_AGE_MS;
+    tx.update(membershipRef, {
+      "cancellationRequest.status": isTerminal ? "manual_review" : "pending",
+      "cancellationRequest.lastError": message,
+      // Each retry retrieves current Stripe state first. Rotating only after a
+      // failed verification lets it reassert a schedule that was removed after
+      // Stripe cached the prior idempotent update.
+      "cancellationRequest.repairGeneration":
+        typeof pending.repairGeneration === "number" ?
+          pending.repairGeneration + 1 : 1,
+      "cancellationRequest.failedAt": serverTimestamp(),
+      "cancellationRequest.leaseToken": admin.firestore.FieldValue.delete(),
+      "cancellationRequest.leaseExpiresAt": admin.firestore.FieldValue.delete(),
+      "cancellationRequest.nextAttemptAt": isTerminal ?
+        admin.firestore.FieldValue.delete() :
+        admin.firestore.Timestamp.fromMillis(
+          cancellationRetryAtMillis(attemptCount, nowMillis)
+        ),
+      ...(isTerminal ? {"cancellationRequest.manualReviewAt": serverTimestamp()} : {}),
+      "updatedAt": serverTimestamp(),
+    });
+    return isTerminal;
+  });
+  if (terminal) {
+    console.error("CRITICAL_BILLING_CANCELLATION_MANUAL_REVIEW", {
+      subscriptionId: membershipRef.id,
+      requestId,
+      error: message,
+    });
+    await writeAudit({
+      type: "cancellation_manual_review",
+      severity: "critical",
+      subscriptionId: membershipRef.id,
+      requestId,
+      error: message,
+    }).catch((auditError) =>
+      console.error("Could not write cancellation manual-review audit", membershipRef.id, auditError)
+    );
+  }
+  return terminal;
+}
+
+type CancellationRecoveryLease = {
+  token: string;
+  payerUid: string;
+  prepared: PreparedCancellation;
+};
+
+async function acquireCancellationRecoveryLease(
+  membershipRef: admin.firestore.DocumentReference,
+  nowMillis = Date.now()
+): Promise<CancellationRecoveryLease | null> {
+  const token = randomUUID();
+  const result = await db().runTransaction(async (tx) => {
+    const snap = await tx.get(membershipRef);
+    if (!snap.exists || snap.get("cancellationOutcome")) {
+      return {state: "skipped" as const};
+    }
+    const payerUid = snap.get("payerUid");
+    const pending = snap.get("cancellationRequest") as {
+      id?: unknown;
+      status?: unknown;
+      receivedAt?: unknown;
+      recoveryStartedAt?: unknown;
+      outcome?: unknown;
+      attemptCount?: unknown;
+      repairGeneration?: unknown;
+      nextAttemptAt?: unknown;
+      leaseExpiresAt?: unknown;
+    } | undefined;
+    const outcome = pending?.outcome as CancellationOutcome | undefined;
+    if (pending?.status !== "pending") return {state: "skipped" as const};
+    if (typeof pending.id !== "string" || typeof payerUid !== "string" || !payerUid ||
+      !(pending.receivedAt instanceof admin.firestore.Timestamp) ||
+      typeof outcome?.cancelAtUnixSeconds !== "number") {
+      const reason = "Pending cancellation evidence is malformed.";
+      tx.update(membershipRef, {
+        "cancellationRequest.status": "manual_review",
+        "cancellationRequest.lastError": reason,
+        "cancellationRequest.manualReviewAt": serverTimestamp(),
+        "cancellationRequest.nextAttemptAt": admin.firestore.FieldValue.delete(),
+        "cancellationRequest.leaseToken": admin.firestore.FieldValue.delete(),
+        "cancellationRequest.leaseExpiresAt": admin.firestore.FieldValue.delete(),
+        "updatedAt": serverTimestamp(),
+      });
+      return {
+        state: "terminal" as const,
+        requestId: typeof pending.id === "string" ? pending.id : "malformed",
+        reason,
+      };
+    }
+    const nextAttemptAt = timestampMillis(pending.nextAttemptAt);
+    const leaseExpiresAt = timestampMillis(pending.leaseExpiresAt);
+    if ((nextAttemptAt !== null && nextAttemptAt > nowMillis) ||
+      (leaseExpiresAt !== null && leaseExpiresAt > nowMillis)) {
+      return {state: "skipped" as const};
+    }
+    const attemptCount = typeof pending.attemptCount === "number" ?
+      pending.attemptCount : 1;
+    const recoveryStartedAtMillis = timestampMillis(pending.recoveryStartedAt) ??
+      pending.receivedAt.toMillis();
+    if (attemptCount >= CANCELLATION_RECOVERY_MAX_ATTEMPTS ||
+      nowMillis - recoveryStartedAtMillis >= CANCELLATION_RECOVERY_MAX_AGE_MS) {
+      tx.update(membershipRef, {
+        "cancellationRequest.status": "manual_review",
+        "cancellationRequest.lastError": "Automatic cancellation recovery exhausted.",
+        "cancellationRequest.manualReviewAt": serverTimestamp(),
+        "cancellationRequest.nextAttemptAt": admin.firestore.FieldValue.delete(),
+        "cancellationRequest.leaseToken": admin.firestore.FieldValue.delete(),
+        "cancellationRequest.leaseExpiresAt": admin.firestore.FieldValue.delete(),
+        "updatedAt": serverTimestamp(),
+      });
+      return {
+        state: "terminal" as const,
+        requestId: pending.id,
+        reason: "Automatic cancellation recovery exhausted.",
+      };
+    }
+    tx.update(membershipRef, {
+      "cancellationRequest.attemptCount": attemptCount + 1,
+      "cancellationRequest.lastAttemptAt": serverTimestamp(),
+      "cancellationRequest.leaseToken": token,
+      "cancellationRequest.leaseExpiresAt": admin.firestore.Timestamp.fromMillis(
+        nowMillis + CANCELLATION_RECOVERY_LEASE_MS
+      ),
+      "cancellationRequest.nextAttemptAt": admin.firestore.Timestamp.fromMillis(
+        nowMillis + CANCELLATION_RECOVERY_LEASE_MS
+      ),
+      "updatedAt": serverTimestamp(),
+    });
+    return {
+      state: "acquired" as const,
+      token,
+      payerUid,
+      prepared: {
+        requestId: pending.id,
+        receivedAt: pending.receivedAt,
+        outcome,
+        repairGeneration: typeof pending.repairGeneration === "number" ?
+          pending.repairGeneration : 0,
+      },
+    };
+  });
+  if (result.state === "terminal") {
+    console.error("CRITICAL_BILLING_CANCELLATION_MANUAL_REVIEW", {
+      subscriptionId: membershipRef.id,
+      requestId: result.requestId,
+      error: result.reason,
+    });
+    await writeAudit({
+      type: "cancellation_manual_review",
+      severity: "critical",
+      subscriptionId: membershipRef.id,
+      requestId: result.requestId,
+      error: result.reason,
+    }).catch((auditError) =>
+      console.error("Could not write cancellation manual-review audit", membershipRef.id, auditError)
+    );
+    return null;
+  }
+  if (result.state !== "acquired") return null;
+  return {
+    token: result.token,
+    payerUid: result.payerUid,
+    prepared: result.prepared,
+  };
+}
+
+/** Retries frozen cancellation receipts independently of a customer returning. */
+async function recoverPendingCancellationsOnce(
+  nowMillis = Date.now(),
+  limit = 50,
+  converge: (userId: string) => Promise<void> = async () => undefined
+): Promise<{processed: number; failed: number; skipped: number}> {
+  const due = await db().collection("memberships")
+    .where(
+      "cancellationRequest.nextAttemptAt",
+      "<=",
+      admin.firestore.Timestamp.fromMillis(nowMillis)
+    )
+    .orderBy("cancellationRequest.nextAttemptAt", "asc")
+    .limit(limit)
+    .get();
+  const result = {processed: 0, failed: 0, skipped: 0};
+  for (const membership of due.docs) {
+    const itemNow = Math.max(nowMillis, Date.now());
+    const lease = await acquireCancellationRecoveryLease(membership.ref, itemNow);
+    if (!lease) {
+      result.skipped += 1;
+      continue;
+    }
+    try {
+      await settlePreparedCancellation(
+        membership.ref,
+        lease.payerUid,
+        lease.prepared,
+        converge
+      );
+      result.processed += 1;
+    } catch (error) {
+      await markPendingCancellationFailed(
+        membership.ref,
+        lease.prepared.requestId,
+        error,
+        Math.max(itemNow, Date.now())
+      );
+      console.error("Scheduled cancellation recovery failed", membership.id, error);
+      result.failed += 1;
+    }
+  }
+  return result;
+}
+
+export function buildRecoverMembershipCancellations(
+  converge: (userId: string) => Promise<void>
+) {
+  return onSchedule({
+    region: REGION,
+    schedule: "every 5 minutes",
+    timeZone: "UTC",
+    secrets: MEMBERSHIP_STRIPE_WORKER_SECRETS,
+    timeoutSeconds: 540,
+  }, async () => {
+    const result = await recoverPendingCancellationsOnce(Date.now(), 50, converge);
+    console.log("Membership cancellation recovery result", result);
+  });
+}
+
+export function buildRequestMembershipCancellation(
+  converge: (userId: string) => Promise<void>
+) {
+  return onCall(
+    {region: REGION, secrets: MEMBERSHIP_SECRETS},
+    async (request) => {
+      const userId = requireAuthUid(request);
+      const subscriptionId = requireBoundedString(request.data?.subscriptionId, "subscriptionId", 3, 255);
+      const expectedCancelAtUnixSeconds = request.data?.expectedCancelAtUnixSeconds;
+      if (typeof expectedCancelAtUnixSeconds !== "number" ||
+      !Number.isSafeInteger(expectedCancelAtUnixSeconds) || expectedCancelAtUnixSeconds <= 0) {
+        throw new HttpsError(
+          "invalid-argument",
+          "expectedCancelAtUnixSeconds must be the cancellation date currently shown to you."
+        );
+      }
+
+      const membershipRef = db().collection("memberships").doc(subscriptionId);
+      const receivedAtMillis = Date.now();
+      const proposedRequestId = randomUUID();
+
+      // Freeze the legally decisive receipt time and outcome before calling
+      // Stripe. A crash after Stripe accepts the update can then replay this same
+      // request rather than recomputing it across a notice/month boundary.
+      const prepared = await db().runTransaction(async (tx) => {
+        const snap = await tx.get(membershipRef);
+        if (!snap.exists) throw new HttpsError("not-found", "Membership not found.");
+        const membership = snap.data() as MembershipDoc;
+        if (membership.payerUid !== userId) {
+          throw new HttpsError("permission-denied", "Only the payer can cancel this membership.");
+        }
+        const pending = snap.get("cancellationRequest") as {
+        id?: unknown;
+        status?: unknown;
+        receivedAt?: unknown;
+        recoveryStartedAt?: unknown;
+        outcome?: unknown;
+        repairGeneration?: unknown;
+        attemptCount?: unknown;
+      } | undefined;
+        const pendingOutcome = pending?.outcome as ReturnType<
+        typeof resolveCancellationOutcome
+      > | undefined;
+        if (membership.cancellationOutcome) {
+          if (typeof pending?.id !== "string" ||
+          !(pending.receivedAt instanceof admin.firestore.Timestamp)) {
+            throw new HttpsError(
+              "failed-precondition",
+              "This cancellation needs support because its recovery evidence is incomplete."
+            );
+          }
+          const repairGeneration = typeof pending.repairGeneration === "number" ?
+            pending.repairGeneration + 1 : 1;
+          const nextAttemptAt = admin.firestore.Timestamp.fromMillis(
+            receivedAtMillis + CANCELLATION_RECOVERY_LEASE_MS
+          );
+          tx.set(membershipRef, {
+            cancellationOutcome: null,
+            cancellationRequest: {
+              ...pending,
+              status: "pending",
+              outcome: membership.cancellationOutcome,
+              repairGeneration,
+              recoveryStartedAt: admin.firestore.Timestamp.fromMillis(receivedAtMillis),
+              attemptCount: 1,
+              lastAttemptAt: admin.firestore.Timestamp.fromMillis(receivedAtMillis),
+              nextAttemptAt,
+              leaseToken: admin.firestore.FieldValue.delete(),
+              leaseExpiresAt: admin.firestore.FieldValue.delete(),
+              lastError: admin.firestore.FieldValue.delete(),
+            },
+            updatedAt: serverTimestamp(),
+          }, {merge: true});
+          return {
+            alreadyFinalized: true as const,
+            requestId: pending.id,
+            receivedAt: pending.receivedAt,
+            outcome: membership.cancellationOutcome,
+            repairGeneration,
+          };
+        }
+        if (pending?.status === "pending" && typeof pending.id === "string" &&
+        pending.receivedAt instanceof admin.firestore.Timestamp &&
+        typeof pendingOutcome?.cancelAtUnixSeconds === "number") {
+          return {
+            alreadyFinalized: false as const,
+            requestId: pending.id,
+            receivedAt: pending.receivedAt,
+            outcome: pendingOutcome,
+            repairGeneration: typeof pending.repairGeneration === "number" ?
+              pending.repairGeneration : 0,
+          };
+        }
+        if (pending?.status === "manual_review") {
+          throw new HttpsError(
+            "failed-precondition",
+            "This cancellation is already with support for manual review."
+          );
+        }
+        const coolingOffEndsAt = membership.acceptances?.coolingOffEndsAt;
+        const coolingOffEndMillis = typeof coolingOffEndsAt === "string" ?
+          Date.parse(coolingOffEndsAt) : Number.NaN;
+        if (Number.isFinite(coolingOffEndMillis) &&
+          receivedAtMillis <= coolingOffEndMillis) {
+          throw new HttpsError(
+            "failed-precondition",
+            "This request is inside the cooling-off period and needs the staffed cooling-off process. Contact support for written acknowledgement; the ordinary renewal-notice flow was not applied.",
+            {reason: "cooling_off_manual_review", coolingOffEndsAt}
+          );
+        }
+        const receivedAt = admin.firestore.Timestamp.fromMillis(receivedAtMillis);
+        const outcome = resolveCancellationOutcome(receivedAtMillis);
+        if (outcome.cancelAtUnixSeconds !== expectedCancelAtUnixSeconds) {
+          throw new HttpsError(
+            "failed-precondition",
+            "The cancellation dates have changed. Review the updated dates and confirm again.",
+            {cancellationPreview: outcome}
+          );
+        }
+        tx.set(membershipRef, {
+          cancellationRequest: {
+            id: proposedRequestId,
+            status: "pending",
+            receivedAt,
+            recoveryStartedAt: receivedAt,
+            outcome,
+            attemptCount: 1,
+            repairGeneration: 0,
+            lastAttemptAt: receivedAt,
+            nextAttemptAt: admin.firestore.Timestamp.fromMillis(
+              receivedAtMillis + CANCELLATION_RECOVERY_LEASE_MS
+            ),
+          },
+          updatedAt: serverTimestamp(),
+        }, {merge: true});
+        return {
+          alreadyFinalized: false as const,
+          requestId: proposedRequestId,
+          receivedAt,
+          outcome,
+          repairGeneration: 0,
+        };
+      });
+
+      try {
+        const settled = await settlePreparedCancellation(
+          membershipRef,
+          userId,
+          prepared,
+          converge
+        );
+        return {
+          ok: true,
+          outcome: settled.outcome,
+          alreadyCancelled: prepared.alreadyFinalized || !settled.newlyFinalized,
+        };
+      } catch (error) {
+        await markPendingCancellationFailed(
+          membershipRef,
+          prepared.requestId,
+          error
+        ).catch((recordError) =>
+          console.error("Could not schedule cancellation recovery", subscriptionId, recordError)
+        );
+        throw error;
+      }
+    }
+  );
+}
 
 /**
- * Window in which the checkout session id alone is accepted as proof of
- * purchase, for the buyer who creates their account straight after paying.
+ * Window in which the checkout session plus browser-held verifier can attach a
+ * purchase for the buyer who creates their account straight after paying.
  */
 const SESSION_CLAIM_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -869,11 +2792,10 @@ function toMillis(
  *
  * Two routes, deliberately different in what they demand:
  *
- * - By checkout session id: possession of the id is the evidence. It is only
- *   ever shown to the buyer, on the success page immediately after payment, so
- *   it is accepted without a verified email but only inside a 24 hour window
- *   and only once. This is the path a brand new account uses, because a fresh
- *   sign-up has not verified its email yet.
+ * - By checkout session id plus the separate browser-held attempt verifier:
+ *   both must identify the same fulfilled membership. The verifier is accepted
+ *   without a verified email only inside a 24 hour window and is consumed by
+ *   the ownership transaction. A leaked Stripe URL is therefore insufficient.
  * - By email: no window, but the account's email must be verified and must
  *   match the address Stripe billed. Without the verification requirement,
  *   anyone could register a victim's address and take their membership.
@@ -885,13 +2807,16 @@ export function buildClaimMembership(converge: (userId: string) => Promise<void>
   return onCall({region: REGION}, async (request) => {
     const userId = requireAuthUid(request);
     const sessionId = optionalBoundedText(request.data?.sessionId, 3, 255);
+    const checkoutAttemptId = sessionId && request.data?.checkoutAttemptId !== undefined ?
+      requireCheckoutAttemptId(request.data.checkoutAttemptId) : null;
+    const presentedAttemptHash = checkoutAttemptId ?
+      sha256(`membership-checkout:${checkoutAttemptId}`) : null;
 
     const authUser = await admin.auth().getUser(userId);
     const email = authUser.email?.trim().toLowerCase() || null;
 
     const userRef = db().collection("users").doc(userId);
-    const userSnap = await userRef.get();
-    if (!userSnap.exists) {
+    if (!(await userRef.get()).exists) {
       throw new HttpsError(
         "failed-precondition",
         "Set up your member profile before claiming a purchase."
@@ -905,29 +2830,119 @@ export function buildClaimMembership(converge: (userId: string) => Promise<void>
         db().collection("memberships").where("payerEmail", "==", email).get() :
         Promise.resolve({docs: []} as unknown as admin.firestore.QuerySnapshot));
 
+    if (sessionId && candidates.docs.length > 1) {
+      const checkoutSessionIdHash = sha256(sessionId);
+      console.error("CRITICAL_BILLING_DUPLICATE_CHECKOUT_SESSION", {
+        checkoutSessionIdHash,
+        membershipIds: candidates.docs.map((doc) => doc.id),
+      });
+      await writeAudit({
+        type: "duplicate_checkout_session_claim",
+        severity: "critical",
+        checkoutSessionIdHash,
+        membershipIds: candidates.docs.map((doc) => doc.id),
+        claimantUid: userId,
+      });
+      throw new HttpsError(
+        "failed-precondition",
+        "This purchase link needs support review before it can be claimed."
+      );
+    }
+    // A success page can call this more than once (navigation retries, Strict
+    // Mode, or a network response lost after the transaction committed). Once
+    // this exact session already belongs to the caller, treat the repeat as a
+    // successful no-op and re-run entitlement convergence in case the first
+    // attempt committed the attach but failed before convergence completed.
+    const alreadyOwned = candidates.docs.filter((doc) =>
+      doc.get("payerUid") === userId &&
+      (Boolean(sessionId) || (authUser.emailVerified && Boolean(email)))
+    );
+    if (sessionId && alreadyOwned.length > 0) {
+      await Promise.all(alreadyOwned.map((doc) =>
+        applyMembershipEntitlement(doc.ref, converge)
+      ));
+      return {
+        ok: true,
+        claimed: alreadyOwned.map((doc) => doc.id),
+        alreadyClaimed: true,
+      };
+    }
+
+    // The session id is bearer evidence only while the membership is still
+    // unclaimed. Once the authenticated caller already owns this exact unique
+    // Session, retries remain idempotent even after the original claim window.
+    if (sessionId && candidates.docs.length === 1) {
+      if (!presentedAttemptHash ||
+        candidates.docs[0].get("checkoutAttemptHash") !== presentedAttemptHash) {
+        const checkoutSessionIdHash = sha256(sessionId);
+        await writeAudit({
+          type: "invalid_checkout_claim_verifier",
+          severity: "critical",
+          checkoutSessionIdHash,
+          membershipId: candidates.docs[0].id,
+          claimantUid: userId,
+        });
+        throw new HttpsError(
+          "permission-denied",
+          "This checkout link cannot prove ownership. Sign in with the verified email used to pay."
+        );
+      }
+      const fulfilledAt = toMillis(candidates.docs[0].get("fulfilledAt"));
+      const claimNow = Date.now();
+      const maxClockSkewMs = 5 * 60 * 1000;
+      if (fulfilledAt === null || fulfilledAt > claimNow + maxClockSkewMs) {
+        const checkoutSessionIdHash = sha256(sessionId);
+        await writeAudit({
+          type: "invalid_checkout_session_claim_evidence",
+          severity: "critical",
+          checkoutSessionIdHash,
+          membershipId: candidates.docs[0].id,
+          claimantUid: userId,
+        });
+        throw new HttpsError(
+          "failed-precondition",
+          "This purchase link needs support review before it can be claimed."
+        );
+      }
+      if (claimNow - fulfilledAt > SESSION_CLAIM_WINDOW_MS) {
+        throw new HttpsError(
+          "deadline-exceeded",
+          "This purchase link has expired. Sign in with the email you paid with to claim it."
+        );
+      }
+    }
+
     const unclaimed = candidates.docs.filter((doc) => !doc.get("payerUid"));
     if (unclaimed.length === 0) {
+      if (alreadyOwned.length > 0) {
+        await Promise.all(alreadyOwned.map((doc) =>
+          applyMembershipEntitlement(doc.ref, converge)
+        ));
+        return {
+          ok: true,
+          claimed: alreadyOwned.map((doc) => doc.id),
+          alreadyClaimed: true,
+        };
+      }
       throw new HttpsError(
         "not-found",
         "No unclaimed membership was found for this account."
       );
     }
 
-    const claimed: string[] = [];
+    // A verified-email retry may find both a membership attached just before a
+    // prior invocation crashed and another still-unclaimed membership for the
+    // same payer. Re-converge the owned rows, then continue claiming the rest.
+    await Promise.all(alreadyOwned.map((doc) =>
+      applyMembershipEntitlement(doc.ref, converge)
+    ));
+    const claimed: string[] = alreadyOwned.map((doc) => doc.id);
 
     for (const candidate of unclaimed) {
       const membershipRef = candidate.ref;
       const payerEmail = candidate.get("payerEmail") as string | null;
 
-      if (sessionId) {
-        const fulfilledAt = toMillis(candidate.get("fulfilledAt"));
-        if (fulfilledAt !== null && Date.now() - fulfilledAt > SESSION_CLAIM_WINDOW_MS) {
-          throw new HttpsError(
-            "deadline-exceeded",
-            "This purchase link has expired. Sign in with the email you paid with to claim it."
-          );
-        }
-      } else if (!authUser.emailVerified || !email || email !== payerEmail) {
+      if (!sessionId && (!authUser.emailVerified || !email || email !== payerEmail)) {
         throw new HttpsError(
           "permission-denied",
           "Verify the email address you paid with before claiming this membership."
@@ -936,53 +2951,116 @@ export function buildClaimMembership(converge: (userId: string) => Promise<void>
 
       const plan = getPlan(candidate.get("planKey") as PlanKey);
 
-      // A claim must not hand one account a second app-access membership.
-      if (plan.grantsAlphaWodAccess) {
-        const existing = await db().collection("memberships")
-          .where("payerUid", "==", userId).get();
-        const duplicate = existing.docs.some((doc) =>
-          doc.get("grantsAlphaWodAccess") === true &&
-          isMembershipStateBlockingDuplicate(doc.get("state") as MembershipState)
-        );
-        if (duplicate) throw new HttpsError("already-exists", POLICY_TEXT.duplicateBlocked);
-      }
-
       const attached = await db().runTransaction(async (tx) => {
         const fresh = await tx.get(membershipRef);
-        if (!fresh.exists || fresh.get("payerUid")) return false;
+        const freshUser = await tx.get(userRef);
+        if (!fresh.exists) return {state: "taken" as const, customerConflict: false};
+        if (!freshUser.exists) {
+          throw new HttpsError(
+            "failed-precondition",
+            "Set up your member profile before claiming a purchase."
+          );
+        }
+        const currentPayerUid = fresh.get("payerUid");
+        if (currentPayerUid && currentPayerUid !== userId) {
+          return {state: "taken" as const, customerConflict: false};
+        }
+        if (sessionId && fresh.get("checkoutAttemptHash") !== presentedAttemptHash) {
+          throw new HttpsError(
+            "permission-denied",
+            "This checkout link cannot prove ownership."
+          );
+        }
 
         const participantIsPayer = fresh.get("participant.isPayer") === true;
+        const currentTargetUid = fresh.get("entitlementTargetUid");
+        if (participantIsPayer && currentTargetUid !== null &&
+          currentTargetUid !== undefined && currentTargetUid !== userId) {
+          throw new HttpsError(
+            "failed-precondition",
+            "This self-payer membership is already linked to another account."
+          );
+        }
+        const shouldOwnEntitlement = plan.grantsAlphaWodAccess && participantIsPayer &&
+          isMembershipStateBlockingDuplicate(fresh.get("state") as MembershipState);
+        const payerMemberships = shouldOwnEntitlement ? await tx.get(
+          db().collection("memberships").where("payerUid", "==", userId)
+        ) : null;
+        const targetMemberships = shouldOwnEntitlement ? await tx.get(
+          db().collection("memberships").where("entitlementTargetUid", "==", userId)
+        ) : null;
+        const duplicate = [...(payerMemberships?.docs ?? []),
+          ...(targetMemberships?.docs ?? [])].some((doc) =>
+          doc.id !== membershipRef.id &&
+          doc.get("grantsAlphaWodAccess") === true &&
+          isBlockingMembershipDoc(doc)
+        );
+        if (duplicate) {
+          throw new HttpsError("already-exists", POLICY_TEXT.duplicateBlocked);
+        }
+        if (shouldOwnEntitlement &&
+          await hasBlockingPayerCheckoutReservation(tx, userId)) {
+          throw new HttpsError("already-exists", POLICY_TEXT.duplicateBlocked);
+        }
+        const owner = shouldOwnEntitlement ?
+          await readEntitlementOwner(tx, userId, membershipRef.id) : null;
+
+        if (owner) acquireEntitlementOwner(tx, owner, userId, membershipRef.id);
         tx.set(membershipRef, {
           payerUid: userId,
-          payerEmail: payerEmail ?? email,
-          claimedAt: serverTimestamp(),
-          claimedVia: sessionId ? "checkout_session" : "verified_email",
-          ...(plan.grantsAlphaWodAccess && participantIsPayer ?
+          payerEmail: (fresh.get("payerEmail") as string | null) ?? payerEmail ?? email,
+          ...(currentPayerUid === userId ? {} : {
+            claimedAt: serverTimestamp(),
+            claimedVia: sessionId ? "checkout_session" : "verified_email",
+          }),
+          ...(sessionId ? {checkoutClaimVerifierConsumedAt: serverTimestamp()} : {}),
+          ...(shouldOwnEntitlement ?
             {entitlementTargetUid: userId} :
             {}),
           updatedAt: serverTimestamp(),
         }, {merge: true});
 
         const customerId = fresh.get("stripeCustomerId");
-        if (typeof customerId === "string" && customerId && !userSnap.get("stripeCustomerId")) {
+        const currentCustomerId = freshUser.get("stripeCustomerId");
+        if (typeof customerId === "string" && customerId && !currentCustomerId) {
           tx.set(userRef, {
             stripeCustomerId: customerId,
             updatedAt: serverTimestamp(),
           }, {merge: true});
         }
-        return true;
+        return {
+          state: currentPayerUid === userId ? "already_mine" as const : "attached" as const,
+          customerConflict: typeof customerId === "string" && Boolean(customerId) &&
+            typeof currentCustomerId === "string" && Boolean(currentCustomerId) &&
+            currentCustomerId !== customerId,
+        };
       });
 
-      if (!attached) continue;
+      if (attached.state === "taken") continue;
+
+      if (attached.customerConflict) {
+        console.error("CRITICAL_BILLING_CUSTOMER_CONFLICT", {
+          subscriptionId: membershipRef.id,
+          userId,
+        });
+        await writeAudit({
+          type: "billing_customer_conflict",
+          severity: "critical",
+          subscriptionId: membershipRef.id,
+          payerUid: userId,
+        });
+      }
 
       await applyMembershipEntitlement(membershipRef, converge);
       claimed.push(membershipRef.id);
-      await writeAudit({
-        type: "membership_claimed",
-        subscriptionId: membershipRef.id,
-        payerUid: userId,
-        claimedVia: sessionId ? "checkout_session" : "verified_email",
-      });
+      if (attached.state === "attached") {
+        await writeAudit({
+          type: "membership_claimed",
+          subscriptionId: membershipRef.id,
+          payerUid: userId,
+          claimedVia: sessionId ? "checkout_session" : "verified_email",
+        });
+      }
     }
 
     if (claimed.length === 0) {
@@ -1002,29 +3080,80 @@ export function buildClaimMembership(converge: (userId: string) => Promise<void>
 
 async function fulfilCheckoutSession(
   session: Stripe.Checkout.Session,
-  converge: (userId: string) => Promise<void>
+  converge: (userId: string) => Promise<void>,
+  completionUnixSeconds: number
 ): Promise<void> {
   const intentId = session.metadata?.intentId;
   const subscriptionId = typeof session.subscription === "string" ?
     session.subscription :
     session.subscription?.id;
 
-  if (!intentId || !subscriptionId) return;
-  if (session.payment_status === "unpaid") return;
-
+  if (!intentId) return;
   const intentRef = db().collection("membershipIntents").doc(intentId);
   const intentSnap = await intentRef.get();
-  if (!intentSnap.exists) return;
-
+  if (!intentSnap.exists) {
+    throw new Error(`Checkout intent ${intentId} was not found for ${session.id}.`);
+  }
   const intent = intentSnap.data() as MembershipIntentDoc;
+  if (session.mode !== "subscription") {
+    throw new Error(`Checkout Session ${session.id} is not a subscription checkout.`);
+  }
+  if (intent.checkoutSessionId && intent.checkoutSessionId !== session.id) {
+    throw new Error(
+      `Checkout Session ${session.id} does not match intent ${intentRef.id}.`
+    );
+  }
+  if (session.metadata?.planKey !== intent.planKey) {
+    throw new Error(`Checkout Session ${session.id} has the wrong membership plan.`);
+  }
+
+  // Some dynamic payment methods complete Checkout before funds settle. Keep
+  // the uniqueness locks alive until the async success/failure event arrives.
+  if (session.payment_status === "unpaid") {
+    await extendCheckoutReservationForAsyncPayment(intentRef);
+    return;
+  }
+  if (session.payment_status !== "paid") {
+    throw new Error(
+      `Checkout Session ${session.id} is not paid (${session.payment_status}).`
+    );
+  }
+  if (!subscriptionId) {
+    throw new Error(`Paid Checkout Session ${session.id} has no subscription.`);
+  }
+
   const plan = getPlan(intent.planKey);
   const subscription = await stripe().subscriptions.retrieve(subscriptionId);
+  const sessionCustomerId = idOf(session.customer);
+  if (!sessionCustomerId) {
+    throw new Error(
+      `Checkout Session ${session.id} has no Stripe customer.`
+    );
+  }
+  const contractMismatch = stripeSubscriptionContractMismatch(subscription, {
+    planKey: intent.planKey,
+    stripePriceId: intent.stripePriceId,
+    stripeCustomerId: sessionCustomerId,
+    billingCycleAnchor: intent.billingCycleAnchor,
+    intentId: intentRef.id,
+  });
+  if (contractMismatch) throw new Error(contractMismatch);
   const membershipRef = db().collection("memberships").doc(subscriptionId);
 
+  const fulfilmentNow = Date.now();
+  const contractMadeMillis = Number.isFinite(completionUnixSeconds) &&
+      completionUnixSeconds > 0 ?
+    completionUnixSeconds * 1000 : fulfilmentNow;
+  const pastDueSince = subscription.status === "past_due" ?
+    Math.floor(fulfilmentNow / 1000) : null;
+  const graceEndMillis = resolvePastDueGraceEndMillis(pastDueSince);
+  const pastDueGraceEndsAt = graceEndMillis === null ?
+    null : admin.firestore.Timestamp.fromMillis(graceEndMillis);
   const state = resolveMembershipState({
     stripeStatus: subscription.status,
+    pastDueSinceUnixSeconds: pastDueSince,
     cancelAtUnixSeconds: subscription.cancel_at,
-  }, Date.now());
+  }, fulfilmentNow);
 
   // Stripe collected the billing email during checkout. It is the identity a
   // later claim is matched against, so it takes precedence over anything the
@@ -1040,16 +3169,22 @@ async function fulfilCheckoutSession(
       session.customer :
       session.customer?.id ?? "",
     checkoutSessionId: session.id,
+    checkoutAttemptHash: intent.checkoutAttemptHash,
     payerUid: intent.payerUid,
     payerEmail: stripeEmail,
     fulfilledAt: serverTimestamp(),
     claimedAt: intent.payerUid ? serverTimestamp() : null,
     planKey: intent.planKey,
+    stripePriceId: intent.stripePriceId,
     planName: plan.name,
     grantsAlphaWodAccess: plan.grantsAlphaWodAccess,
     participant: intent.participant,
     guardian: intent.guardian,
-    acceptances: intent.acceptances,
+    acceptances: {
+      ...intent.acceptances,
+      contractMadeAt: admin.firestore.Timestamp.fromMillis(contractMadeMillis),
+      coolingOffEndsAt: resolveCoolingOffEnd(contractMadeMillis),
+    },
     state,
     stripeStatus: subscription.status,
     // Access is granted only to an account that bought this for itself. An
@@ -1062,9 +3197,16 @@ async function fulfilCheckoutSession(
     preMembershipEntitlement: null,
     currentPeriodEnd: resolveCurrentPeriodEnd(subscription),
     billingCycleAnchor: intent.billingCycleAnchor,
-    pastDueSince: null,
+    pastDueSince,
+    pastDueGraceEndsAt,
+    nextReconcileAt: state === "past_due_grace" ? pastDueGraceEndsAt :
+      state === "past_due_suspended" ? admin.firestore.Timestamp.fromMillis(
+        fulfilmentNow + SUSPENDED_RECONCILE_INTERVAL_MS
+      ) : null,
+    openDisputeIds: [],
     disputeOpen: false,
     accessRevoked: false,
+    providerContractStatus: "verified",
     cancelAt: subscription.cancel_at ?? null,
     cancellationRequestedAt: null,
     cancellationOutcome: null,
@@ -1072,19 +3214,28 @@ async function fulfilCheckoutSession(
     updatedAt: serverTimestamp(),
   };
 
-  // `create` keeps a replayed webhook from overwriting a membership that has
-  // since moved on; convergence below then reconciles it either way.
-  try {
-    await membershipRef.create(membership);
-  } catch (error: any) {
-    if (error?.code !== 6 && error?.code !== "already-exists") throw error;
-  }
+  // Membership state and its durable confirmation are accepted atomically.
+  // A replay never overwrites a membership that has moved on, but it can heal
+  // a missing outbox row from an interrupted earlier version of the handler.
+  await ensureMembershipAndConfirmationOutbox(
+    membershipRef,
+    membership,
+    session.amount_total ?? null,
+    intentRef,
+    intent
+  );
 
-  await intentRef.set({status: "fulfilled", subscriptionId}, {merge: true});
-  await applyMembershipEntitlement(membershipRef, converge);
-  // Stripe's own total is authoritative for what was actually charged, so the
-  // confirmation reports it rather than any figure computed here.
-  await sendMembershipConfirmation(membershipRef, session.amount_total ?? null);
+  await transitionCheckoutReservation(intentRef, "fulfilled", {
+    subscriptionId,
+    fulfilledAt: serverTimestamp(),
+  });
+  // Re-read authoritative Stripe state after the membership exists. This also
+  // heals an invoice/subscription event that arrived before Checkout fulfilment
+  // and guarantees a past-due membership has a bounded grace deadline.
+  await convergeMembershipFromStripe(subscriptionId, converge, {}, fulfilmentNow);
+  // The scheduled sender owns delivery. Webhook completion therefore never
+  // depends on Resend availability, and every retry uses the frozen outbox
+  // payload rather than waiting for another unrelated Stripe event.
   await writeAudit({
     type: "checkout_fulfilled",
     subscriptionId,
@@ -1099,9 +3250,10 @@ async function fulfilCheckoutSession(
  *
  * `Charge` no longer carries an `invoice` field, so the link runs through the
  * charge's PaymentIntent and the invoice payment recorded against it. If that
- * lookup yields nothing, the customer's own stored membership is used, which
- * is unambiguous because a duplicate active subscription is blocked at
- * purchase time.
+ * Customer identity alone is never enough: a customer can have sequential
+ * subscriptions and unrelated one-off charges. If invoice linkage is missing,
+ * an app-owned customer is sent through durable retry/manual review instead of
+ * guessing and revoking the wrong membership.
  */
 async function findMembershipIdForCharge(charge: Stripe.Charge): Promise<string | null> {
   const paymentIntentId = idOf(charge.payment_intent);
@@ -1128,17 +3280,71 @@ async function findMembershipIdForCharge(charge: Stripe.Charge): Promise<string 
     .collection("memberships")
     .where("stripeCustomerId", "==", customerId)
     .get();
-  const live = byCustomer.docs.filter((doc) =>
-    isMembershipStateBlockingDuplicate(doc.get("state") as MembershipState)
+  if (byCustomer.empty) return null;
+  console.error("CRITICAL_BILLING_UNRESOLVED_CHARGE_MEMBERSHIP", {
+    chargeId: charge.id,
+    customerId,
+    membershipIds: byCustomer.docs.map((doc) => doc.id),
+  });
+  // Retrying may heal a temporarily unavailable invoice-payment link. If it
+  // never becomes resolvable, the durable Stripe event reaches manual review.
+  throw new Error(
+    `Charge ${charge.id} has no authoritative invoice-to-membership link.`
   );
-
-  return live.length === 1 ? live[0].id : null;
 }
 
 function idOf(value: unknown): string | null {
   if (typeof value === "string") return value;
   if (value && typeof value === "object" && "id" in (value as any)) {
     return String((value as any).id);
+  }
+  return null;
+}
+
+type SubscriptionContractExpectation = {
+  planKey: PlanKey;
+  stripePriceId: string;
+  stripeCustomerId: string;
+  billingCycleAnchor: number;
+  intentId?: string;
+};
+
+/** Returns the first immutable provider-contract mismatch, or null when safe. */
+function stripeSubscriptionContractMismatch(
+  subscription: Stripe.Subscription,
+  expected: SubscriptionContractExpectation
+): string | null {
+  if (subscription.collection_method !== "charge_automatically") {
+    return `Subscription ${subscription.id} is not collected automatically.`;
+  }
+  if (subscription.pause_collection !== null) {
+    return `Subscription ${subscription.id} has payment collection paused.`;
+  }
+  if (subscription.status === "trialing" || subscription.trial_start !== null ||
+    subscription.trial_end !== null) {
+    return `Subscription ${subscription.id} has an unapproved trial.`;
+  }
+  if (subscription.metadata?.planKey !== expected.planKey) {
+    return `Subscription ${subscription.id} has the wrong plan metadata.`;
+  }
+  if (expected.intentId && subscription.metadata?.intentId !== expected.intentId) {
+    return `Subscription ${subscription.id} has the wrong checkout intent metadata.`;
+  }
+  if (idOf(subscription.customer) !== expected.stripeCustomerId) {
+    return `Subscription ${subscription.id} has the wrong Stripe customer.`;
+  }
+  if (subscription.billing_cycle_anchor !== expected.billingCycleAnchor) {
+    return `Subscription ${subscription.id} has a different billing-cycle anchor.`;
+  }
+  const items = subscription.items.data;
+  if (items.length !== 1) {
+    return `Subscription ${subscription.id} does not have exactly one membership item.`;
+  }
+  if (idOf(items[0].price) !== expected.stripePriceId) {
+    return `Subscription ${subscription.id} has a different membership Price.`;
+  }
+  if (items[0].quantity !== 1) {
+    return `Subscription ${subscription.id} does not have quantity one.`;
   }
   return null;
 }
@@ -1165,12 +3371,216 @@ function resolveInvoiceSubscriptionId(invoice: Stripe.Invoice): string | null {
   return idOf((invoice as unknown as {subscription?: unknown}).subscription);
 }
 
+const STRIPE_EVENT_LEASE_MS = 10 * 60 * 1000;
+const STRIPE_EVENT_MAX_ATTEMPTS = 12;
+const STRIPE_EVENT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+type StripeEventLeaseResult =
+  | {state: "acquired"; leaseToken: string}
+  | {state: "processed"}
+  | {state: "in_progress"}
+  | {state: "deferred"}
+  | {state: "terminal"};
+
+function stripeEventRetryAtMillis(attemptCount: number, nowMillis: number): number {
+  const exponent = Math.max(0, Math.min(attemptCount - 1, 6));
+  return nowMillis + Math.min(60 * 60 * 1000, 60 * 1000 * (2 ** exponent));
+}
+
+/**
+ * Claims a recoverable processing lease for one Stripe event. A plain
+ * create-if-absent ledger loses an event forever if the process dies after the
+ * create but before handling. Status plus an expiring lease lets a later
+ * delivery distinguish completed work from an abandoned attempt.
+ */
+async function acquireStripeEventLease(
+  event: Pick<Stripe.Event, "id" | "type" | "created">,
+  nowMillis = Date.now(),
+  leaseToken = randomUUID()
+): Promise<StripeEventLeaseResult> {
+  const ledgerRef = db().collection("stripeEvents").doc(event.id);
+  let newlyTerminal = false;
+  const result = await db().runTransaction(async (tx) => {
+    const snap = await tx.get(ledgerRef);
+    if (snap.exists && snap.get("status") === "processed") {
+      return {state: "processed"} as const;
+    }
+    if (snap.exists && snap.get("status") === "dead_letter") {
+      return {state: "terminal"} as const;
+    }
+
+    const activeLeaseExpiresAt = snap.exists ?
+      timestampMillis(snap.get("leaseExpiresAt")) : null;
+    if (snap.exists && snap.get("status") === "processing" &&
+      activeLeaseExpiresAt !== null && activeLeaseExpiresAt > nowMillis) {
+      return {state: "in_progress"} as const;
+    }
+    const nextAttemptAt = snap.exists ?
+      timestampMillis(snap.get("nextAttemptAt")) : null;
+    if (snap.exists && snap.get("status") === "failed" &&
+      nextAttemptAt !== null && nextAttemptAt > nowMillis) {
+      return {state: "deferred"} as const;
+    }
+
+    const attemptCount = snap.exists && typeof snap.get("attemptCount") === "number" ?
+      snap.get("attemptCount") as number : 0;
+    const stripeCreated = snap.exists && typeof snap.get("stripeCreated") === "number" ?
+      snap.get("stripeCreated") as number : event.created;
+    if (attemptCount >= STRIPE_EVENT_MAX_ATTEMPTS ||
+      nowMillis - stripeCreated * 1000 >= STRIPE_EVENT_MAX_AGE_MS) {
+      newlyTerminal = true;
+      tx.set(ledgerRef, {
+        type: event.type,
+        stripeCreated,
+        status: "dead_letter",
+        deadLetteredAt: serverTimestamp(),
+        deadLetterReason: "Stripe event retry budget exhausted.",
+        leaseToken: admin.firestore.FieldValue.delete(),
+        leaseExpiresAt: admin.firestore.FieldValue.delete(),
+        nextAttemptAt: admin.firestore.FieldValue.delete(),
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+      return {state: "terminal"} as const;
+    }
+    const leaseExpiresAt = admin.firestore.Timestamp.fromMillis(
+      nowMillis + STRIPE_EVENT_LEASE_MS
+    );
+    tx.set(ledgerRef, {
+      type: event.type,
+      stripeCreated: event.created,
+      status: "processing",
+      leaseToken,
+      leaseExpiresAt,
+      // A crashed invocation becomes discoverable by the scheduled worker as
+      // soon as its lease expires.
+      nextAttemptAt: leaseExpiresAt,
+      attemptCount: attemptCount + 1,
+      lastAttemptAt: serverTimestamp(),
+      ...(snap.exists ? {} : {receivedAt: serverTimestamp()}),
+      lastError: admin.firestore.FieldValue.delete(),
+      failedAt: admin.firestore.FieldValue.delete(),
+    }, {merge: true});
+    return {state: "acquired", leaseToken} as const;
+  });
+  if (newlyTerminal) {
+    console.error("CRITICAL_BILLING_STRIPE_EVENT_DEAD_LETTER", {
+      eventId: event.id,
+      eventType: event.type,
+    });
+    await writeAudit({
+      type: "stripe_event_dead_lettered",
+      severity: "critical",
+      stripeEventId: event.id,
+      stripeEventType: event.type,
+      reason: "retry_budget_exhausted",
+    }).catch((error) => console.error("Could not write dead-letter audit", event.id, error));
+  }
+  return result;
+}
+
+async function markStripeEventProcessed(
+  eventId: string,
+  leaseToken: string
+): Promise<boolean> {
+  const ledgerRef = db().collection("stripeEvents").doc(eventId);
+  return db().runTransaction(async (tx) => {
+    const snap = await tx.get(ledgerRef);
+    if (!snap.exists || snap.get("status") !== "processing" ||
+      snap.get("leaseToken") !== leaseToken) return false;
+    tx.set(ledgerRef, {
+      status: "processed",
+      processedAt: serverTimestamp(),
+      leaseToken: admin.firestore.FieldValue.delete(),
+      leaseExpiresAt: admin.firestore.FieldValue.delete(),
+      nextAttemptAt: admin.firestore.FieldValue.delete(),
+      lastError: admin.firestore.FieldValue.delete(),
+    }, {merge: true});
+    return true;
+  });
+}
+
+async function markStripeEventFailed(
+  eventId: string,
+  leaseToken: string,
+  error: unknown,
+  nowMillis = Date.now()
+): Promise<boolean> {
+  const ledgerRef = db().collection("stripeEvents").doc(eventId);
+  const outcome = await db().runTransaction(async (tx) => {
+    const snap = await tx.get(ledgerRef);
+    if (!snap.exists || snap.get("status") !== "processing" ||
+      snap.get("leaseToken") !== leaseToken) return null;
+    const message = error instanceof Error ? error.message : String(error);
+    const attemptCount = typeof snap.get("attemptCount") === "number" ?
+      snap.get("attemptCount") as number : 1;
+    const stripeCreated = typeof snap.get("stripeCreated") === "number" ?
+      snap.get("stripeCreated") as number : Math.floor(nowMillis / 1000);
+    const terminal = attemptCount >= STRIPE_EVENT_MAX_ATTEMPTS ||
+      nowMillis - stripeCreated * 1000 >= STRIPE_EVENT_MAX_AGE_MS;
+    const terminalMessage = message.slice(0, 1000);
+    tx.set(ledgerRef, {
+      status: terminal ? "dead_letter" : "failed",
+      failedAt: serverTimestamp(),
+      lastError: message.slice(0, 1000),
+      leaseToken: admin.firestore.FieldValue.delete(),
+      leaseExpiresAt: admin.firestore.FieldValue.delete(),
+      ...(terminal ? {
+        deadLetteredAt: serverTimestamp(),
+        nextAttemptAt: admin.firestore.FieldValue.delete(),
+      } : {
+        nextAttemptAt: admin.firestore.Timestamp.fromMillis(
+          stripeEventRetryAtMillis(attemptCount, nowMillis)
+        ),
+      }),
+    }, {merge: true});
+    return {terminal, terminalMessage};
+  });
+  if (outcome?.terminal) {
+    console.error("CRITICAL_BILLING_STRIPE_EVENT_DEAD_LETTER", {
+      eventId,
+      error: outcome.terminalMessage,
+    });
+    await writeAudit({
+      type: "stripe_event_dead_lettered",
+      severity: "critical",
+      stripeEventId: eventId,
+      error: outcome.terminalMessage,
+    }).catch((auditError) =>
+      console.error("Could not write dead-letter audit", eventId, auditError)
+    );
+  }
+  return outcome?.terminal ?? false;
+}
+
+async function processStripeEventUnderLease(
+  event: Stripe.Event,
+  leaseToken: string,
+  converge: (userId: string) => Promise<void>
+): Promise<void> {
+  try {
+    await handleStripeEvent(event, converge);
+    const marked = await markStripeEventProcessed(event.id, leaseToken);
+    if (!marked) {
+      throw new Error("The Stripe event processing lease changed before completion.");
+    }
+  } catch (error) {
+    await markStripeEventFailed(event.id, leaseToken, error).catch((ledgerError) =>
+      console.error(
+        "Could not record Stripe webhook failure",
+        event.id,
+        ledgerError
+      )
+    );
+    throw error;
+  }
+}
+
 /**
  * Stripe webhook endpoint.
  *
  * The signature is verified against the raw body before anything is read, and
- * every event is recorded in an idempotency ledger so a redelivery cannot
- * apply an access change twice.
+ * every event is recorded in a recoverable lease ledger so redelivery cannot
+ * apply completed work twice while a crashed handler can still be retried.
  */
 export function buildStripeWebhook(converge: (userId: string) => Promise<void>) {
   return onRequest(
@@ -1197,34 +3607,104 @@ export function buildStripeWebhook(converge: (userId: string) => Promise<void>) 
         return;
       }
 
-      const ledgerRef = db().collection("stripeEvents").doc(event.id);
+      let lease: StripeEventLeaseResult;
       try {
-        await ledgerRef.create({
-          type: event.type,
-          receivedAt: serverTimestamp(),
-          stripeCreated: event.created,
-        });
-      } catch (error: any) {
-        if (error?.code === 6 || error?.code === "already-exists") {
-          res.status(200).send("Already processed.");
-          return;
-        }
-        throw error;
+        lease = await acquireStripeEventLease(event);
+      } catch (error) {
+        console.error("Stripe webhook lease acquisition failed", event.id, error);
+        res.status(500).send("Ledger error.");
+        return;
+      }
+      if (lease.state === "processed") {
+        res.status(200).send("Already processed.");
+        return;
+      }
+      if (lease.state === "terminal") {
+        res.status(200).send("Accepted for manual review.");
+        return;
+      }
+      if (lease.state === "in_progress" || lease.state === "deferred") {
+        res.set("Retry-After", "5");
+        res.status(409).send("Event processing is deferred; retry.");
+        return;
       }
 
       try {
-        await handleStripeEvent(event, converge);
-        await ledgerRef.set({status: "processed", processedAt: serverTimestamp()}, {merge: true});
+        await processStripeEventUnderLease(event, lease.leaseToken, converge);
         res.status(200).send("ok");
       } catch (error) {
         console.error("Stripe webhook handling failed", event.id, event.type, error);
-        // The ledger entry is removed so Stripe's retry can reprocess the
-        // event rather than being turned away by the idempotency guard.
-        await ledgerRef.delete().catch(() => undefined);
         res.status(500).send("Handler error.");
       }
     }
   );
+}
+
+/** Reclaims due failed/crashed events and retrieves the signed object from Stripe. */
+async function recoverDueStripeEventsOnce(
+  converge: (userId: string) => Promise<void>,
+  nowMillis = Date.now(),
+  limit = 50
+): Promise<{processed: number; failed: number; skipped: number}> {
+  const due = await db().collection("stripeEvents")
+    .where("nextAttemptAt", "<=", admin.firestore.Timestamp.fromMillis(nowMillis))
+    .orderBy("nextAttemptAt", "asc")
+    .limit(limit)
+    .get();
+  const result = {processed: 0, failed: 0, skipped: 0};
+
+  for (const ledger of due.docs) {
+    const itemNow = Math.max(nowMillis, Date.now());
+    const eventStub = {
+      id: ledger.id,
+      type: String(ledger.get("type") || "unknown") as Stripe.Event["type"],
+      created: typeof ledger.get("stripeCreated") === "number" ?
+        ledger.get("stripeCreated") as number : Math.floor(itemNow / 1000),
+    };
+    const lease = await acquireStripeEventLease(eventStub, itemNow);
+    if (lease.state !== "acquired") {
+      result.skipped += 1;
+      continue;
+    }
+
+    try {
+      const event = await stripe().events.retrieve(ledger.id);
+      await processStripeEventUnderLease(event, lease.leaseToken, converge);
+      result.processed += 1;
+    } catch (error) {
+      // Retrieval and handler failures are already recorded by the shared
+      // processor only after retrieval. Record retrieval failures here too.
+      const fresh = await ledger.ref.get();
+      if (fresh.get("status") === "processing" &&
+        fresh.get("leaseToken") === lease.leaseToken) {
+        await markStripeEventFailed(
+          ledger.id,
+          lease.leaseToken,
+          error,
+          Math.max(itemNow, Date.now())
+        );
+      }
+      console.error("Scheduled Stripe event recovery failed", ledger.id, error);
+      result.failed += 1;
+    }
+  }
+
+  return result;
+}
+
+export function buildRecoverStripeEvents(
+  converge: (userId: string) => Promise<void>
+) {
+  return onSchedule({
+    region: REGION,
+    schedule: "every 5 minutes",
+    timeZone: "UTC",
+    secrets: MEMBERSHIP_STRIPE_WORKER_SECRETS,
+    timeoutSeconds: 540,
+  }, async () => {
+    const result = await recoverDueStripeEventsOnce(converge);
+    console.log("Stripe event recovery result", result);
+  });
 }
 
 async function handleStripeEvent(
@@ -1234,7 +3714,35 @@ async function handleStripeEvent(
   switch (event.type) {
   case "checkout.session.completed":
   case "checkout.session.async_payment_succeeded": {
-    await fulfilCheckoutSession(event.data.object as Stripe.Checkout.Session, converge);
+    await fulfilCheckoutSession(
+      event.data.object as Stripe.Checkout.Session,
+      converge,
+      event.created
+    );
+    return;
+  }
+
+  case "checkout.session.expired":
+  case "checkout.session.async_payment_failed": {
+    const session = event.data.object as Stripe.Checkout.Session;
+    const intentId = session.metadata?.intentId;
+    if (intentId) {
+      const status = event.type === "checkout.session.expired" ? "expired" : "failed";
+      await transitionCheckoutReservation(
+        db().collection("membershipIntents").doc(intentId),
+        status,
+        {
+          endedByStripeEvent: event.type,
+          endedAt: serverTimestamp(),
+        },
+        true,
+        {
+          sessionId: session.id,
+          mode: session.mode,
+          planKey: session.metadata?.planKey ?? null,
+        }
+      );
+    }
     return;
   }
 
@@ -1261,32 +3769,29 @@ async function handleStripeEvent(
     const invoice = event.data.object as Stripe.Invoice;
     const subscriptionId = resolveInvoiceSubscriptionId(invoice);
     if (subscriptionId) {
-      // The grace period runs from the due date of the invoice that failed.
-      const pastDueSince = invoice.due_date ?? invoice.created ?? event.created;
+      // `due_date` is meaningful only for manually sent invoices. Automatic
+      // invoices can be created/finalised well before the failed collection
+      // attempt, so their grace period starts at the signed failure event.
+      const pastDueSince = invoice.collection_method === "send_invoice" &&
+          typeof invoice.due_date === "number" ?
+        invoice.due_date : event.created;
       await convergeMembershipFromStripe(subscriptionId, converge, {pastDueSince});
     }
     return;
   }
 
-  case "charge.dispute.created": {
-    const dispute = event.data.object as Stripe.Dispute;
-    const subscriptionId = await findMembershipIdForDispute(dispute);
-    if (subscriptionId) {
-      await convergeMembershipFromStripe(subscriptionId, converge, {disputeOpen: true});
-    }
-    return;
-  }
-
+  case "charge.dispute.created":
   case "charge.dispute.closed": {
-    const dispute = event.data.object as Stripe.Dispute;
+    const delivered = event.data.object as Stripe.Dispute;
+    // The event snapshot may be older than another delivered event. Retrieve
+    // the current Dispute so a delayed `created` can never reopen a won/closed
+    // dispute or undo a lost-dispute revocation.
+    const dispute = await stripe().disputes.retrieve(delivered.id);
     const subscriptionId = await findMembershipIdForDispute(dispute);
     if (!subscriptionId) return;
-
-    // Won restores eligible access; lost revokes it permanently.
-    const lost = dispute.status === "lost";
     await convergeMembershipFromStripe(subscriptionId, converge, {
-      disputeOpen: false,
-      ...(lost ? {accessRevoked: true} : {}),
+      dispute: {id: dispute.id, status: dispute.status},
+      ...(dispute.status === "lost" ? {accessRevoked: true} : {}),
     });
     return;
   }
@@ -1346,7 +3851,19 @@ export function buildListMemberships(requireAdmin: (request: any) => Promise<voi
         cancelAt: membership.cancelAt ?? null,
         disputeOpen: membership.disputeOpen ?? false,
         accessRevoked: membership.accessRevoked ?? false,
+        providerContractStatus: membership.providerContractStatus ?? null,
+        providerContractError: membership.providerContractError ?? null,
         pastDueSince: membership.pastDueSince ?? null,
+        confirmationEmailStatus: typeof membership.confirmationEmailStatus === "string" ?
+          membership.confirmationEmailStatus : null,
+        confirmationEmailError: typeof membership.confirmationEmailError === "string" ?
+          membership.confirmationEmailError : null,
+        confirmationEmailProviderId: typeof membership.confirmationEmailProviderId === "string" ?
+          membership.confirmationEmailProviderId : null,
+        cancellationRequestStatus: membership.cancellationRequest?.status ?? null,
+        cancellationRequestError: membership.cancellationRequest?.lastError ?? null,
+        entitlementProjectionStatus: membership.entitlementProjectionStatus ?? null,
+        entitlementProjectionError: membership.entitlementProjectionError ?? null,
       };
     });
 
@@ -1358,7 +3875,10 @@ export function buildListMemberships(requireAdmin: (request: any) => Promise<voi
  * Links a membership bought for another person to that person's account, so a
  * purchase where the payer is not the participant can still grant access.
  */
-export function buildLinkMembershipParticipant(requireAdmin: (request: any) => Promise<void>) {
+export function buildLinkMembershipParticipant(
+  requireAdmin: (request: any) => Promise<void>,
+  converge: (userId: string) => Promise<void>
+) {
   return onCall({region: REGION}, async (request) => {
     const callerUid = requireAuthUid(request);
     await requireAdmin(request);
@@ -1367,41 +3887,132 @@ export function buildLinkMembershipParticipant(requireAdmin: (request: any) => P
     const targetUid = requireBoundedString(request.data?.participantUid, "participantUid", 3, 128);
 
     const membershipRef = db().collection("memberships").doc(subscriptionId);
-    const [membershipSnap, userSnap] = await Promise.all([
-      membershipRef.get(),
-      db().collection("users").doc(targetUid).get(),
-    ]);
-    if (!membershipSnap.exists) throw new HttpsError("not-found", "Membership not found.");
-    if (!userSnap.exists) throw new HttpsError("not-found", "Participant account not found.");
+    const targetRef = db().collection("users").doc(targetUid);
+    const linked = await db().runTransaction(async (tx) => {
+      const membershipSnap = await tx.get(membershipRef);
+      const userSnap = await tx.get(targetRef);
+      if (!membershipSnap.exists) throw new HttpsError("not-found", "Membership not found.");
+      if (!userSnap.exists) throw new HttpsError("not-found", "Participant account not found.");
 
-    const membership = membershipSnap.data() as MembershipDoc;
-    if (!membership.grantsAlphaWodAccess) {
-      throw new HttpsError(
-        "failed-precondition",
-        "This plan does not include AlphaWOD access."
+      const membership = membershipSnap.data() as MembershipDoc;
+      if (!membership.grantsAlphaWodAccess) {
+        throw new HttpsError(
+          "failed-precondition",
+          "This plan does not include AlphaWOD access."
+        );
+      }
+      if (!isMembershipStateBlockingDuplicate(membership.state)) {
+        throw new HttpsError(
+          "failed-precondition",
+          "This membership is no longer eligible to grant AlphaWOD access."
+        );
+      }
+      if (membership.participant?.isPayer !== false) {
+        throw new HttpsError(
+          "failed-precondition",
+          "A self-payer membership must be claimed by its payer account."
+        );
+      }
+      const target = userSnap.data() as Record<string, unknown>;
+      if (target.role !== "user") {
+        throw new HttpsError(
+          "failed-precondition",
+          "Only a member account can be linked to a membership."
+        );
+      }
+      if (membership.entitlementTargetUid === targetUid) {
+        return false;
+      }
+      if (membership.entitlementTargetUid &&
+        membership.entitlementTargetUid !== targetUid) {
+        // A transfer needs explicit restoration of the old target's snapshot.
+        // Until that workflow exists, fail closed instead of leaking access.
+        throw new HttpsError(
+          "failed-precondition",
+          "This membership is already linked. Contact support to review a transfer."
+        );
+      }
+
+      const targetMemberships = await tx.get(
+        db().collection("memberships").where("entitlementTargetUid", "==", targetUid)
       );
-    }
+      const payerMemberships = await tx.get(
+        db().collection("memberships").where("payerUid", "==", targetUid)
+      );
+      const duplicate = [...targetMemberships.docs, ...payerMemberships.docs].some((doc) =>
+        doc.id !== membershipRef.id &&
+        doc.get("grantsAlphaWodAccess") === true &&
+        isBlockingMembershipDoc(doc)
+      );
+      if (duplicate) {
+        throw new HttpsError("already-exists", POLICY_TEXT.duplicateBlocked);
+      }
+      if (await hasBlockingPayerCheckoutReservation(tx, targetUid)) {
+        throw new HttpsError("already-exists", POLICY_TEXT.duplicateBlocked);
+      }
+      const owner = await readEntitlementOwner(tx, targetUid, subscriptionId);
+      acquireEntitlementOwner(tx, owner, targetUid, subscriptionId);
 
-    await membershipRef.set({
-      entitlementTargetUid: targetUid,
-      entitlementTargetLinkedBy: callerUid,
-      entitlementTargetLinkedAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    }, {merge: true});
-
-    await writeAudit({
-      type: "membership_participant_linked",
-      subscriptionId,
-      targetUid,
-      linkedBy: callerUid,
+      tx.set(membershipRef, {
+        entitlementTargetUid: targetUid,
+        entitlementTargetLinkedBy: callerUid,
+        entitlementTargetLinkedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+      return true;
     });
 
-    return {ok: true, subscriptionId, participantUid: targetUid};
+    // Linking is the action that makes this paid membership authoritative for
+    // the participant. Apply it now; waiting for a later Stripe webhook can
+    // leave a fully paid member without access indefinitely.
+    await applyMembershipEntitlement(membershipRef, converge);
+
+    if (linked) {
+      await writeAudit({
+        type: "membership_participant_linked",
+        subscriptionId,
+        targetUid,
+        linkedBy: callerUid,
+      });
+    }
+
+    return {
+      ok: true,
+      subscriptionId,
+      participantUid: targetUid,
+      alreadyLinked: !linked,
+    };
   });
 }
 
 export const __testing = {
   participantKeyFor,
+  checkoutLockSpecs,
+  checkoutRequestFingerprint,
+  buildCreateMembershipCheckoutHandler,
+  reserveCheckoutAttempt,
+  transitionCheckoutReservation,
+  reconcileExpiredCheckoutReservations,
+  settlePreparedCancellation,
+  recoverPendingCancellationsOnce,
+  cancellationRetryAtMillis,
+  acquireStripeEventLease,
+  markStripeEventProcessed,
+  markStripeEventFailed,
+  processStripeEventUnderLease,
+  recoverDueStripeEventsOnce,
+  stripeEventRetryAtMillis,
+  reconcilePastDueMembershipsOnce,
+  convergeMembershipFromStripe,
+  handleStripeEvent,
+  buildConfirmationPayload,
+  ensureMembershipAndConfirmationOutbox,
+  acquireConfirmationEmailLease,
+  processMembershipConfirmationOutbox,
+  retryDueMembershipConfirmationsOnce,
+  confirmationEmailRetryAtMillis,
+  isPermanentConfirmationFailure,
+  isSystemicResendFailure,
   resolveCurrentPeriodEnd,
   resolveInvoiceSubscriptionId,
 };
@@ -1409,11 +4020,13 @@ export const __testing = {
 /** ---------------------------------------------------------------
  * Durable confirmation email (Membership Terms 4)
  *
- * The Terms require an emailed durable copy carrying the agreed plan, the
- * amounts, the next payment date, the accepted document versions, cancellation
- * information, and the signed acceptance evidence, and state explicitly that a
- * changeable website link is not a durable copy. Everything below is therefore
- * written into the email body itself rather than linked.
+ * The Terms require an emailed durable copy carrying the agreed plan, amounts,
+ * next payment date, cancellation information, signed acceptance evidence, and
+ * the actual immutable documents accepted by the buyer. This implementation
+ * currently embeds the transaction details and document version identifiers,
+ * but not the complete immutable document text or attachments. The legal
+ * publication gate must remain closed until those approved durable copies are
+ * included and tested.
  * -------------------------------------------------------------- */
 
 function escapeHtml(value: string): string {
@@ -1469,8 +4082,8 @@ function buildConfirmationHtml(details: ConfirmationDetails): string {
   const claimBlock = claimUrl ?
     `<div style="margin:24px 0;padding:16px;background:#fff8e6;border:1px solid #e6c67a;">
       <p style="margin:0 0 10px;"><strong>One step left: claim your membership</strong></p>
-      <p style="margin:0 0 12px;">Create your account with this email address to link this
-      membership to it.</p>
+      <p style="margin:0 0 12px;">Sign in, or create and verify an account with this email
+      address, to link this membership to it.</p>
       <p style="margin:0;"><a href="${escapeHtml(claimUrl)}">${escapeHtml(claimUrl)}</a></p>
     </div>` :
     "";
@@ -1488,8 +4101,9 @@ function buildConfirmationHtml(details: ConfirmationDetails): string {
   <h2 style="font-size:15px;margin:24px 0 8px;">Cancelling</h2>
   <p style="margin:0 0 8px;">${escapeHtml(POLICY_TEXT.cancellationRule)}</p>
   <p style="margin:0 0 8px;">Request cancellation from your membership page when signed in,
-  or email ${escapeHtml(COMPANY.supportEmail)} from this address. We record when your
-  request reaches us.</p>
+  or email ${escapeHtml(COMPANY.supportEmail)} from this address if the page is unavailable.
+  Staff will confirm the effective dates in writing; do not assume an email request is complete
+  until you receive that confirmation.</p>
   <p style="margin:0 0 8px;">${escapeHtml(POLICY_TEXT.refund)}</p>
   <p style="margin:0 0 8px;">${escapeHtml(POLICY_TEXT.noPause)}</p>
 
@@ -1520,75 +4134,664 @@ function buildConfirmationHtml(details: ConfirmationDetails): string {
 </body></html>`;
 }
 
-/**
- * Sends the durable confirmation once per membership.
- *
- * The send is guarded by a transactional marker rather than the webhook event
- * ledger, because two different Stripe events can both reach fulfilment for
- * one purchase. A send failure clears the marker so a Stripe retry can try
- * again, and never fails the webhook: the membership is already valid and paid,
- * so losing the email must not roll back fulfilment.
- */
-async function sendMembershipConfirmation(
-  membershipRef: admin.firestore.DocumentReference,
+const CONFIRMATION_OUTBOX_COLLECTION = "membershipEmailOutbox";
+const CONFIRMATION_EMAIL_LEASE_MS = 10 * 60 * 1000;
+// Resend's idempotency guarantee lasts 24 hours. Stop automatic uncertain
+// retries with an hour to spare so a late retry cannot create a duplicate.
+const CONFIRMATION_EMAIL_RETRY_WINDOW_MS = 23 * 60 * 60 * 1000;
+
+type ConfirmationEmailPayload = {
+  from: string;
+  to: string[];
+  subject: string;
+  html: string;
+};
+
+type ConfirmationEmailSender = (
+  payload: ConfirmationEmailPayload,
+  idempotencyKey: string
+) => Promise<{providerMessageId: string | null}>;
+
+type ConfirmationEmailLeaseResult =
+  | {
+    state: "acquired";
+    leaseToken: string;
+    payload: ConfirmationEmailPayload;
+    idempotencyKey: string;
+    attemptCount: number;
+  }
+  | {state: "sent" | "in_progress" | "deferred" | "terminal" | "missing"};
+
+function buildConfirmationPayload(
+  membership: MembershipDoc,
   initialChargePence: number | null
-): Promise<void> {
-  const claimed = await db().runTransaction(async (tx) => {
-    const snap = await tx.get(membershipRef);
-    if (!snap.exists) return null;
-    if (snap.get("confirmationEmailSentAt")) return null;
-    if (!snap.get("payerEmail")) return null;
-
-    tx.set(membershipRef, {confirmationEmailSentAt: serverTimestamp()}, {merge: true});
-    return snap.data() as MembershipDoc;
-  });
-
-  if (!claimed) return;
-
-  const apiKey = resendApiKey.value().trim();
+): ConfirmationEmailPayload | null {
+  if (!membership.payerEmail || initialChargePence === null) return null;
   const fromEmail = membershipFromEmail.value().trim() || COMPANY.confirmationSender;
+  // The Stripe Session id is not an ownership credential and must never be
+  // copied into email. The recipient can claim through verified-email matching;
+  // same-browser post-checkout claiming additionally uses a one-time verifier.
+  const claimUrl = membership.payerUid ?
+    null : `${resolveReturnOrigin()}/account/membership?claim=email`;
+  return {
+    from: `${COMPANY.tradingName} <${fromEmail}>`,
+    to: [membership.payerEmail],
+    subject: `Your ${getPlan(membership.planKey).name} is confirmed`,
+    html: buildConfirmationHtml({
+      membership,
+      initialChargePence,
+      claimUrl,
+    }),
+  };
+}
 
-  try {
-    if (!apiKey) throw new Error("RESEND_API_KEY is not configured.");
+/** Atomically creates a first membership and its immutable email outbox row. */
+async function ensureMembershipAndConfirmationOutbox(
+  membershipRef: admin.firestore.DocumentReference,
+  proposedMembership: MembershipDoc,
+  initialChargePence: number | null,
+  intentRef: admin.firestore.DocumentReference,
+  intent: MembershipIntentDoc
+): Promise<void> {
+  const outboxRef = db().collection(CONFIRMATION_OUTBOX_COLLECTION)
+    .doc(membershipRef.id);
+  const lockRefs = intent.reservationLockIds.map((id) =>
+    db().collection(CHECKOUT_LOCK_COLLECTION).doc(id)
+  );
+  const participantQuery = db().collection("memberships")
+    .where(
+      "participant.participantKey",
+      "==",
+      intent.participant.participantKey
+    );
+  const payerQuery = intent.payerUid && getPlan(intent.planKey).grantsAlphaWodAccess ?
+    db().collection("memberships").where("payerUid", "==", intent.payerUid) :
+    null;
+  const targetQuery = intent.payerUid && getPlan(intent.planKey).grantsAlphaWodAccess ?
+    db().collection("memberships").where("entitlementTargetUid", "==", intent.payerUid) :
+    null;
+  const transactionOutcome = await db().runTransaction(async (tx) => {
+    // Every read precedes every write. The deterministic lock ownership check
+    // is the final paid-session guard: even if an unusually late asynchronous
+    // payment arrives after its reservation was reclaimed, two subscriptions
+    // cannot both fulfil for the same participant/account.
+    const freshIntent = await tx.get(intentRef);
+    const membershipSnap = await tx.get(membershipRef);
+    const outboxSnap = await tx.get(outboxRef);
+    const lockSnaps = await Promise.all(lockRefs.map((ref) => tx.get(ref)));
+    const byParticipant = await tx.get(participantQuery);
+    const byPayer = payerQuery ? await tx.get(payerQuery) : null;
+    const byTarget = targetQuery ? await tx.get(targetQuery) : null;
+    const effectiveTargetUid = membershipSnap.exists ?
+      membershipSnap.get("entitlementTargetUid") as string | null :
+      proposedMembership.entitlementTargetUid;
+    const effectiveState = membershipSnap.exists ?
+      membershipSnap.get("state") as MembershipState : proposedMembership.state;
+    const entitlementOwner = effectiveTargetUid &&
+        isMembershipStateBlockingDuplicate(effectiveState) ?
+      await readEntitlementOwner(tx, effectiveTargetUid, membershipRef.id) : null;
 
-    const claimUrl = claimed.payerUid ?
-      null :
-      `${resolveReturnOrigin()}/memberships/success?session_id=` +
-        `${encodeURIComponent(claimed.checkoutSessionId)}`;
-
-    const response = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: `${COMPANY.tradingName} <${fromEmail}>`,
-        to: [claimed.payerEmail],
-        subject: `Your ${getPlan(claimed.planKey).name} is confirmed`,
-        html: buildConfirmationHtml({
-          membership: claimed,
-          initialChargePence,
-          claimUrl,
-        }),
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(await response.text() || response.statusText);
+    if (!freshIntent.exists) {
+      throw new Error(`Checkout intent ${intentRef.id} disappeared during fulfilment.`);
+    }
+    const storedSessionId = freshIntent.get("checkoutSessionId");
+    if (typeof storedSessionId === "string" &&
+      storedSessionId !== proposedMembership.checkoutSessionId) {
+      throw new Error(
+        `Checkout intent ${intentRef.id} is bound to another Session.`
+      );
+    }
+    const intentStatus = freshIntent.get("status") as MembershipIntentDoc["status"];
+    if ((intentStatus === "failed" || intentStatus === "expired") &&
+      !membershipSnap.exists) {
+      throw new Error(`Checkout intent ${intentRef.id} ended before fulfilment.`);
+    }
+    if (!storedSessionId) {
+      tx.set(intentRef, {
+        checkoutSessionId: proposedMembership.checkoutSessionId,
+        ...(intentStatus === "reserved" || intentStatus === "created" ?
+          {status: "payment_pending"} : {}),
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
     }
 
-    await writeAudit({
-      type: "confirmation_email_sent",
+    if (!membershipSnap.exists) {
+      const ownsEveryLock = lockRefs.length > 0 && lockSnaps.every((lock) =>
+        lock.exists && lock.get("intentId") === intentRef.id
+      );
+      const duplicateParticipant = byParticipant.docs.some((doc) =>
+        doc.id !== membershipRef.id && isBlockingMembershipDoc(doc)
+      );
+      const duplicatePayer = Boolean(byPayer?.docs.some((doc) =>
+        doc.id !== membershipRef.id &&
+        doc.get("grantsAlphaWodAccess") === true &&
+        isBlockingMembershipDoc(doc)
+      )) || Boolean(byTarget?.docs.some((doc) =>
+        doc.id !== membershipRef.id &&
+        doc.get("grantsAlphaWodAccess") === true &&
+        isBlockingMembershipDoc(doc)
+      ));
+      if (!ownsEveryLock || duplicateParticipant || duplicatePayer) {
+        throw new Error(
+          `Checkout ${intentRef.id} no longer owns a unique fulfilment reservation.`
+        );
+      }
+    }
+
+    const membership = membershipSnap.exists ?
+      membershipSnap.data() as MembershipDoc : proposedMembership;
+    const alreadySent = membershipSnap.exists &&
+      Boolean(membershipSnap.get("confirmationEmailSentAt"));
+    const payload = alreadySent ? null :
+      buildConfirmationPayload(membership, initialChargePence);
+    const manualReviewReason = alreadySent ? null :
+      !membership.payerEmail ?
+        "Payer email was unavailable at fulfilment." :
+        initialChargePence === null ?
+          "Stripe did not provide the amount charged at fulfilment." : null;
+
+    if (!membershipSnap.exists) {
+      if (effectiveTargetUid && entitlementOwner) {
+        acquireEntitlementOwner(
+          tx,
+          entitlementOwner,
+          effectiveTargetUid,
+          membershipRef.id
+        );
+      }
+      tx.create(membershipRef, {
+        ...proposedMembership,
+        confirmationEmailStatus: payload ? "pending" : "manual_review",
+        ...(manualReviewReason ? {confirmationEmailError: manualReviewReason} : {}),
+      });
+    } else if (alreadySent) {
+      tx.set(membershipRef, {confirmationEmailStatus: "sent"}, {merge: true});
+    } else if (payload && !outboxSnap.exists) {
+      tx.set(membershipRef, {
+        confirmationEmailStatus: "pending",
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+    } else if (manualReviewReason) {
+      tx.set(membershipRef, {
+        confirmationEmailStatus: "manual_review",
+        confirmationEmailError: manualReviewReason,
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+    }
+
+    if (payload && !outboxSnap.exists) {
+      tx.create(outboxRef, {
+        schemaVersion: MEMBERSHIP_SCHEMA_VERSION,
+        kind: "membership_confirmation",
+        subscriptionId: membershipRef.id,
+        status: "pending",
+        payload,
+        idempotencyKey: `membership-confirmation/${membershipRef.id}/v1`,
+        initialChargePence,
+        attemptCount: 0,
+        nextAttemptAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      return {manualReviewCreated: false, manualReviewReason: null};
+    }
+    if (manualReviewReason && !outboxSnap.exists) {
+      tx.create(outboxRef, {
+        schemaVersion: MEMBERSHIP_SCHEMA_VERSION,
+        kind: "membership_confirmation",
+        subscriptionId: membershipRef.id,
+        status: "manual_review",
+        initialChargePence,
+        deadLetterReason: manualReviewReason,
+        deadLetteredAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      return {manualReviewCreated: true, manualReviewReason};
+    }
+    return {manualReviewCreated: false, manualReviewReason: null};
+  });
+  if (transactionOutcome.manualReviewCreated) {
+    console.error("CRITICAL_BILLING_CONFIRMATION_MANUAL_REVIEW", {
       subscriptionId: membershipRef.id,
-      unclaimed: !claimed.payerUid,
+      reason: transactionOutcome.manualReviewReason,
     });
-  } catch (error) {
-    console.error("Confirmation email failed", membershipRef.id, error);
-    await membershipRef.set({
-      confirmationEmailSentAt: admin.firestore.FieldValue.delete(),
-      confirmationEmailError: String(error).slice(0, 500),
+    await writeAudit({
+      type: "confirmation_email_terminal",
+      severity: "critical",
+      subscriptionId: membershipRef.id,
+      reason: transactionOutcome.manualReviewReason,
+    }).catch((error) =>
+      console.error("Could not write confirmation terminal audit", membershipRef.id, error)
+    );
+  }
+}
+
+function confirmationEmailRetryAtMillis(
+  attemptCount: number,
+  nowMillis: number
+): number {
+  const exponent = Math.max(0, Math.min(attemptCount - 1, 4));
+  return nowMillis + Math.min(60 * 60 * 1000, 5 * 60 * 1000 * (2 ** exponent));
+}
+
+const PERMANENT_RESEND_ERROR_NAMES = new Set([
+  "invalid_attachment",
+  "invalid_idempotency_key",
+  "invalid_idempotent_request",
+  "invalid_parameter",
+  "invalid_to_address",
+  "missing_required_field",
+]);
+
+const SYSTEMIC_RESEND_ERROR_NAMES = new Set([
+  "missing_api_key",
+  "invalid_api_key",
+  "restricted_api_key",
+  "invalid_from_address",
+  "invalid_region",
+  "validation_error",
+  "daily_quota_exceeded",
+  "monthly_quota_exceeded",
+  "rate_limit_exceeded",
+]);
+
+function isPermanentConfirmationFailure(
+  _status: number | null,
+  providerErrorName: string | null = null
+): boolean {
+  return providerErrorName !== null &&
+    PERMANENT_RESEND_ERROR_NAMES.has(providerErrorName);
+}
+
+function isSystemicResendFailure(
+  status: number | null,
+  providerErrorName: string | null
+): boolean {
+  return (providerErrorName !== null &&
+      SYSTEMIC_RESEND_ERROR_NAMES.has(providerErrorName)) || status === 429;
+}
+
+async function acquireConfirmationEmailLease(
+  subscriptionId: string,
+  nowMillis = Date.now(),
+  leaseToken = randomUUID()
+): Promise<ConfirmationEmailLeaseResult> {
+  const outboxRef = db().collection(CONFIRMATION_OUTBOX_COLLECTION)
+    .doc(subscriptionId);
+  const membershipRef = db().collection("memberships").doc(subscriptionId);
+  const outcome = await db().runTransaction(async (tx) => {
+    const snap = await tx.get(outboxRef);
+    if (!snap.exists) {
+      return {
+        result: {state: "missing"} as const,
+        terminalReason: null,
+      };
+    }
+    const membership = await tx.get(membershipRef);
+    if (!membership.exists) {
+      const terminalReason = "Confirmation outbox has no membership document.";
+      tx.set(outboxRef, {
+        status: "manual_review",
+        deadLetteredAt: serverTimestamp(),
+        deadLetterReason: terminalReason,
+        leaseToken: admin.firestore.FieldValue.delete(),
+        leaseExpiresAt: admin.firestore.FieldValue.delete(),
+        nextAttemptAt: admin.firestore.FieldValue.delete(),
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+      return {result: {state: "terminal"} as const, terminalReason};
+    }
+    const status = snap.get("status");
+    if (status === "sent") {
+      return {
+        result: {state: "sent"} as const,
+        terminalReason: null,
+      };
+    }
+    if (status === "dead_letter" || status === "manual_review") {
+      return {result: {state: "terminal"} as const, terminalReason: null};
+    }
+
+    const leaseExpiresAt = timestampMillis(snap.get("leaseExpiresAt"));
+    if (status === "sending" && leaseExpiresAt !== null &&
+      leaseExpiresAt > nowMillis) {
+      return {result: {state: "in_progress"} as const, terminalReason: null};
+    }
+    const nextAttemptAt = timestampMillis(snap.get("nextAttemptAt"));
+    if (status !== "sending" && nextAttemptAt !== null &&
+      nextAttemptAt > nowMillis) {
+      return {result: {state: "deferred"} as const, terminalReason: null};
+    }
+
+    const firstAttemptAt = timestampMillis(snap.get("firstAttemptAt"));
+    const retryDeadlineAt = timestampMillis(snap.get("retryDeadlineAt"));
+    if (retryDeadlineAt !== null && nowMillis >= retryDeadlineAt) {
+      const terminalReason =
+        "Resend idempotency window expired before confirmed delivery.";
+      tx.set(outboxRef, {
+        status: "manual_review",
+        deadLetteredAt: serverTimestamp(),
+        deadLetterReason: terminalReason,
+        leaseToken: admin.firestore.FieldValue.delete(),
+        leaseExpiresAt: admin.firestore.FieldValue.delete(),
+        nextAttemptAt: admin.firestore.FieldValue.delete(),
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+      tx.update(membershipRef, {
+        confirmationEmailStatus: "manual_review",
+        confirmationEmailError: "Delivery requires manual review.",
+        updatedAt: serverTimestamp(),
+      });
+      return {result: {state: "terminal"} as const, terminalReason};
+    }
+
+    const payload = snap.get("payload") as ConfirmationEmailPayload | undefined;
+    const idempotencyKey = snap.get("idempotencyKey");
+    if (!payload || typeof idempotencyKey !== "string") {
+      const terminalReason = "Confirmation payload is missing or invalid.";
+      tx.set(outboxRef, {
+        status: "dead_letter",
+        deadLetteredAt: serverTimestamp(),
+        deadLetterReason: terminalReason,
+        leaseToken: admin.firestore.FieldValue.delete(),
+        leaseExpiresAt: admin.firestore.FieldValue.delete(),
+        nextAttemptAt: admin.firestore.FieldValue.delete(),
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+      tx.update(membershipRef, {
+        confirmationEmailStatus: "dead_letter",
+        confirmationEmailError: terminalReason,
+        updatedAt: serverTimestamp(),
+      });
+      return {result: {state: "terminal"} as const, terminalReason};
+    }
+
+    const attemptCount = typeof snap.get("attemptCount") === "number" ?
+      snap.get("attemptCount") as number : 0;
+    const newLeaseExpiresAt = admin.firestore.Timestamp.fromMillis(
+      nowMillis + CONFIRMATION_EMAIL_LEASE_MS
+    );
+    tx.set(outboxRef, {
+      status: "sending",
+      leaseToken,
+      leaseExpiresAt: newLeaseExpiresAt,
+      nextAttemptAt: newLeaseExpiresAt,
+      attemptCount: attemptCount + 1,
+      lastAttemptAt: serverTimestamp(),
+      ...(firstAttemptAt === null ? {
+        firstAttemptAt: admin.firestore.Timestamp.fromMillis(nowMillis),
+        retryDeadlineAt: admin.firestore.Timestamp.fromMillis(
+          nowMillis + CONFIRMATION_EMAIL_RETRY_WINDOW_MS
+        ),
+      } : {}),
       updatedAt: serverTimestamp(),
     }, {merge: true});
+    return {
+      result: {
+        state: "acquired",
+        leaseToken,
+        payload,
+        idempotencyKey,
+        attemptCount: attemptCount + 1,
+      } as const,
+      terminalReason: null,
+    };
+  });
+  if (outcome.terminalReason) {
+    console.error("CRITICAL_BILLING_CONFIRMATION_MANUAL_REVIEW", {
+      subscriptionId,
+      reason: outcome.terminalReason,
+    });
+    await writeAudit({
+      type: "confirmation_email_terminal",
+      severity: "critical",
+      subscriptionId,
+      reason: outcome.terminalReason,
+    }).catch((error) =>
+      console.error("Could not write confirmation terminal audit", subscriptionId, error)
+    );
   }
+  return outcome.result;
+}
+
+class ConfirmationDeliveryError extends Error {
+  constructor(
+    message: string,
+    readonly status: number | null,
+    readonly providerErrorName: string | null
+  ) {
+    super(message);
+  }
+}
+
+const sendConfirmationViaResend: ConfirmationEmailSender = async (
+  payload,
+  idempotencyKey
+) => {
+  const apiKey = resendApiKey.value().trim();
+  if (!apiKey) {
+    throw new ConfirmationDeliveryError(
+      "RESEND_API_KEY is not configured.",
+      null,
+      "missing_api_key"
+    );
+  }
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "Idempotency-Key": idempotencyKey,
+      "User-Agent": "AlphaWOD-membership/1.0",
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(20000),
+  });
+  const body = await response.text();
+  if (!response.ok) {
+    let providerErrorName: string | null = null;
+    let providerMessage = body;
+    try {
+      const parsed = JSON.parse(body) as {name?: unknown; message?: unknown};
+      providerErrorName = typeof parsed.name === "string" ? parsed.name : null;
+      providerMessage = typeof parsed.message === "string" ? parsed.message : body;
+    } catch {
+      // Keep the provider body as diagnostic context when it is not JSON.
+    }
+    throw new ConfirmationDeliveryError(
+      providerMessage || response.statusText || `Resend returned ${response.status}.`,
+      response.status,
+      providerErrorName
+    );
+  }
+  let providerMessageId: string | null = null;
+  try {
+    const parsed = JSON.parse(body) as {id?: unknown};
+    providerMessageId = typeof parsed.id === "string" ? parsed.id : null;
+  } catch {
+    // A 2xx response is authoritative even if its optional metadata is absent.
+  }
+  return {providerMessageId};
+};
+
+async function processMembershipConfirmationOutbox(
+  subscriptionId: string,
+  nowMillis = Date.now(),
+  sender: ConfirmationEmailSender = sendConfirmationViaResend
+): Promise<ConfirmationEmailLeaseResult["state"] | "failed" | "systemic_failure"> {
+  const lease = await acquireConfirmationEmailLease(subscriptionId, nowMillis);
+  if (lease.state !== "acquired") return lease.state;
+
+  const outboxRef = db().collection(CONFIRMATION_OUTBOX_COLLECTION)
+    .doc(subscriptionId);
+  const membershipRef = db().collection("memberships").doc(subscriptionId);
+  try {
+    const delivery = await sender(lease.payload, lease.idempotencyKey);
+    const markOutcome = await db().runTransaction(async (tx) => {
+      const snap = await tx.get(outboxRef);
+      const membership = await tx.get(membershipRef);
+      if (!snap.exists || snap.get("status") !== "sending" ||
+        snap.get("leaseToken") !== lease.leaseToken) {
+        return {marked: false, missingMembership: false};
+      }
+      tx.set(outboxRef, {
+        status: "sent",
+        sentAt: serverTimestamp(),
+        providerMessageId: delivery.providerMessageId,
+        leaseToken: admin.firestore.FieldValue.delete(),
+        leaseExpiresAt: admin.firestore.FieldValue.delete(),
+        nextAttemptAt: admin.firestore.FieldValue.delete(),
+        lastError: admin.firestore.FieldValue.delete(),
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+      if (membership.exists) {
+        tx.update(membershipRef, {
+          confirmationEmailStatus: "sent",
+          confirmationEmailSentAt: serverTimestamp(),
+          confirmationEmailProviderId: delivery.providerMessageId,
+          confirmationEmailError: admin.firestore.FieldValue.delete(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+      return {marked: true, missingMembership: !membership.exists};
+    });
+    if (!markOutcome.marked) return "in_progress";
+    if (markOutcome.missingMembership) {
+      console.error("CRITICAL_BILLING_SENT_CONFIRMATION_ORPHAN", {subscriptionId});
+      await writeAudit({
+        type: "confirmation_email_orphaned_after_send",
+        severity: "critical",
+        subscriptionId,
+        providerMessageId: delivery.providerMessageId,
+      }).catch((error) =>
+        console.error("Could not write sent-orphan audit", subscriptionId, error)
+      );
+    }
+    await writeAudit({
+      type: "confirmation_email_sent",
+      subscriptionId,
+      providerMessageId: delivery.providerMessageId,
+    }).catch((error) =>
+      console.error("Could not write confirmation email audit", subscriptionId, error)
+    );
+    return "sent";
+  } catch (error) {
+    const errorStatus = error instanceof ConfirmationDeliveryError ?
+      error.status : null;
+    const providerErrorName = error instanceof ConfirmationDeliveryError ?
+      error.providerErrorName : null;
+    const message = error instanceof Error ? error.message : String(error);
+    const failureNow = Math.max(nowMillis, Date.now());
+    const failureOutcome = await db().runTransaction(async (tx) => {
+      const snap = await tx.get(outboxRef);
+      const membership = await tx.get(membershipRef);
+      if (!snap.exists || snap.get("status") !== "sending" ||
+        snap.get("leaseToken") !== lease.leaseToken) return null;
+      const retryDeadlineAt = timestampMillis(snap.get("retryDeadlineAt"));
+      const permanent = isPermanentConfirmationFailure(errorStatus, providerErrorName);
+      const windowExpired = retryDeadlineAt !== null && failureNow >= retryDeadlineAt;
+      const terminalStatus = permanent ? "dead_letter" : "manual_review";
+      const orphan = !membership.exists;
+      const terminal = permanent || windowExpired || orphan;
+      tx.set(outboxRef, {
+        status: terminal ? (orphan ? "manual_review" : terminalStatus) : "pending",
+        lastError: message.slice(0, 1000),
+        lastHttpStatus: errorStatus,
+        lastProviderErrorName: providerErrorName,
+        failedAt: serverTimestamp(),
+        leaseToken: admin.firestore.FieldValue.delete(),
+        leaseExpiresAt: admin.firestore.FieldValue.delete(),
+        ...(terminal ? {
+          deadLetteredAt: serverTimestamp(),
+          nextAttemptAt: admin.firestore.FieldValue.delete(),
+        } : {
+          nextAttemptAt: admin.firestore.Timestamp.fromMillis(
+            confirmationEmailRetryAtMillis(lease.attemptCount, failureNow)
+          ),
+        }),
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+      if (membership.exists) {
+        tx.update(membershipRef, {
+          confirmationEmailStatus: terminal ? terminalStatus : "pending",
+          confirmationEmailError: message.slice(0, 500),
+          updatedAt: serverTimestamp(),
+        });
+      }
+      return {terminal, orphan};
+    });
+    if (!failureOutcome) return "in_progress";
+    const {terminal, orphan} = failureOutcome;
+    if (terminal || orphan) {
+      console.error("CRITICAL_BILLING_CONFIRMATION_MANUAL_REVIEW", {
+        subscriptionId,
+        providerErrorName,
+        error: message,
+        orphan,
+      });
+      await writeAudit({
+        type: "confirmation_email_terminal",
+        severity: "critical",
+        subscriptionId,
+        providerErrorName,
+        error: message.slice(0, 1000),
+        orphan,
+      }).catch((auditError) =>
+        console.error("Could not write confirmation terminal audit", subscriptionId, auditError)
+      );
+    } else {
+      console.error("Confirmation email delivery failed", subscriptionId, error);
+    }
+    if (!terminal && isSystemicResendFailure(errorStatus, providerErrorName)) {
+      console.error("CRITICAL_BILLING_RESEND_CONFIGURATION", {
+        providerErrorName,
+        status: errorStatus,
+      });
+      return "systemic_failure";
+    }
+    return "failed";
+  }
+}
+
+async function retryDueMembershipConfirmationsOnce(
+  nowMillis = Date.now(),
+  limit = 50,
+  sender: ConfirmationEmailSender = sendConfirmationViaResend
+): Promise<{sent: number; failed: number; skipped: number}> {
+  const due = await db().collection(CONFIRMATION_OUTBOX_COLLECTION)
+    .where("nextAttemptAt", "<=", admin.firestore.Timestamp.fromMillis(nowMillis))
+    .orderBy("nextAttemptAt", "asc")
+    .limit(limit)
+    .get();
+  const result = {sent: 0, failed: 0, skipped: 0};
+  for (const outbox of due.docs) {
+    const itemNow = Math.max(nowMillis, Date.now());
+    const status = await processMembershipConfirmationOutbox(
+      outbox.id,
+      itemNow,
+      sender
+    );
+    if (status === "sent") result.sent += 1;
+    else if (status === "failed" || status === "systemic_failure") result.failed += 1;
+    else result.skipped += 1;
+    // A bad key, unverified sender/domain, or provider-wide quota applies to
+    // every row. Stop this batch so one configuration incident cannot churn all
+    // confirmations; the next schedule retries after operators are alerted.
+    if (status === "systemic_failure") break;
+  }
+  return result;
+}
+
+export function buildRetryMembershipConfirmations() {
+  return onSchedule({
+    region: REGION,
+    schedule: "every 5 minutes",
+    timeZone: "UTC",
+    secrets: MEMBERSHIP_EMAIL_WORKER_SECRETS,
+    timeoutSeconds: 540,
+  }, async () => {
+    const result = await retryDueMembershipConfirmationsOnce();
+    console.log("Membership confirmation retry result", result);
+  });
 }

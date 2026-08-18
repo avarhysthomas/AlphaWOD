@@ -253,6 +253,19 @@ export type BillingAnchor = {
   firstFullChargeDate: string;
 };
 
+/** Stripe requires Checkout Sessions to remain open for at least 30 minutes. */
+export const STRIPE_MIN_CHECKOUT_WINDOW_SECONDS = 30 * 60;
+
+/** Network/clock allowance so Stripe still receives at least its 30m floor. */
+export const CHECKOUT_CREATION_MARGIN_SECONDS = 5 * 60;
+
+/**
+ * Keep a full hour between Checkout expiry and the first recurring anchor.
+ * Besides ensuring the anchor is still in the future when payment completes,
+ * this leaves a small operational buffer for Stripe to finalise the session.
+ */
+export const CHECKOUT_ANCHOR_MARGIN_SECONDS = 60 * 60;
+
 function londonNow(nowMillis: number): DateTime {
   return DateTime.fromMillis(nowMillis, {zone: BILLING_TIMEZONE});
 }
@@ -282,10 +295,21 @@ export function resolveCheckoutSessionExpiry(nowMillis: number): number {
   const now = londonNow(nowMillis);
   const {anchorUnixSeconds} = resolveBillingCycleAnchor(nowMillis);
   const maxStripeExpiry = Math.floor(now.plus({hours: 24}).toSeconds());
-  const minStripeExpiry = Math.floor(now.plus({minutes: 30}).toSeconds());
-  const beforeAnchor = anchorUnixSeconds - 3600;
+  const safeMinStripeExpiry = Math.floor(now.toSeconds()) +
+    STRIPE_MIN_CHECKOUT_WINDOW_SECONDS + CHECKOUT_CREATION_MARGIN_SECONDS;
+  const beforeAnchor = anchorUnixSeconds - CHECKOUT_ANCHOR_MARGIN_SECONDS;
 
-  return Math.max(minStripeExpiry, Math.min(maxStripeExpiry, beforeAnchor));
+  // The old implementation used Math.max here. Close to midnight that chose
+  // Stripe's 30-minute minimum even when it landed at or beyond the billing
+  // anchor. Refuse to create a session instead: the buyer can start again just
+  // after midnight, when the following month's anchor is safely in the future.
+  if (beforeAnchor < safeMinStripeExpiry) {
+    throw new RangeError(
+      "Checkout is temporarily unavailable this close to the monthly billing boundary."
+    );
+  }
+
+  return Math.min(maxStripeExpiry, beforeAnchor);
 }
 
 export type CancellationOutcome = {
@@ -383,6 +407,12 @@ export function formatUnixBillingDate(unixSeconds: number): string {
     .toFormat("d LLLL yyyy");
 }
 
+/** Formats a unix seconds instant as an ISO calendar date in London. */
+export function formatUnixBillingIsoDate(unixSeconds: number): string {
+  return DateTime.fromSeconds(unixSeconds, {zone: BILLING_TIMEZONE})
+    .toISODate() as string;
+}
+
 /** ---------------------------------------------------------------
  * Subscription state to entitlement mapping (Membership Terms 8 and 11)
  * -------------------------------------------------------------- */
@@ -456,12 +486,28 @@ export function isWithinPastDueGrace(
   pastDueSinceUnixSeconds: number | null | undefined,
   nowMillis: number
 ): boolean {
-  if (!pastDueSinceUnixSeconds) return true;
+  const graceEndMillis = resolvePastDueGraceEndMillis(pastDueSinceUnixSeconds);
+  return graceEndMillis === null || nowMillis <= graceEndMillis;
+}
+
+/**
+ * Absolute end of the approved London-calendar grace period.
+ *
+ * Persisting this deadline lets a UTC scheduler revoke access even when no
+ * later Stripe event arrives. Milliseconds preserve the inclusive final
+ * millisecond of the third calendar day across both GMT and BST transitions.
+ */
+export function resolvePastDueGraceEndMillis(
+  pastDueSinceUnixSeconds: number | null | undefined
+): number | null {
+  if (!pastDueSinceUnixSeconds) return null;
 
   const failedDay = DateTime.fromSeconds(pastDueSinceUnixSeconds, {zone: BILLING_TIMEZONE})
     .startOf("day");
-  const graceEnd = failedDay.plus({days: BILLING_POLICY.pastDueGraceDays}).endOf("day");
-  return nowMillis <= graceEnd.toMillis();
+  return failedDay
+    .plus({days: BILLING_POLICY.pastDueGraceDays})
+    .endOf("day")
+    .toMillis();
 }
 
 /** Membership states that keep the purchased service available. */

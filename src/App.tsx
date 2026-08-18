@@ -160,12 +160,15 @@ function AdminLayout() {
 
 export default function App() {
   const { user, appUser, loading } = useAuth();
+  const location = useLocation();
 
   if (loading) return <LoadingScreen />;
 
   const isAuthed = !!user;
+  const waiverBypass = location.pathname.startsWith("/memberships") ||
+    location.pathname === "/account/membership";
   return (
-    <WaiverGate>
+    <WaiverGate bypass={waiverBypass}>
     <React.Suspense fallback={<LoadingScreen />}>
     <Routes>
       {/* Public */}
