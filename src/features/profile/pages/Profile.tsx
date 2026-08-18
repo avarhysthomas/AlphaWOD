@@ -13,6 +13,7 @@ import { db } from "../../../firebase";
 import { AlertTriangle, Bell, Plus, Save } from "lucide-react";
 import { getUserNavItems } from "../../../components/layout/UserTopNav";
 import { useAuth } from "../../../context/AuthContext";
+import { bootstrapUserProfile } from "../../auth/services/account";
 
 
 type UserStats = {
@@ -115,7 +116,7 @@ export default function Profile() {
   const auth = useMemo(() => getAuth(), []);
   const storage = useMemo(() => getStorage(), []);
   const navigate = useNavigate();
-  const { appUser } = useAuth();
+  const { appUser, refreshAppUser } = useAuth();
   const user = auth.currentUser;
 
   const [loading, setLoading] = useState(true);
@@ -164,7 +165,15 @@ export default function Profile() {
         const userRef = doc(db, "users", user.uid);
         const snap = await getDoc(userRef);
 
-        const data = (snap.exists() ? (snap.data() as UserDoc) : {}) as UserDoc;
+        if (!snap.exists()) {
+          // Profile creation assigns security-sensitive defaults on the server.
+          // The client must never choose its own role or approval state.
+          await bootstrapUserProfile(user.displayName ?? "");
+          await refreshAppUser();
+          return;
+        }
+
+        const data = snap.data() as UserDoc;
 
         const nameFromDoc = data.name ?? "";
         const emailFromDoc = data.email ?? "";
@@ -180,45 +189,13 @@ export default function Profile() {
 
         setStats(data.stats ?? null);
 
-        // Ensure doc exists (merge so we don’t clobber anything)
-        if (!snap.exists()) {
-          await setDoc(
-            userRef,
-            {
-              name: resolvedName || null,
-              email: resolvedEmail || null,
-              role: "user",
-              approvalStatus: "approved",
-              strengthBlock: "none",
-              photoURL: resolvedPhoto ?? null,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-              stats: {
-                totalCheckIns: 0,
-                monthCheckIns: {},
-                currentStreak: 0,
-                longestStreak: 0,
-                lastCheckInDate: null,
-                updatedAt: serverTimestamp(),
-              },
-            },
-            { merge: true }
-          );
-          setStats({
-            totalCheckIns: 0,
-            monthCheckIns: {},
-            currentStreak: 0,
-            longestStreak: 0,
-          });
-        }
       } catch (e: any) {
         setErr(e?.message ?? "Failed to load profile.");
       } finally {
         setLoading(false);
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [refreshAppUser, user]);
 
   async function uploadProfilePicIfNeeded(): Promise<string | null> {
     if (!user) return null;
@@ -257,13 +234,16 @@ export default function Profile() {
 
       const nextEmail = email.trim();
       const currentEmail = user.email ?? "";
-      if (nextEmail && nextEmail !== currentEmail) await updateEmail(user, nextEmail);
+      if (nextEmail && nextEmail !== currentEmail) {
+        await updateEmail(user, nextEmail);
+        // Firestore email is server-owned and mirrored from Firebase Auth.
+        await bootstrapUserProfile(trimmedName);
+      }
 
       await setDoc(
         doc(db, "users", user.uid),
         {
           name: trimmedName || null,
-          email: (user.email ?? nextEmail) || null,
           photoURL: (newPhotoURL ?? user.photoURL) || null,
           updatedAt: serverTimestamp(),
         },

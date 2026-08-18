@@ -4,6 +4,8 @@ import { onAuthStateChanged, User } from "firebase/auth";
 import { auth } from "../firebaseApp";
 import { AppUser, buildAppUser, buildSafePendingAppUser } from "./authUser";
 
+type Unsubscribe = () => void;
+
 type AuthCtx = {
   user: User | null;
   appUser: AppUser | null;
@@ -25,16 +27,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const loadAppUser = useCallback(async (u: User) => {
     try {
-      const [{ doc, getDoc }, { db }] = await Promise.all([
+      const [{ doc, getDocFromServer }, { db }] = await Promise.all([
         import("firebase/firestore"),
         import("../firebase"),
       ]);
-      const snap = await getDoc(doc(db, "users", u.uid));
-      const data = snap.exists() ? snap.data() : {};
-      setAppUser(buildAppUser({ uid: u.uid, email: u.email }, data));
+      const snap = await getDocFromServer(doc(db, "users", u.uid));
+      if (auth.currentUser?.uid !== u.uid) return;
+
+      setAppUser(
+        snap.exists()
+          ? buildAppUser({ uid: u.uid, email: u.email }, snap.data())
+          : buildSafePendingAppUser(
+              { uid: u.uid, email: u.email },
+              { profileExists: false }
+            )
+      );
     } catch (error) {
       console.error("Failed to load app user profile:", error);
-      setAppUser(buildSafePendingAppUser({ uid: u.uid, email: u.email }));
+      if (auth.currentUser?.uid === u.uid) {
+        setAppUser(buildSafePendingAppUser({ uid: u.uid, email: u.email }));
+      }
     }
   }, []);
 
@@ -44,25 +56,107 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [loadAppUser]);
 
   useEffect(() => {
-    return onAuthStateChanged(auth, async (u) => {
+    let profileUnsubscribe: Unsubscribe | null = null;
+    let authVersion = 0;
+
+    const authUnsubscribe = onAuthStateChanged(auth, (u) => {
+      authVersion += 1;
+      const currentVersion = authVersion;
+
+      profileUnsubscribe?.();
+      profileUnsubscribe = null;
       setUser(u);
+      setAppUser(null);
 
       if (!u) {
-        setAppUser(null);
         setLoading(false);
         return;
       }
 
-      try {
-        await loadAppUser(u);
-      } catch (error) {
-        console.error("Failed to load app user profile:", error);
-        setAppUser(buildSafePendingAppUser({ uid: u.uid, email: u.email }));
-      } finally {
-        setLoading(false);
-      }
+      // A newly authenticated user is not allowed through any protected route
+      // until their authoritative profile has resolved.
+      setLoading(true);
+
+      void Promise.all([import("firebase/firestore"), import("../firebase")])
+        .then(([{ doc, getDocFromServer, onSnapshot }, { db }]) => {
+          if (currentVersion !== authVersion || auth.currentUser?.uid !== u.uid) return;
+
+          const profileRef = doc(db, "users", u.uid);
+          const applyAuthoritativeProfile = (snap: {
+            exists: () => boolean;
+            data: () => unknown;
+          }) => {
+            if (currentVersion !== authVersion || auth.currentUser?.uid !== u.uid) return;
+
+            setAppUser(
+              snap.exists()
+                ? buildAppUser({ uid: u.uid, email: u.email }, snap.data() as any)
+                : buildSafePendingAppUser(
+                    { uid: u.uid, email: u.email },
+                    { profileExists: false }
+                  )
+            );
+            setLoading(false);
+          };
+
+          const unsubscribe = onSnapshot(
+            profileRef,
+            { includeMetadataChanges: true },
+            (snap) => {
+              if (currentVersion !== authVersion || auth.currentUser?.uid !== u.uid) return;
+
+              // Never elevate from an offline or persisted cache snapshot. If
+              // a confirmed session loses its server source, revoke the local
+              // route gate immediately until Firestore confirms access again.
+              if (snap.metadata.fromCache) {
+                setAppUser(buildSafePendingAppUser({ uid: u.uid, email: u.email }));
+                return;
+              }
+
+              applyAuthoritativeProfile(snap);
+            },
+            (error) => {
+              if (currentVersion !== authVersion || auth.currentUser?.uid !== u.uid) return;
+
+              console.error("Failed to subscribe to app user profile:", error);
+              setAppUser(buildSafePendingAppUser({ uid: u.uid, email: u.email }));
+              setLoading(false);
+            }
+          );
+
+          if (currentVersion !== authVersion || auth.currentUser?.uid !== u.uid) {
+            unsubscribe();
+            return;
+          }
+          profileUnsubscribe = unsubscribe;
+
+          // The first protected render requires an explicit server read. The
+          // listener remains the live revocation path after that confirmation.
+          void getDocFromServer(profileRef)
+            .then(applyAuthoritativeProfile)
+            .catch((error) => {
+              if (currentVersion !== authVersion || auth.currentUser?.uid !== u.uid) return;
+
+              console.error("Failed to confirm app user profile with the server:", error);
+              setAppUser(buildSafePendingAppUser({ uid: u.uid, email: u.email }));
+              setLoading(false);
+            });
+        })
+        .catch((error) => {
+          if (currentVersion !== authVersion || auth.currentUser?.uid !== u.uid) return;
+
+          console.error("Failed to initialise app user subscription:", error);
+          setAppUser(buildSafePendingAppUser({ uid: u.uid, email: u.email }));
+          setLoading(false);
+        });
     });
-  }, [loadAppUser]);
+
+    return () => {
+      authVersion += 1;
+      profileUnsubscribe?.();
+      authUnsubscribe();
+    };
+  }, []);
 
   return (
     <Ctx.Provider value={{ user, appUser, loading, refreshAppUser }}>

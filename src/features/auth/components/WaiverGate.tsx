@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { useAuth } from "../../../context/AuthContext";
+import { hasAlphaWodAccess } from "../../../context/authUser";
 
 const WAIVER_VERSION = "2026-30-05";
 
@@ -13,27 +14,10 @@ const requiredAcknowledgements = [
 ];
 
 function needsCurrentWaiver(appUser: ReturnType<typeof useAuth>["appUser"]) {
-  return appUser?.waiverAcceptedVersion !== WAIVER_VERSION;
-}
-
-function getLocalWaiverKey(uid: string) {
-  return `zaf-waiver-accepted:${uid}:${WAIVER_VERSION}`;
-}
-
-function hasLocalWaiver(uid: string) {
-  try {
-    return window.localStorage.getItem(getLocalWaiverKey(uid)) === "true";
-  } catch {
-    return false;
-  }
-}
-
-function rememberLocalWaiver(uid: string) {
-  try {
-    window.localStorage.setItem(getLocalWaiverKey(uid), "true");
-  } catch {
-    // Firestore remains the source of truth if local storage is unavailable.
-  }
+  return (
+    appUser?.waiverAcceptedVersion !== WAIVER_VERSION ||
+    !appUser.waiverAcceptedAt
+  );
 }
 
 export default function WaiverGate({ children }: { children: React.ReactNode }) {
@@ -52,14 +36,21 @@ export default function WaiverGate({ children }: { children: React.ReactNode }) 
     [appUser?.name, user?.displayName]
   );
 
-  const signedOnThisDevice = !!user && hasLocalWaiver(user.uid);
+  if (!user) {
+    return <>{children}</>;
+  }
+
+  if (loading || !appUser) {
+    return (
+      <div className="carbon-fiber-bg flex min-h-screen items-center justify-center text-white">
+        Loading...
+      </div>
+    );
+  }
 
   if (
-    loading ||
-    !user ||
-    !appUser ||
+    !hasAlphaWodAccess(appUser) ||
     signedThisSession ||
-    signedOnThisDevice ||
     !needsCurrentWaiver(appUser)
   ) {
     return <>{children}</>;
@@ -76,24 +67,13 @@ export default function WaiverGate({ children }: { children: React.ReactNode }) 
     try {
       setSubmitting(true);
       setError("");
-      const [{ doc, serverTimestamp, setDoc }, { db }] = await Promise.all([
-        import("firebase/firestore"),
-        import("../../../firebase"),
-      ]);
-      await setDoc(
-        doc(db, "users", user.uid),
-        {
-          waiverAcceptedAt: serverTimestamp(),
-          waiverAcceptedBy: user.uid,
-          waiverAcceptedEmail: user.email ?? null,
-          waiverAcceptedName: typedName,
-          waiverAcceptedVersion: WAIVER_VERSION,
-          waiverAcknowledgements: requiredAcknowledgements,
-          waiverMediaConsent: mediaConsent,
-        },
-        { merge: true }
-      );
-      rememberLocalWaiver(user.uid);
+      const { acceptCurrentWaiver } = await import("../services/account");
+      await acceptCurrentWaiver({
+        acceptedName: typedName,
+        waiverVersion: WAIVER_VERSION,
+        acknowledgements: requiredAcknowledgements,
+        mediaConsent,
+      });
       setSignedThisSession(true);
       await refreshAppUser();
     } catch (err) {

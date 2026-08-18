@@ -13,6 +13,38 @@ import {setGlobalOptions} from "firebase-functions/v2";
 import {defineSecret} from "firebase-functions/params";
 import * as admin from "firebase-admin";
 import {DateTime} from "luxon";
+import {
+  ACCESS_SCHEMA_VERSION,
+  CURRENT_WAIVER_ACKNOWLEDGEMENTS,
+  CURRENT_WAIVER_TITLE,
+  CURRENT_WAIVER_VERSION,
+  EntitlementSource,
+  EntitlementStatus,
+  buildManagedClaims,
+  claimsEqual,
+  isApprovalStatus,
+  isEntitlementSource,
+  isEntitlementStatus,
+  isEntitlementCompatibleWithRole,
+  isCanonicalCurrentWaiverAcceptance,
+  isUserRole,
+  isValidEntitlementPair,
+  mergeManagedClaims,
+  resolveUserAuthorisation,
+} from "./authz";
+import {
+  buildClaimMembership,
+  buildListMemberships,
+  buildLinkMembershipParticipant,
+  buildStripeWebhook,
+} from "./membership";
+import {
+  LEADERBOARD_CANDIDATE_MAX_ROWS,
+  LeaderboardProfile,
+  filterAttendanceLeaderboardRows,
+  filterDipLeaderboardRows,
+  resolveBoundedLeaderboardMonthKey,
+} from "./leaderboard";
 
 setGlobalOptions({region: "europe-west1"});
 
@@ -25,19 +57,26 @@ const defaultInviteOrigin = "https://alpha-wod.vercel.app";
 /** -----------------------------
  * Types
  * ----------------------------*/
-type Role = "admin" | "user" | "sgpt" | "banned" | string;
-type ApprovalStatus = "approved" | "pending" | string;
 type StrengthBlock = "A" | "B" | "none" | string;
 
 type UserDoc = {
-  name?: string;
-  email?: string;
-  role?: Role;
-  approvalStatus?: ApprovalStatus;
+  name?: string | null;
+  email?: string | null;
+  role?: unknown;
+  approvalStatus?: unknown;
+  entitlementStatus?: unknown;
+  entitlementSource?: unknown;
+  entitlementPlanKey?: string;
+  entitlementReason?: string;
+  alphaWodAccess?: boolean;
+  accessSchemaVersion?: number;
+  profileSchemaVersion?: number;
   strengthBlock?: StrengthBlock;
   approvedAt?: admin.firestore.FieldValue | admin.firestore.Timestamp;
   approvedBy?: string;
-  photoURL?: string;
+  photoURL?: string | null;
+  createdAt?: admin.firestore.FieldValue | admin.firestore.Timestamp;
+  updatedAt?: admin.firestore.FieldValue | admin.firestore.Timestamp;
   stats?: {
     totalCheckIns?: number;
     monthCheckIns?: Record<string, number>;
@@ -109,7 +148,6 @@ type BookingDoc = {
 type LeaderboardUserDoc = {
   userId: string;
   name: string;
-  email: string;
   attendedCount: number;
   updatedAt: admin.firestore.FieldValue | admin.firestore.Timestamp;
 };
@@ -117,7 +155,6 @@ type LeaderboardUserDoc = {
 type DipLeaderboardUserDoc = {
   userId: string;
   name: string;
-  email: string;
   photoURL: string;
   dipCount: number;
   updatedAt: admin.firestore.FieldValue | admin.firestore.Timestamp;
@@ -161,6 +198,133 @@ function requireEmail(value: unknown, field: string): string {
   return email;
 }
 
+function optionalBoundedString(
+  value: unknown,
+  field: string,
+  maxLength: number
+): string | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value !== "string") {
+    throw new HttpsError("invalid-argument", `${field} must be a string`);
+  }
+
+  const normalised = value.trim();
+  if (!normalised) return undefined;
+  if (normalised.length > maxLength) {
+    throw new HttpsError(
+      "invalid-argument",
+      `${field} must be ${maxLength} characters or fewer`
+    );
+  }
+  return normalised;
+}
+
+function userAccessPatch(user: UserDoc) {
+  const access = resolveUserAuthorisation(user);
+  return {
+    alphaWodAccess: access.alphaWodAccess,
+    accessSchemaVersion: ACCESS_SCHEMA_VERSION,
+  };
+}
+
+async function syncUserCustomClaims(
+  userId: string,
+  user: UserDoc | undefined,
+  profileExists = true
+): Promise<void> {
+  let authUser: admin.auth.UserRecord;
+  try {
+    authUser = await admin.auth().getUser(userId);
+  } catch (error: any) {
+    if (error?.code === "auth/user-not-found") {
+      console.warn("Cannot sync claims for missing Auth user", userId);
+      return;
+    }
+    throw error;
+  }
+
+  const managed = buildManagedClaims(user, {profileExists});
+  const nextClaims = mergeManagedClaims(authUser.customClaims, managed);
+  if (!claimsEqual(authUser.customClaims, nextClaims)) {
+    await admin.auth().setCustomUserClaims(userId, nextClaims);
+  }
+}
+
+function isFailedPrecondition(error: unknown): boolean {
+  const code = (error as {code?: unknown} | undefined)?.code;
+  return code === 9 || code === "failed-precondition";
+}
+
+function sameDocumentVersion(
+  left: admin.firestore.DocumentSnapshot,
+  right: admin.firestore.DocumentSnapshot
+): boolean {
+  if (left.exists !== right.exists) return false;
+  if (!left.exists) return true;
+  return Boolean(
+    left.updateTime && right.updateTime && left.updateTime.isEqual(right.updateTime)
+  );
+}
+
+/**
+ * Converges derived Firestore markers and Auth claims from the current profile.
+ * Firestore events can be delivered out of order, so the event's `after` image
+ * must never be used as the authority for revocable access state.
+ */
+async function convergeUserDerivedAccess(userId: string): Promise<void> {
+  const userRef = db.collection("users").doc(userId);
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const current = await userRef.get();
+    if (!current.exists) {
+      await syncUserCustomClaims(userId, undefined, false);
+      const verification = await userRef.get();
+      if (!verification.exists) return;
+      continue;
+    }
+
+    const user = current.data() as UserDoc;
+    const accessPatch = userAccessPatch(user);
+    if (user.alphaWodAccess !== accessPatch.alphaWodAccess ||
+      user.accessSchemaVersion !== ACCESS_SCHEMA_VERSION) {
+      if (!current.updateTime) {
+        throw new Error(`Cannot derive access for ${userId} without an update time.`);
+      }
+      try {
+        await userRef.update({
+          ...accessPatch,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, {lastUpdateTime: current.updateTime});
+      } catch (error) {
+        if (isFailedPrecondition(error)) continue;
+        throw error;
+      }
+      // Re-read the version created by our marker correction before syncing
+      // claims. The correction itself emits another event, but this invocation
+      // also converges so correctness does not depend on its delivery order.
+      continue;
+    }
+
+    await syncUserCustomClaims(userId, user, true);
+    const verification = await userRef.get();
+    if (sameDocumentVersion(current, verification)) return;
+  }
+
+  // retry:true asks Eventarc to redeliver after sustained concurrent writes.
+  throw new Error(`User ${userId} changed repeatedly while deriving access state.`);
+}
+
+function requireStrictAuthorisation(user: UserDoc | undefined) {
+  const resolved = resolveUserAuthorisation(user, {profileExists: Boolean(user)});
+  if (!resolved.valid) {
+    throw new HttpsError(
+      "failed-precondition",
+      "This account profile is incomplete or invalid. Contact support."
+    );
+  }
+  return resolved;
+}
+
 function normaliseAppOrigin(value: unknown): string {
   const raw = typeof value === "string" ? value.trim() : "";
 
@@ -190,7 +354,11 @@ function resolveInviteOrigin(value: unknown): string {
     return defaultInviteOrigin;
   }
 
-  return origin;
+  if (origin !== defaultInviteOrigin) {
+    throw new HttpsError("invalid-argument", "origin is not an approved app URL");
+  }
+
+  return defaultInviteOrigin;
 }
 
 function inviteDocIdFor(email: string) {
@@ -308,11 +476,11 @@ async function updateDipLeaderboardCount(
     {
       userId,
       name: user.name ?? bookingUserName ?? "Member",
-      email: user.email ?? "",
+      email: admin.firestore.FieldValue.delete(),
       photoURL: user.photoURL ?? "",
       dipCount: nextCount,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    } satisfies DipLeaderboardUserDoc,
+    },
     {merge: true}
   );
 }
@@ -487,12 +655,6 @@ function bookingIdFor(classId: string, userId: string) {
   return `${classId}_${userId}`;
 }
 
-function monthKeyFromDate(d: Date) {
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
-  return `${y}-${m}`; // e.g. "2026-03"
-}
-
 function ukDateKeyNow() {
   return DateTime.now().setZone("Europe/London").toFormat("yyyy-LL-dd");
 }
@@ -577,15 +739,19 @@ export const generateClassOccurrencesDaily = onSchedule(
 
 export const generateClassOccurrences = onCall(async (request) => {
   requireAuth(request);
+  await requireAdmin(request);
 
-  // Optional: admin only (uncomment if you want)
-  // await requireAdmin(uid);
-
-  const daysAhead =
-    typeof request.data?.daysAhead === "number" ? request.data.daysAhead : 28;
+  const requestedDays = request.data?.daysAhead;
+  const daysAhead = requestedDays === undefined ? 28 : requestedDays;
+  if (!Number.isInteger(daysAhead) || daysAhead < 1 || daysAhead > 90) {
+    throw new HttpsError(
+      "invalid-argument",
+      "daysAhead must be an integer between 1 and 90."
+    );
+  }
 
   try {
-    return await generateRange(daysAhead);
+    return await generateRange(daysAhead as number);
   } catch (err: any) {
     console.error("generateClassOccurrences failed", err?.message, err?.stack, err);
     throw new HttpsError("internal", err?.message || "generateRange failed");
@@ -737,10 +903,7 @@ export const adminAddBooking = onCall(async (request) => {
       throw new HttpsError("not-found", "User not found.");
     }
 
-    const userData = userSnap.data() as UserDoc;
-    if (userData.approvalStatus === "pending") {
-      throw new HttpsError("failed-precondition", "User must be approved before being added to a class.");
-    }
+    const userData = assertApprovedMember(userSnap.data() as UserDoc);
 
     const classData = classSnap.data() as Partial<ClassDoc>;
     const capacity = Number(classData.capacity ?? 0);
@@ -959,16 +1122,16 @@ export const checkInBooking = onCall(async (request) => {
         checkedInBy: callerUid,
       });
 
-      // Update leaderboard (merge so name/email can refresh)
+      // Update the member-visible leaderboard without private contact data.
       tx.set(
         lbUserRef,
         {
           userId: booking.userId,
           name: u.name ?? booking.userName ?? "Member",
-          email: u.email ?? "",
+          email: admin.firestore.FieldValue.delete(),
           attendedCount: nextCount,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        } satisfies LeaderboardUserDoc,
+        },
         {merge: true}
       );
 
@@ -998,114 +1161,73 @@ export const checkInBooking = onCall(async (request) => {
   }
 });
 
-type TokenClaims = {role?: string; approvalStatus?: string};
 type AuthedRequest = {auth?: {uid?: string; token?: Record<string, unknown>} | null};
 
-function tokenClaims(request: AuthedRequest): TokenClaims | undefined {
-  return request.auth?.token as TokenClaims | undefined;
-}
-
-/**
- * Admin check. Fast path: custom claims on the ID token (zero Firestore
- * reads). Falls back to a Firestore read when claims are missing or deny,
- * so stale/unset claims can never lock out a real admin.
- */
 async function requireAdmin(request: AuthedRequest): Promise<void> {
   const uid = requireAuth(request);
-  if (tokenClaims(request)?.role === "admin") return;
-
   const snap = await db.collection("users").doc(uid).get();
-  const user = (snap.data() || {}) as UserDoc;
-  if (user.role !== "admin") {
+  const user = snap.exists ? snap.data() as UserDoc : undefined;
+  const access = requireStrictAuthorisation(user);
+  if (access.role !== "admin" || access.approvalStatus !== "approved" ||
+    !access.alphaWodAccess || access.disabled) {
     throw new HttpsError("permission-denied", "Admin only.");
   }
 }
 
-/**
- * Approved-member check. Fast path via custom claims; Firestore fallback
- * when claims are missing or would deny (claims may be stale for up to an
- * hour after approval).
- */
+async function requireAdminOrSgpt(request: AuthedRequest): Promise<void> {
+  const uid = requireAuth(request);
+  const snap = await db.collection("users").doc(uid).get();
+  const user = snap.exists ? snap.data() as UserDoc : undefined;
+  const access = requireStrictAuthorisation(user);
+  if ((access.role !== "admin" && access.role !== "sgpt") ||
+    access.approvalStatus !== "approved" || !access.alphaWodAccess ||
+    access.disabled) {
+    throw new HttpsError("permission-denied", "Staff only.");
+  }
+}
+
 async function requireApprovedMember(request: AuthedRequest): Promise<void> {
   const uid = requireAuth(request);
-  const token = tokenClaims(request);
-
-  if (token && typeof token.role === "string") {
-    if (token.role === "admin") return;
-    if (token.role !== "banned" && token.approvalStatus === "approved") return;
-    // Claims deny — fall through to Firestore in case they are stale.
-  }
-
   const snap = await db.collection("users").doc(uid).get();
-  assertApprovedMember(snap.data() as UserDoc | undefined);
+  assertApprovedMember(snap.exists ? snap.data() as UserDoc : undefined);
 }
 
 /**
- * Mirrors role/approvalStatus from the user doc into Auth custom claims so
- * functions and security rules can authorise from the ID token (zero
- * Firestore reads) instead of get()-ing the user doc on every request.
- * Also refreshes the current month's leaderboard summary when fields shown
- * on the leaderboard change.
- *
- * Note: claims land on the client after its next token refresh (up to ~1h,
- * or immediately via getIdToken(true)). The Firestore fallbacks in
- * requireAdmin/requireApprovedMember and firestore.rules cover the gap.
+ * Synchronises the complete, fail-closed access claim set while preserving
+ * claims owned by other systems. Firestore remains authoritative for
+ * privileged callable checks so stale ID tokens cannot extend access.
  */
-export const onUserDocWritten = onDocumentWritten("users/{userId}", async (event) => {
-  const after = event.data?.after?.exists ? (event.data.after.data() as UserDoc) : undefined;
-  if (!after) return; // user doc deleted — nothing to sync
-
-  const before = event.data?.before?.exists ? (event.data.before.data() as UserDoc) : undefined;
-
-  const role = after.role ?? "user";
-  const approvalStatus = after.approvalStatus ?? "approved";
-  const claimsChanged =
-    !before ||
-    (before.role ?? "user") !== role ||
-    (before.approvalStatus ?? "approved") !== approvalStatus;
-
-  const leaderboardFieldsChanged =
-    claimsChanged ||
-    (before?.name ?? "") !== (after.name ?? "") ||
-    (before?.photoURL ?? "") !== (after.photoURL ?? "");
-
-  const tasks: Promise<unknown>[] = [];
-
-  if (claimsChanged) {
-    tasks.push(
-      admin.auth().setCustomUserClaims(event.params.userId, {role, approvalStatus})
-        .catch((err) => {
-          // Doc id may not correspond to an Auth user (e.g. seeded data).
-          console.warn("setCustomUserClaims failed for", event.params.userId, err?.message);
-        })
-    );
-  }
-
-  if (leaderboardFieldsChanged) {
-    tasks.push(
-      rebuildLeaderboardSummary(ukMonthKeyFromDate(new Date())).catch((err) => {
-        console.warn("leaderboard summary refresh failed", err?.message);
-      })
-    );
-  }
-
-  if (tasks.length) await Promise.all(tasks);
+export const onUserDocWritten = onDocumentWritten({
+  document: "users/{userId}",
+  retry: true,
+}, async (event) => {
+  await convergeUserDerivedAccess(event.params.userId);
 });
 
 function assertApprovedMember(user: UserDoc | undefined): UserDoc {
-  const u = user || ({} as UserDoc);
-
-  if (u.role === "admin") return u;
-
-  if (u.role === "banned") {
+  if (!user) {
+    throw new HttpsError(
+      "failed-precondition",
+      "This account profile is missing. Contact support."
+    );
+  }
+  const access = requireStrictAuthorisation(user);
+  if (access.role === "banned" || access.disabled) {
     throw new HttpsError("permission-denied", "Your account is currently suspended.");
   }
 
-  if (u.approvalStatus === "pending") {
+  if (access.approvalStatus !== "approved") {
     throw new HttpsError("permission-denied", "Your account is awaiting admin approval.");
   }
 
-  return u;
+  if (!access.alphaWodAccess) {
+    throw new HttpsError(
+      "permission-denied",
+      "This account does not currently have AlphaWOD access."
+    );
+  }
+
+  return user;
 }
 
 /**
@@ -1243,10 +1365,10 @@ export const markBookingStatus = onCall(async (request) => {
         {
           userId,
           name: u.name ?? booking.userName ?? "Member",
-          email: u.email ?? "",
+          email: admin.firestore.FieldValue.delete(),
           attendedCount: nextLb,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        } satisfies LeaderboardUserDoc,
+        },
         {merge: true}
       );
 
@@ -1381,12 +1503,9 @@ export const getClassRoster = onCall(async (request) => {
 type LeaderboardSummaryRow = {
   userId: string;
   name: string;
-  email: string;
   photoURL: string;
   attendedCount: number;
 };
-
-const LEADERBOARD_SUMMARY_MAX_ROWS = 500;
 
 /**
  * Builds the merged, ranked leaderboard for a month
@@ -1405,18 +1524,19 @@ async function buildMonthlyLeaderboardRows(monthKey: string): Promise<Leaderboar
   });
 
   return usersSnap.docs
-    .map((d) => ({
-      userId: d.id,
-      name: String((d.data() as any)?.name || "Member"),
-      email: String((d.data() as any)?.email || ""),
-      photoURL: String((d.data() as any)?.photoURL || ""),
-      approvalStatus: String((d.data() as any)?.approvalStatus || "approved"),
-    }))
-    .filter((u) => u.approvalStatus !== "pending")
+    .map((d) => {
+      const user = d.data() as UserDoc;
+      return {
+        userId: d.id,
+        name: String(user.name || "Member"),
+        photoURL: String(user.photoURL || ""),
+        access: resolveUserAuthorisation(user),
+      };
+    })
+    .filter((u) => u.access.alphaWodAccess)
     .map((u) => ({
       userId: u.userId,
       name: u.name,
-      email: u.email,
       photoURL: u.photoURL,
       attendedCount: counts.get(u.userId) ?? 0,
     }))
@@ -1425,6 +1545,39 @@ async function buildMonthlyLeaderboardRows(monthKey: string): Promise<Leaderboar
       if (diff !== 0) return diff;
       return a.name.localeCompare(b.name);
     });
+}
+
+function requireLeaderboardMonthKey(value: unknown): string {
+  const monthKey = resolveBoundedLeaderboardMonthKey(
+    value,
+    ukMonthKeyFromDate(new Date())
+  );
+  if (!monthKey) {
+    throw new HttpsError(
+      "invalid-argument",
+      "monthKey must be a supported YYYY-MM month."
+    );
+  }
+  return monthKey;
+}
+
+function leaderboardLimit(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ?
+    Math.min(200, Math.floor(value)) : 200;
+}
+
+async function loadLeaderboardProfiles(values: unknown[]): Promise<Map<string, LeaderboardProfile>> {
+  const userIds = Array.from(new Set(values.map((value) => {
+    const row = (value || {}) as Record<string, unknown>;
+    return typeof row.userId === "string" ? row.userId : "";
+  }).filter(Boolean))).slice(0, LEADERBOARD_CANDIDATE_MAX_ROWS);
+  if (!userIds.length) return new Map();
+  const snapshots = await db.getAll(...userIds.map((userId) =>
+    db.collection("users").doc(userId)
+  ));
+  return new Map(snapshots
+    .filter((snapshot) => snapshot.exists)
+    .map((snapshot) => [snapshot.id, snapshot.data() as LeaderboardProfile]));
 }
 
 /**
@@ -1438,7 +1591,7 @@ async function rebuildLeaderboardSummary(monthKey: string): Promise<LeaderboardS
   await db.collection("leaderboards").doc(monthKey).set(
     {
       summary: {
-        rows: rows.slice(0, LEADERBOARD_SUMMARY_MAX_ROWS),
+        rows: rows.slice(0, LEADERBOARD_CANDIDATE_MAX_ROWS),
         total: rows.length,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
@@ -1456,6 +1609,17 @@ async function rebuildLeaderboardSummary(monthKey: string): Promise<LeaderboardS
 export const onLeaderboardEntryWritten = onDocumentWritten(
   "leaderboards/{monthKey}/users/{userId}",
   async (event) => {
+    const before = event.data?.before?.exists ? event.data.before.data() : undefined;
+    const after = event.data?.after?.exists ? event.data.after.data() : undefined;
+    // The Phase 0 scrub removes only legacy email fields. Counts and display
+    // data are unchanged, so avoid a full rebuild for every migrated row.
+    if (before && after &&
+      before.userId === after.userId &&
+      before.name === after.name &&
+      before.photoURL === after.photoURL &&
+      before.attendedCount === after.attendedCount) {
+      return;
+    }
     await rebuildLeaderboardSummary(event.params.monthKey);
   }
 );
@@ -1464,27 +1628,28 @@ export const getMonthlyLeaderboard = onCall(async (request) => {
   requireAuth(request);
   await requireApprovedMember(request);
 
-  const monthKey =
-    typeof request.data?.monthKey === "string" && request.data.monthKey.trim() ?
-      request.data.monthKey.trim() :
-      monthKeyFromDate(new Date());
-
-  const limit =
-    typeof request.data?.limit === "number" && request.data.limit > 0 ?
-      Math.min(500, Math.floor(request.data.limit)) :
-      200;
+  const monthKey = requireLeaderboardMonthKey(request.data?.monthKey);
+  const limit = leaderboardLimit(request.data?.limit);
 
   // Fast path: serve the precomputed summary.
   const monthSnap = await db.collection("leaderboards").doc(monthKey).get();
   const summary = (monthSnap.data() as any)?.summary;
   if (summary && Array.isArray(summary.rows)) {
-    const rows = (summary.rows as LeaderboardSummaryRow[]).slice(0, limit);
+    const profiles = await loadLeaderboardProfiles(summary.rows);
+    const rows = filterAttendanceLeaderboardRows(summary.rows, profiles, limit);
     return {monthKey, total: rows.length, rows};
   }
 
-  // Slow path (summary not built yet): compute and persist it.
-  const allRows = await rebuildLeaderboardSummary(monthKey);
-  const rows = allRows.slice(0, limit);
+  // A member cache miss remains read-only and bounded. Summary generation is
+  // owned by trusted triggers/admin reconciliation, not arbitrary read input.
+  const countSnap = await db.collection("leaderboards").doc(monthKey)
+    .collection("users").limit(LEADERBOARD_CANDIDATE_MAX_ROWS).get();
+  const rawRows = countSnap.docs.map((snapshot) => ({
+    userId: snapshot.id,
+    attendedCount: snapshot.data().attendedCount,
+  }));
+  const profiles = await loadLeaderboardProfiles(rawRows);
+  const rows = filterAttendanceLeaderboardRows(rawRows, profiles, limit);
   return {monthKey, total: rows.length, rows};
 });
 
@@ -1492,14 +1657,7 @@ export const reconcileMonthlyLeaderboard = onCall(async (request) => {
   requireAuth(request);
   await requireAdmin(request);
 
-  const monthKey =
-    typeof request.data?.monthKey === "string" && request.data.monthKey.trim() ?
-      request.data.monthKey.trim() :
-      ukMonthKeyFromDate(new Date());
-
-  if (!/^\d{4}-\d{2}$/.test(monthKey)) {
-    throw new HttpsError("invalid-argument", "monthKey must be YYYY-MM");
-  }
+  const monthKey = requireLeaderboardMonthKey(request.data?.monthKey);
 
   const bookingsSnap = await db.collection("bookings").get();
 
@@ -1536,14 +1694,14 @@ export const reconcileMonthlyLeaderboard = onCall(async (request) => {
   // rebuild
   for (const [userId, attendedCount] of counts.entries()) {
     const userSnap = await db.collection("users").doc(userId).get();
-    const u = (userSnap.data() || {}) as UserDoc;
-    if (u.approvalStatus === "pending") continue;
+    if (!userSnap.exists) continue;
+    const u = userSnap.data() as UserDoc;
+    if (!resolveUserAuthorisation(u).alphaWodAccess) continue;
 
     const ref = lbMonthRef.collection("users").doc(userId);
     batch.set(ref, {
       userId,
       name: u.name ?? "Member",
-      email: u.email ?? "",
       attendedCount,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     } satisfies LeaderboardUserDoc);
@@ -1562,83 +1720,287 @@ export const getMonthlyDipLeaderboard = onCall(async (request) => {
   requireAuth(request);
   await requireApprovedMember(request);
 
-  const monthKey =
-    typeof request.data?.monthKey === "string" && request.data.monthKey.trim() ?
-      request.data.monthKey.trim() :
-      monthKeyFromDate(new Date());
-
-  const limit =
-    typeof request.data?.limit === "number" && request.data.limit > 0 ?
-      Math.min(500, Math.floor(request.data.limit)) :
-      200;
+  const monthKey = requireLeaderboardMonthKey(request.data?.monthKey);
+  const limit = leaderboardLimit(request.data?.limit);
 
   const dipRollupSnap = await db
     .collection("leaderboards")
     .doc(monthKey)
     .collection("dipUsers")
+    .orderBy("dipCount", "desc")
+    .limit(LEADERBOARD_CANDIDATE_MAX_ROWS)
     .get();
 
   if (!dipRollupSnap.empty) {
-    const rows = dipRollupSnap.docs
-      .map((doc) => doc.data() as DipLeaderboardUserDoc)
-      .filter((row) => Number(row.dipCount || 0) > 0)
-      .sort((a, b) => {
-        const diff = Number(b.dipCount || 0) - Number(a.dipCount || 0);
-        if (diff !== 0) return diff;
-        return String(a.name || "Member").localeCompare(String(b.name || "Member"));
-      })
-      .slice(0, limit);
+    const rawRows = dipRollupSnap.docs.map((snapshot) => ({
+      userId: String(snapshot.data().userId || snapshot.id),
+      dipCount: snapshot.data().dipCount,
+    }));
+    const profiles = await loadLeaderboardProfiles(rawRows);
+    const rows = filterDipLeaderboardRows(rawRows, profiles, limit);
 
     return {monthKey, total: rows.length, rows};
   }
 
+  // Rollups are maintained transactionally by attendance mutations. Do not
+  // turn a member-facing cache miss into an all-bookings/all-classes scan.
+  return {monthKey, total: 0, rows: []};
+});
+
+export const listStaffUsers = onCall(async (request) => {
+  requireAuth(request);
+  await requireAdminOrSgpt(request);
   const usersSnap = await db.collection("users").get();
+  const users = usersSnap.docs.map((doc) => {
+    const user = doc.data() as UserDoc;
+    const access = resolveUserAuthorisation(user);
+    const stats = user.stats ? {
+      totalCheckIns: Math.max(0, Number(user.stats.totalCheckIns || 0)),
+      monthCheckIns: Object.fromEntries(
+        Object.entries(user.stats.monthCheckIns || {}).map(([month, count]) => [
+          month,
+          Math.max(0, Number(count || 0)),
+        ])
+      ),
+      currentStreak: Math.max(0, Number(user.stats.currentStreak || 0)),
+      longestStreak: Math.max(0, Number(user.stats.longestStreak || 0)),
+      lastCheckInDate: typeof user.stats.lastCheckInDate === "string" ?
+        user.stats.lastCheckInDate : null,
+    } : undefined;
 
-  const allUsers = usersSnap.docs.map((d) => ({
-    userId: d.id,
-    name: String((d.data() as any)?.name || "Member"),
-    email: String((d.data() as any)?.email || ""),
-    photoURL: String((d.data() as any)?.photoURL || ""),
-    approvalStatus: String((d.data() as any)?.approvalStatus || "approved"),
-  })).filter((u) => u.approvalStatus !== "pending");
+    return {
+      id: doc.id,
+      name: typeof user.name === "string" ? user.name : "",
+      email: typeof user.email === "string" ? user.email : "",
+      photoURL: typeof user.photoURL === "string" ? user.photoURL : "",
+      role: access.role,
+      approvalStatus: access.approvalStatus,
+      entitlementStatus: access.entitlementStatus,
+      entitlementSource: access.entitlementSource,
+      alphaWodAccess: access.alphaWodAccess,
+      strengthBlock: user.strengthBlock === "A" || user.strengthBlock === "B" ?
+        user.strengthBlock : "none",
+      stats,
+    };
+  });
+  return {users};
+});
 
-  const bookingsSnap = await db.collection("bookings").get();
-  const counts = new Map<string, number>();
+export const bootstrapUserProfile = onCall(async (request) => {
+  const userId = requireAuth(request);
+  const requestedName = optionalBoundedString(request.data?.displayName, "displayName", 120);
+  const authUser = await admin.auth().getUser(userId);
+  const canonicalEmail = authUser.email?.trim().toLowerCase() || null;
+  const fallbackName = authUser.displayName?.trim() || null;
+  const userRef = db.collection("users").doc(userId);
+  let finalUser: UserDoc = {};
 
-  for (const doc of bookingsSnap.docs) {
-    const b = doc.data() as Partial<BookingDoc>;
-    if (!b.classId || !b.userId) continue;
-    if (b.attendanceStatus !== "dip") continue;
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(userRef);
+    const existing = snap.exists ? snap.data() as UserDoc : {};
+    const existingAccess = resolveUserAuthorisation(existing);
+    const safeAuthorisation = existingAccess.valid ? {
+      role: existingAccess.role,
+      approvalStatus: existingAccess.approvalStatus,
+      entitlementStatus: existingAccess.entitlementStatus,
+      entitlementSource: existingAccess.entitlementSource,
+    } : {
+      role: "user" as const,
+      approvalStatus: "pending" as const,
+      entitlementStatus: "none" as const,
+      entitlementSource: "none" as const,
+    };
+    const nextAccess = resolveUserAuthorisation(safeAuthorisation);
+    const currentName = typeof existing.name === "string" && existing.name.trim() ?
+      existing.name.trim() : undefined;
+    const resolvedName = currentName || requestedName || fallbackName || undefined;
 
-    const classSnap = await db.collection("classes").doc(String(b.classId)).get();
-    if (!classSnap.exists) continue;
+    const patch = {
+      ...safeAuthorisation,
+      alphaWodAccess: nextAccess.alphaWodAccess,
+      accessSchemaVersion: ACCESS_SCHEMA_VERSION,
+      profileSchemaVersion: 1,
+      email: canonicalEmail,
+      emailVerified: authUser.emailVerified,
+      ...(resolvedName ? {name: resolvedName} : {}),
+      strengthBlock: existing.strengthBlock === "A" || existing.strengthBlock === "B" ?
+        existing.strengthBlock : "none",
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      ...(!snap.exists || !existing.createdAt ? {
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      } : {}),
+    };
 
-    const classData = classSnap.data() as Partial<ClassDoc>;
-    const classStart = classData.startTime?.toDate?.();
-    if (!classStart) continue;
+    tx.set(userRef, patch, {merge: true});
+    finalUser = {...existing, ...patch};
+  });
 
-    const bookingMonthKey = ukMonthKeyFromDate(classStart);
-    if (bookingMonthKey !== monthKey) continue;
+  await convergeUserDerivedAccess(userId);
+  const access = resolveUserAuthorisation(finalUser);
+  return {
+    ok: true,
+    profile: {
+      userId,
+      role: access.role,
+      approvalStatus: access.approvalStatus,
+      entitlementStatus: access.entitlementStatus,
+      entitlementSource: access.entitlementSource,
+      alphaWodAccess: access.alphaWodAccess,
+    },
+  };
+});
 
-    counts.set(String(b.userId), (counts.get(String(b.userId)) || 0) + 1);
+export const acceptCurrentWaiver = onCall(async (request) => {
+  const userId = requireAuth(request);
+  const signedName = optionalBoundedString(request.data?.signedName, "signedName", 160);
+  if (!signedName || signedName.length < 2) {
+    throw new HttpsError("invalid-argument", "signedName must contain at least 2 characters.");
   }
 
-  const rows = allUsers
-    .map((u) => ({
-      userId: u.userId,
-      name: u.name,
-      email: u.email,
-      photoURL: u.photoURL,
-      dipCount: counts.get(u.userId) ?? 0,
-    }))
-    .sort((a, b) => {
-      const diff = (b.dipCount || 0) - (a.dipCount || 0);
-      if (diff !== 0) return diff;
-      return a.name.localeCompare(b.name);
-    })
-    .slice(0, limit);
+  if (request.data?.version !== CURRENT_WAIVER_VERSION) {
+    throw new HttpsError(
+      "failed-precondition",
+      `The current waiver version is ${CURRENT_WAIVER_VERSION}.`
+    );
+  }
+  if (!Array.isArray(request.data?.acknowledgements) ||
+    request.data.acknowledgements.length !== CURRENT_WAIVER_ACKNOWLEDGEMENTS.length ||
+    !CURRENT_WAIVER_ACKNOWLEDGEMENTS.every(
+      (text, index) => request.data.acknowledgements[index] === text
+    )) {
+    throw new HttpsError(
+      "invalid-argument",
+      "Every current waiver acknowledgement must be accepted exactly."
+    );
+  }
+  if (typeof request.data?.mediaConsent !== "boolean") {
+    throw new HttpsError("invalid-argument", "mediaConsent must be true or false.");
+  }
 
-  return {monthKey, total: rows.length, rows};
+  const authUser = await admin.auth().getUser(userId);
+  const firebaseToken = request.auth?.token?.firebase as
+    {sign_in_provider?: unknown} | undefined;
+  const userRef = db.collection("users").doc(userId);
+  const acceptanceRef = db.collection("waiverAcceptances")
+    .doc(`${userId}__${CURRENT_WAIVER_VERSION}`);
+  let alreadyAccepted = false;
+
+  await db.runTransaction(async (tx) => {
+    const [userSnap, acceptanceSnap] = await Promise.all([
+      tx.get(userRef),
+      tx.get(acceptanceRef),
+    ]);
+    if (!userSnap.exists) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Create your member profile before accepting the waiver."
+      );
+    }
+
+    if (acceptanceSnap.exists) {
+      const existingAcceptance = acceptanceSnap.data();
+      if (!isCanonicalCurrentWaiverAcceptance(userId, existingAcceptance)) {
+        throw new HttpsError(
+          "failed-precondition",
+          "Stored waiver evidence is invalid. Contact an administrator before retrying."
+        );
+      }
+      alreadyAccepted = true;
+      const existingAcceptedAt = acceptanceSnap.get("acceptedAt");
+      tx.set(userRef, {
+        waiverAcceptedVersion: CURRENT_WAIVER_VERSION,
+        waiverAcceptedAt: existingAcceptedAt,
+      }, {merge: true});
+      return;
+    }
+
+    const acceptedAt = admin.firestore.FieldValue.serverTimestamp();
+    tx.create(acceptanceRef, {
+      acceptanceSchemaVersion: 1,
+      userId,
+      version: CURRENT_WAIVER_VERSION,
+      agreementTitle: CURRENT_WAIVER_TITLE,
+      acceptedAt,
+      acceptedName: signedName,
+      acceptedEmail: authUser.email?.trim().toLowerCase() || null,
+      acceptedEmailVerified: authUser.emailVerified,
+      acknowledgements: [...CURRENT_WAIVER_ACKNOWLEDGEMENTS],
+      mediaConsent: request.data.mediaConsent,
+      authenticatedAt: request.auth?.token?.auth_time || null,
+      signInProvider: typeof firebaseToken?.sign_in_provider === "string" ?
+        firebaseToken.sign_in_provider : null,
+      userAgent: String(request.rawRequest.get("user-agent") || "").slice(0, 500),
+      source: "authenticated_callable",
+    });
+    tx.set(userRef, {
+      waiverAcceptedVersion: CURRENT_WAIVER_VERSION,
+      waiverAcceptedAt: acceptedAt,
+    }, {merge: true});
+  });
+
+  return {ok: true, version: CURRENT_WAIVER_VERSION, alreadyAccepted};
+});
+
+export const setMemberEntitlement = onCall(async (request) => {
+  const callerUid = requireAuth(request);
+  await requireAdmin(request);
+  const userId = requireString(request.data?.userId, "userId");
+  const status = request.data?.entitlementStatus;
+  const source = request.data?.entitlementSource;
+  if (!isEntitlementStatus(status) || !isEntitlementSource(source) ||
+    !isValidEntitlementPair(status, source)) {
+    throw new HttpsError(
+      "invalid-argument",
+      "entitlementStatus and entitlementSource are not a valid combination."
+    );
+  }
+
+  const planKey = optionalBoundedString(request.data?.planKey, "planKey", 100);
+  const reason = optionalBoundedString(request.data?.reason, "reason", 500);
+  const userRef = db.collection("users").doc(userId);
+  let finalUser: UserDoc | undefined;
+
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(userRef);
+    if (!snap.exists) throw new HttpsError("not-found", "User not found.");
+    const user = snap.data() as UserDoc;
+    if (!isUserRole(user.role) || !isApprovalStatus(user.approvalStatus)) {
+      throw new HttpsError(
+        "failed-precondition",
+        "The member role or approval state is invalid; repair it before assigning access."
+      );
+    }
+    if (!isEntitlementCompatibleWithRole(user.role, status, source)) {
+      throw new HttpsError(
+        "invalid-argument",
+        "That active entitlement source is not valid for the member role."
+      );
+    }
+
+    const next = {
+      role: user.role,
+      approvalStatus: user.approvalStatus,
+      entitlementStatus: status,
+      entitlementSource: source,
+    };
+    const access = resolveUserAuthorisation(next);
+    const patch = {
+      ...next,
+      alphaWodAccess: access.alphaWodAccess,
+      accessSchemaVersion: ACCESS_SCHEMA_VERSION,
+      entitlementPlanKey: planKey || admin.firestore.FieldValue.delete(),
+      entitlementReason: reason || admin.firestore.FieldValue.delete(),
+      entitlementUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      entitlementUpdatedBy: callerUid,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    tx.set(userRef, patch, {merge: true});
+    finalUser = {...user, ...next, alphaWodAccess: access.alphaWodAccess};
+  });
+
+  await convergeUserDerivedAccess(userId);
+  const access = resolveUserAuthorisation(finalUser);
+  return {ok: true, userId, ...access};
 });
 
 export const approveUserAccess = onCall(async (request) => {
@@ -1647,22 +2009,51 @@ export const approveUserAccess = onCall(async (request) => {
 
   const userId = requireString(request.data?.userId, "userId");
   const userRef = db.collection("users").doc(userId);
-  const snap = await userRef.get();
 
-  if (!snap.exists) {
-    throw new HttpsError("not-found", "User not found.");
-  }
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(userRef);
+    if (!snap.exists) throw new HttpsError("not-found", "User not found.");
+    const user = snap.data() as UserDoc;
+    if (!isUserRole(user.role)) {
+      throw new HttpsError("failed-precondition", "The member role is invalid.");
+    }
+    if (user.role === "admin") {
+      throw new HttpsError("failed-precondition", "Admins do not require approval.");
+    }
+    if (user.role === "banned") {
+      throw new HttpsError("failed-precondition", "A suspended member cannot be approved.");
+    }
 
-  const user = snap.data() as UserDoc;
-  if (user.role === "admin") {
-    throw new HttpsError("failed-precondition", "Admins do not require approval.");
-  }
+    const memberSources: EntitlementSource[] = ["legacy", "manual", "stripe"];
+    const preserveMemberEntitlement = user.role === "user" &&
+      user.entitlementStatus === "active" &&
+      isEntitlementSource(user.entitlementSource) &&
+      memberSources.includes(user.entitlementSource);
+    const entitlementStatus: EntitlementStatus = "active";
+    const entitlementSource: EntitlementSource = user.role === "sgpt" ?
+      "staff" : preserveMemberEntitlement ?
+        user.entitlementSource as EntitlementSource : "manual";
+    const next = {
+      role: user.role,
+      approvalStatus: "approved" as const,
+      entitlementStatus,
+      entitlementSource,
+    };
+    const access = resolveUserAuthorisation(next);
+    const patch = {
+      ...next,
+      alphaWodAccess: access.alphaWodAccess,
+      accessSchemaVersion: ACCESS_SCHEMA_VERSION,
+      approvedAt: admin.firestore.FieldValue.serverTimestamp(),
+      approvedBy: callerUid,
+      entitlementUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      entitlementUpdatedBy: callerUid,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    tx.set(userRef, patch, {merge: true});
+  });
 
-  await userRef.set({
-    approvalStatus: "approved",
-    approvedAt: admin.firestore.FieldValue.serverTimestamp(),
-    approvedBy: callerUid,
-  }, {merge: true});
+  await convergeUserDerivedAccess(userId);
 
   return {ok: true};
 });
@@ -1679,33 +2070,49 @@ export const updateMemberRole = onCall(async (request) => {
   }
 
   const userRef = db.collection("users").doc(userId);
-  const snap = await userRef.get();
 
-  if (!snap.exists) {
-    throw new HttpsError("not-found", "User not found.");
-  }
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(userRef);
+    if (!snap.exists) throw new HttpsError("not-found", "User not found.");
+    const user = snap.data() as UserDoc;
+    if (!isUserRole(user.role)) {
+      throw new HttpsError("failed-precondition", "The member role is invalid.");
+    }
+    if (user.role === "admin") {
+      throw new HttpsError("failed-precondition", "Admins cannot be reassigned.");
+    }
 
-  const user = snap.data() as UserDoc;
-  if (user.role === "admin") {
-    throw new HttpsError("failed-precondition", "Admins cannot be reassigned.");
-  }
+    const entitlementStatus: EntitlementStatus = role === "sgpt" ?
+      "active" : role === "banned" ? "restricted" : "none";
+    const entitlementSource: EntitlementSource = role === "sgpt" ?
+      "staff" : role === "banned" ? "manual" : "none";
+    const next = {
+      role,
+      approvalStatus: "approved" as const,
+      entitlementStatus,
+      entitlementSource,
+    };
+    const access = resolveUserAuthorisation(next);
+    const patch = {
+      ...next,
+      alphaWodAccess: access.alphaWodAccess,
+      accessSchemaVersion: ACCESS_SCHEMA_VERSION,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      ...(role === "banned" ? {
+        suspendedAt: admin.firestore.FieldValue.serverTimestamp(),
+        suspendedBy: callerUid,
+        entitlementReason: "suspended_by_admin",
+      } : {
+        restoredAt: admin.firestore.FieldValue.serverTimestamp(),
+        restoredBy: callerUid,
+        entitlementReason: role === "user" ?
+          "access_requires_explicit_entitlement" : "staff_role",
+      }),
+    };
+    tx.set(userRef, patch, {merge: true});
+  });
 
-  await userRef.set({
-    role,
-    approvalStatus: "approved",
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    ...(
-      role === "banned" ?
-        {
-          suspendedAt: admin.firestore.FieldValue.serverTimestamp(),
-          suspendedBy: callerUid,
-        } :
-        {
-          restoredAt: admin.firestore.FieldValue.serverTimestamp(),
-          restoredBy: callerUid,
-        }
-    ),
-  }, {merge: true});
+  await convergeUserDerivedAccess(userId);
 
   return {ok: true};
 });
@@ -1811,3 +2218,23 @@ export const inviteMemberByEmail = onCall({secrets: [resendApiKey, resendFromEma
 
   return {ok: true, signUpUrl};
 });
+
+/** -----------------------------
+ * Phase 1: membership purchase and Stripe Billing
+ *
+ * The membership module is self-contained and receives the two trusted Phase 0
+ * routines it must not reimplement: derived-access convergence and the admin
+ * guard. Handlers are re-exported here so the deployed function names stay in
+ * one manifest.
+ * ----------------------------*/
+export {
+  createMembershipCheckoutSession,
+  createCustomerPortalSession,
+  getMyMemberships,
+  requestMembershipCancellation,
+} from "./membership";
+
+export const stripeWebhook = buildStripeWebhook(convergeUserDerivedAccess);
+export const claimMembership = buildClaimMembership(convergeUserDerivedAccess);
+export const listMemberships = buildListMemberships(requireAdmin);
+export const linkMembershipParticipant = buildLinkMembershipParticipant(requireAdmin);

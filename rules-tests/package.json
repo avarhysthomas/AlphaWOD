@@ -1,0 +1,13 @@
+{
+  "name": "alpha-wod-rules-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "firebase emulators:exec --config ../firebase.json --project alpha-wod-rules-test --only firestore,storage \"node --test rules.test.mjs\"",
+    "test:compat": "firebase emulators:exec --config ../firebase.phase0-compat.json --project alpha-wod-rules-test --only firestore,storage \"node --test compat.rules.test.mjs\""
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "5.0.1",
+    "firebase": "12.17.0"
+  }
+}

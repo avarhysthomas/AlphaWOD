@@ -10,6 +10,7 @@ import AdminSectionCard from "../components/AdminSectionCard";
 import { updateMemberStrengthBlock, updateStrengthBlockSettings } from "../services/access";
 import { getAdminUsers } from "../services/insights";
 import type { AdminUser } from "../types";
+import { hasAlphaWodAccess } from "../../../context/authUser";
 
 type StrengthBlock = "A" | "B" | "none";
 
@@ -139,8 +140,7 @@ export default function AdminStrengthBlocks() {
         if (!alive) return;
 
         const managedMembers = users
-          .filter((user) => user.role !== "banned")
-          .filter((user) => user.approvalStatus !== "pending")
+          .filter(hasAlphaWodAccess)
           .map(toManagedMember)
           .sort((a, b) => (a.name ?? a.email ?? "").localeCompare(b.name ?? b.email ?? ""));
 

@@ -1,0 +1,59 @@
+// -----------------------------------------------------------------------------
+// TEMPORARY PHASE 0 MAINTENANCE LOCKDOWN — NOT THE FINAL RULESET
+// -----------------------------------------------------------------------------
+// The legacy policy allowed clients to create their own access profile. No
+// historical role or approval value can therefore be trusted until it has been
+// independently audited. This bridge deliberately keeps protected app data
+// unavailable while that audit and backfill are completed.
+//
+// Safe rollout order:
+//   1. Start maintenance, IAM-block public invocation of every deployed callable
+//      service, and verify each callable URL is denied.
+//   2. Deploy this Firestore rule plus the companion
+//      storage.phase0-compat.rules.
+//   3. Run a read-only migration report and verify every access candidate.
+//      Remediate anything suspicious before continuing.
+//   4. With Firebase CLI 15.5.1, selectively update only the 18 pre-existing
+//      Functions while callable ingress remains blocked.
+//   5. Run a fresh report, approve its exact access manifest, and backfill.
+//   6. Create and immediately re-block the four new hardened callables.
+//   7. Deploy final Firestore/Storage rules and the updated frontend.
+//   8. Restore callable ingress only after post-cutover verification.
+
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwnUser(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    match /users/{userId} {
+      // Keep only the minimum account-status surface available. All writes
+      // are closed so a legacy trigger cannot race the audit or PII scrub.
+      // Historical staff roles grant no cross-user, list, or write privilege.
+      allow get: if isOwnUser(userId);
+      allow list: if false;
+      allow create, update, delete: if false;
+
+      match /trainingLogs/{logId} {
+        allow read, write: if false;
+      }
+    }
+
+    match /waiverAcceptances/{acceptanceId} {
+      allow read, write: if false;
+    }
+
+    // All workouts, classes, bookings, settings, leaderboards and any unknown
+    // collection remain closed until the audited final entitlement policy is
+    // deployed. Admin SDK migration/Functions access bypasses client rules.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

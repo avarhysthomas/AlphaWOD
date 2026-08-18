@@ -1,4 +1,5 @@
 import type { AdminUser } from "../types";
+import { hasAlphaWodAccess } from "../../../context/authUser";
 import { getCachedAdminUsers } from "./usersCache";
 
 function getMonthKey(date = new Date()) {
@@ -24,7 +25,7 @@ export async function getInsightsSummary() {
   const monthKey = getMonthKey();
 
   const approvedMembers = users.filter(
-    (u) => u.role !== "admin" && u.role !== "banned" && u.approvalStatus !== "pending"
+    (u) => u.role !== "admin" && hasAlphaWodAccess(u)
   );
   const pendingApprovals = users
     .filter((u) => u.role !== "admin" && u.role !== "banned" && u.approvalStatus === "pending")

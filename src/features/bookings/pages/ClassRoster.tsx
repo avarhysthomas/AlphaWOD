@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { hasAlphaWodAccess } from "../../../context/authUser";
 import { Link, NavLink, useParams } from "react-router-dom";
 import {
   Bell,
@@ -56,6 +57,8 @@ type GymUser = {
   photoURL?: string;
   role?: string;
   approvalStatus?: "approved" | "pending";
+  entitlementStatus?: "none" | "active" | "restricted";
+  alphaWodAccess?: boolean;
 };
 
 function normalizeStatus(r: BookingRow): BookingStatus {
@@ -160,7 +163,7 @@ export default function ClassRoster() {
         const users: GymUser[] = snap.docs.map((d) => ({
           id: d.id,
           ...(d.data() as Omit<GymUser, "id">),
-        })).filter((user) => user.approvalStatus !== "pending" && user.role !== "banned");
+        })).filter(hasAlphaWodAccess);
 
         users.sort((a, b) => (a.name ?? a.email ?? "").localeCompare(b.name ?? b.email ?? ""));
         setAllUsers(users);

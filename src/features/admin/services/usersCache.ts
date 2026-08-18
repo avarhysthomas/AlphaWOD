@@ -1,5 +1,7 @@
-import { collection, doc, getDoc, getDocs } from "firebase/firestore";
-import { db } from "../../../firebase";
+import { getFunctions, httpsCallable } from "firebase/functions";
+import app from "../../../firebaseApp";
+
+const functions = getFunctions(app, "europe-west1");
 
 export type CachedAdminUser = {
   id: string;
@@ -8,6 +10,9 @@ export type CachedAdminUser = {
   photoURL?: string;
   role?: string;
   approvalStatus?: "approved" | "pending";
+  entitlementStatus?: "none" | "active" | "restricted";
+  entitlementSource?: "none" | "legacy" | "manual" | "stripe" | "staff";
+  alphaWodAccess?: boolean;
   stats?: {
     currentStreak?: number;
     longestStreak?: number;
@@ -26,6 +31,14 @@ let usersCache:
     }
   | null = null;
 
+type ListStaffUsersResponse = {
+  users: CachedAdminUser[];
+};
+
+export function invalidateCachedAdminUsers() {
+  usersCache = null;
+}
+
 export async function getCachedAdminUsers() {
   const now = Date.now();
 
@@ -33,11 +46,16 @@ export async function getCachedAdminUsers() {
     return usersCache.users;
   }
 
-  const snap = await getDocs(collection(db, "users"));
-  const users: CachedAdminUser[] = snap.docs.map((item) => ({
-    id: item.id,
-    ...(item.data() as Omit<CachedAdminUser, "id">),
-  }));
+  const callable = httpsCallable<Record<string, never>, ListStaffUsersResponse>(
+    functions,
+    "listStaffUsers"
+  );
+  const response = await callable({});
+  const users = response.data?.users;
+
+  if (!Array.isArray(users) || users.some((user) => !user || typeof user.id !== "string")) {
+    throw new Error("The staff user directory returned an invalid response.");
+  }
 
   usersCache = {
     expiresAt: now + USERS_CACHE_TTL_MS,
@@ -48,14 +66,6 @@ export async function getCachedAdminUsers() {
 }
 
 export async function getCachedAdminUser(userId: string) {
-  const cached = usersCache?.users.find((user) => user.id === userId);
-  if (cached) return cached;
-
-  const snap = await getDoc(doc(db, "users", userId));
-  if (!snap.exists()) return null;
-
-  return {
-    id: snap.id,
-    ...(snap.data() as Omit<CachedAdminUser, "id">),
-  };
+  const users = await getCachedAdminUsers();
+  return users.find((user) => user.id === userId) ?? null;
 }

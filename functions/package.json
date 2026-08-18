@@ -3,8 +3,10 @@
   "scripts": {
     "lint": "eslint --ext .js,.ts .",
     "build": "tsc",
+    "test": "npm run build && node --test test/*.test.js",
+    "test:emulator": "npm run build && firebase emulators:exec --config ../firebase.json --project alpha-wod-functions-test --only auth,firestore \"node --test --test-concurrency=1 test-emulator/*.test.js\"",
     "build:watch": "tsc --watch",
-    "backfill:claims": "node scripts/backfillClaims.js",
+    "backfill:claims": "npm run build && node scripts/backfillClaims.js",
     "serve": "npm run build && firebase emulators:start --only functions",
     "shell": "npm run build && firebase functions:shell",
     "start": "npm run shell",
@@ -18,7 +20,8 @@
   "dependencies": {
     "firebase-admin": "^13.6.0",
     "firebase-functions": "^7.0.0",
-    "luxon": "^3.7.2"
+    "luxon": "^3.7.2",
+    "stripe": "^22.5.0"
   },
   "devDependencies": {
     "@types/luxon": "^3.7.1",

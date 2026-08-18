@@ -6,9 +6,82 @@ service firebase.storage {
       return request.auth != null;
     }
 
+    function currentUserPath() {
+      return /databases/(default)/documents/users/$(request.auth.uid);
+    }
+
+    function currentUserExists() {
+      return isSignedIn() && firestore.exists(currentUserPath());
+    }
+
+    function currentUser() {
+      return firestore.get(currentUserPath()).data;
+    }
+
+    function hasStaffEntitlement() {
+      return (
+        currentUser().role == "admin" ||
+        currentUser().role == "sgpt"
+      ) &&
+        currentUser().entitlementStatus == "active" &&
+        currentUser().entitlementSource == "staff";
+    }
+
+    function hasMemberEntitlement() {
+      return currentUser().role == "user" &&
+        currentUser().entitlementStatus == "active" &&
+        (
+          currentUser().entitlementSource == "legacy" ||
+          currentUser().entitlementSource == "manual" ||
+          currentUser().entitlementSource == "stripe"
+        );
+    }
+
+    function hasAlphaWodAccess() {
+      return currentUserExists() &&
+        currentUser().approvalStatus == "approved" &&
+        currentUser().alphaWodAccess == true &&
+        (hasStaffEntitlement() || hasMemberEntitlement());
+    }
+
+    function isAdmin() {
+      return hasAlphaWodAccess() && currentUser().role == "admin";
+    }
+
+    function isOwnerFile(fileName) {
+      return isSignedIn() && (
+        fileName == request.auth.uid + ".jpg" ||
+        fileName == request.auth.uid + ".jpeg" ||
+        fileName == request.auth.uid + ".png" ||
+        fileName == request.auth.uid + ".webp"
+      );
+    }
+
+    function isValidProfileFileName(fileName) {
+      return fileName.matches("^[A-Za-z0-9_-]{1,128}\\.(jpg|jpeg|png|webp)$");
+    }
+
+    function isValidProfileImage(fileName) {
+      return isValidProfileFileName(fileName) &&
+        request.resource.size > 0 &&
+        request.resource.size <= 5 * 1024 * 1024 &&
+        request.resource.contentType.matches("^image/(jpeg|png|webp)$");
+    }
+
     match /profilePics/{fileName} {
-      allow read: if true;
-      allow write: if isSignedIn();
+      allow read: if hasAlphaWodAccess();
+
+      allow create, update: if hasAlphaWodAccess() &&
+        (isOwnerFile(fileName) || isAdmin()) &&
+        isValidProfileImage(fileName);
+
+      allow delete: if hasAlphaWodAccess() &&
+        (isOwnerFile(fileName) || isAdmin()) &&
+        isValidProfileFileName(fileName);
+    }
+
+    match /{path=**} {
+      allow read, write: if false;
     }
   }
 }

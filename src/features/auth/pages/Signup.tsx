@@ -1,9 +1,9 @@
 import React, { useState } from "react";
-import { auth, db } from "../../../firebase";
-import { createUserWithEmailAndPassword } from "firebase/auth";
-import { doc, setDoc } from "firebase/firestore";
+import { auth } from "../../../firebase";
+import { createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import AuthShell from "../components/AuthShell";
+import { bootstrapUserProfile } from "../services/account";
 
 const Signup = () => {
   const [searchParams] = useSearchParams();
@@ -21,16 +21,9 @@ const Signup = () => {
     try {
       setLoading(true);
       setError("");
-      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      const uid = userCredential.user.uid;
-
-      await setDoc(doc(db, "users", uid), {
-        email,
-        name: name.trim(),
-        role: "user",
-        approvalStatus: "pending",
-        strengthBlock: "none",
-      });
+      const credential = await createUserWithEmailAndPassword(auth, email, password);
+      await updateProfile(credential.user, { displayName: name.trim() });
+      await bootstrapUserProfile(name);
 
       navigate("/pending-approval");
     } catch (err: any) {

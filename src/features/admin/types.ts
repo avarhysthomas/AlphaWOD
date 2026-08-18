@@ -14,6 +14,9 @@ export type AdminUser = {
   photoURL?: string;
   role?: string;
   approvalStatus?: "approved" | "pending";
+  entitlementStatus?: "none" | "active" | "restricted";
+  entitlementSource?: "none" | "legacy" | "manual" | "stripe" | "staff";
+  alphaWodAccess?: boolean;
   strengthBlock?: "A" | "B" | "none";
   stats?: UserStats;
 };

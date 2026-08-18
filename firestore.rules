@@ -10,44 +10,53 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
-    function currentUserExists() {
-      return isSignedIn() &&
-        exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    function currentUserPath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
     }
 
-    // Custom-claim fast path: role/approvalStatus are mirrored into the ID
-    // token by the onUserDocWritten Cloud Function, so most requests avoid
-    // the get() below (one billed read + latency per rule evaluation).
-    // The get() fallback keeps users with missing/stale claims working.
-    function tokenRole() {
-      return request.auth.token.get("role", "");
+    function currentUserExists() {
+      return isSignedIn() && exists(currentUserPath());
+    }
+
+    function currentUser() {
+      return get(currentUserPath()).data;
+    }
+
+    // Access is always resolved from the authoritative Firestore document.
+    // Custom claims are deliberately not an allow path: a stale positive claim
+    // must never delay a ban, dispute suspension, or membership revocation.
+    function hasStaffEntitlement() {
+      return (
+        currentUser().role == "admin" ||
+        currentUser().role == "sgpt"
+      ) &&
+        currentUser().entitlementStatus == "active" &&
+        currentUser().entitlementSource == "staff";
+    }
+
+    function hasMemberEntitlement() {
+      return currentUser().role == "user" &&
+        currentUser().entitlementStatus == "active" &&
+        (
+          currentUser().entitlementSource == "legacy" ||
+          currentUser().entitlementSource == "manual" ||
+          currentUser().entitlementSource == "stripe"
+        );
+    }
+
+    function hasAlphaWodAccess() {
+      return currentUserExists() &&
+        currentUser().approvalStatus == "approved" &&
+        currentUser().alphaWodAccess == true &&
+        (hasStaffEntitlement() || hasMemberEntitlement());
     }
 
     function isAdmin() {
-      return isSignedIn() && (
-        tokenRole() == "admin" ||
-        (currentUserExists() &&
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin")
-      );
+      return hasAlphaWodAccess() && currentUser().role == "admin";
     }
 
     function isSgpt() {
-      return isSignedIn() && (
-        tokenRole() == "sgpt" ||
-        (currentUserExists() &&
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "sgpt")
-      );
-    }
-
-    function isApprovedMember() {
-      return isSignedIn() && (
-        tokenRole() == "admin" ||
-        (tokenRole() != "banned" &&
-          request.auth.token.get("approvalStatus", "") == "approved") ||
-        (currentUserExists() &&
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("role", "user") != "banned" &&
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get("approvalStatus", "approved") != "pending")
-      );
+      return hasAlphaWodAccess() && currentUser().role == "sgpt";
     }
 
     function hasPerformanceAccess() {
@@ -58,112 +67,175 @@ service cloud.firestore {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly(allowedKeys);
     }
 
-    function isWaiverUpdate() {
-      return affectsOnly([
-        "waiverAcceptedAt",
-        "waiverAcceptedBy",
-        "waiverAcceptedEmail",
-        "waiverAcceptedName",
-        "waiverAcceptedVersion",
-        "waiverAcknowledgements",
-        "waiverMediaConsent"
-      ]);
+    function isNullableString(value, maxLength) {
+      return value == null || (value is string && value.size() <= maxLength);
+    }
+
+    function isValidPhotoUrl(value) {
+      return value == null || (
+        value is string &&
+        value.size() <= 2048 &&
+        value.matches("^https://.*$")
+      );
+    }
+
+    function isHarmlessProfileUpdate() {
+      return affectsOnly(["name", "photoURL", "updatedAt"]) &&
+        isNullableString(request.resource.data.get("name", null), 120) &&
+        isValidPhotoUrl(request.resource.data.get("photoURL", null)) &&
+        request.resource.data.get("updatedAt", null) == request.time;
+    }
+
+    function isValidTrainingLog(log, userId) {
+      return log.keys().hasAll([
+          "userId",
+          "category",
+          "movementSlug",
+          "movementName",
+          "metricType",
+          "value",
+          "unit",
+          "reps",
+          "date",
+          "notes",
+          "createdAt"
+        ]) &&
+        log.keys().hasOnly([
+          "userId",
+          "category",
+          "movementSlug",
+          "movementName",
+          "metricType",
+          "value",
+          "unit",
+          "reps",
+          "date",
+          "notes",
+          "createdAt"
+        ]) &&
+        log.userId == userId &&
+        log.category is string && log.category.size() <= 80 &&
+        log.movementSlug is string && log.movementSlug.size() <= 120 &&
+        log.movementName is string && log.movementName.size() <= 160 &&
+        log.metricType is string && log.metricType.size() <= 80 &&
+        log.value is string && log.value.size() <= 80 &&
+        log.unit is string && log.unit.size() <= 40 &&
+        log.reps is string && log.reps.size() <= 40 &&
+        log.date is string && log.date.matches("^\\d{4}-\\d{2}-\\d{2}$") &&
+        log.notes is string && log.notes.size() <= 2000 &&
+        log.createdAt is timestamp;
     }
 
     match /users/{userId} {
-      allow read: if isSignedIn();
+      allow get: if isOwnUser(userId) || isAdmin();
+      allow list: if isAdmin();
 
-      allow create: if isOwnUser(userId);
-
-      allow update: if isAdmin() || (
-        isOwnUser(userId) &&
-        (
-          isWaiverUpdate() ||
-          (
-            request.resource.data.role == resource.data.role &&
-            request.resource.data.approvalStatus == resource.data.approvalStatus &&
-            request.resource.data.strengthBlock == resource.data.strengthBlock
-          )
-        )
-      );
-
-      allow delete: if false;
+      // Account bootstrap and every access/role/entitlement field are owned by
+      // trusted Cloud Functions. Admin SDK writes bypass these client rules.
+      allow create, delete: if false;
+      allow update: if isOwnUser(userId) && isHarmlessProfileUpdate();
 
       match /trainingLogs/{logId} {
-        allow read: if isOwnUser(userId) || hasPerformanceAccess();
-        allow write: if isOwnUser(userId) || isAdmin();
+        allow read: if hasPerformanceAccess() ||
+          (isOwnUser(userId) && hasAlphaWodAccess());
+
+        allow create: if isOwnUser(userId) &&
+          hasAlphaWodAccess() &&
+          isValidTrainingLog(request.resource.data, userId) &&
+          request.resource.data.createdAt == request.time;
+
+        allow update: if isOwnUser(userId) &&
+          hasAlphaWodAccess() &&
+          isValidTrainingLog(request.resource.data, userId) &&
+          request.resource.data.userId == resource.data.userId &&
+          request.resource.data.createdAt == resource.data.createdAt;
+
+        allow delete: if isOwnUser(userId) &&
+          hasAlphaWodAccess() &&
+          resource.data.userId == userId;
       }
     }
 
+    // Immutable, detailed signature evidence. This collection is server-only;
+    // a callable may return a deliberately shaped durable copy when required.
+    match /waiverAcceptances/{acceptanceId} {
+      allow read, write: if false;
+    }
+
+    // Collection-group reads are staff-only. Owner reads are granted only by
+    // the concrete users/{uid}/trainingLogs rule above.
     match /{path=**}/trainingLogs/{logId} {
-      allow read: if hasPerformanceAccess() || (
-        isSignedIn() &&
-        resource.data.userId == request.auth.uid
-      );
-      allow create: if isSignedIn() &&
-        (
-          request.resource.data.userId == request.auth.uid ||
-          isAdmin()
-        );
-      allow update, delete: if isAdmin() || (
-        isSignedIn() &&
-        resource.data.userId == request.auth.uid
-      );
+      allow read: if hasPerformanceAccess();
+      allow write: if false;
     }
 
     match /appSettings/{settingsId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow read: if hasAlphaWodAccess();
+      allow write: if false;
     }
 
     match /wods/{wodDate} {
-      allow read: if isSignedIn();
+      allow read: if hasAlphaWodAccess();
       allow write: if isAdmin();
     }
 
     match /wodTemplates/{templateId} {
-      allow read: if isSignedIn();
+      allow read: if hasAlphaWodAccess();
       allow write: if isAdmin();
     }
 
+    match /classTemplates/{templateId} {
+      allow read, write: if isAdmin();
+    }
+
     match /classes/{classId} {
-      allow read: if isSignedIn();
-      allow create, delete: if isAdmin();
-      allow update: if isAdmin() || (
-        isSignedIn() &&
-        affectsOnly(["bookedCount"])
-      );
+      allow read: if hasAlphaWodAccess();
+      // Occurrences and bookedCount are maintained transactionally by trusted
+      // Cloud Functions; clients must not forge capacity or attendance state.
+      allow write: if false;
     }
 
     match /bookings/{bookingId} {
       allow read: if isAdmin() || (
-        isSignedIn() &&
-        (
-          !exists(/databases/$(database)/documents/bookings/$(bookingId)) ||
-          resource.data.userId == request.auth.uid ||
-          bookingId.matches(".*_" + request.auth.uid)
-        )
+        hasAlphaWodAccess() && resource.data.userId == request.auth.uid
       );
-
-      allow create: if isSignedIn() &&
-        request.resource.data.userId == request.auth.uid;
-
-      allow update: if isAdmin() || (
-        isSignedIn() &&
-        resource.data.userId == request.auth.uid &&
-        request.resource.data.userId == resource.data.userId &&
-        request.resource.data.classId == resource.data.classId
-      );
-
-      allow delete: if false;
+      // Booking lifecycle is server-only so capacity and attendance invariants
+      // cannot be bypassed with direct SDK writes.
+      allow write: if false;
     }
 
-    // Precomputed monthly leaderboard summary (written by Cloud Functions).
-    // Members read this one doc instead of calling getMonthlyLeaderboard.
-    // Deliberately does NOT match the users subcollection.
+    // Precomputed monthly leaderboard summary, written by Cloud Functions.
     match /leaderboards/{monthKey} {
-      allow read: if isApprovedMember();
-      allow write: if false;
+      // Stored rows can lag a revocation, so member-visible results are shaped
+      // by a callable that rechecks every referenced profile authoritatively.
+      allow read, write: if false;
+    }
+
+    // Billing state is server-only.
+    //
+    // These documents hold participant and guardian personal data, signature
+    // evidence, and payment status. Members reach their own membership through
+    // a callable projection that reshapes it, so no client read path exists
+    // here, and no client may forge a membership, an entitlement source, or a
+    // webhook ledger entry.
+    match /memberships/{subscriptionId} {
+      allow read, write: if false;
+    }
+
+    // Pending checkout details, written before the customer reaches Stripe and
+    // consumed by the fulfilment webhook.
+    match /membershipIntents/{intentId} {
+      allow read, write: if false;
+    }
+
+    // Webhook idempotency ledger. A client write here could suppress or replay
+    // a fulfilment event.
+    match /stripeEvents/{eventId} {
+      allow read, write: if false;
+    }
+
+    match /membershipAudit/{entryId} {
+      allow read, write: if false;
     }
 
     match /{document=**} {

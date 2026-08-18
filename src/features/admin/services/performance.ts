@@ -7,6 +7,7 @@ import {
   query,
 } from "firebase/firestore";
 import { db } from "../../../firebase";
+import { hasAlphaWodAccess } from "../../../context/authUser";
 import { getCachedAdminUsers } from "./usersCache";
 
 export type TrainingLog = {
@@ -89,7 +90,7 @@ async function _fetchPerformanceSummary() {
   const memberLogs = logs
     .filter((log) => {
       const user = log.userId ? userMap.get(log.userId) : null;
-      return user?.role !== "admin" && user?.role !== "banned" && user?.approvalStatus !== "pending";
+      return user?.role !== "admin" && hasAlphaWodAccess(user);
     })
     .sort((a, b) => getCreatedAtMs(b.createdAt) - getCreatedAtMs(a.createdAt));
 

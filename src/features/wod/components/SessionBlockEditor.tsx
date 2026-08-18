@@ -55,6 +55,66 @@ const chipButtonClass = (active: boolean) =>
       : "border-white/10 bg-transparent text-white/36 hover:text-white/70",
   ].join(" ");
 
+/**
+ * A number field you can actually empty.
+ *
+ * Committing `event.target.value` straight to state means clearing the box
+ * writes the clamped minimum back into it — on a phone you can never delete the
+ * "1" in Rounds to type something else. The keystrokes live in a local draft
+ * instead: the saved value only moves when the draft parses to a number, and
+ * the draft is dropped on blur so the field settles on the clamped value.
+ */
+function NumberField({
+  label,
+  value,
+  onValue,
+  min,
+  max,
+  suffix,
+}: {
+  label: string;
+  value: number;
+  onValue: (next: number) => void;
+  min: number;
+  max: number;
+  suffix?: string;
+}) {
+  const [draft, setDraft] = React.useState<string | null>(null);
+
+  // Wrapping the input labels it without an id, so tapping the caption focuses
+  // the field — worth having on a phone, where these boxes are small.
+  return (
+    <label className="block">
+      <span className={labelClass}>{label}</span>
+      <div className="relative">
+        <input
+          type="number"
+          inputMode="numeric"
+          value={draft ?? String(value)}
+          min={min}
+          max={max}
+          onChange={(event) => {
+            const raw = event.target.value;
+            setDraft(raw);
+
+            if (!raw.trim()) return;
+            const parsed = Number(raw);
+            if (!Number.isFinite(parsed)) return;
+            onValue(clampInt(Math.trunc(parsed), min, max));
+          }}
+          onBlur={() => setDraft(null)}
+          className={`${numberInputClass} ${suffix ? "pr-10" : ""}`}
+        />
+        {suffix ? (
+          <span className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-[10px] font-black uppercase tracking-[0.16em] text-white/26">
+            {suffix}
+          </span>
+        ) : null}
+      </div>
+    </label>
+  );
+}
+
 export const BLOCK_KIND_ICONS: Record<BlockKind, React.ComponentType<{ className?: string }>> = {
   warmup: Sparkles,
   strength: Dumbbell,
@@ -371,32 +431,6 @@ function ConditioningBlockEditor({
     updateStation(stationId, { movements: [...station.movements, emptyStationMovement()] });
   };
 
-  const numberField = (
-    label: string,
-    value: number,
-    onValue: (n: number) => void,
-    { min, max, suffix }: { min: number; max: number; suffix?: string }
-  ) => (
-    <div>
-      <label className={labelClass}>{label}</label>
-      <div className="relative">
-        <input
-          type="number"
-          value={value}
-          min={min}
-          max={max}
-          onChange={(event) => onValue(clampInt(toInt(event.target.value, min), min, max))}
-          className={`${numberInputClass} ${suffix ? "pr-10" : ""}`}
-        />
-        {suffix ? (
-          <span className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-[10px] font-black uppercase tracking-[0.16em] text-white/26">
-            {suffix}
-          </span>
-        ) : null}
-      </div>
-    </div>
-  );
-
   return (
     <div className="space-y-5">
       <div>
@@ -437,11 +471,42 @@ function ConditioningBlockEditor({
 
       {block.timerMode === "timed" ? (
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-          {numberField("Minutes", block.roundMinutes, (n) => onChange({ ...block, roundMinutes: n }), { min: 0, max: 180 })}
-          {numberField("Seconds", block.roundSeconds, (n) => onChange({ ...block, roundSeconds: n }), { min: 0, max: 59 })}
-          {numberField("Rounds", block.rounds, (n) => onChange({ ...block, rounds: n }), { min: 1, max: 99 })}
-          {numberField("Rest", block.restBetweenRoundsSeconds, (n) => onChange({ ...block, restBetweenRoundsSeconds: n }), { min: 0, max: 600, suffix: "sec" })}
-          {numberField("Group", block.groupSize, (n) => onChange({ ...block, groupSize: n }), { min: 1, max: 50 })}
+          <NumberField
+            label="Minutes"
+            value={block.roundMinutes}
+            onValue={(n) => onChange({ ...block, roundMinutes: n })}
+            min={0}
+            max={180}
+          />
+          <NumberField
+            label="Seconds"
+            value={block.roundSeconds}
+            onValue={(n) => onChange({ ...block, roundSeconds: n })}
+            min={0}
+            max={59}
+          />
+          <NumberField
+            label="Rounds"
+            value={block.rounds}
+            onValue={(n) => onChange({ ...block, rounds: n })}
+            min={1}
+            max={99}
+          />
+          <NumberField
+            label="Rest"
+            value={block.restBetweenRoundsSeconds}
+            onValue={(n) => onChange({ ...block, restBetweenRoundsSeconds: n })}
+            min={0}
+            max={600}
+            suffix="sec"
+          />
+          <NumberField
+            label="Group"
+            value={block.groupSize}
+            onValue={(n) => onChange({ ...block, groupSize: n })}
+            min={1}
+            max={50}
+          />
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -468,7 +533,13 @@ function ConditioningBlockEditor({
               ))}
             </select>
           </div>
-          {numberField("Group", block.groupSize, (n) => onChange({ ...block, groupSize: n }), { min: 1, max: 50 })}
+          <NumberField
+            label="Group"
+            value={block.groupSize}
+            onValue={(n) => onChange({ ...block, groupSize: n })}
+            min={1}
+            max={50}
+          />
         </div>
       )}
 

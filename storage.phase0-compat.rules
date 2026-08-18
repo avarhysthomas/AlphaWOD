@@ -1,0 +1,35 @@
+// Temporary Phase 0 maintenance lockdown. Do not use as the final policy.
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwnerFile(fileName) {
+      return isSignedIn() && (
+        fileName == request.auth.uid + ".jpg" ||
+        fileName == request.auth.uid + ".jpeg" ||
+        fileName == request.auth.uid + ".png" ||
+        fileName == request.auth.uid + ".webp"
+      );
+    }
+
+    function isValidProfileImage(fileName) {
+      return fileName.matches("^[A-Za-z0-9_-]{1,128}\\.(jpg|jpeg|png|webp)$") &&
+        request.resource.size > 0 &&
+        request.resource.size <= 5 * 1024 * 1024 &&
+        request.resource.contentType.matches("^image/(jpeg|png|webp)$");
+    }
+
+    match /profilePics/{fileName} {
+      allow read, delete: if isOwnerFile(fileName);
+      allow create, update: if isOwnerFile(fileName) && isValidProfileImage(fileName);
+    }
+
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}

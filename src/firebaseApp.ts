@@ -1,5 +1,6 @@
 import { initializeApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
+import { connectAuthEmulator, getAuth } from "firebase/auth";
+import { connectFunctionsEmulator, getFunctions } from "firebase/functions";
 
 const firebaseConfig = {
   apiKey: process.env.REACT_APP_FIREBASE_API_KEY,
@@ -14,4 +15,33 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 
 export const auth = getAuth(app);
+
+/**
+ * Local development against the Firebase emulators.
+ *
+ * Off unless `REACT_APP_USE_EMULATORS=true`, so a production build can never
+ * pick this up: the variable is inlined at build time and is absent from the
+ * deployment. Without it, `npm start` talks to the live project, which is
+ * rarely what you want while testing a purchase flow.
+ *
+ * Auth and Functions are connected here because this module is imported before
+ * any call is made through either. Firestore is connected where its instance is
+ * created, in `firebase.ts`.
+ */
+export const useEmulators = process.env.REACT_APP_USE_EMULATORS === "true";
+
+export const FUNCTIONS_REGION = "europe-west1";
+
+if (useEmulators) {
+  // Every caller resolves the same cached instance for this app and region, so
+  // connecting once here covers all of them.
+  connectFunctionsEmulator(getFunctions(app, FUNCTIONS_REGION), "127.0.0.1", 5001);
+  connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
+
+  // eslint-disable-next-line no-console
+  console.warn(
+    "[AlphaWOD] Firebase emulators are in use. No production data is being read or written."
+  );
+}
+
 export default app;

@@ -8,6 +8,7 @@ import {
   where,
 } from "firebase/firestore";
 import { db } from "../../../firebase";
+import { hasAlphaWodAccess } from "../../../context/authUser";
 import { getCachedAdminUsers } from "./usersCache";
 import {
   formatDisplayValue,
@@ -83,7 +84,7 @@ export async function getMetricPerformance(
     }))
     .filter((log) => {
       const user = log.userId ? userMap.get(log.userId) : null;
-      return user?.role !== "admin" && user?.role !== "banned" && user?.approvalStatus !== "pending";
+      return user?.role !== "admin" && hasAlphaWodAccess(user);
     })
     .sort((a, b) => getCreatedAtMs(b.createdAt) - getCreatedAtMs(a.createdAt));
 

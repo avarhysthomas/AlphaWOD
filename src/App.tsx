@@ -9,6 +9,7 @@ import {
 
 import WaiverGate from "./features/auth/components/WaiverGate";
 import { useAuth } from "./context/AuthContext";
+import { getAlphaWodAccessGateRoute, hasAlphaWodAccess } from "./context/authUser";
 import {
   canAccessTraining,
   hasPerformanceAccess,
@@ -22,6 +23,7 @@ const WODDisplay = React.lazy(() => import("./features/wod/pages/WODDisplay"));
 const DipLeaderboard = React.lazy(() => import("./features/leaderboard/pages/DipLeaderboard"));
 const Login = React.lazy(() => import("./features/auth/pages/Login"));
 const PendingApproval = React.lazy(() => import("./features/auth/pages/PendingApproval"));
+const AccessRestricted = React.lazy(() => import("./features/auth/pages/AccessRestricted"));
 const Signup = React.lazy(() => import("./features/auth/pages/Signup"));
 const Dashboard = React.lazy(() => import("./features/dashboard/pages/Dashboard"));
 const SgptDashboard = React.lazy(() => import("./features/dashboard/pages/SgptDashboard"));
@@ -38,6 +40,11 @@ const AdminMemberPerformance = React.lazy(() => import("./features/admin/pages/A
 const AdminMetricPerformance = React.lazy(() => import("./features/admin/pages/AdminMetricPerformance"));
 const AdminMetricIndex = React.lazy(() => import("./features/admin/pages/AdminMetricIndex"));
 const AdminStrengthBlocks = React.lazy(() => import("./features/admin/pages/AdminStrengthBlocks"));
+const AdminMemberships = React.lazy(() => import("./features/admin/pages/AdminMemberships"));
+const Memberships = React.lazy(() => import("./features/memberships/pages/Memberships"));
+const MembershipCheckout = React.lazy(() => import("./features/memberships/pages/MembershipCheckout"));
+const MembershipSuccess = React.lazy(() => import("./features/memberships/pages/MembershipSuccess"));
+const MembershipManage = React.lazy(() => import("./features/memberships/pages/MembershipManage"));
 
 /** ---------- Route guards ---------- */
 
@@ -81,14 +88,15 @@ function RequireSgpt({ children }: { children: React.ReactElement }) {
   return children;
 }
 
-function RequireApproved({ children }: { children: React.ReactElement }) {
+function RequireAlphaWodAccess({ children }: { children: React.ReactElement }) {
   const { user, appUser, loading } = useAuth();
   const location = useLocation();
 
   if (loading) return <LoadingScreen />;
   if (!user) return <Navigate to="/" replace state={{ from: location }} />;
-  if (appUser?.approvalStatus === "pending") {
-    return <Navigate to="/pending-approval" replace state={{ from: location }} />;
+  const gateRoute = getAlphaWodAccessGateRoute(appUser);
+  if (gateRoute) {
+    return <Navigate to={gateRoute} replace state={{ from: location }} />;
   }
 
   return children;
@@ -132,7 +140,8 @@ function RequirePerformanceArea({ children }: { children: React.ReactElement }) 
 }
 
 function getAuthedHome(appUser: ReturnType<typeof useAuth>["appUser"]) {
-  if (appUser?.approvalStatus === "pending") return "/pending-approval";
+  const gateRoute = getAlphaWodAccessGateRoute(appUser);
+  if (gateRoute) return gateRoute;
   if (isSgptRole(appUser?.role)) return "/sgpt/dashboard";
   return "/dashboard";
 }
@@ -151,17 +160,10 @@ function AdminLayout() {
 
 export default function App() {
   const { user, appUser, loading } = useAuth();
-  const location = useLocation();
 
   if (loading) return <LoadingScreen />;
 
   const isAuthed = !!user;
-  const isBanned = appUser?.role === "banned";
-
-  if (isAuthed && isBanned && location.pathname !== "/dashboard") {
-    return <Navigate to="/dashboard" replace state={{ from: location }} />;
-  }
-
   return (
     <WaiverGate>
     <React.Suspense fallback={<LoadingScreen />}>
@@ -179,11 +181,43 @@ export default function App() {
         path="/pending-approval"
         element={
           <RequireAuth>
-            {appUser?.approvalStatus === "pending" ? (
-              <PendingApproval />
-            ) : (
+            {appUser?.approvalStatus === "approved" ? (
               <Navigate to={getAuthedHome(appUser)} replace />
+            ) : (
+              <PendingApproval />
             )}
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/access-restricted"
+        element={
+          <RequireAuth>
+            {appUser?.approvalStatus !== "approved" ? (
+              <Navigate to="/pending-approval" replace />
+            ) : hasAlphaWodAccess(appUser) ? (
+              <Navigate to={getAuthedHome(appUser)} replace />
+            ) : (
+              <AccessRestricted />
+            )}
+          </RequireAuth>
+        }
+      />
+
+      {/* Public membership purchase.
+          These routes stay outside the AlphaWOD access gates on purpose: the
+          catalogue must be readable while signed out, and a member on a plan
+          that does not include app access still has to reach their billing. */}
+      <Route path="/memberships" element={<Memberships />} />
+      <Route path="/memberships/checkout/:planKey" element={<MembershipCheckout />} />
+      {/* Reachable signed out: the buyer lands here straight from Stripe,
+          before they have an account, and claims the purchase from here. */}
+      <Route path="/memberships/success" element={<MembershipSuccess />} />
+      <Route
+        path="/account/membership"
+        element={
+          <RequireAuth>
+            <MembershipManage />
           </RequireAuth>
         }
       />
@@ -193,9 +227,9 @@ export default function App() {
         path="/dashboard"
         element={
           <RequireAuth>
-            <RequireApproved>
+            <RequireAlphaWodAccess>
               {isSgptRole(appUser?.role) ? <Navigate to="/sgpt/dashboard" replace /> : <Dashboard />}
-            </RequireApproved>
+            </RequireAlphaWodAccess>
           </RequireAuth>
         }
       />
@@ -204,11 +238,11 @@ export default function App() {
         path="/sgpt/dashboard"
         element={
           <RequireAuth>
-            <RequireApproved>
+            <RequireAlphaWodAccess>
               <RequireSgpt>
                 <SgptDashboard />
               </RequireSgpt>
-            </RequireApproved>
+            </RequireAlphaWodAccess>
           </RequireAuth>
         }
       />
@@ -217,11 +251,11 @@ export default function App() {
         path="/schedule"
         element={
           <RequireAuth>
-            <RequireApproved>
+            <RequireAlphaWodAccess>
               <RequireMember>
                 <Schedule />
               </RequireMember>
-            </RequireApproved>
+            </RequireAlphaWodAccess>
           </RequireAuth>
         }
       />
@@ -230,11 +264,11 @@ export default function App() {
         path="/leaderboard"
         element={
           <RequireAuth>
-            <RequireApproved>
+            <RequireAlphaWodAccess>
               <RequireMember>
                 <Leaderboard />
               </RequireMember>
-            </RequireApproved>
+            </RequireAlphaWodAccess>
           </RequireAuth>
         }
       />
@@ -243,9 +277,9 @@ export default function App() {
         path="/board-of-shame"
         element={
           <RequireAuth>
-            <RequireApproved>
+            <RequireAlphaWodAccess>
               <DipLeaderboard />
-            </RequireApproved>
+            </RequireAlphaWodAccess>
           </RequireAuth>
         }
       />
@@ -254,9 +288,9 @@ export default function App() {
         path="/profile"
         element={
           <RequireAuth>
-            <RequireApproved>
+            <RequireAlphaWodAccess>
               <Profile />
-            </RequireApproved>
+            </RequireAlphaWodAccess>
           </RequireAuth>
         }
       />
@@ -265,11 +299,11 @@ export default function App() {
         path="/training"
         element={
           <RequireAuth>
-            <RequireApproved>
+            <RequireAlphaWodAccess>
               <RequireTrainingAccess>
                 <Training />
               </RequireTrainingAccess>
-            </RequireApproved>
+            </RequireAlphaWodAccess>
           </RequireAuth>
         }
       />
@@ -277,11 +311,11 @@ export default function App() {
         path="/training/:category"
         element={
           <RequireAuth>
-            <RequireApproved>
+            <RequireAlphaWodAccess>
               <RequireTrainingAccess>
                 <TrainingCategory />
               </RequireTrainingAccess>
-            </RequireApproved>
+            </RequireAlphaWodAccess>
           </RequireAuth>
         }
       />
@@ -289,11 +323,11 @@ export default function App() {
         path="/training/:category/:movementSlug"
         element={
           <RequireAuth>
-            <RequireApproved>
+            <RequireAlphaWodAccess>
               <RequireTrainingAccess>
                 <TrainingMovement />
               </RequireTrainingAccess>
-            </RequireApproved>
+            </RequireAlphaWodAccess>
           </RequireAuth>
         }
       />
@@ -302,11 +336,11 @@ export default function App() {
       <Route
         element={
           <RequireAuth>
-            <RequireApproved>
+            <RequireAlphaWodAccess>
               <RequirePerformanceArea>
                 <AdminLayout />
               </RequirePerformanceArea>
-            </RequireApproved>
+            </RequireAlphaWodAccess>
           </RequireAuth>
         }
       >
@@ -323,16 +357,17 @@ export default function App() {
       <Route
         element={
           <RequireAuth>
-            <RequireApproved>
+            <RequireAlphaWodAccess>
               <RequireAdmin>
                 <AdminLayout />
               </RequireAdmin>
-            </RequireApproved>
+            </RequireAlphaWodAccess>
           </RequireAuth>
         }
       >
         <Route path="/admin/insights" element={<AdminInsights />} />
         <Route path="/admin/strength-blocks" element={<AdminStrengthBlocks />} />
+        <Route path="/admin/memberships" element={<AdminMemberships />} />
         <Route path="/display" element={<WODDisplay />} />
         <Route path="/editor" element={<WODEditor />} />
         <Route path="/admin/classes/:classId" element={<ClassRoster />} />
