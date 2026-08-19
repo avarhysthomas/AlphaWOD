@@ -27,6 +27,15 @@ import {onCall, onRequest, HttpsError} from "firebase-functions/v2/https";
 import {onSchedule} from "firebase-functions/v2/scheduler";
 import {defineSecret, defineString} from "firebase-functions/params";
 import * as admin from "firebase-admin";
+import {
+  DocumentReference,
+  FieldValue,
+  Firestore,
+  QueryDocumentSnapshot,
+  QuerySnapshot,
+  Timestamp,
+  Transaction,
+} from "firebase-admin/firestore";
 import {createHash, randomUUID} from "crypto";
 import Stripe from "stripe";
 import {
@@ -89,6 +98,15 @@ const stripePortalConfigurationId = defineString("STRIPE_PORTAL_CONFIGURATION_ID
 const membershipPurchaseEnabled = defineString("MEMBERSHIP_PURCHASE_ENABLED", {
   default: "false",
 });
+const membershipTestJourneyEnabled = defineString("MEMBERSHIP_TEST_JOURNEY_ENABLED", {
+  default: "false",
+});
+const membershipFirebaseProjectId = defineString("MEMBERSHIP_FIREBASE_PROJECT_ID", {
+  default: "",
+});
+const stripeExpectedMode = defineString("STRIPE_EXPECTED_MODE", {
+  default: "",
+});
 
 const priceParams: Record<PlanKey, ReturnType<typeof defineString>> = {
   adult_unlimited: defineString("STRIPE_PRICE_ADULT_UNLIMITED", {default: ""}),
@@ -98,23 +116,169 @@ const priceParams: Record<PlanKey, ReturnType<typeof defineString>> = {
   youth_teenstars: defineString("STRIPE_PRICE_YOUTH_TEENSTARS", {default: ""}),
 };
 
-export const MEMBERSHIP_SECRETS = [stripeSecretKey];
-export const MEMBERSHIP_WEBHOOK_SECRETS = [
+const PRODUCTION_FIREBASE_PROJECT_ID = "alphawod-d1f2f";
+const LOCAL_TEST_FIREBASE_PROJECT_ID = "demo-alphawod-stripe";
+const LOCAL_TEST_JOURNEY_ORIGINS = new Set([
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+  "http://localhost:3002",
+  "http://127.0.0.1:3002",
+]);
+
+/**
+ * The emulator receives short-lived test credentials from its parent process.
+ * Bindings are omitted only for the exact demo project with both data-plane
+ * emulators on loopback. A production or partially configured process keeps
+ * its normal Secret Manager bindings even if FUNCTIONS_EMULATOR is injected.
+ */
+function secretsForRuntime<T>(secrets: T[]): T[] {
+  return isIsolatedLocalTestEmulatorProcess() ? [] : secrets;
+}
+
+export const MEMBERSHIP_SECRETS = secretsForRuntime([stripeSecretKey]);
+export const MEMBERSHIP_WEBHOOK_SECRETS = secretsForRuntime([
   stripeSecretKey,
   stripeWebhookSecret,
-];
-export const MEMBERSHIP_STRIPE_WORKER_SECRETS = [stripeSecretKey];
-export const MEMBERSHIP_EMAIL_WORKER_SECRETS = [resendApiKey];
+]);
+export const MEMBERSHIP_STRIPE_WORKER_SECRETS = secretsForRuntime([stripeSecretKey]);
+export const MEMBERSHIP_EMAIL_WORKER_SECRETS = secretsForRuntime([resendApiKey]);
 
 /**
  * Firestore and Stripe clients are resolved lazily. `admin.initializeApp()`
  * runs in the body of index.ts, which executes after this module is imported.
  */
-function db(): admin.firestore.Firestore {
+function db(): Firestore {
   return admin.firestore();
 }
 
 let stripeClient: Stripe | null = null;
+
+type StripeMode = "test" | "live";
+
+type BillingEnvironment = {
+  projectId: string;
+  stripeMode: StripeMode;
+  expectedLivemode: boolean;
+};
+
+function isFirebaseFunctionsEmulatorProcess(): boolean {
+  return process.env.FUNCTIONS_EMULATOR === "true";
+}
+
+function isLoopbackEmulatorHost(value: string | undefined): boolean {
+  return typeof value === "string" &&
+    /^(127\.0\.0\.1|localhost):\d+$/.test(value);
+}
+
+function hasLoopbackFirebaseEmulatorDataPlane(): boolean {
+  return isFirebaseFunctionsEmulatorProcess() &&
+    isLoopbackEmulatorHost(process.env.FIRESTORE_EMULATOR_HOST) &&
+    isLoopbackEmulatorHost(process.env.FIREBASE_AUTH_EMULATOR_HOST);
+}
+
+/** Resolves the Firebase project identity Cloud Functions actually supplied. */
+function runtimeFirebaseProjectId(): string {
+  const direct = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT;
+  if (direct?.trim()) return direct.trim();
+
+  try {
+    const firebaseConfig = JSON.parse(process.env.FIREBASE_CONFIG || "{}") as {
+      projectId?: unknown;
+    };
+    return typeof firebaseConfig.projectId === "string" ?
+      firebaseConfig.projectId.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+/** The only runtime allowed to receive memory-only local test credentials. */
+function isIsolatedLocalTestEmulatorProcess(): boolean {
+  return hasLoopbackFirebaseEmulatorDataPlane() &&
+    runtimeFirebaseProjectId() === LOCAL_TEST_FIREBASE_PROJECT_ID;
+}
+
+/**
+ * Binds one Firebase data plane to one explicit Stripe mode before any Stripe
+ * network call. This prevents a test key being aimed at production Firestore,
+ * or a live key being used from the isolated test project.
+ */
+function assertBillingEnvironment(): BillingEnvironment {
+  const expectedProjectId = membershipFirebaseProjectId.value().trim();
+  const projectId = runtimeFirebaseProjectId();
+  if (!expectedProjectId || !projectId || expectedProjectId !== projectId) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Billing is disabled because the Firebase project identity is not explicitly matched."
+    );
+  }
+
+  const rawMode = stripeExpectedMode.value().trim().toLowerCase();
+  if (rawMode !== "test" && rawMode !== "live") {
+    throw new HttpsError(
+      "failed-precondition",
+      "Billing is disabled because the expected Stripe mode is not configured."
+    );
+  }
+  const stripeMode = rawMode as StripeMode;
+  const key = stripeSecretKey.value().trim();
+  const keyMode: StripeMode | null =
+    key.startsWith("sk_test_") || key.startsWith("rk_test_") ? "test" :
+      key.startsWith("sk_live_") || key.startsWith("rk_live_") ? "live" : null;
+  if (keyMode !== stripeMode) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Billing is disabled because the Stripe key does not match the configured mode."
+    );
+  }
+  if (projectId === PRODUCTION_FIREBASE_PROJECT_ID && stripeMode === "test") {
+    throw new HttpsError(
+      "failed-precondition",
+      "Stripe test mode is forbidden in the production Firebase project."
+    );
+  }
+  if (projectId === LOCAL_TEST_FIREBASE_PROJECT_ID && stripeMode !== "test") {
+    throw new HttpsError(
+      "failed-precondition",
+      "Stripe live mode is forbidden in the isolated local Firebase project."
+    );
+  }
+  if (isFirebaseFunctionsEmulatorProcess() && stripeMode === "live") {
+    throw new HttpsError(
+      "failed-precondition",
+      "Stripe live mode is forbidden in every Firebase emulator process."
+    );
+  }
+
+  return {
+    projectId,
+    stripeMode,
+    expectedLivemode: stripeMode === "live",
+  };
+}
+
+/** Refuses a provider object from the other half of Stripe's test/live split. */
+function assertStripeObjectMode(
+  objectType: string,
+  objectId: string,
+  livemode: unknown
+): void {
+  const environment = assertBillingEnvironment();
+  if (typeof livemode !== "boolean" ||
+    livemode !== environment.expectedLivemode) {
+    console.error("CRITICAL_BILLING_STRIPE_MODE_MISMATCH", {
+      projectId: environment.projectId,
+      expectedStripeMode: environment.stripeMode,
+      objectType,
+      objectId,
+      livemode: typeof livemode === "boolean" ? livemode : null,
+    });
+    throw new HttpsError(
+      "failed-precondition",
+      `Billing refused a ${objectType} from the wrong Stripe mode.`
+    );
+  }
+}
 
 /**
  * Optional API host override.
@@ -127,6 +291,14 @@ function stripeHostOptions(): Partial<Stripe.StripeConfig> {
   const host = process.env.STRIPE_API_HOST;
   if (!host) return {};
 
+  if (!hasLoopbackFirebaseEmulatorDataPlane() ||
+    stripeExpectedMode.value().trim().toLowerCase() !== "test") {
+    throw new HttpsError(
+      "failed-precondition",
+      "The Stripe API host override is allowed only in the isolated emulator suite."
+    );
+  }
+
   return {
     host,
     port: Number(process.env.STRIPE_API_PORT || 12111),
@@ -135,6 +307,7 @@ function stripeHostOptions(): Partial<Stripe.StripeConfig> {
 }
 
 function stripe(): Stripe {
+  assertBillingEnvironment();
   const key = stripeSecretKey.value();
   if (!key) {
     throw new HttpsError("failed-precondition", "Billing is not configured.");
@@ -149,7 +322,7 @@ function stripe(): Stripe {
   return stripeClient;
 }
 
-const serverTimestamp = () => admin.firestore.FieldValue.serverTimestamp();
+const serverTimestamp = () => FieldValue.serverTimestamp();
 
 /** ---------------------------------------------------------------
  * Stored document shapes (all server-owned)
@@ -174,13 +347,13 @@ type CheckoutAcceptanceRecord = {
   signedName: string;
   documents: typeof CHECKOUT_DOCUMENTS;
   immediatePerformanceRequested: boolean;
-  acceptedAt: admin.firestore.FieldValue | admin.firestore.Timestamp;
+  acceptedAt: FieldValue | Timestamp;
   userAgent: string;
 };
 
 type MembershipAcceptanceRecord = CheckoutAcceptanceRecord & {
   /** Stripe event time at which the paid contract was formed. */
-  contractMadeAt: admin.firestore.Timestamp;
+  contractMadeAt: Timestamp;
   coolingOffEndsAt: string;
 };
 
@@ -194,6 +367,8 @@ type MembershipIntentDoc = {
   payerUid: string | null;
   payerEmail: string | null;
   planKey: PlanKey;
+  /** Stripe mode frozen with this retryable attempt. */
+  stripeMode: StripeMode;
   /** Exact validated Price frozen for this attempt, even if config later rotates. */
   stripePriceId: string;
   participant: ParticipantRecord;
@@ -205,9 +380,9 @@ type MembershipIntentDoc = {
   billingCycleAnchor: number;
   firstFullChargeDate: string;
   checkoutExpiresAt: number;
-  reservationExpiresAt: admin.firestore.Timestamp;
+  reservationExpiresAt: Timestamp;
   reservationLockIds: string[];
-  createdAt: admin.firestore.FieldValue | admin.firestore.Timestamp;
+  createdAt: FieldValue | Timestamp;
 };
 
 type MembershipDoc = {
@@ -225,8 +400,8 @@ type MembershipDoc = {
   payerUid: string | null;
   /** Billing email Stripe collected. The identity a claim is matched against. */
   payerEmail: string | null;
-  fulfilledAt: admin.firestore.FieldValue | admin.firestore.Timestamp | null;
-  claimedAt: admin.firestore.FieldValue | admin.firestore.Timestamp | null;
+  fulfilledAt: FieldValue | Timestamp | null;
+  claimedAt: FieldValue | Timestamp | null;
   planKey: PlanKey;
   stripePriceId: string;
   planName: string;
@@ -249,8 +424,8 @@ type MembershipDoc = {
   currentPeriodEnd: number | null;
   billingCycleAnchor: number;
   pastDueSince: number | null;
-  pastDueGraceEndsAt: admin.firestore.Timestamp | null;
-  nextReconcileAt?: admin.firestore.Timestamp | null;
+  pastDueGraceEndsAt: Timestamp | null;
+  nextReconcileAt?: Timestamp | null;
   /** Open Stripe dispute ids; the derived boolean remains for simple queries. */
   openDisputeIds: string[];
   disputeOpen: boolean;
@@ -258,21 +433,21 @@ type MembershipDoc = {
   providerContractStatus?: "verified" | "manual_review";
   providerContractError?: string;
   cancelAt: number | null;
-  cancellationRequestedAt: admin.firestore.Timestamp | admin.firestore.FieldValue | null;
+  cancellationRequestedAt: Timestamp | FieldValue | null;
   cancellationOutcome: ReturnType<typeof resolveCancellationOutcome> | null;
   cancellationRequest?: {
     id: string;
     status: "pending" | "applied" | "manual_review";
-    receivedAt: admin.firestore.Timestamp;
+    receivedAt: Timestamp;
     /** Starts/resets when automatic application or a later drift repair begins. */
-    recoveryStartedAt?: admin.firestore.Timestamp;
+    recoveryStartedAt?: Timestamp;
     outcome: ReturnType<typeof resolveCancellationOutcome>;
     stripeCancelAt?: number;
     attemptCount?: number;
     repairGeneration?: number;
-    nextAttemptAt?: admin.firestore.Timestamp;
+    nextAttemptAt?: Timestamp;
     leaseToken?: string;
-    leaseExpiresAt?: admin.firestore.Timestamp;
+    leaseExpiresAt?: Timestamp;
     lastError?: string;
   };
   entitlementProjectionStatus?: "applied" | "manual_review";
@@ -280,9 +455,9 @@ type MembershipDoc = {
   confirmationEmailStatus?: string;
   confirmationEmailError?: string;
   confirmationEmailProviderId?: string;
-  confirmationEmailSentAt?: admin.firestore.Timestamp | admin.firestore.FieldValue | null;
-  createdAt: admin.firestore.FieldValue | admin.firestore.Timestamp;
-  updatedAt: admin.firestore.FieldValue | admin.firestore.Timestamp;
+  confirmationEmailSentAt?: Timestamp | FieldValue | null;
+  createdAt: FieldValue | Timestamp;
+  updatedAt: FieldValue | Timestamp;
 };
 
 type CancellationOutcome = ReturnType<typeof resolveCancellationOutcome>;
@@ -447,16 +622,16 @@ function resolveReturnOrigin(): string {
 }
 
 /**
- * Price IDs from the 17 August 2026 catalogue export, which is a Stripe
- * **test mode** export. Products, prices, portal configurations and webhook
- * secrets are all mode-specific, so these can never be correct in live mode.
+ * Price IDs verified directly against the Stripe sandbox on 18 August 2026.
+ * Products, prices, portal configurations and webhook secrets are all
+ * mode-specific, so these can never be correct in live mode.
  */
 const KNOWN_TEST_PRICE_IDS = new Set([
-  "price_1U5KgYFzNDZoGGA0jGftxyZH",
-  "price_1U5KjOFzNDZoGGA0j3qcds5p",
-  "price_1U5Kk9FzNDZoGGA0dQ61G49d",
-  "price_1U5KoQFzNDZoGGA0s4t806bH",
-  "price_1U5Kt8FzNDZoGGA0ogq41DEw",
+  "price_1U5PS5FzNDZoGGA0rPLiyQ2Q",
+  "price_1U5PKZFzNDZoGGA0xsnNcV2m",
+  "price_1U5PJHFzNDZoGGA0izMSvHP1",
+  "price_1U5PFZFzNDZoGGA06T2ggw4M",
+  "price_1U5PEwFzNDZoGGA0d24UJaZd",
 ]);
 
 function resolvePriceId(planKey: PlanKey): string {
@@ -471,7 +646,7 @@ function resolvePriceId(planKey: PlanKey): string {
   // Stripe would reject this anyway, but only once a real customer was part
   // way through checkout. Failing here makes the misconfiguration obvious
   // before anyone is asked to pay.
-  if (stripeSecretKey.value().startsWith("sk_live_") &&
+  if (assertBillingEnvironment().stripeMode === "live" &&
     KNOWN_TEST_PRICE_IDS.has(priceId)) {
     throw new HttpsError(
       "failed-precondition",
@@ -511,9 +686,11 @@ async function assertStripePriceMatchesPlan(
 
   const product = typeof price.product === "object" && price.product &&
       !("deleted" in price.product) ? price.product : null;
-  const expectedLiveMode = stripeSecretKey.value().startsWith("sk_live_");
+  assertStripeObjectMode("Price", price.id, price.livemode);
+  if (product) {
+    assertStripeObjectMode("Product", product.id, product.livemode);
+  }
   const valid = price.active === true &&
-    price.livemode === expectedLiveMode &&
     price.currency.toLowerCase() === plan.currency &&
     price.unit_amount === plan.amountPence &&
     price.type === "recurring" &&
@@ -560,6 +737,11 @@ async function assertPortalConfigurationIsLockedDown(
     }
     throw new HttpsError("unavailable", "The billing portal is temporarily unavailable.");
   }
+  assertStripeObjectMode(
+    "Customer Portal configuration",
+    configuration.id,
+    configuration.livemode
+  );
   if (configuration.active !== true ||
     configuration.features.subscription_cancel.enabled !== false ||
     configuration.features.subscription_update.enabled !== false) {
@@ -585,11 +767,26 @@ async function assertPortalConfigurationIsLockedDown(
  * signed off, and an unapproved version must never reach a paying customer.
  */
 function requirePurchaseFlowOpen(): void {
-  if (!CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION) {
+  const testJourneyRequested =
+    membershipTestJourneyEnabled.value().trim().toLowerCase() === "true";
+  if (!CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION && !testJourneyRequested) {
     throw new HttpsError(
       "failed-precondition",
       "Membership purchase is not open yet: the checkout documents are still in legal review."
     );
+  }
+  if (!CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION) {
+    const environment = assertBillingEnvironment();
+    const origin = resolveReturnOrigin();
+    if (environment.stripeMode !== "test" ||
+      environment.projectId === PRODUCTION_FIREBASE_PROJECT_ID ||
+      !hasLoopbackFirebaseEmulatorDataPlane() ||
+      !LOCAL_TEST_JOURNEY_ORIGINS.has(origin)) {
+      throw new HttpsError(
+        "failed-precondition",
+        "The unpublished checkout can run only in the isolated local Stripe test journey."
+      );
+    }
   }
   if (membershipPurchaseEnabled.value().trim().toLowerCase() !== "true") {
     throw new HttpsError(
@@ -597,6 +794,7 @@ function requirePurchaseFlowOpen(): void {
       "Membership purchase is not enabled for this environment."
     );
   }
+  assertBillingEnvironment();
 }
 
 /** ---------------------------------------------------------------
@@ -624,6 +822,7 @@ async function resolveStripeCustomerId(userId: string): Promise<string> {
     // than duplicating one if this call is replayed.
     {idempotencyKey: `customer:${userId}`}
   );
+  assertStripeObjectMode("Customer", customer.id, customer.livemode);
 
   await userRef.set(
     {stripeCustomerId: customer.id, updatedAt: serverTimestamp()},
@@ -683,11 +882,11 @@ function checkoutLockSpecs(
 }
 
 function timestampMillis(value: unknown): number | null {
-  return value instanceof admin.firestore.Timestamp ? value.toMillis() : null;
+  return value instanceof Timestamp ? value.toMillis() : null;
 }
 
 function isBlockingMembershipDoc(
-  doc: admin.firestore.QueryDocumentSnapshot
+  doc: QueryDocumentSnapshot
 ): boolean {
   if (isMembershipStateBlockingDuplicate(doc.get("state") as MembershipState)) {
     return true;
@@ -701,19 +900,19 @@ function isBlockingMembershipDoc(
     (stripeStatus !== "canceled" && stripeStatus !== "incomplete_expired");
 }
 
-function entitlementOwnerRef(userId: string): admin.firestore.DocumentReference {
+function entitlementOwnerRef(userId: string): DocumentReference {
   return db().collection(ENTITLEMENT_OWNER_COLLECTION).doc(sha256(userId));
 }
 
 function alphaWodPayerCheckoutLockRef(
   userId: string
-): admin.firestore.DocumentReference {
+): DocumentReference {
   return db().collection(CHECKOUT_LOCK_COLLECTION)
     .doc(`alpha_wod_payer_${sha256(userId)}`);
 }
 
 async function hasBlockingPayerCheckoutReservation(
-  tx: admin.firestore.Transaction,
+  tx: Transaction,
   userId: string
 ): Promise<boolean> {
   const lock = await tx.get(alphaWodPayerCheckoutLockRef(userId));
@@ -727,7 +926,7 @@ async function hasBlockingPayerCheckoutReservation(
 }
 
 type EntitlementOwnerRead = {
-  ref: admin.firestore.DocumentReference;
+  ref: DocumentReference;
   ownerSubscriptionId: string | null;
   ownerState: "active" | "released" | null;
   ownerMembershipBlocks: boolean;
@@ -739,7 +938,7 @@ type EntitlementOwnerRead = {
  * or restored the prior grant and marked the generation released.
  */
 async function readEntitlementOwner(
-  tx: admin.firestore.Transaction,
+  tx: Transaction,
   userId: string,
   requestedSubscriptionId: string
 ): Promise<EntitlementOwnerRead> {
@@ -769,7 +968,7 @@ async function readEntitlementOwner(
 }
 
 function acquireEntitlementOwner(
-  tx: admin.firestore.Transaction,
+  tx: Transaction,
   owner: EntitlementOwnerRead,
   userId: string,
   subscriptionId: string
@@ -784,7 +983,7 @@ function acquireEntitlementOwner(
     subscriptionId,
     userIdHash: sha256(userId),
     state: "active",
-    releasedAt: admin.firestore.FieldValue.delete(),
+    releasedAt: FieldValue.delete(),
     updatedAt: serverTimestamp(),
     ...(owner.ownerSubscriptionId ? {} : {createdAt: serverTimestamp()}),
   }, {merge: true});
@@ -795,7 +994,7 @@ function acquireEntitlementOwner(
  * Stripe is deliberately called only after this transaction has committed.
  */
 async function reserveCheckoutAttempt(
-  intentRef: admin.firestore.DocumentReference,
+  intentRef: DocumentReference,
   proposedIntent: MembershipIntentDoc,
   nowMillis: number
 ): Promise<CheckoutReservationResult> {
@@ -897,7 +1096,7 @@ async function reserveCheckoutAttempt(
  * when an old webhook arrives after an expired lock has been reused.
  */
 async function transitionCheckoutReservation(
-  intentRef: admin.firestore.DocumentReference,
+  intentRef: DocumentReference,
   status: MembershipIntentDoc["status"],
   updates: Record<string, unknown> = {},
   releaseLocks = true,
@@ -910,6 +1109,11 @@ async function transitionCheckoutReservation(
   return db().runTransaction(async (tx) => {
     const intentSnap = await tx.get(intentRef);
     if (!intentSnap.exists) return false;
+    if (intentSnap.get("stripeMode") !== assertBillingEnvironment().stripeMode) {
+      throw new Error(
+        `Checkout intent ${intentRef.id} belongs to another Stripe environment.`
+      );
+    }
 
     if (stripeSessionBinding) {
       const storedSessionId = intentSnap.get("checkoutSessionId");
@@ -965,9 +1169,9 @@ async function transitionCheckoutReservation(
 
 /** Keeps a completed-but-delayed payment from losing its duplicate guard. */
 async function extendCheckoutReservationForAsyncPayment(
-  intentRef: admin.firestore.DocumentReference
+  intentRef: DocumentReference
 ): Promise<void> {
-  const expiresAt = admin.firestore.Timestamp.fromMillis(
+  const expiresAt = Timestamp.fromMillis(
     Date.now() + ASYNC_PAYMENT_RESERVATION_MS
   );
   await db().runTransaction(async (tx) => {
@@ -1032,6 +1236,13 @@ async function reconcileExpiredCheckoutReservations(
       console.error("CRITICAL_BILLING_ORPHAN_CHECKOUT_LOCK", {intentId: ownerId});
       continue;
     }
+    if (intent.get("stripeMode") !== assertBillingEnvironment().stripeMode) {
+      console.error("CRITICAL_BILLING_CHECKOUT_LOCK_MODE_MISMATCH", {
+        intentId: ownerId,
+        storedStripeMode: intent.get("stripeMode") ?? null,
+      });
+      continue;
+    }
     const status = intent.get("status") as MembershipIntentDoc["status"];
     if (status === "expired" || status === "failed") {
       await transitionCheckoutReservation(intentRef, status);
@@ -1045,10 +1256,12 @@ async function reconcileExpiredCheckoutReservations(
 
     try {
       let session = await stripe().checkout.sessions.retrieve(sessionId);
+      assertStripeObjectMode("Checkout Session", session.id, session.livemode);
       if (session.status === "open" &&
         typeof session.expires_at === "number" &&
         session.expires_at * 1000 <= nowMillis) {
         session = await stripe().checkout.sessions.expire(sessionId);
+        assertStripeObjectMode("Checkout Session", session.id, session.livemode);
       }
       if (session.status === "expired") {
         await transitionCheckoutReservation(intentRef, "expired", {
@@ -1100,7 +1313,7 @@ async function writeAudit(entry: Record<string, unknown>): Promise<void> {
  * membership. A banned role is never granted anything.
  */
 async function applyMembershipEntitlement(
-  membershipRef: admin.firestore.DocumentReference,
+  membershipRef: DocumentReference,
   converge: (userId: string) => Promise<void>
 ): Promise<void> {
   const outcome = await db().runTransaction(async (tx) => {
@@ -1244,7 +1457,7 @@ async function applyMembershipEntitlement(
     tx.set(membershipRef, {
       preMembershipEntitlement: preMembership,
       entitlementProjectionStatus: "applied",
-      entitlementProjectionError: admin.firestore.FieldValue.delete(),
+      entitlementProjectionError: FieldValue.delete(),
       updatedAt: serverTimestamp(),
     }, {merge: true});
 
@@ -1303,7 +1516,7 @@ type MembershipConvergenceLease =
   | {state: "in_progress"};
 
 async function acquireMembershipConvergenceLease(
-  membershipRef: admin.firestore.DocumentReference,
+  membershipRef: DocumentReference,
   nowMillis = Date.now(),
   token = randomUUID()
 ): Promise<MembershipConvergenceLease> {
@@ -1317,7 +1530,7 @@ async function acquireMembershipConvergenceLease(
     }
     tx.set(membershipRef, {
       convergenceLeaseToken: token,
-      convergenceLeaseExpiresAt: admin.firestore.Timestamp.fromMillis(
+      convergenceLeaseExpiresAt: Timestamp.fromMillis(
         nowMillis + MEMBERSHIP_CONVERGENCE_LEASE_MS
       ),
       updatedAt: serverTimestamp(),
@@ -1327,15 +1540,15 @@ async function acquireMembershipConvergenceLease(
 }
 
 async function releaseMembershipConvergenceLease(
-  membershipRef: admin.firestore.DocumentReference,
+  membershipRef: DocumentReference,
   token: string
 ): Promise<void> {
   await db().runTransaction(async (tx) => {
     const snap = await tx.get(membershipRef);
     if (!snap.exists || snap.get("convergenceLeaseToken") !== token) return;
     tx.set(membershipRef, {
-      convergenceLeaseToken: admin.firestore.FieldValue.delete(),
-      convergenceLeaseExpiresAt: admin.firestore.FieldValue.delete(),
+      convergenceLeaseToken: FieldValue.delete(),
+      convergenceLeaseExpiresAt: FieldValue.delete(),
       updatedAt: serverTimestamp(),
     }, {merge: true});
   });
@@ -1354,6 +1567,9 @@ async function convergeMembershipFromStripe(
   overrides: MembershipConvergenceOverrides = {},
   nowMillis = Date.now()
 ): Promise<void> {
+  // Fail before acquiring a Firestore lease: a mixed Firebase/Stripe
+  // deployment must not mutate even local billing state before it is refused.
+  assertBillingEnvironment();
   const membershipRef = db().collection("memberships").doc(subscriptionId);
   const lease = await acquireMembershipConvergenceLease(membershipRef);
   if (lease.state === "in_progress") {
@@ -1363,6 +1579,7 @@ async function convergeMembershipFromStripe(
   let subscription: Stripe.Subscription;
   try {
     subscription = await stripe().subscriptions.retrieve(subscriptionId);
+    assertStripeObjectMode("Subscription", subscription.id, subscription.livemode);
   } catch (error) {
     if (lease.state === "acquired") {
       await releaseMembershipConvergenceLease(membershipRef, lease.token).catch(() => undefined);
@@ -1449,7 +1666,7 @@ async function convergeMembershipFromStripe(
       }
       const graceEndMillis = resolvePastDueGraceEndMillis(pastDueSince);
       const pastDueGraceEndsAt = graceEndMillis === null ?
-        null : admin.firestore.Timestamp.fromMillis(graceEndMillis);
+        null : Timestamp.fromMillis(graceEndMillis);
       const state = resolveMembershipState({
         stripeStatus: subscription.status,
         pastDueSinceUnixSeconds: pastDueSince,
@@ -1459,7 +1676,7 @@ async function convergeMembershipFromStripe(
       }, nowMillis);
       const nextReconcileAt = state === "past_due_grace" ?
         pastDueGraceEndsAt : state === "past_due_suspended" ?
-          admin.firestore.Timestamp.fromMillis(
+          Timestamp.fromMillis(
             nowMillis + SUSPENDED_RECONCILE_INTERVAL_MS
           ) : null;
 
@@ -1478,7 +1695,7 @@ async function convergeMembershipFromStripe(
       } | null = null;
       let cancellationUpdate: Record<string, unknown> = {};
       const validRequest = typeof pendingCancellation?.id === "string" &&
-        pendingCancellation.receivedAt instanceof admin.firestore.Timestamp &&
+        pendingCancellation.receivedAt instanceof Timestamp &&
         typeof pendingCancellation.outcome?.cancelAtUnixSeconds === "number";
 
       if (stored.cancellationOutcome) {
@@ -1497,10 +1714,10 @@ async function convergeMembershipFromStripe(
                 status: "applied",
                 outcome: aligned,
                 stripeCancelAt: authoritativeCancelAt,
-                nextAttemptAt: admin.firestore.FieldValue.delete(),
-                leaseToken: admin.firestore.FieldValue.delete(),
-                leaseExpiresAt: admin.firestore.FieldValue.delete(),
-                lastError: admin.firestore.FieldValue.delete(),
+                nextAttemptAt: FieldValue.delete(),
+                leaseToken: FieldValue.delete(),
+                leaseExpiresAt: FieldValue.delete(),
+                lastError: FieldValue.delete(),
               },
             } : {}),
           };
@@ -1526,9 +1743,9 @@ async function convergeMembershipFromStripe(
                 stripeCancelAt: authoritativeCancelAt,
                 lastError: reason,
                 manualReviewAt: serverTimestamp(),
-                nextAttemptAt: admin.firestore.FieldValue.delete(),
-                leaseToken: admin.firestore.FieldValue.delete(),
-                leaseExpiresAt: admin.firestore.FieldValue.delete(),
+                nextAttemptAt: FieldValue.delete(),
+                leaseToken: FieldValue.delete(),
+                leaseExpiresAt: FieldValue.delete(),
               },
             } : {}),
           };
@@ -1550,27 +1767,27 @@ async function convergeMembershipFromStripe(
               id: requestId,
               status: repairQueued ? "pending" : "manual_review",
               receivedAt: validRequest ? pendingCancellation.receivedAt :
-                (stored.cancellationRequestedAt instanceof admin.firestore.Timestamp ?
+                (stored.cancellationRequestedAt instanceof Timestamp ?
                   stored.cancellationRequestedAt :
-                  admin.firestore.Timestamp.fromMillis(nowMillis)),
+                  Timestamp.fromMillis(nowMillis)),
               outcome: stored.cancellationOutcome,
               repairGeneration: pendingCancellation?.status === "pending" ?
                 repairGeneration : repairGeneration + 1,
               recoveryStartedAt: pendingCancellation?.status === "pending" &&
-                pendingCancellation.recoveryStartedAt instanceof admin.firestore.Timestamp ?
+                pendingCancellation.recoveryStartedAt instanceof Timestamp ?
                 pendingCancellation.recoveryStartedAt :
-                admin.firestore.Timestamp.fromMillis(nowMillis),
+                Timestamp.fromMillis(nowMillis),
               attemptCount: pendingCancellation?.status === "pending" ?
                 (pendingCancellation.attemptCount ?? 0) : 0,
               lastError: reason,
               ...(repairQueued ? {
-                nextAttemptAt: admin.firestore.Timestamp.fromMillis(nowMillis),
+                nextAttemptAt: Timestamp.fromMillis(nowMillis),
               } : {
-                nextAttemptAt: admin.firestore.FieldValue.delete(),
+                nextAttemptAt: FieldValue.delete(),
                 manualReviewAt: serverTimestamp(),
               }),
-              leaseToken: admin.firestore.FieldValue.delete(),
-              leaseExpiresAt: admin.firestore.FieldValue.delete(),
+              leaseToken: FieldValue.delete(),
+              leaseExpiresAt: FieldValue.delete(),
             },
           };
         }
@@ -1596,10 +1813,10 @@ async function convergeMembershipFromStripe(
             outcome: settledCancellation.outcome,
             stripeCancelAt: authoritativeCancelAt,
             appliedAt: serverTimestamp(),
-            nextAttemptAt: admin.firestore.FieldValue.delete(),
-            leaseToken: admin.firestore.FieldValue.delete(),
-            leaseExpiresAt: admin.firestore.FieldValue.delete(),
-            lastError: admin.firestore.FieldValue.delete(),
+            nextAttemptAt: FieldValue.delete(),
+            leaseToken: FieldValue.delete(),
+            leaseExpiresAt: FieldValue.delete(),
+            lastError: FieldValue.delete(),
           },
         };
       } else if (validRequest && subscription.status === "canceled" &&
@@ -1624,9 +1841,9 @@ async function convergeMembershipFromStripe(
             stripeCancelAt: authoritativeCancelAt,
             lastError: reason,
             manualReviewAt: serverTimestamp(),
-            nextAttemptAt: admin.firestore.FieldValue.delete(),
-            leaseToken: admin.firestore.FieldValue.delete(),
-            leaseExpiresAt: admin.firestore.FieldValue.delete(),
+            nextAttemptAt: FieldValue.delete(),
+            leaseToken: FieldValue.delete(),
+            leaseExpiresAt: FieldValue.delete(),
           },
         };
       } else if (!stored.cancellationOutcome && validRequest &&
@@ -1643,9 +1860,9 @@ async function convergeMembershipFromStripe(
             status: "manual_review",
             lastError: reason,
             manualReviewAt: serverTimestamp(),
-            nextAttemptAt: admin.firestore.FieldValue.delete(),
-            leaseToken: admin.firestore.FieldValue.delete(),
-            leaseExpiresAt: admin.firestore.FieldValue.delete(),
+            nextAttemptAt: FieldValue.delete(),
+            leaseToken: FieldValue.delete(),
+            leaseExpiresAt: FieldValue.delete(),
           },
         };
       }
@@ -1661,13 +1878,13 @@ async function convergeMembershipFromStripe(
         providerContractStatus: providerNeedsManualReview ?
           "manual_review" : "verified",
         providerContractError: currentContractMismatch ??
-          admin.firestore.FieldValue.delete(),
+          FieldValue.delete(),
         pastDueSince,
         pastDueGraceEndsAt,
         nextReconcileAt,
         ...cancellationUpdate,
-        convergenceLeaseToken: admin.firestore.FieldValue.delete(),
-        convergenceLeaseExpiresAt: admin.firestore.FieldValue.delete(),
+        convergenceLeaseToken: FieldValue.delete(),
+        convergenceLeaseExpiresAt: FieldValue.delete(),
         updatedAt: serverTimestamp(),
       }, {merge: true});
       return {
@@ -1735,9 +1952,10 @@ async function reconcilePastDueMembershipsOnce(
   nowMillis = Date.now(),
   limit = 100
 ): Promise<{processed: number; failed: number}> {
+  assertBillingEnvironment();
   const due = await db().collection("memberships")
     .where("state", "in", ["past_due_grace", "past_due_suspended"])
-    .where("nextReconcileAt", "<=", admin.firestore.Timestamp.fromMillis(nowMillis))
+    .where("nextReconcileAt", "<=", Timestamp.fromMillis(nowMillis))
     .orderBy("nextReconcileAt", "asc")
     .limit(limit)
     .get();
@@ -1940,6 +2158,7 @@ function buildCreateMembershipCheckoutHandler(
         payerUid,
         payerEmail,
         planKey,
+        stripeMode: assertBillingEnvironment().stripeMode,
         stripePriceId: validatedConfig.priceId,
         participant,
         guardian,
@@ -1956,7 +2175,7 @@ function buildCreateMembershipCheckoutHandler(
         billingCycleAnchor: anchorUnixSeconds,
         firstFullChargeDate,
         checkoutExpiresAt,
-        reservationExpiresAt: admin.firestore.Timestamp.fromMillis(
+        reservationExpiresAt: Timestamp.fromMillis(
           (checkoutExpiresAt + CHECKOUT_SETTLEMENT_GRACE_SECONDS) * 1000
         ),
         reservationLockIds,
@@ -1971,6 +2190,12 @@ function buildCreateMembershipCheckoutHandler(
       throw new HttpsError(
         "failed-precondition",
         "This checkout attempt was already used with different membership details."
+      );
+    }
+    if (intent.stripeMode !== assertBillingEnvironment().stripeMode) {
+      throw new HttpsError(
+        "failed-precondition",
+        "This checkout attempt belongs to another Stripe environment. Start again."
       );
     }
     const checkoutWindowEnded = () =>
@@ -2076,6 +2301,7 @@ function buildCreateMembershipCheckoutHandler(
           intentId: intentRef.id,
         },
       }, {idempotencyKey: `checkout:${checkoutAttemptHash}`});
+      assertStripeObjectMode("Checkout Session", session.id, session.livemode);
     } catch (error) {
       if (isDefinitiveCheckoutCreateFailure(error)) {
         await transitionCheckoutReservation(intentRef, "failed", {
@@ -2177,6 +2403,8 @@ export const createMembershipCheckoutSession = onCall(
 export const createCustomerPortalSession = onCall(
   {region: REGION, secrets: MEMBERSHIP_SECRETS},
   async (request) => {
+    // Refuse a mixed project/key deployment before reading billing records.
+    assertBillingEnvironment();
     const userId = requireAuthUid(request);
     const subscriptionId = requireBoundedString(
       request.data?.subscriptionId,
@@ -2263,7 +2491,7 @@ const CANCELLATION_RECOVERY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 type PreparedCancellation = {
   requestId: string;
-  receivedAt: admin.firestore.Timestamp;
+  receivedAt: Timestamp;
   outcome: CancellationOutcome;
   repairGeneration: number;
 };
@@ -2275,7 +2503,7 @@ function cancellationRetryAtMillis(attemptCount: number, nowMillis: number): num
 
 /** Applies one frozen cancellation request without ever extending Stripe's date. */
 async function settlePreparedCancellation(
-  membershipRef: admin.firestore.DocumentReference,
+  membershipRef: DocumentReference,
   payerUid: string,
   prepared: PreparedCancellation,
   converge: (userId: string) => Promise<void>
@@ -2292,6 +2520,11 @@ async function settlePreparedCancellation(
   const hadOutcome = Boolean(before.get("cancellationOutcome"));
 
   const currentSubscription = await stripe().subscriptions.retrieve(subscriptionId);
+  assertStripeObjectMode(
+    "Subscription",
+    currentSubscription.id,
+    currentSubscription.livemode
+  );
   const currentObservedEnd = currentSubscription.status === "canceled" ?
     (currentSubscription.ended_at ?? currentSubscription.cancel_at ?? null) :
     (currentSubscription.cancel_at ?? null);
@@ -2328,6 +2561,11 @@ async function settlePreparedCancellation(
   // Re-read after the idempotent update. Stripe can cache an idempotency result;
   // only current authoritative state proves that the schedule is now in place.
   const verifiedSubscription = await stripe().subscriptions.retrieve(subscriptionId);
+  assertStripeObjectMode(
+    "Subscription",
+    verifiedSubscription.id,
+    verifiedSubscription.livemode
+  );
   const verifiedEnd = verifiedSubscription.status === "canceled" ?
     (verifiedSubscription.ended_at ?? verifiedSubscription.cancel_at ?? null) :
     (verifiedSubscription.cancel_at ?? null);
@@ -2354,7 +2592,7 @@ async function settlePreparedCancellation(
 }
 
 async function markPendingCancellationFailed(
-  membershipRef: admin.firestore.DocumentReference,
+  membershipRef: DocumentReference,
   requestId: string,
   error: unknown,
   nowMillis = Date.now()
@@ -2387,11 +2625,11 @@ async function markPendingCancellationFailed(
         typeof pending.repairGeneration === "number" ?
           pending.repairGeneration + 1 : 1,
       "cancellationRequest.failedAt": serverTimestamp(),
-      "cancellationRequest.leaseToken": admin.firestore.FieldValue.delete(),
-      "cancellationRequest.leaseExpiresAt": admin.firestore.FieldValue.delete(),
+      "cancellationRequest.leaseToken": FieldValue.delete(),
+      "cancellationRequest.leaseExpiresAt": FieldValue.delete(),
       "cancellationRequest.nextAttemptAt": isTerminal ?
-        admin.firestore.FieldValue.delete() :
-        admin.firestore.Timestamp.fromMillis(
+        FieldValue.delete() :
+        Timestamp.fromMillis(
           cancellationRetryAtMillis(attemptCount, nowMillis)
         ),
       ...(isTerminal ? {"cancellationRequest.manualReviewAt": serverTimestamp()} : {}),
@@ -2425,7 +2663,7 @@ type CancellationRecoveryLease = {
 };
 
 async function acquireCancellationRecoveryLease(
-  membershipRef: admin.firestore.DocumentReference,
+  membershipRef: DocumentReference,
   nowMillis = Date.now()
 ): Promise<CancellationRecoveryLease | null> {
   const token = randomUUID();
@@ -2449,16 +2687,16 @@ async function acquireCancellationRecoveryLease(
     const outcome = pending?.outcome as CancellationOutcome | undefined;
     if (pending?.status !== "pending") return {state: "skipped" as const};
     if (typeof pending.id !== "string" || typeof payerUid !== "string" || !payerUid ||
-      !(pending.receivedAt instanceof admin.firestore.Timestamp) ||
+      !(pending.receivedAt instanceof Timestamp) ||
       typeof outcome?.cancelAtUnixSeconds !== "number") {
       const reason = "Pending cancellation evidence is malformed.";
       tx.update(membershipRef, {
         "cancellationRequest.status": "manual_review",
         "cancellationRequest.lastError": reason,
         "cancellationRequest.manualReviewAt": serverTimestamp(),
-        "cancellationRequest.nextAttemptAt": admin.firestore.FieldValue.delete(),
-        "cancellationRequest.leaseToken": admin.firestore.FieldValue.delete(),
-        "cancellationRequest.leaseExpiresAt": admin.firestore.FieldValue.delete(),
+        "cancellationRequest.nextAttemptAt": FieldValue.delete(),
+        "cancellationRequest.leaseToken": FieldValue.delete(),
+        "cancellationRequest.leaseExpiresAt": FieldValue.delete(),
         "updatedAt": serverTimestamp(),
       });
       return {
@@ -2483,9 +2721,9 @@ async function acquireCancellationRecoveryLease(
         "cancellationRequest.status": "manual_review",
         "cancellationRequest.lastError": "Automatic cancellation recovery exhausted.",
         "cancellationRequest.manualReviewAt": serverTimestamp(),
-        "cancellationRequest.nextAttemptAt": admin.firestore.FieldValue.delete(),
-        "cancellationRequest.leaseToken": admin.firestore.FieldValue.delete(),
-        "cancellationRequest.leaseExpiresAt": admin.firestore.FieldValue.delete(),
+        "cancellationRequest.nextAttemptAt": FieldValue.delete(),
+        "cancellationRequest.leaseToken": FieldValue.delete(),
+        "cancellationRequest.leaseExpiresAt": FieldValue.delete(),
         "updatedAt": serverTimestamp(),
       });
       return {
@@ -2498,10 +2736,10 @@ async function acquireCancellationRecoveryLease(
       "cancellationRequest.attemptCount": attemptCount + 1,
       "cancellationRequest.lastAttemptAt": serverTimestamp(),
       "cancellationRequest.leaseToken": token,
-      "cancellationRequest.leaseExpiresAt": admin.firestore.Timestamp.fromMillis(
+      "cancellationRequest.leaseExpiresAt": Timestamp.fromMillis(
         nowMillis + CANCELLATION_RECOVERY_LEASE_MS
       ),
-      "cancellationRequest.nextAttemptAt": admin.firestore.Timestamp.fromMillis(
+      "cancellationRequest.nextAttemptAt": Timestamp.fromMillis(
         nowMillis + CANCELLATION_RECOVERY_LEASE_MS
       ),
       "updatedAt": serverTimestamp(),
@@ -2550,11 +2788,12 @@ async function recoverPendingCancellationsOnce(
   limit = 50,
   converge: (userId: string) => Promise<void> = async () => undefined
 ): Promise<{processed: number; failed: number; skipped: number}> {
+  assertBillingEnvironment();
   const due = await db().collection("memberships")
     .where(
       "cancellationRequest.nextAttemptAt",
       "<=",
-      admin.firestore.Timestamp.fromMillis(nowMillis)
+      Timestamp.fromMillis(nowMillis)
     )
     .orderBy("cancellationRequest.nextAttemptAt", "asc")
     .limit(limit)
@@ -2610,6 +2849,9 @@ export function buildRequestMembershipCancellation(
   return onCall(
     {region: REGION, secrets: MEMBERSHIP_SECRETS},
     async (request) => {
+      // The receipt transaction is legally significant. Never write it until
+      // the Firebase project and Stripe key are proven to be paired.
+      assertBillingEnvironment();
       const userId = requireAuthUid(request);
       const subscriptionId = requireBoundedString(request.data?.subscriptionId, "subscriptionId", 3, 255);
       const expectedCancelAtUnixSeconds = request.data?.expectedCancelAtUnixSeconds;
@@ -2649,7 +2891,7 @@ export function buildRequestMembershipCancellation(
       > | undefined;
         if (membership.cancellationOutcome) {
           if (typeof pending?.id !== "string" ||
-          !(pending.receivedAt instanceof admin.firestore.Timestamp)) {
+          !(pending.receivedAt instanceof Timestamp)) {
             throw new HttpsError(
               "failed-precondition",
               "This cancellation needs support because its recovery evidence is incomplete."
@@ -2657,7 +2899,7 @@ export function buildRequestMembershipCancellation(
           }
           const repairGeneration = typeof pending.repairGeneration === "number" ?
             pending.repairGeneration + 1 : 1;
-          const nextAttemptAt = admin.firestore.Timestamp.fromMillis(
+          const nextAttemptAt = Timestamp.fromMillis(
             receivedAtMillis + CANCELLATION_RECOVERY_LEASE_MS
           );
           tx.set(membershipRef, {
@@ -2667,13 +2909,13 @@ export function buildRequestMembershipCancellation(
               status: "pending",
               outcome: membership.cancellationOutcome,
               repairGeneration,
-              recoveryStartedAt: admin.firestore.Timestamp.fromMillis(receivedAtMillis),
+              recoveryStartedAt: Timestamp.fromMillis(receivedAtMillis),
               attemptCount: 1,
-              lastAttemptAt: admin.firestore.Timestamp.fromMillis(receivedAtMillis),
+              lastAttemptAt: Timestamp.fromMillis(receivedAtMillis),
               nextAttemptAt,
-              leaseToken: admin.firestore.FieldValue.delete(),
-              leaseExpiresAt: admin.firestore.FieldValue.delete(),
-              lastError: admin.firestore.FieldValue.delete(),
+              leaseToken: FieldValue.delete(),
+              leaseExpiresAt: FieldValue.delete(),
+              lastError: FieldValue.delete(),
             },
             updatedAt: serverTimestamp(),
           }, {merge: true});
@@ -2686,7 +2928,7 @@ export function buildRequestMembershipCancellation(
           };
         }
         if (pending?.status === "pending" && typeof pending.id === "string" &&
-        pending.receivedAt instanceof admin.firestore.Timestamp &&
+        pending.receivedAt instanceof Timestamp &&
         typeof pendingOutcome?.cancelAtUnixSeconds === "number") {
           return {
             alreadyFinalized: false as const,
@@ -2714,7 +2956,7 @@ export function buildRequestMembershipCancellation(
             {reason: "cooling_off_manual_review", coolingOffEndsAt}
           );
         }
-        const receivedAt = admin.firestore.Timestamp.fromMillis(receivedAtMillis);
+        const receivedAt = Timestamp.fromMillis(receivedAtMillis);
         const outcome = resolveCancellationOutcome(receivedAtMillis);
         if (outcome.cancelAtUnixSeconds !== expectedCancelAtUnixSeconds) {
           throw new HttpsError(
@@ -2733,7 +2975,7 @@ export function buildRequestMembershipCancellation(
             attemptCount: 1,
             repairGeneration: 0,
             lastAttemptAt: receivedAt,
-            nextAttemptAt: admin.firestore.Timestamp.fromMillis(
+            nextAttemptAt: Timestamp.fromMillis(
               receivedAtMillis + CANCELLATION_RECOVERY_LEASE_MS
             ),
           },
@@ -2781,9 +3023,9 @@ export function buildRequestMembershipCancellation(
 const SESSION_CLAIM_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 function toMillis(
-  value: admin.firestore.FieldValue | admin.firestore.Timestamp | null | undefined
+  value: FieldValue | Timestamp | null | undefined
 ): number | null {
-  if (value instanceof admin.firestore.Timestamp) return value.toMillis();
+  if (value instanceof Timestamp) return value.toMillis();
   return null;
 }
 
@@ -2828,7 +3070,7 @@ export function buildClaimMembership(converge: (userId: string) => Promise<void>
         .where("checkoutSessionId", "==", sessionId).get() :
       await (email ?
         db().collection("memberships").where("payerEmail", "==", email).get() :
-        Promise.resolve({docs: []} as unknown as admin.firestore.QuerySnapshot));
+        Promise.resolve({docs: []} as unknown as QuerySnapshot));
 
     if (sessionId && candidates.docs.length > 1) {
       const checkoutSessionIdHash = sha256(sessionId);
@@ -3083,6 +3325,7 @@ async function fulfilCheckoutSession(
   converge: (userId: string) => Promise<void>,
   completionUnixSeconds: number
 ): Promise<void> {
+  assertStripeObjectMode("Checkout Session", session.id, session.livemode);
   const intentId = session.metadata?.intentId;
   const subscriptionId = typeof session.subscription === "string" ?
     session.subscription :
@@ -3095,6 +3338,9 @@ async function fulfilCheckoutSession(
     throw new Error(`Checkout intent ${intentId} was not found for ${session.id}.`);
   }
   const intent = intentSnap.data() as MembershipIntentDoc;
+  if (intent.stripeMode !== assertBillingEnvironment().stripeMode) {
+    throw new Error(`Checkout intent ${intentId} belongs to another Stripe environment.`);
+  }
   if (session.mode !== "subscription") {
     throw new Error(`Checkout Session ${session.id} is not a subscription checkout.`);
   }
@@ -3124,6 +3370,7 @@ async function fulfilCheckoutSession(
 
   const plan = getPlan(intent.planKey);
   const subscription = await stripe().subscriptions.retrieve(subscriptionId);
+  assertStripeObjectMode("Subscription", subscription.id, subscription.livemode);
   const sessionCustomerId = idOf(session.customer);
   if (!sessionCustomerId) {
     throw new Error(
@@ -3148,7 +3395,7 @@ async function fulfilCheckoutSession(
     Math.floor(fulfilmentNow / 1000) : null;
   const graceEndMillis = resolvePastDueGraceEndMillis(pastDueSince);
   const pastDueGraceEndsAt = graceEndMillis === null ?
-    null : admin.firestore.Timestamp.fromMillis(graceEndMillis);
+    null : Timestamp.fromMillis(graceEndMillis);
   const state = resolveMembershipState({
     stripeStatus: subscription.status,
     pastDueSinceUnixSeconds: pastDueSince,
@@ -3182,7 +3429,7 @@ async function fulfilCheckoutSession(
     guardian: intent.guardian,
     acceptances: {
       ...intent.acceptances,
-      contractMadeAt: admin.firestore.Timestamp.fromMillis(contractMadeMillis),
+      contractMadeAt: Timestamp.fromMillis(contractMadeMillis),
       coolingOffEndsAt: resolveCoolingOffEnd(contractMadeMillis),
     },
     state,
@@ -3200,7 +3447,7 @@ async function fulfilCheckoutSession(
     pastDueSince,
     pastDueGraceEndsAt,
     nextReconcileAt: state === "past_due_grace" ? pastDueGraceEndsAt :
-      state === "past_due_suspended" ? admin.firestore.Timestamp.fromMillis(
+      state === "past_due_suspended" ? Timestamp.fromMillis(
         fulfilmentNow + SUSPENDED_RECONCILE_INTERVAL_MS
       ) : null,
     openDisputeIds: [],
@@ -3268,6 +3515,7 @@ async function findMembershipIdForCharge(charge: Stripe.Charge): Promise<string 
       const invoiceId = idOf(payment.invoice);
       if (!invoiceId) continue;
       const invoice = await stripe().invoices.retrieve(invoiceId);
+      assertStripeObjectMode("Invoice", invoice.id, invoice.livemode);
       const subscriptionId = resolveInvoiceSubscriptionId(invoice);
       if (subscriptionId) return subscriptionId;
     }
@@ -3435,14 +3683,14 @@ async function acquireStripeEventLease(
         status: "dead_letter",
         deadLetteredAt: serverTimestamp(),
         deadLetterReason: "Stripe event retry budget exhausted.",
-        leaseToken: admin.firestore.FieldValue.delete(),
-        leaseExpiresAt: admin.firestore.FieldValue.delete(),
-        nextAttemptAt: admin.firestore.FieldValue.delete(),
+        leaseToken: FieldValue.delete(),
+        leaseExpiresAt: FieldValue.delete(),
+        nextAttemptAt: FieldValue.delete(),
         updatedAt: serverTimestamp(),
       }, {merge: true});
       return {state: "terminal"} as const;
     }
-    const leaseExpiresAt = admin.firestore.Timestamp.fromMillis(
+    const leaseExpiresAt = Timestamp.fromMillis(
       nowMillis + STRIPE_EVENT_LEASE_MS
     );
     tx.set(ledgerRef, {
@@ -3457,8 +3705,8 @@ async function acquireStripeEventLease(
       attemptCount: attemptCount + 1,
       lastAttemptAt: serverTimestamp(),
       ...(snap.exists ? {} : {receivedAt: serverTimestamp()}),
-      lastError: admin.firestore.FieldValue.delete(),
-      failedAt: admin.firestore.FieldValue.delete(),
+      lastError: FieldValue.delete(),
+      failedAt: FieldValue.delete(),
     }, {merge: true});
     return {state: "acquired", leaseToken} as const;
   });
@@ -3490,10 +3738,10 @@ async function markStripeEventProcessed(
     tx.set(ledgerRef, {
       status: "processed",
       processedAt: serverTimestamp(),
-      leaseToken: admin.firestore.FieldValue.delete(),
-      leaseExpiresAt: admin.firestore.FieldValue.delete(),
-      nextAttemptAt: admin.firestore.FieldValue.delete(),
-      lastError: admin.firestore.FieldValue.delete(),
+      leaseToken: FieldValue.delete(),
+      leaseExpiresAt: FieldValue.delete(),
+      nextAttemptAt: FieldValue.delete(),
+      lastError: FieldValue.delete(),
     }, {merge: true});
     return true;
   });
@@ -3522,13 +3770,13 @@ async function markStripeEventFailed(
       status: terminal ? "dead_letter" : "failed",
       failedAt: serverTimestamp(),
       lastError: message.slice(0, 1000),
-      leaseToken: admin.firestore.FieldValue.delete(),
-      leaseExpiresAt: admin.firestore.FieldValue.delete(),
+      leaseToken: FieldValue.delete(),
+      leaseExpiresAt: FieldValue.delete(),
       ...(terminal ? {
         deadLetteredAt: serverTimestamp(),
-        nextAttemptAt: admin.firestore.FieldValue.delete(),
+        nextAttemptAt: FieldValue.delete(),
       } : {
-        nextAttemptAt: admin.firestore.Timestamp.fromMillis(
+        nextAttemptAt: Timestamp.fromMillis(
           stripeEventRetryAtMillis(attemptCount, nowMillis)
         ),
       }),
@@ -3591,6 +3839,15 @@ export function buildStripeWebhook(converge: (userId: string) => Promise<void>) 
         return;
       }
 
+      try {
+        // Fail before writing the webhook receipt/lease in Firestore.
+        assertBillingEnvironment();
+      } catch (error) {
+        console.error("Rejected Stripe webhook in an invalid billing environment", error);
+        res.status(503).send("Billing environment unavailable.");
+        return;
+      }
+
       const signature = req.get("stripe-signature");
       const webhookSecret = stripeWebhookSecret.value();
       if (!signature || !webhookSecret) {
@@ -3604,6 +3861,13 @@ export function buildStripeWebhook(converge: (userId: string) => Promise<void>) 
       } catch (error) {
         console.error("Rejected Stripe webhook signature", error);
         res.status(400).send("Invalid signature.");
+        return;
+      }
+      try {
+        assertStripeObjectMode("Event", event.id, event.livemode);
+      } catch (error) {
+        console.error("Rejected Stripe webhook from the wrong mode", event.id, error);
+        res.status(400).send("Wrong Stripe mode.");
         return;
       }
 
@@ -3646,8 +3910,9 @@ async function recoverDueStripeEventsOnce(
   nowMillis = Date.now(),
   limit = 50
 ): Promise<{processed: number; failed: number; skipped: number}> {
+  assertBillingEnvironment();
   const due = await db().collection("stripeEvents")
-    .where("nextAttemptAt", "<=", admin.firestore.Timestamp.fromMillis(nowMillis))
+    .where("nextAttemptAt", "<=", Timestamp.fromMillis(nowMillis))
     .orderBy("nextAttemptAt", "asc")
     .limit(limit)
     .get();
@@ -3669,6 +3934,7 @@ async function recoverDueStripeEventsOnce(
 
     try {
       const event = await stripe().events.retrieve(ledger.id);
+      assertStripeObjectMode("Event", event.id, event.livemode);
       await processStripeEventUnderLease(event, lease.leaseToken, converge);
       result.processed += 1;
     } catch (error) {
@@ -3725,6 +3991,7 @@ async function handleStripeEvent(
   case "checkout.session.expired":
   case "checkout.session.async_payment_failed": {
     const session = event.data.object as Stripe.Checkout.Session;
+    assertStripeObjectMode("Checkout Session", session.id, session.livemode);
     const intentId = session.metadata?.intentId;
     if (intentId) {
       const status = event.type === "checkout.session.expired" ? "expired" : "failed";
@@ -3787,6 +4054,7 @@ async function handleStripeEvent(
     // the current Dispute so a delayed `created` can never reopen a won/closed
     // dispute or undo a lost-dispute revocation.
     const dispute = await stripe().disputes.retrieve(delivered.id);
+    assertStripeObjectMode("Dispute", dispute.id, dispute.livemode);
     const subscriptionId = await findMembershipIdForDispute(dispute);
     if (!subscriptionId) return;
     await convergeMembershipFromStripe(subscriptionId, converge, {
@@ -3818,6 +4086,7 @@ async function findMembershipIdForDispute(dispute: Stripe.Dispute): Promise<stri
   if (!chargeId) return null;
 
   const charge = await stripe().charges.retrieve(chargeId);
+  assertStripeObjectMode("Charge", charge.id, charge.livemode);
   return findMembershipIdForCharge(charge);
 }
 
@@ -3986,6 +4255,10 @@ export function buildLinkMembershipParticipant(
 }
 
 export const __testing = {
+  secretsForRuntime,
+  assertBillingEnvironment,
+  assertStripeObjectMode,
+  requirePurchaseFlowOpen,
   participantKeyFor,
   checkoutLockSpecs,
   checkoutRequestFingerprint,
@@ -4187,10 +4460,10 @@ function buildConfirmationPayload(
 
 /** Atomically creates a first membership and its immutable email outbox row. */
 async function ensureMembershipAndConfirmationOutbox(
-  membershipRef: admin.firestore.DocumentReference,
+  membershipRef: DocumentReference,
   proposedMembership: MembershipDoc,
   initialChargePence: number | null,
-  intentRef: admin.firestore.DocumentReference,
+  intentRef: DocumentReference,
   intent: MembershipIntentDoc
 ): Promise<void> {
   const outboxRef = db().collection(CONFIRMATION_OUTBOX_COLLECTION)
@@ -4435,9 +4708,9 @@ async function acquireConfirmationEmailLease(
         status: "manual_review",
         deadLetteredAt: serverTimestamp(),
         deadLetterReason: terminalReason,
-        leaseToken: admin.firestore.FieldValue.delete(),
-        leaseExpiresAt: admin.firestore.FieldValue.delete(),
-        nextAttemptAt: admin.firestore.FieldValue.delete(),
+        leaseToken: FieldValue.delete(),
+        leaseExpiresAt: FieldValue.delete(),
+        nextAttemptAt: FieldValue.delete(),
         updatedAt: serverTimestamp(),
       }, {merge: true});
       return {result: {state: "terminal"} as const, terminalReason};
@@ -4473,9 +4746,9 @@ async function acquireConfirmationEmailLease(
         status: "manual_review",
         deadLetteredAt: serverTimestamp(),
         deadLetterReason: terminalReason,
-        leaseToken: admin.firestore.FieldValue.delete(),
-        leaseExpiresAt: admin.firestore.FieldValue.delete(),
-        nextAttemptAt: admin.firestore.FieldValue.delete(),
+        leaseToken: FieldValue.delete(),
+        leaseExpiresAt: FieldValue.delete(),
+        nextAttemptAt: FieldValue.delete(),
         updatedAt: serverTimestamp(),
       }, {merge: true});
       tx.update(membershipRef, {
@@ -4494,9 +4767,9 @@ async function acquireConfirmationEmailLease(
         status: "dead_letter",
         deadLetteredAt: serverTimestamp(),
         deadLetterReason: terminalReason,
-        leaseToken: admin.firestore.FieldValue.delete(),
-        leaseExpiresAt: admin.firestore.FieldValue.delete(),
-        nextAttemptAt: admin.firestore.FieldValue.delete(),
+        leaseToken: FieldValue.delete(),
+        leaseExpiresAt: FieldValue.delete(),
+        nextAttemptAt: FieldValue.delete(),
         updatedAt: serverTimestamp(),
       }, {merge: true});
       tx.update(membershipRef, {
@@ -4509,7 +4782,7 @@ async function acquireConfirmationEmailLease(
 
     const attemptCount = typeof snap.get("attemptCount") === "number" ?
       snap.get("attemptCount") as number : 0;
-    const newLeaseExpiresAt = admin.firestore.Timestamp.fromMillis(
+    const newLeaseExpiresAt = Timestamp.fromMillis(
       nowMillis + CONFIRMATION_EMAIL_LEASE_MS
     );
     tx.set(outboxRef, {
@@ -4520,8 +4793,8 @@ async function acquireConfirmationEmailLease(
       attemptCount: attemptCount + 1,
       lastAttemptAt: serverTimestamp(),
       ...(firstAttemptAt === null ? {
-        firstAttemptAt: admin.firestore.Timestamp.fromMillis(nowMillis),
-        retryDeadlineAt: admin.firestore.Timestamp.fromMillis(
+        firstAttemptAt: Timestamp.fromMillis(nowMillis),
+        retryDeadlineAt: Timestamp.fromMillis(
           nowMillis + CONFIRMATION_EMAIL_RETRY_WINDOW_MS
         ),
       } : {}),
@@ -4639,10 +4912,10 @@ async function processMembershipConfirmationOutbox(
         status: "sent",
         sentAt: serverTimestamp(),
         providerMessageId: delivery.providerMessageId,
-        leaseToken: admin.firestore.FieldValue.delete(),
-        leaseExpiresAt: admin.firestore.FieldValue.delete(),
-        nextAttemptAt: admin.firestore.FieldValue.delete(),
-        lastError: admin.firestore.FieldValue.delete(),
+        leaseToken: FieldValue.delete(),
+        leaseExpiresAt: FieldValue.delete(),
+        nextAttemptAt: FieldValue.delete(),
+        lastError: FieldValue.delete(),
         updatedAt: serverTimestamp(),
       }, {merge: true});
       if (membership.exists) {
@@ -4650,7 +4923,7 @@ async function processMembershipConfirmationOutbox(
           confirmationEmailStatus: "sent",
           confirmationEmailSentAt: serverTimestamp(),
           confirmationEmailProviderId: delivery.providerMessageId,
-          confirmationEmailError: admin.firestore.FieldValue.delete(),
+          confirmationEmailError: FieldValue.delete(),
           updatedAt: serverTimestamp(),
         });
       }
@@ -4700,13 +4973,13 @@ async function processMembershipConfirmationOutbox(
         lastHttpStatus: errorStatus,
         lastProviderErrorName: providerErrorName,
         failedAt: serverTimestamp(),
-        leaseToken: admin.firestore.FieldValue.delete(),
-        leaseExpiresAt: admin.firestore.FieldValue.delete(),
+        leaseToken: FieldValue.delete(),
+        leaseExpiresAt: FieldValue.delete(),
         ...(terminal ? {
           deadLetteredAt: serverTimestamp(),
-          nextAttemptAt: admin.firestore.FieldValue.delete(),
+          nextAttemptAt: FieldValue.delete(),
         } : {
-          nextAttemptAt: admin.firestore.Timestamp.fromMillis(
+          nextAttemptAt: Timestamp.fromMillis(
             confirmationEmailRetryAtMillis(lease.attemptCount, failureNow)
           ),
         }),
@@ -4760,7 +5033,7 @@ async function retryDueMembershipConfirmationsOnce(
   sender: ConfirmationEmailSender = sendConfirmationViaResend
 ): Promise<{sent: number; failed: number; skipped: number}> {
   const due = await db().collection(CONFIRMATION_OUTBOX_COLLECTION)
-    .where("nextAttemptAt", "<=", admin.firestore.Timestamp.fromMillis(nowMillis))
+    .where("nextAttemptAt", "<=", Timestamp.fromMillis(nowMillis))
     .orderBy("nextAttemptAt", "asc")
     .limit(limit)
     .get();

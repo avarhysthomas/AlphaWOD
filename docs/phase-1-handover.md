@@ -1,6 +1,6 @@
 # Phase 1 Handover: Public Membership Purchase & Stripe Billing
 
-Date: 2026-08-18
+Date: 2026-08-18 (provider-test status updated 2026-08-19)
 
 This is the current implementation handover. The detailed operating and
 deployment runbook is
@@ -10,8 +10,12 @@ documents differ, use that rollout guide.
 ## 1) Current status
 
 Phase 1 is implemented in the local working tree. It has **not** been deployed,
-no live Stripe catalogue, portal, webhook or membership email configuration has
-been created or verified, and no real Stripe or Resend end-to-end test has run.
+and no live Stripe catalogue, portal, webhook or membership email configuration
+has been created or verified. A real emulator-bound Stripe sandbox journey ran
+successfully on 19 August 2026: the public customer form opened hosted Checkout,
+settled a £24.38 test payment, received the Stripe webhook, created an active
+local membership and pending confirmation outbox, and returned through the
+local success route. Real Resend delivery and deployed staging remain untested.
 
 Public purchasing remains closed by two independent controls:
 
@@ -265,11 +269,13 @@ batch circuit; the 20-second timeout; the 23-hour manual-review boundary; and
 terminal audit/admin projection. Those behaviours are implemented and described
 above, but the present test inventory does not prove them directly.
 
-Do not describe these suites as a real provider end-to-end test. They do not
-open hosted Stripe Checkout, settle a Stripe test-mode payment, receive a
-Stripe-delivered webhook, exercise the real Events API, or send a real Resend
-email. Those seams require a controlled test-mode round trip only after both
-checkout gates can be lawfully opened.
+Do not describe the automated suites themselves as a real provider end-to-end
+test. Separately, the controlled emulator-bound run documented in
+`docs/billing/local-stripe-test-journey.md` opened hosted Stripe Checkout,
+settled a test-mode payment, received Stripe-delivered events, fulfilled the
+local membership and returned through the success route on 19 August 2026. It
+did not exercise the real Events recovery worker, account claim, deployed
+staging or real Resend delivery; normal checkout remains closed.
 
 ## 7) Release work still required
 
@@ -297,10 +303,10 @@ then follow this order:
    route uncertain/orphaned records to monitoring/manual review rather than
    deleting the lock blindly.
 4. Create an isolated staging Firebase project/data plane and app origin, wired
-   only to Stripe test-mode catalogue, portal and webhook configuration. Add a
-   runtime environment/mode guard, including Stripe `livemode` consistency, so
-   test/live credentials and data cannot be mixed. The price-prefix and runtime
-   Price checks are not the full project/environment guard.
+   only to Stripe test-mode catalogue, portal and webhook configuration. The
+   runtime project/key/object-mode guard is now implemented and locally covered;
+   verify it again in that deployed staging boundary. The emulator-only
+   `demo-*` journey is not evidence of a deployed staging environment.
 5. Make checkout duplicate checks, claim, and admin participant linking
    authoritatively converge any relevant existing Stripe subscriptions before
    their final eligibility transaction, failing closed on provider uncertainty.
@@ -316,10 +322,11 @@ then follow this order:
    is not a receipt for a later cancellation request. Disable every
    Stripe-hosted portal login page that could expose an unsafe/default portal
    configuration, since runtime checks cover only sessions created by this app.
-6. In that isolated environment, configure the Resend test sender/recipient and
-   run a real hosted Checkout payment, Stripe-delivered webhook and Events
-   recovery plus an actual Resend delivery. The current emulator suite is not
-   this end-to-end proof.
+6. The emulator-bound hosted Checkout payment and Stripe-delivered webhook seam
+   passed on 19 August 2026. In isolated deployed staging, repeat that proof and
+   additionally exercise Events recovery, anonymous account claim, a configured
+   Resend test sender/recipient and actual Resend delivery. The current local
+   provider run does not prove those remaining seams.
 7. Prepare and verify the separate live Stripe catalogue, prices, locked-down
    Customer Portal, webhook subscriptions/secrets and verified Resend domain,
    without enabling purchase.

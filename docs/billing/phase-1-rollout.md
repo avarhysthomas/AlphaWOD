@@ -304,29 +304,50 @@ rules tests; and the Functions callable-boundary and billing handler/emulator
 suites. Section 10a records what the billing suite does and does not prove.
 Record the final command results and counts at release time; this document does
 not assert a final total. Local passing tests are not deployment evidence and do
-not replace a Stripe test-mode plus Resend delivery dry run.
+not replace provider testing. The real local Stripe test-mode payment run
+recorded below covers hosted Checkout and webhook fulfilment, but not Resend
+delivery.
 
 ## 7. Provider configuration required before release
 
-Nothing below has been done. Each step needs the Stripe account owner.
+The emulator-bound Stripe provider exercise described below was completed on
+19 August 2026. The live/staging deployment and Resend items remain undone and
+require the applicable provider owner.
+
+For the isolated, non-deployed provider exercise, follow
+[`local-stripe-test-journey.md`](./local-stripe-test-journey.md). Its test-only
+checkout bypass is limited to the local Firebase emulators, the
+`demo-alphawod-stripe` namespace, localhost, an explicit opt-in and Stripe test
+objects. It does not change the production publication or runtime gates.
 
 1. **Create an isolated staging environment before the provider round trip.**
    Use a separate Firebase project, Firestore/Auth/Functions data plane and app
    origin, never the production project with a test Stripe key. Configure only
-   Stripe test-mode products, prices, portal and webhook there. Add a runtime
-   guard that asserts the expected Firebase environment and Stripe mode and
-   rejects mixed-key/configuration use or an event/session whose `livemode`
-   value disagrees. The present price-id check is useful but is not a complete
-   environment/mode guard. Only after those controls are verified should the
-   controlled Stripe test payment and Resend test delivery run.
-2. **Create the live catalogue.** The 17 August 2026 export is **test mode**,
-   confirmed by the account owner on 18 August 2026. Products, prices, the
-   portal configuration, and the webhook endpoint and its signing secret are all
-   mode-specific and none of them carry across, so the five products and prices
-   must be recreated in live mode, producing a different set of price IDs.
+   Stripe test-mode products, prices, portal and webhook there. The runtime
+   guard now binds the exact Firebase project id to `test` or `live`, verifies
+   test/restricted-test versus live/restricted-live key prefixes, rejects test
+   mode outright on production project `alphawod-d1f2f`, and checks Price,
+   Product, Session, Subscription, Portal configuration and webhook/Event
+   `livemode`. Verify those controls again in the deployed staging boundary;
+   the local `demo-*` journey is intentionally emulator-only. Only after those
+   controls are verified should the Resend test delivery run.
 
-   The test IDs in `functions/.env.example` are correct for the dry run and a
-   test-mode deployment. The checkout preflight retrieves the configured Price
+   The local `demo-alphawod-stripe` exercise completed on 19 August 2026:
+   public catalogue/form -> real hosted Stripe sandbox Checkout -> £24.38 test
+   payment -> Stripe-delivered webhook -> fulfilled intent and active local
+   membership -> local success redirect. The exact Session and Subscription
+   were independently re-read from Stripe; the durable confirmation outbox was
+   present and pending. Resend, anonymous account claim and deployed staging
+   were not exercised.
+2. **Verify the live catalogue.** A real provider lookup on 18 August 2026
+   proved the earlier `price_1U5K...` mapping is live-mode, not test-mode as the
+   handover had claimed. The corrected `price_1U5P...` mapping in
+   `functions/.env.example` is the verified sandbox catalogue. Products,
+   prices, the portal configuration, and the webhook endpoint/signing secret
+   remain mode-specific and never carry across.
+
+   The corrected test IDs in `functions/.env.example` are correct for the dry
+   run and a test-mode deployment. The checkout preflight retrieves the configured Price
    and expanded Product and verifies mode, active state, name, GBP amount and
    monthly recurrence before taking an identity lock. `resolvePriceId` also
    refuses the known test IDs alongside an `sk_live_` key.
@@ -464,9 +485,11 @@ These are release blockers, not optional future enhancements:
   design: suitable App Check enforcement, per-source/attempt/participant rate
   limits, an anti-bot or challenge strategy, Stripe-session/budget alerts,
   dashboards and an incident runbook. App Check alone is not proof of a human.
-- Build and verify the isolated staging Firebase/Stripe test-mode boundary and
-  explicit environment/`livemode` guard described in section 7. Do not point a
-  test key at production Firebase data or infer safety from price-id prefixes.
+- Build and verify the isolated deployed staging Firebase/Stripe test-mode
+  boundary described in section 7. The explicit project/key/object-mode guard
+  is implemented and locally covered, but the emulator-only `demo-*` journey is
+  not evidence of a deployed staging boundary. Do not point a test key at
+  production Firebase data or infer safety from price-id prefixes.
 - Close the remaining authoritative-state boundary before opening checkout:
   checkout duplicate checks, verified-email/session claims, and admin participant
   linking currently make their final eligibility decision from stored
@@ -670,11 +693,14 @@ systemic Resend failures and the batch circuit; the 20-second timeout; the
 23-hour manual-review boundary; and terminal audit/admin projection. They are
 implementation facts described above, not coverage this document claims today.
 
-This is still not an end-to-end Stripe integration test. It does not call
-Stripe's test-mode service, open hosted Checkout, settle a real test payment,
-receive a webhook delivered by Stripe, or send a real Resend email. Those seams
-still require a controlled Stripe test-mode round trip after both checkout gates
-are lawfully and deliberately opened; both gates remain closed now.
+The automated emulator suite is still not an end-to-end provider test: it does
+not call Stripe's service or send through Resend. Separately, the controlled
+local run in `local-stripe-test-journey.md` did open real hosted test Checkout,
+settle a test payment, receive Stripe-delivered events, fulfil the local intent
+and membership, and return through the success route on 19 August 2026. It did
+not exercise real Resend delivery, a deployed staging boundary, anonymous claim
+or production. The normal publication and runtime gates remain closed; only the
+emulator-bound, explicit test journey can bypass publication.
 
 The Stripe host override used by the suite comes from `STRIPE_API_HOST`,
 `STRIPE_API_PORT` and `STRIPE_API_PROTOCOL`. These are never set in a deployed

@@ -12,6 +12,7 @@ import {onDocumentWritten} from "firebase-functions/v2/firestore";
 import {setGlobalOptions} from "firebase-functions/v2";
 import {defineSecret} from "firebase-functions/params";
 import * as admin from "firebase-admin";
+import {FieldValue, Timestamp} from "firebase-admin/firestore";
 import {DateTime} from "luxon";
 import {
   ACCESS_SCHEMA_VERSION,
@@ -77,18 +78,18 @@ type UserDoc = {
   accessSchemaVersion?: number;
   profileSchemaVersion?: number;
   strengthBlock?: StrengthBlock;
-  approvedAt?: admin.firestore.FieldValue | admin.firestore.Timestamp;
+  approvedAt?: FieldValue | Timestamp;
   approvedBy?: string;
   photoURL?: string | null;
-  createdAt?: admin.firestore.FieldValue | admin.firestore.Timestamp;
-  updatedAt?: admin.firestore.FieldValue | admin.firestore.Timestamp;
+  createdAt?: FieldValue | Timestamp;
+  updatedAt?: FieldValue | Timestamp;
   stats?: {
     totalCheckIns?: number;
     monthCheckIns?: Record<string, number>;
     currentStreak?: number;
     longestStreak?: number;
     lastCheckInDate?: string; // YYYY-MM-DD (Europe/London)
-    updatedAt?: admin.firestore.FieldValue | admin.firestore.Timestamp;
+    updatedAt?: FieldValue | Timestamp;
   };
 };
 
@@ -109,21 +110,21 @@ type ClassDoc = {
   templateId: string;
   title: string;
   timezone: string;
-  startTime: admin.firestore.Timestamp;
-  endTime: admin.firestore.Timestamp;
+  startTime: Timestamp;
+  endTime: Timestamp;
   coachId: string;
   coachName: string;
   capacity: number;
   bookedCount: number;
   location: string;
   status: "scheduled" | "cancelled";
-  createdAt: admin.firestore.FieldValue | admin.firestore.Timestamp;
-  updatedAt?: admin.firestore.FieldValue | admin.firestore.Timestamp;
+  createdAt: FieldValue | Timestamp;
+  updatedAt?: FieldValue | Timestamp;
 };
 
 type BookingSettingsDoc = {
   strengthBlocksEnabled?: boolean;
-  updatedAt?: admin.firestore.FieldValue | admin.firestore.Timestamp;
+  updatedAt?: FieldValue | Timestamp;
   updatedBy?: string;
 };
 
@@ -134,27 +135,27 @@ type BookingDoc = {
 
   // booking lifecycle
   status: "booked" | "cancelled";
-  createdAt: admin.firestore.FieldValue | admin.firestore.Timestamp;
-  cancelledAt?: admin.firestore.FieldValue | admin.firestore.Timestamp;
+  createdAt: FieldValue | Timestamp;
+  cancelledAt?: FieldValue | Timestamp;
   cancelledReason?: "user_cancelled" | "authorised_absence" | string;
 
   // attendance (day-of)
   attendanceStatus?: "none" | "checked_in" | "dip";
   attended?: boolean;
-  checkedInAt?: admin.firestore.FieldValue | admin.firestore.Timestamp | null;
+  checkedInAt?: FieldValue | Timestamp | null;
   checkedInBy?: string | null;
 
   // admin exception metadata
   addedByAdmin?: boolean;
   addedByAdminBy?: string;
-  addedByAdminAt?: admin.firestore.FieldValue | admin.firestore.Timestamp;
+  addedByAdminAt?: FieldValue | Timestamp;
 };
 
 type LeaderboardUserDoc = {
   userId: string;
   name: string;
   attendedCount: number;
-  updatedAt: admin.firestore.FieldValue | admin.firestore.Timestamp;
+  updatedAt: FieldValue | Timestamp;
 };
 
 type DipLeaderboardUserDoc = {
@@ -162,7 +163,7 @@ type DipLeaderboardUserDoc = {
   name: string;
   photoURL: string;
   dipCount: number;
-  updatedAt: admin.firestore.FieldValue | admin.firestore.Timestamp;
+  updatedAt: FieldValue | Timestamp;
 };
 
 type InviteDoc = {
@@ -171,9 +172,9 @@ type InviteDoc = {
   inviteToken: string;
   signUpUrl: string;
   status: "sent";
-  createdAt: admin.firestore.FieldValue | admin.firestore.Timestamp;
-  updatedAt: admin.firestore.FieldValue | admin.firestore.Timestamp;
-  lastSentAt: admin.firestore.FieldValue | admin.firestore.Timestamp;
+  createdAt: FieldValue | Timestamp;
+  updatedAt: FieldValue | Timestamp;
+  lastSentAt: FieldValue | Timestamp;
 };
 
 type StrengthSlot = "A" | "B" | null;
@@ -298,7 +299,7 @@ async function convergeUserDerivedAccess(userId: string): Promise<void> {
       try {
         await userRef.update({
           ...accessPatch,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
         }, {lastUpdateTime: current.updateTime});
       } catch (error) {
         if (isFailedPrecondition(error)) continue;
@@ -481,10 +482,10 @@ async function updateDipLeaderboardCount(
     {
       userId,
       name: user.name ?? bookingUserName ?? "Member",
-      email: admin.firestore.FieldValue.delete(),
+      email: FieldValue.delete(),
       photoURL: user.photoURL ?? "",
       dipCount: nextCount,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
     },
     {merge: true}
   );
@@ -711,15 +712,15 @@ async function generateRange(daysAhead: number) {
         templateId: t.id,
         title: t.title,
         timezone: tz,
-        startTime: admin.firestore.Timestamp.fromDate(start.toJSDate()),
-        endTime: admin.firestore.Timestamp.fromDate(end.toJSDate()),
+        startTime: Timestamp.fromDate(start.toJSDate()),
+        endTime: Timestamp.fromDate(end.toJSDate()),
         coachId: t.coachId,
         coachName: t.coachName,
         capacity: t.capacity,
         bookedCount: 0,
         location: t.location,
         status: "scheduled",
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        createdAt: FieldValue.serverTimestamp(),
       };
 
       try {
@@ -827,12 +828,12 @@ export const bookClass = onCall(async (request) => {
       userId: uid,
       userName,
       status: "booked",
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
     } satisfies BookingDoc);
 
     tx.update(classRef, {
-      bookedCount: admin.firestore.FieldValue.increment(1),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      bookedCount: FieldValue.increment(1),
+      updatedAt: FieldValue.serverTimestamp(),
     });
 
     return {success: true};
@@ -869,13 +870,13 @@ export const cancelBooking = onCall(async (request) => {
 
     tx.update(bookingRef, {
       status: "cancelled",
-      cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
+      cancelledAt: FieldValue.serverTimestamp(),
     });
 
     // Guard against negatives
     tx.update(classRef, {
-      bookedCount: admin.firestore.FieldValue.increment(bookedCount > 0 ? -1 : 0),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      bookedCount: FieldValue.increment(bookedCount > 0 ? -1 : 0),
+      updatedAt: FieldValue.serverTimestamp(),
     });
 
     return {success: true};
@@ -938,19 +939,19 @@ export const adminAddBooking = onCall(async (request) => {
       userId,
       userName,
       status: "booked",
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
       attendanceStatus: "none",
       attended: false,
       checkedInAt: null,
       checkedInBy: null,
       addedByAdmin: true,
       addedByAdminBy: callerUid,
-      addedByAdminAt: admin.firestore.FieldValue.serverTimestamp(),
+      addedByAdminAt: FieldValue.serverTimestamp(),
     } as any);
 
     tx.update(classRef, {
-      bookedCount: admin.firestore.FieldValue.increment(1),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      bookedCount: FieldValue.increment(1),
+      updatedAt: FieldValue.serverTimestamp(),
     });
 
     return {success: true};
@@ -1027,7 +1028,7 @@ export const checkInBooking = onCall(async (request) => {
 
         tx.update(bookingRef, {
           checkedInBy: callerUid,
-          checkedInAt: prevAttended ? admin.firestore.FieldValue.serverTimestamp() : booking.checkedInAt ?? null,
+          checkedInAt: prevAttended ? FieldValue.serverTimestamp() : booking.checkedInAt ?? null,
           attendanceStatus: nextAttendanceStatus,
         });
         return {ok: true, leaderboardChanged: false};
@@ -1123,7 +1124,7 @@ export const checkInBooking = onCall(async (request) => {
       tx.update(bookingRef, {
         attended: nextAttended,
         attendanceStatus: nextAttended ? "checked_in" : "none",
-        checkedInAt: nextAttended ? admin.firestore.FieldValue.serverTimestamp() : null,
+        checkedInAt: nextAttended ? FieldValue.serverTimestamp() : null,
         checkedInBy: callerUid,
       });
 
@@ -1133,9 +1134,9 @@ export const checkInBooking = onCall(async (request) => {
         {
           userId: booking.userId,
           name: u.name ?? booking.userName ?? "Member",
-          email: admin.firestore.FieldValue.delete(),
+          email: FieldValue.delete(),
           attendedCount: nextCount,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
         },
         {merge: true}
       );
@@ -1150,7 +1151,7 @@ export const checkInBooking = onCall(async (request) => {
             currentStreak,
             longestStreak,
             lastCheckInDate: lastCheckInDate || null,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: FieldValue.serverTimestamp(),
           },
         },
         {merge: true}
@@ -1370,9 +1371,9 @@ export const markBookingStatus = onCall(async (request) => {
         {
           userId,
           name: u.name ?? booking.userName ?? "Member",
-          email: admin.firestore.FieldValue.delete(),
+          email: FieldValue.delete(),
           attendedCount: nextLb,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
         },
         {merge: true}
       );
@@ -1386,7 +1387,7 @@ export const markBookingStatus = onCall(async (request) => {
             currentStreak,
             longestStreak,
             lastCheckInDate: lastCheckInDate || null,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: FieldValue.serverTimestamp(),
           },
         },
         {merge: true}
@@ -1408,7 +1409,7 @@ export const markBookingStatus = onCall(async (request) => {
 
       tx.update(bookingRef, {
         status: "cancelled",
-        cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
+        cancelledAt: FieldValue.serverTimestamp(),
         cancelledReason: "authorised_absence",
         attendanceStatus: "none",
         attended: false,
@@ -1417,8 +1418,8 @@ export const markBookingStatus = onCall(async (request) => {
       });
 
       tx.update(classRef, {
-        bookedCount: admin.firestore.FieldValue.increment(bookedCount > 0 ? -1 : 0),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        bookedCount: FieldValue.increment(bookedCount > 0 ? -1 : 0),
+        updatedAt: FieldValue.serverTimestamp(),
       });
 
       return {ok: true, kind: "authorised_absence", delta};
@@ -1428,7 +1429,7 @@ export const markBookingStatus = onCall(async (request) => {
     tx.update(bookingRef, {
       attendanceStatus: nextAttendanceStatus,
       attended: nextAttended,
-      checkedInAt: nextAttended ? admin.firestore.FieldValue.serverTimestamp() : null,
+      checkedInAt: nextAttended ? FieldValue.serverTimestamp() : null,
       checkedInBy: callerUid,
     });
 
@@ -1598,7 +1599,7 @@ async function rebuildLeaderboardSummary(monthKey: string): Promise<LeaderboardS
       summary: {
         rows: rows.slice(0, LEADERBOARD_CANDIDATE_MAX_ROWS),
         total: rows.length,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
       },
     },
     {merge: true}
@@ -1708,7 +1709,7 @@ export const reconcileMonthlyLeaderboard = onCall(async (request) => {
       userId,
       name: u.name ?? "Member",
       attendedCount,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
     } satisfies LeaderboardUserDoc);
   }
 
@@ -1830,9 +1831,9 @@ export const bootstrapUserProfile = onCall(async (request) => {
       ...(resolvedName ? {name: resolvedName} : {}),
       strengthBlock: existing.strengthBlock === "A" || existing.strengthBlock === "B" ?
         existing.strengthBlock : "none",
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
       ...(!snap.exists || !existing.createdAt ? {
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        createdAt: FieldValue.serverTimestamp(),
       } : {}),
     };
 
@@ -1919,7 +1920,7 @@ export const acceptCurrentWaiver = onCall(async (request) => {
       return;
     }
 
-    const acceptedAt = admin.firestore.FieldValue.serverTimestamp();
+    const acceptedAt = FieldValue.serverTimestamp();
     tx.create(acceptanceRef, {
       acceptanceSchemaVersion: 1,
       userId,
@@ -1993,11 +1994,11 @@ export const setMemberEntitlement = onCall(async (request) => {
       ...next,
       alphaWodAccess: access.alphaWodAccess,
       accessSchemaVersion: ACCESS_SCHEMA_VERSION,
-      entitlementPlanKey: planKey || admin.firestore.FieldValue.delete(),
-      entitlementReason: reason || admin.firestore.FieldValue.delete(),
-      entitlementUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      entitlementPlanKey: planKey || FieldValue.delete(),
+      entitlementReason: reason || FieldValue.delete(),
+      entitlementUpdatedAt: FieldValue.serverTimestamp(),
       entitlementUpdatedBy: callerUid,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
     };
     tx.set(userRef, patch, {merge: true});
     finalUser = {...user, ...next, alphaWodAccess: access.alphaWodAccess};
@@ -2049,11 +2050,11 @@ export const approveUserAccess = onCall(async (request) => {
       ...next,
       alphaWodAccess: access.alphaWodAccess,
       accessSchemaVersion: ACCESS_SCHEMA_VERSION,
-      approvedAt: admin.firestore.FieldValue.serverTimestamp(),
+      approvedAt: FieldValue.serverTimestamp(),
       approvedBy: callerUid,
-      entitlementUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      entitlementUpdatedAt: FieldValue.serverTimestamp(),
       entitlementUpdatedBy: callerUid,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
     };
     tx.set(userRef, patch, {merge: true});
   });
@@ -2102,13 +2103,13 @@ export const updateMemberRole = onCall(async (request) => {
       ...next,
       alphaWodAccess: access.alphaWodAccess,
       accessSchemaVersion: ACCESS_SCHEMA_VERSION,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
       ...(role === "banned" ? {
-        suspendedAt: admin.firestore.FieldValue.serverTimestamp(),
+        suspendedAt: FieldValue.serverTimestamp(),
         suspendedBy: callerUid,
         entitlementReason: "suspended_by_admin",
       } : {
-        restoredAt: admin.firestore.FieldValue.serverTimestamp(),
+        restoredAt: FieldValue.serverTimestamp(),
         restoredBy: callerUid,
         entitlementReason: role === "user" ?
           "access_requires_explicit_entitlement" : "staff_role",
@@ -2146,8 +2147,8 @@ export const updateMemberStrengthBlock = onCall(async (request) => {
 
   await userRef.set({
     strengthBlock,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    strengthBlockUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+    strengthBlockUpdatedAt: FieldValue.serverTimestamp(),
     strengthBlockUpdatedBy: callerUid,
   }, {merge: true});
 
@@ -2169,7 +2170,7 @@ export const updateStrengthBlockSettings = onCall(async (request) => {
 
   await db.collection("appSettings").doc("booking").set({
     strengthBlocksEnabled,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
     updatedBy: callerUid,
   } satisfies BookingSettingsDoc, {merge: true});
 
@@ -2216,9 +2217,9 @@ export const inviteMemberByEmail = onCall({secrets: [resendApiKey, resendFromEma
     inviteToken,
     signUpUrl,
     status: "sent",
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    lastSentAt: admin.firestore.FieldValue.serverTimestamp(),
+    createdAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+    lastSentAt: FieldValue.serverTimestamp(),
   } satisfies InviteDoc, {merge: true});
 
   return {ok: true, signUpUrl};

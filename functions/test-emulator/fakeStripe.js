@@ -39,6 +39,7 @@ function createFakeStripe() {
       id: `prod_${id}`,
       object: "product",
       active: true,
+      livemode: false,
       name: value.name,
     },
   }]));
@@ -57,6 +58,7 @@ function createFakeStripe() {
       id: "bpc_fake",
       object: "billing_portal.configuration",
       active: true,
+      livemode: false,
       features: {
         subscription_cancel: {enabled: false},
         subscription_update: {enabled: false},
@@ -95,7 +97,12 @@ function createFakeStripe() {
       // --- Customers ---
       if (path === "/v1/customers" && req.method === "POST") {
         const id = `cus_fake_${state.customers.size + 1}`;
-        const customer = {id, object: "customer", email: payload.email || null};
+        const customer = {
+          id,
+          object: "customer",
+          email: payload.email || null,
+          livemode: false,
+        };
         state.customers.set(id, customer);
         return send(200, customer);
       }
@@ -116,6 +123,7 @@ function createFakeStripe() {
         const session = {
           id,
           object: "checkout.session",
+          livemode: false,
           url: `https://checkout.stripe.test/${id}`,
           metadata: {
             intentId: payload["metadata[intentId]"],
@@ -256,6 +264,7 @@ function createFakeStripe() {
       const subscription = {
         id,
         object: "subscription",
+        livemode: false,
         status: "active",
         cancel_at: null,
         collection_method: "charge_automatically",
@@ -288,6 +297,7 @@ function createFakeStripe() {
       const dispute = {
         id,
         object: "dispute",
+        livemode: false,
         status: "needs_response",
         charge: null,
         ...overrides,
@@ -300,6 +310,7 @@ function createFakeStripe() {
       state.charges.set(chargeId, {
         id: chargeId,
         object: "charge",
+        livemode: false,
         amount,
         amount_refunded: amountRefunded,
         payment_intent: paymentIntentId,
@@ -308,6 +319,7 @@ function createFakeStripe() {
       state.invoices.set(invoiceId, {
         id: invoiceId,
         object: "invoice",
+        livemode: false,
         parent: {
           type: "subscription_details",
           subscription_details: {subscription: subscriptionId},

@@ -22,6 +22,12 @@ const here = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(here, "..");
 const projectId = "alpha-wod-rules-test";
 const bucket = `${projectId}.appspot.com`;
+const firestoreEmulator = new URL(
+  `http://${process.env.FIRESTORE_EMULATOR_HOST || "127.0.0.1:8080"}`
+);
+const storageEmulator = new URL(
+  `http://${process.env.FIREBASE_STORAGE_EMULATOR_HOST || "127.0.0.1:9199"}`
+);
 
 const legacyMember = {
   name: "Legacy Member",
@@ -52,13 +58,13 @@ before(async () => {
   testEnv = await initializeTestEnvironment({
     projectId,
     firestore: {
-      host: "127.0.0.1",
-      port: 8080,
+      host: firestoreEmulator.hostname,
+      port: Number(firestoreEmulator.port),
       rules: readFileSync(resolve(projectRoot, "firestore.phase0-compat.rules"), "utf8"),
     },
     storage: {
-      host: "127.0.0.1",
-      port: 9199,
+      host: storageEmulator.hostname,
+      port: Number(storageEmulator.port),
       rules: readFileSync(resolve(projectRoot, "storage.phase0-compat.rules"), "utf8"),
     },
   });

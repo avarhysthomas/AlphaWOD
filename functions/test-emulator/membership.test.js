@@ -18,6 +18,10 @@ process.env.STRIPE_API_PORT = String(STRIPE_PORT);
 process.env.STRIPE_API_PROTOCOL = "http";
 process.env.STRIPE_SECRET_KEY = "sk_test_fake";
 process.env.STRIPE_WEBHOOK_SECRET = "whsec_test_fake";
+process.env.STRIPE_EXPECTED_MODE = "test";
+process.env.MEMBERSHIP_FIREBASE_PROJECT_ID = process.env.GCLOUD_PROJECT ||
+  process.env.GOOGLE_CLOUD_PROJECT || "alpha-wod-functions-test";
+process.env.FUNCTIONS_EMULATOR = "true";
 process.env.RESEND_API_KEY = "re_test_fake";
 process.env.APP_PUBLIC_ORIGIN = "https://alpha-wod.vercel.app";
 process.env.MEMBERSHIP_PURCHASE_ENABLED = "true";
@@ -29,6 +33,10 @@ process.env.STRIPE_PRICE_YOUTH_YOUNGSTARS = "price_youngstars";
 process.env.STRIPE_PRICE_YOUTH_TEENSTARS = "price_teenstars";
 
 const functionsTest = require("firebase-functions-test")();
+// firebase-functions-test installs its own synthetic runtime project id. Bind
+// the billing guard to that exact id before importing the Functions module.
+process.env.MEMBERSHIP_FIREBASE_PROJECT_ID = process.env.GCLOUD_PROJECT ||
+  process.env.GOOGLE_CLOUD_PROJECT || "alpha-wod-functions-test";
 const functions = require("../lib/index");
 const {__testing: membershipTesting} = require("../lib/membership");
 const {
@@ -237,6 +245,7 @@ function reservationIntent(id, overrides = {}) {
     payerUid,
     payerEmail: payerUid ? `${payerUid}@example.test` : null,
     planKey,
+    stripeMode: "test",
     stripePriceId,
     participant: {
       fullName: overrides.participantName ?? "Reserved Athlete",
@@ -308,6 +317,123 @@ test("the deployed checkout handler stays closed while legal documents are draft
   );
 });
 
+test("draft checkout opens only for the explicit isolated local test journey", () => {
+  const original = {
+    APP_PUBLIC_ORIGIN: process.env.APP_PUBLIC_ORIGIN,
+    GCLOUD_PROJECT: process.env.GCLOUD_PROJECT,
+    MEMBERSHIP_FIREBASE_PROJECT_ID: process.env.MEMBERSHIP_FIREBASE_PROJECT_ID,
+    MEMBERSHIP_TEST_JOURNEY_ENABLED: process.env.MEMBERSHIP_TEST_JOURNEY_ENABLED,
+    FIREBASE_AUTH_EMULATOR_HOST: process.env.FIREBASE_AUTH_EMULATOR_HOST,
+    FIRESTORE_EMULATOR_HOST: process.env.FIRESTORE_EMULATOR_HOST,
+    FUNCTIONS_EMULATOR: process.env.FUNCTIONS_EMULATOR,
+    STRIPE_EXPECTED_MODE: process.env.STRIPE_EXPECTED_MODE,
+    STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
+  };
+  try {
+    process.env.APP_PUBLIC_ORIGIN = "http://localhost:3000";
+    process.env.MEMBERSHIP_TEST_JOURNEY_ENABLED = "true";
+    assert.doesNotThrow(() => membershipTesting.requirePurchaseFlowOpen());
+
+    process.env.APP_PUBLIC_ORIGIN = "https://alpha-wod.vercel.app";
+    assert.throws(
+      () => membershipTesting.requirePurchaseFlowOpen(),
+      /isolated local Stripe test journey/i
+    );
+
+    process.env.APP_PUBLIC_ORIGIN = "http://localhost:3000";
+    process.env.STRIPE_SECRET_KEY = "rk_test_restricted_fake";
+    assert.equal(membershipTesting.assertBillingEnvironment().stripeMode, "test");
+
+    process.env.GCLOUD_PROJECT = "alphawod-d1f2f";
+    process.env.MEMBERSHIP_FIREBASE_PROJECT_ID = "alphawod-d1f2f";
+    assert.throws(
+      () => membershipTesting.assertBillingEnvironment(),
+      /test mode is forbidden in the production Firebase project/i
+    );
+
+    process.env.GCLOUD_PROJECT = "demo-alphawod-stripe";
+    process.env.MEMBERSHIP_FIREBASE_PROJECT_ID = "demo-alphawod-stripe";
+    process.env.STRIPE_EXPECTED_MODE = "live";
+    process.env.STRIPE_SECRET_KEY = "rk_live_restricted_fake";
+    assert.throws(
+      () => membershipTesting.assertBillingEnvironment(),
+      /live mode is forbidden in the isolated local Firebase project/i
+    );
+
+    process.env.GCLOUD_PROJECT = "alpha-wod-functions-test";
+    process.env.MEMBERSHIP_FIREBASE_PROJECT_ID = "alpha-wod-functions-test";
+    process.env.FUNCTIONS_EMULATOR = "true";
+    delete process.env.FIRESTORE_EMULATOR_HOST;
+    delete process.env.FIREBASE_AUTH_EMULATOR_HOST;
+    assert.throws(
+      () => membershipTesting.assertBillingEnvironment(),
+      /live mode is forbidden in every Firebase emulator process/i
+    );
+  } finally {
+    Object.entries(original).forEach(([key, value]) => {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    });
+  }
+});
+
+test("Secret Manager bindings are omitted only for the exact isolated demo emulator", () => {
+  const original = {
+    FIREBASE_AUTH_EMULATOR_HOST: process.env.FIREBASE_AUTH_EMULATOR_HOST,
+    FIRESTORE_EMULATOR_HOST: process.env.FIRESTORE_EMULATOR_HOST,
+    FUNCTIONS_EMULATOR: process.env.FUNCTIONS_EMULATOR,
+    GCLOUD_PROJECT: process.env.GCLOUD_PROJECT,
+  };
+  const marker = {name: "sentinel-secret"};
+  try {
+    process.env.FUNCTIONS_EMULATOR = "true";
+    process.env.FIRESTORE_EMULATOR_HOST = "127.0.0.1:8080";
+    process.env.FIREBASE_AUTH_EMULATOR_HOST = "127.0.0.1:9099";
+
+    process.env.GCLOUD_PROJECT = "alpha-wod-functions-test";
+    assert.deepEqual(membershipTesting.secretsForRuntime([marker]), [marker]);
+
+    process.env.GCLOUD_PROJECT = "demo-alphawod-stripe";
+    assert.deepEqual(membershipTesting.secretsForRuntime([marker]), []);
+
+    process.env.FIREBASE_AUTH_EMULATOR_HOST = "auth.example.test:9099";
+    assert.deepEqual(membershipTesting.secretsForRuntime([marker]), [marker]);
+  } finally {
+    Object.entries(original).forEach(([key, value]) => {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    });
+  }
+});
+
+test("a forbidden project and Stripe mode fails before cancellation writes", async () => {
+  const original = {
+    GCLOUD_PROJECT: process.env.GCLOUD_PROJECT,
+    MEMBERSHIP_FIREBASE_PROJECT_ID: process.env.MEMBERSHIP_FIREBASE_PROJECT_ID,
+    STRIPE_EXPECTED_MODE: process.env.STRIPE_EXPECTED_MODE,
+    STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
+  };
+  try {
+    process.env.GCLOUD_PROJECT = "alphawod-d1f2f";
+    process.env.MEMBERSHIP_FIREBASE_PROJECT_ID = "alphawod-d1f2f";
+    process.env.STRIPE_EXPECTED_MODE = "test";
+    process.env.STRIPE_SECRET_KEY = "rk_test_restricted_fake";
+    await assert.rejects(
+      () => requestMembershipCancellation(request({
+        subscriptionId: "sub_forbidden_environment",
+        expectedCancelAtUnixSeconds: 1800000000,
+      }, "payer")),
+      /test mode is forbidden in the production Firebase project/i
+    );
+    assert.equal((await db.collection("memberships").get()).size, 0);
+  } finally {
+    Object.entries(original).forEach(([key, value]) => {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    });
+  }
+});
+
 test("the checkout core creates one Stripe session and reuses it on retry", async () => {
   const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
     () => undefined
@@ -324,6 +450,7 @@ test("the checkout core creates one Stripe session and reuses it on retry", asyn
     assert.equal(fakeStripe.state.checkoutSessions.size, sessionsBefore + 1);
     const intent = (await db.collection("membershipIntents").get()).docs[0];
     assert.equal(intent.get("status"), "created");
+    assert.equal(intent.get("stripeMode"), "test");
     assert.equal(intent.get("checkoutSessionId"), first.sessionId);
     assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 1);
 
@@ -335,6 +462,22 @@ test("the checkout core creates one Stripe session and reuses it on retry", asyn
   } finally {
     Date.now = realNow;
   }
+});
+
+test("a retry never returns a Checkout Session frozen in another Stripe mode", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const data = validCheckoutData("attempt_cross_mode_retry_123456");
+  await handler(request(data));
+  const intents = await db.collection("membershipIntents").get();
+  assert.equal(intents.size, 1);
+  await intents.docs[0].ref.set({stripeMode: "live"}, {merge: true});
+
+  await assert.rejects(
+    () => handler(request(data)),
+    /another Stripe environment/i
+  );
 });
 
 test("a signed-in buyer without a profile cannot leave a checkout lock", async () => {
@@ -525,6 +668,23 @@ test("the public webhook verifies Stripe signatures before durable processing", 
     signature
   );
   assert.equal(rejected.statusCode, 400);
+
+  const wrongModeEvent = {
+    ...event,
+    id: "evt_wrong_mode_webhook",
+    livemode: true,
+  };
+  const wrongModePayload = JSON.stringify(wrongModeEvent);
+  const wrongModeSignature = Stripe.webhooks.generateTestHeaderString({
+    payload: wrongModePayload,
+    secret: process.env.STRIPE_WEBHOOK_SECRET,
+  });
+  const wrongMode = await invokeStripeWebhook(wrongModePayload, wrongModeSignature);
+  assert.equal(wrongMode.statusCode, 400);
+  assert.equal(
+    (await db.collection("stripeEvents").doc(wrongModeEvent.id).get()).exists,
+    false
+  );
 });
 
 test("checkout completion fulfils membership and queues its durable confirmation", async () => {
@@ -554,6 +714,7 @@ test("checkout completion fulfils membership and queues its durable confirmation
       object: {
         id: "cs_fulfil_handler",
         object: "checkout.session",
+        livemode: false,
         mode: "subscription",
         metadata: {intentId: intentRef.id, planKey: "adult_unlimited"},
         payment_status: "paid",
@@ -624,6 +785,7 @@ test("paid fulfilment stays bound to the Price frozen before a config rotation",
       data: {object: {
         id: checkout.sessionId,
         object: "checkout.session",
+        livemode: false,
         mode: "subscription",
         metadata: {intentId: intentRef.id, planKey: "adult_unlimited"},
         payment_status: "paid",
@@ -663,6 +825,7 @@ test("missing confirmation evidence is escalated instead of marked not required"
     data: {object: {
       id: "cs_missing_confirmation",
       object: "checkout.session",
+      livemode: false,
       mode: "subscription",
       metadata: {intentId: intentRef.id, planKey: "adult_unlimited"},
       payment_status: "paid",
@@ -710,6 +873,7 @@ test("a late paid session cannot fulfil after its uniqueness lock was reclaimed"
       data: {object: {
         id: "cs_late_payment",
         object: "checkout.session",
+        livemode: false,
         mode: "subscription",
         metadata: {intentId: intentRef.id, planKey: "adult_unlimited"},
         payment_status: "paid",
@@ -1890,6 +2054,7 @@ test("a terminal Checkout event cannot release a different Session's locks", asy
     data: {object: {
       id: sessionId,
       object: "checkout.session",
+      livemode: false,
       mode: "subscription",
       metadata: {
         intentId: intentRef.id,

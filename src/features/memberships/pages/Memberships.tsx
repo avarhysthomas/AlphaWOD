@@ -11,6 +11,7 @@ import {
   formatPlanPrice,
   type MembershipPlan,
 } from "../../../lib/membershipPlans";
+import { LOCAL_MEMBERSHIP_TEST_JOURNEY_ENABLED } from "../localTestJourney";
 
 const CARD =
   "rounded-[28px] border border-white/10 bg-[#151311] p-7 shadow-[0_26px_80px_rgba(0,0,0,0.42)]";
@@ -117,7 +118,21 @@ export default function Memberships() {
           {POLICY_TEXT.rollingTerm} {POLICY_TEXT.prorationRule}
         </p>
 
-        {!CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION && (
+        {!CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION &&
+          LOCAL_MEMBERSHIP_TEST_JOURNEY_ENABLED && (
+          <div className="mt-7 rounded-[28px] border border-sky-400/30 bg-sky-400/10 p-6">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-sky-200">
+              Local Stripe test journey
+            </p>
+            <p className="mt-3 text-sm leading-7 text-sky-50/85">
+              Checkout is available only for the local Stripe test journey. Use Stripe test
+              cards; no real payment or live membership is created.
+            </p>
+          </div>
+        )}
+
+        {!CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION &&
+          !LOCAL_MEMBERSHIP_TEST_JOURNEY_ENABLED && (
           <div className="mt-7 rounded-[28px] border border-amber-500/25 bg-amber-500/10 p-6">
             <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-amber-200">
               Not open yet
