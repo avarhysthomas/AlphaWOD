@@ -107,11 +107,15 @@ created before the cutoff can complete its already-open Session until five
 minutes before the fixed billing anchor; new intents at the cutoff are standard.
 
 Adult Unlimited presale Checkout can accept the allowlisted existing-member
-Coupon only: £5 GBP off for three months, restricted to that Product. Each
-Promotion Code must be unique, expire at the local opening cutoff and permit one
-redemption. The frozen schedule is £55 for September, October and November,
-then the unchanged £60 base Price from 1 December. Test and live Coupon/Code
-objects are separate provider configuration.
+Coupon only: £5 GBP off for three months, restricted to that Product. One shared
+reusable Promotion Code is distributed to eligible members. It expires at the
+local opening cutoff and has no minimum, first-time-transaction, Customer,
+currency-options or maximum-redemptions restriction. Its exact provider id is
+resolved before Checkout and bound through fulfilment; Stripe's unrestricted
+hosted code field stays disabled. The frozen schedule is £55 for September,
+October and November, then the unchanged £60 base Price from 1 December. Staff
+manually moderate redemptions against the small eligible cohort. Test and live
+Coupon/Code objects are separate provider configuration.
 
 Final AlphaWOD ownership is also recorded in a deterministic
 `membershipEntitlementOwners` document. Claim, fulfilment and admin linking
@@ -347,16 +351,17 @@ then follow this order:
    configuration, since runtime checks cover only sessions created by this app.
 6. The emulator-bound hosted Checkout payment and Stripe-delivered webhook seam
    passed under the former policy on 19 August 2026. Re-run the new £0 presale
-   twice: once without a code and once with a TEST ONLY single-use Adult
+   twice: once without a code and once with the TEST ONLY shared Adult
    Unlimited code. Then use an isolated Stripe Test Clock to prove the expected
    September/October/November £55 invoices and December £60 invoice. In deployed
    staging, additionally exercise Events recovery, anonymous account claim, a
    configured Resend test sender/recipient and actual Resend delivery.
 7. Prepare and verify the separate live Stripe catalogue, prices, £5/repeating-
-   three-month Product-restricted Coupon and unique single-use Promotion Codes,
+   three-month Product-restricted Coupon and one shared reusable Promotion Code,
    locked-down Customer Portal, webhook subscriptions/secrets and verified
    Resend domain, without enabling purchase. Put the live Coupon id in
-   `STRIPE_EXISTING_MEMBER_COUPON_ID`; never reuse the test Coupon or Codes.
+   `STRIPE_EXISTING_MEMBER_COUPON_ID` and the live `promo_...` id in
+   `STRIPE_EXISTING_MEMBER_PROMOTION_CODE_ID`; never reuse the test objects.
 8. Prove all seven production billing collections are empty before accepting
    schema version 1. If they are not, stop for a migration/version plan. Then
    enter the Phase 0 maintenance, callable-transport and identity-admin freezes
@@ -384,7 +389,8 @@ inside-window requests are failed closed to staffed review rather than passed
 through the ordinary renewal-notice calculation.
 Automated Promotion Code issuance, advance price-change notices, automated youth
 onboarding, and an audited linked-participant transfer workflow are deliberately
-not built. Codes are created and distributed manually by the provider owner.
+not built. The shared code is created, distributed and manually moderated by the
+provider owner.
 
 ## 8) Start here
 

@@ -32,6 +32,15 @@ function required(name) {
   return value;
 }
 
+function isValidRedemptionCount(value) {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
+function couponIdForPromotionCode(promotionCode) {
+  return typeof promotionCode.promotion?.coupon === "string" ?
+    promotionCode.promotion.coupon : promotionCode.promotion?.coupon?.id;
+}
+
 function assertLocalTestBoundary() {
   if (process.env.MEMBERSHIP_FIREBASE_PROJECT_ID !== TEST_PROJECT_ID) {
     throw new Error(`MEMBERSHIP_FIREBASE_PROJECT_ID must be ${TEST_PROJECT_ID}.`);
@@ -87,12 +96,23 @@ async function main() {
   }
 
   const couponId = process.env.STRIPE_EXISTING_MEMBER_COUPON_ID?.trim();
-  let promotionCodeCount = 0;
+  const promotionCodeId = process.env.STRIPE_EXISTING_MEMBER_PROMOTION_CODE_ID?.trim();
+  let sharedPromotionCodeVerified = false;
   if (!couponId && Date.now() <
     EXISTING_MEMBER_OFFER.redemptionClosesAtUnixSeconds * 1000) {
     throw new Error("STRIPE_EXISTING_MEMBER_COUPON_ID is required during the presale.");
   }
+  if (!couponId && promotionCodeId) {
+    throw new Error(
+      "STRIPE_EXISTING_MEMBER_PROMOTION_CODE_ID requires STRIPE_EXISTING_MEMBER_COUPON_ID."
+    );
+  }
   if (couponId) {
+    if (!promotionCodeId || promotionCodeId.startsWith("replace_")) {
+      throw new Error(
+        "STRIPE_EXISTING_MEMBER_PROMOTION_CODE_ID is required with the presale Coupon."
+      );
+    }
     const coupon = await stripe.coupons.retrieve(couponId, {
       expand: ["applies_to"],
     });
@@ -116,34 +136,42 @@ async function main() {
       );
     }
 
-    for await (const promotionCode of stripe.promotionCodes.list({
+    const promotionCode = await stripe.promotionCodes.retrieve(promotionCodeId);
+    const restrictions = promotionCode.restrictions;
+    const currencyOptions = restrictions.currency_options ?? {};
+    const validPromotionCode = promotionCode.livemode === false &&
+      promotionCode.active === true &&
+      couponIdForPromotionCode(promotionCode) === coupon.id &&
+      promotionCode.max_redemptions === null &&
+      isValidRedemptionCount(promotionCode.times_redeemed) &&
+      promotionCode.expires_at === EXISTING_MEMBER_OFFER.redemptionClosesAtUnixSeconds &&
+      promotionCode.customer === null &&
+      promotionCode.customer_account === null &&
+      restrictions.first_time_transaction === false &&
+      restrictions.minimum_amount === null &&
+      restrictions.minimum_amount_currency === null &&
+      Object.keys(currencyOptions).length === 0;
+    if (!validPromotionCode) {
+      throw new Error(
+        `Promotion Code ${promotionCode.id} is not the approved shared reusable code.`
+      );
+    }
+
+    const activePromotionCodeIds = [];
+    for await (const activePromotionCode of stripe.promotionCodes.list({
       active: true,
       coupon: coupon.id,
       limit: 100,
     })) {
-      const restrictions = promotionCode.restrictions;
-      const currencyOptions = restrictions.currency_options ?? {};
-      const validPromotionCode = promotionCode.livemode === false &&
-        promotionCode.active === true &&
-        promotionCode.max_redemptions === 1 &&
-        promotionCode.expires_at === EXISTING_MEMBER_OFFER.redemptionClosesAtUnixSeconds &&
-        promotionCode.times_redeemed <= 1 &&
-        promotionCode.customer === null &&
-        promotionCode.customer_account === null &&
-        restrictions.first_time_transaction === false &&
-        restrictions.minimum_amount === null &&
-        restrictions.minimum_amount_currency === null &&
-        Object.keys(currencyOptions).length === 0;
-      if (!validPromotionCode) {
-        throw new Error(
-          `Promotion Code ${promotionCode.id} is not unique, single-use and unrestricted.`
-        );
-      }
-      promotionCodeCount += 1;
+      activePromotionCodeIds.push(activePromotionCode.id);
     }
-    if (promotionCodeCount === 0) {
-      throw new Error("The approved test Coupon has no active single-use Promotion Codes.");
+    if (activePromotionCodeIds.length !== 1 ||
+      activePromotionCodeIds[0] !== promotionCode.id) {
+      throw new Error(
+        "The allowlisted Promotion Code must be the Coupon's only active Promotion Code."
+      );
     }
+    sharedPromotionCodeVerified = true;
   }
 
   const portalConfigurationId = process.env.STRIPE_PORTAL_CONFIGURATION_ID?.trim();
@@ -171,8 +199,11 @@ async function main() {
     `- Customer Portal: ${portalConfigurationId}` :
     "- Customer Portal: not configured (Checkout can run; management cannot)");
   console.log(couponId ?
-    `- Existing-member Coupon: ${couponId} (${promotionCodeCount} active single-use code(s))` :
+    `- Existing-member Coupon: ${couponId}` :
     "- Existing-member offer: disabled (STRIPE_EXISTING_MEMBER_COUPON_ID is unset)");
+  if (sharedPromotionCodeVerified) {
+    console.log(`- Shared reusable Promotion Code: ${promotionCodeId}`);
+  }
 }
 
 main().catch((error) => {

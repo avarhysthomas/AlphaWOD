@@ -475,7 +475,7 @@ async function main() {
   console.log(`- Stripe forwarding: ${WEBHOOK_URL}`);
   console.log("- Card: 4242 4242 4242 4242, any future expiry/CVC");
   console.log("- Presale expectation: £0 today; first payment on 1 September 2026");
-  console.log("- Adult Unlimited TEST ONLY code: EXISTING5-TEST-001 (single use)");
+  console.log("- Adult Unlimited TEST ONLY shared code: EXISTING5-TEST");
   console.log("- Verify after Checkout: npm run verify:stripe-test-journey --prefix functions");
   console.log("Press Ctrl-C once to stop every local process.\n");
 }

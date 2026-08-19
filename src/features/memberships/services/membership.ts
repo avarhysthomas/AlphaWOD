@@ -102,7 +102,7 @@ export type CheckoutRequest = {
   signedName: string;
   acceptedDocuments: boolean;
   immediatePerformanceRequested: boolean;
-  /** Optional single-use code. Included in the digest, never stored as plaintext. */
+  /** Optional shared campaign code. Included in the digest, never stored as plaintext. */
   promotionCode?: string;
   guardianFullName?: string;
   guardianRelationship?: string;

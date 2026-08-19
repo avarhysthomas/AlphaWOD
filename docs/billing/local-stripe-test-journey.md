@@ -61,14 +61,22 @@ service from 1 September and its first payment anchor is 1 September. The app
 shows a prominent test-only notice and continues to label the legal documents
 as drafts.
 
-For Adult Unlimited, enter the explicitly test-only personal code
-`EXISTING5-TEST-001` in the AlphaWOD registration form before opening Stripe.
+For Adult Unlimited, enter the explicitly test-only shared code
+`EXISTING5-TEST` in the AlphaWOD registration form before opening Stripe.
 The hosted Stripe promotion-code box is deliberately disabled because it
-cannot be restricted to this campaign. The test code has one redemption,
-expires at opening and must never be presented as a live customer code. A
-successful application freezes a
+cannot be restricted to this campaign. The reusable test code expires at
+opening and must never be presented as a live customer code. A successful
+application freezes a
 schedule of £55 on 1 September, 1 October and 1 November, followed by the base
 £60 price from 1 December.
+
+`STRIPE_EXISTING_MEMBER_PROMOTION_CODE_ID` is the exact provider-side allowlist;
+the test value is `promo_1U69iNFzNDZoGGA0C3i8uyAJ`, and the preflight requires
+it to be the Coupon's only active Promotion Code. The shared Code and Coupon
+have no redemption cap. The verifier accepts any non-negative current redemption
+count, so repeat test journeys do not require a fresh Code. Live use is manually
+moderated against the small eligible-member list rather than through individual
+codes.
 
 After Stripe returns to the success page, keep the runner open and run the
 read-only post-payment check in a second terminal. With no explicit Session id,
@@ -82,7 +90,7 @@ You can instead pass an exact id as
 `-- --session=cs_test_...` when troubleshooting.
 
 For the Adult Unlimited discount run, make the verifier require evidence that
-the single-use Promotion Code was applied:
+the allowlisted shared Promotion Code was applied:
 
 ```sh
 npm run verify:stripe-test-journey --prefix functions -- \
@@ -92,8 +100,8 @@ npm run verify:stripe-test-journey --prefix functions -- \
 For a presale Session, the check proves `payment_status=no_payment_required`,
 `amount_total=0`, payment-method collection, no trial or initial invoice, the
 exact fixed Stripe billing anchor, a `scheduled` non-entitled membership, a £0
-confirmation record and—when required—the approved Coupon and single-use
-Promotion Code schedule. For a post-opening run it continues to require a paid
+confirmation record and—when required—the approved Coupon and shared Promotion
+Code schedule. For a post-opening run it continues to require a paid
 standard subscription. It does not send the confirmation email or advance
 Stripe time through future invoices; real Resend delivery and Test Clock
 invoice simulation are separate controlled tests.
@@ -119,7 +127,7 @@ That historical run proves the local catalogue/form -> hosted Checkout ->
 Stripe webhook -> Firestore membership -> success redirect seam for the former
 prorated policy. It is not evidence that the new £0 presale, scheduled-access or
 discount paths pass. Re-run both the standard presale and Adult Unlimited
-single-use-code journeys and record their Session ids before release. It did
+shared-code journeys and record their Session ids before release. It did
 not send through Resend, claim the anonymous purchase into an account, exercise
 a deployed staging environment, or change either normal purchase gate.
 
@@ -147,8 +155,8 @@ changing the Product/Price mapping:
 - the production app origin;
 - a live `sk_live_...` or restricted `rk_live_...` key;
 - five live Price ids (each is preflighted with its expanded Product);
-- a separate live £5/repeating-three-month Adult Unlimited Coupon and separately
-  issued, single-use live Promotion Codes;
+- a separate live £5/repeating-three-month Adult Unlimited Coupon and one
+  allowlisted shared reusable live Promotion Code;
 - a locked-down live Customer Portal configuration;
 - a live webhook endpoint and its own live signing secret;
 - approved immutable checkout documents and the normal purchase switch;

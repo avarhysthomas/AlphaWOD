@@ -114,6 +114,10 @@ const stripeExistingMemberCouponId = defineString(
   "STRIPE_EXISTING_MEMBER_COUPON_ID",
   {default: ""}
 );
+const stripeExistingMemberPromotionCodeId = defineString(
+  "STRIPE_EXISTING_MEMBER_PROMOTION_CODE_ID",
+  {default: ""}
+);
 
 const priceParams: Record<PlanKey, ReturnType<typeof defineString>> = {
   adult_unlimited: defineString("STRIPE_PRICE_ADULT_UNLIMITED", {default: ""}),
@@ -610,7 +614,7 @@ function promotionCodeMatchesApprovedOffer(
 ): boolean {
   const currencyOptions = promotionCode.restrictions?.currency_options;
   return idOf(promotionCode.promotion?.coupon) === couponId &&
-    promotionCode.max_redemptions === 1 &&
+    promotionCode.max_redemptions === null &&
     promotionCode.expires_at === PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS &&
     promotionCode.customer == null && promotionCode.customer_account == null &&
     promotionCode.restrictions?.first_time_transaction !== true &&
@@ -619,12 +623,32 @@ function promotionCodeMatchesApprovedOffer(
     (!currencyOptions || Object.keys(currencyOptions).length === 0);
 }
 
+/**
+ * Validates Stripe's campaign-wide redemption counter without treating a
+ * reusable code as if it belonged to one customer. The count may increase
+ * between Checkout and fulfilment because the same campaign code is shared.
+ */
+function promotionCodeRedemptionCountIsCredible(
+  promotionCode: Stripe.PromotionCode
+): boolean {
+  const redeemed = promotionCode.times_redeemed;
+  return Number.isSafeInteger(redeemed) && redeemed >= 0;
+}
+
 async function resolveApprovedPromotionCodeForCheckout(
   billingStripe: Stripe,
   normalizedCode: string,
   nowMillis: number
 ): Promise<string> {
   const configuredCouponId = stripeExistingMemberCouponId.value().trim();
+  const configuredPromotionCodeId =
+    stripeExistingMemberPromotionCodeId.value().trim();
+  if (!configuredPromotionCodeId) {
+    throw new HttpsError(
+      "failed-precondition",
+      "The existing-member Promotion Code allowlist is not configured."
+    );
+  }
   const matches = await billingStripe.promotionCodes.list({
     active: true,
     code: normalizedCode,
@@ -641,8 +665,10 @@ async function resolveApprovedPromotionCodeForCheckout(
   }
   const promotionCode = exactMatches[0];
   assertStripeObjectMode("Promotion Code", promotionCode.id, promotionCode.livemode);
-  if (!promotionCodeMatchesApprovedOffer(promotionCode, configuredCouponId) ||
-    promotionCode.active !== true || promotionCode.times_redeemed !== 0 ||
+  if (promotionCode.id !== configuredPromotionCodeId ||
+    !promotionCodeMatchesApprovedOffer(promotionCode, configuredCouponId) ||
+    promotionCode.active !== true ||
+    !promotionCodeRedemptionCountIsCredible(promotionCode) ||
     promotionCode.expires_at === null || promotionCode.expires_at * 1000 <= nowMillis) {
     throw new HttpsError(
       "failed-precondition",
@@ -674,9 +700,13 @@ async function resolveApprovedCheckoutDiscount(
   }
 
   const configuredCouponId = stripeExistingMemberCouponId.value().trim();
+  const configuredPromotionCodeId =
+    stripeExistingMemberPromotionCodeId.value().trim();
   const couponId = idOf(applied[0].coupon);
   const promotionCodeId = idOf(applied[0].promotion_code);
-  if (couponId !== configuredCouponId || promotionCodeId !== intent.promotionCodeId) {
+  if (!configuredPromotionCodeId || couponId !== configuredCouponId ||
+    promotionCodeId !== configuredPromotionCodeId ||
+    promotionCodeId !== intent.promotionCodeId) {
     throw new Error(`Checkout Session ${session.id} used an unapproved promotion.`);
   }
 
@@ -701,10 +731,12 @@ async function resolveApprovedCheckoutDiscount(
     billingStripe.promotionCodes.retrieve(promotionCodeId),
   ]);
   assertStripeObjectMode("Promotion Code", promotionCode.id, promotionCode.livemode);
-  if (coupon.id !== couponId ||
+  if (promotionCode.id !== configuredPromotionCodeId || coupon.id !== couponId ||
     !promotionCodeMatchesApprovedOffer(promotionCode, coupon.id) ||
-    promotionCode.times_redeemed > 1) {
-    throw new Error(`Promotion Code ${promotionCode.id} is not an approved single-use code.`);
+    !promotionCodeRedemptionCountIsCredible(promotionCode)) {
+    throw new Error(
+      `Promotion Code ${promotionCode.id} is not the approved reusable campaign code.`
+    );
   }
 
   const subscriptionDiscounts = (subscription.discounts ?? []).filter(

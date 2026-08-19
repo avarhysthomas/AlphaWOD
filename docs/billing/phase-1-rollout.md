@@ -73,13 +73,15 @@ exactly one plan carries that flag.
   displays the immediate partial charge. Using UTC day 1 avoids a BST
   London-midnight instant becoming UTC day 31 and drifting to month-end.
 - **Existing-member discount.** Adult Unlimited presale requires the approved
-  Coupon id and refuses checkout if it is missing. The customer enters their
-  personal code in the AlphaWOD registration form; the server validates it
-  before reserving the purchase and passes Stripe that exact Promotion Code.
-  Hosted Checkout's unrestricted promotion-code box stays disabled. Fulfilment
-  revalidates the exact Coupon and requires £5 GBP off, repeating three months,
-  restriction to the Adult Unlimited Product, plus a unique Promotion Code with
-  one maximum redemption and opening-time expiry. The base Price remains £60:
+  Coupon and Promotion Code ids and refuses checkout if either is missing. An
+  eligible customer may enter the one shared code in the AlphaWOD registration
+  form; the server resolves it before reserving the purchase and passes Stripe
+  that exact allowlisted Promotion Code id. Hosted Checkout's unrestricted
+  promotion-code box stays disabled. Fulfilment revalidates the exact Coupon and
+  requires £5 GBP off, repeating three months, restriction to the Adult
+  Unlimited Product, plus the shared reusable Promotion Code with opening-time
+  expiry and no customer, minimum, first-time-transaction or currency-options
+  restrictions. The base Price remains £60:
   discounted members pay £55 on the September, October and November invoices,
   then £60 from 1 December. Unknown or malformed discounts fail closed.
 - **Checkout session expiry** never outlives the anchor it was created against,
@@ -399,25 +401,34 @@ objects. It does not change the production publication or runtime gates.
    exactly: £5.00 off, GBP, duration `repeating`, three months, applies only to
    the Adult Unlimited Product, and redeem-by 1 September 2026 00:00
    Europe/London (`1788217200`). Do not set a minimum order or first-time-order
-   restriction, and leave the Coupon's global maximum redemptions unset. The
-   one-use limit belongs on each member's Promotion Code, not on the shared
-   underlying Coupon.
+   restriction, and leave the Coupon's global maximum redemptions unset.
 
-   Create one privately distributed Promotion Code per eligible existing
-   member, backed by that Coupon. Each Code must have maximum redemptions `1`,
-   expiry `1788217200`, no minimum amount, no first-time-transaction restriction
-   and no Stripe Customer restriction (Checkout creates the Customer in this
-   pay-first journey). Never use a shared code: it can be forwarded and Stripe
-   cannot infer existing gym membership from a new Stripe Customer.
+   Create one privately distributed shared Promotion Code backed by that
+   Coupon. It must also have maximum redemptions unset, expiry `1788217200`, no
+   minimum amount, no first-time-transaction restriction, no currency-options
+   restriction and no Stripe Customer restriction (Checkout creates the
+   Customer in this pay-first journey). Put its `promo_...` id in
+   `STRIPE_EXISTING_MEMBER_PROMOTION_CODE_ID`. The server resolves that exact
+   Code before creating Checkout, and fulfilment binds the same id; it never
+   enables Stripe's hosted accept-any-code field.
 
-   Put the resulting Coupon id—not a customer-facing Code or `promo_...` id—in
+   A shared code can be forwarded and Stripe cannot infer prior gym membership
+   from a new Customer. This small campaign accepts that operational risk.
+   Staff must compare redemptions with the eligible signup list during the
+   presale and deactivate the Code immediately if unexpected use appears. Do
+   not rely on the application or Stripe to prove existing-member eligibility.
+
+   Put the resulting Coupon id—not the customer-facing code—in
    `STRIPE_EXISTING_MEMBER_COUPON_ID`. The checked-in test configuration uses
    Coupon `zaf_existing_member_5off_3mo_2026_test`, restricted to test Product
-   `prod_V5ad9hrrvMkdhw`; the provider owner has a separate TEST ONLY single-use
-   code. The read-only preflight verifies the Coupon and every active Code. At
-   live cutover, switch the Dashboard to live mode and recreate both the Coupon
-   and every Code; test objects do not copy into live mode. Record the live
-   Coupon id in live Functions configuration while purchase remains closed.
+   `prod_V5ad9hrrvMkdhw`, and shared Promotion Code id
+   `promo_1U69iNFzNDZoGGA0C3i8uyAJ` (customer code `EXISTING5-TEST`). The
+   read-only preflight retrieves that exact Code, verifies its campaign
+   restrictions and requires it to be the Coupon's only active Code. It accepts
+   any non-negative `times_redeemed` count so repeated tests do not need a new
+   Code. At live cutover, switch the Dashboard to live mode and recreate both
+   objects; test objects do not copy into live mode. Record both live ids in
+   Functions configuration while purchase remains closed.
 5. **Create the Customer Portal configuration** (one per mode) and put its
    `bpc_...` ID in `STRIPE_PORTAL_CONFIGURATION_ID`.
 
@@ -591,7 +602,7 @@ These are release blockers, not optional future enhancements:
   client transport only after the frontend is in place, and pass the per-service
   IAM and Firebase-client smoke checks in section 8.
 - Run both real isolated Stripe test-mode presale journeys (without a code and
-  with a single-use Adult Unlimited code) through hosted Checkout and
+  with the shared Adult Unlimited code) through hosted Checkout and
   Stripe-delivered webhooks. Use a Test Clock to prove the three discounted
   invoices and December return to £60, then exercise Events recovery and a real
   Resend test delivery before considering either purchase gate. Nothing in the

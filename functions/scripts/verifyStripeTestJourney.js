@@ -29,6 +29,10 @@ const PLAN_KEYS = new Set([
 const POLL_TIMEOUT_MILLISECONDS = 30000;
 const POLL_INTERVAL_MILLISECONDS = 750;
 
+function isValidRedemptionCount(value) {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
 function argument(name) {
   const prefix = `--${name}=`;
   const match = process.argv.slice(2).find((value) => value.startsWith(prefix));
@@ -238,8 +242,12 @@ async function assertAppliedDiscount(stripe, fulfilment, required) {
   }
 
   const configuredCouponId = process.env.STRIPE_EXISTING_MEMBER_COUPON_ID?.trim();
+  const configuredPromotionCodeId =
+    process.env.STRIPE_EXISTING_MEMBER_PROMOTION_CODE_ID?.trim();
   const schedule = fulfilment.membership.get("paymentSchedule");
-  if (!configuredCouponId || discount.couponId !== configuredCouponId ||
+  if (!configuredCouponId || !configuredPromotionCodeId ||
+    discount.couponId !== configuredCouponId ||
+    discount.promotionCodeId !== configuredPromotionCodeId ||
     discount.amountOffPence !== EXISTING_MEMBER_OFFER.amountOffPence ||
     discount.currency !== EXISTING_MEMBER_OFFER.currency ||
     discount.durationInMonths !== EXISTING_MEMBER_OFFER.durationMonths ||
@@ -254,15 +262,17 @@ async function assertAppliedDiscount(stripe, fulfilment, required) {
     promotionCode.promotion.coupon : promotionCode.promotion?.coupon?.id;
   const currencyOptions = promotionCode.restrictions?.currency_options ?? {};
   if (promotionCode.livemode !== false ||
-    promotionCoupon !== configuredCouponId || promotionCode.max_redemptions !== 1 ||
-    promotionCode.times_redeemed !== 1 ||
+    promotionCoupon !== configuredCouponId ||
+    promotionCode.id !== configuredPromotionCodeId ||
+    promotionCode.max_redemptions !== null ||
+    !isValidRedemptionCount(promotionCode.times_redeemed) ||
     promotionCode.expires_at !== PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS ||
     promotionCode.customer !== null || promotionCode.customer_account !== null ||
     promotionCode.restrictions?.first_time_transaction !== false ||
     promotionCode.restrictions?.minimum_amount !== null ||
     promotionCode.restrictions?.minimum_amount_currency !== null ||
     Object.keys(currencyOptions).length !== 0) {
-    throw new Error("The applied Promotion Code is not the approved unique single-use code.");
+    throw new Error("The applied Promotion Code is not the approved shared reusable code.");
   }
   return true;
 }

@@ -32,6 +32,8 @@ process.env.STRIPE_PRICE_ADULT_GYM = "price_gym";
 process.env.STRIPE_PRICE_YOUTH_YOUNGSTARS = "price_youngstars";
 process.env.STRIPE_PRICE_YOUTH_TEENSTARS = "price_teenstars";
 process.env.STRIPE_EXISTING_MEMBER_COUPON_ID = "coupon_existing_member_5x3";
+process.env.STRIPE_EXISTING_MEMBER_PROMOTION_CODE_ID =
+  "promo_existing_member_shared";
 
 const functionsTest = require("firebase-functions-test")();
 // firebase-functions-test installs its own synthetic runtime project id. Bind
@@ -523,41 +525,44 @@ test("the checkout core creates one Stripe session and reuses it on retry", asyn
   }
 });
 
-test("an approved personal code is explicitly bound and retries without revalidation", async () => {
+test("the approved shared code is explicitly bound and remains reusable", async () => {
   const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
     () => undefined
   );
   const realNow = Date.now;
   Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
   const promotion = fakeStripe.state.promotionCodes.get(
-    "promo_existing_member_single_use"
+    "promo_existing_member_shared"
   );
   const originalPromotion = {...promotion};
   try {
     const data = {
-      ...validCheckoutData("attempt_personal_code_idempotent_123456"),
-      promotionCode: "  existing-fake-one  ",
+      ...validCheckoutData("attempt_shared_code_idempotent_123456"),
+      promotionCode: "  existing-fake  ",
     };
+    // Previous redemptions must not turn a shared campaign into a single-use
+    // offer. The exact Promotion Code id is still frozen onto this attempt.
+    promotion.times_redeemed = 7;
     const first = await handler(request(data));
     const intent = (await db.collection("membershipIntents").get()).docs[0];
     const sent = fakeStripe.lastUpdateTo("/v1/checkout/sessions");
 
     assert.equal(
       sent.payload["discounts[0][promotion_code]"],
-      "promo_existing_member_single_use"
+      "promo_existing_member_shared"
     );
     assert.equal(sent.payload.allow_promotion_codes, undefined);
-    assert.equal(intent.get("promotionCodeId"), "promo_existing_member_single_use");
-    assert.equal(JSON.stringify(intent.data()).includes("EXISTING-FAKE-ONE"), false);
+    assert.equal(intent.get("promotionCodeId"), "promo_existing_member_shared");
+    assert.equal(JSON.stringify(intent.data()).includes("EXISTING-FAKE"), false);
 
-    // A lost response can be retried after the personal code has been consumed.
-    // The frozen Session must be returned without looking the raw code up again.
+    // A lost response can be retried after more campaign redemptions. The
+    // frozen Session is returned without looking the raw code up again.
     promotion.active = false;
-    promotion.times_redeemed = 1;
+    promotion.times_redeemed = 11;
     const sessionsBeforeRetry = fakeStripe.state.checkoutSessions.size;
     const retry = await handler(request({
       ...data,
-      promotionCode: "existing-fake-one",
+      promotionCode: "existing-fake",
     }));
     assert.equal(retry.sessionId, first.sessionId);
     assert.equal(fakeStripe.state.checkoutSessions.size, sessionsBeforeRetry);
@@ -567,7 +572,66 @@ test("an approved personal code is explicitly bound and retries without revalida
   }
 });
 
-test("unknown and unrelated personal codes fail before reservation or Stripe", async () => {
+test("capped and malformed shared campaign counters fail closed", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  const promotion = fakeStripe.state.promotionCodes.get(
+    "promo_existing_member_shared"
+  );
+  const originalPromotion = {...promotion};
+  const sessionsBefore = fakeStripe.state.checkoutSessions.size;
+  try {
+    for (const [suffix, maximum, redeemed] of [
+      ["single_use", 1, 0],
+      ["finite_cap", 25, 24],
+      ["negative_count", null, -1],
+      ["fractional_count", null, 0.5],
+    ]) {
+      promotion.max_redemptions = maximum;
+      promotion.times_redeemed = redeemed;
+      await assert.rejects(
+        () => handler(request({
+          ...validCheckoutData(`attempt_shared_code_${suffix}_123456`),
+          promotionCode: "EXISTING-FAKE",
+        })),
+        /not valid for the founding-member offer/i
+      );
+    }
+    assert.equal(fakeStripe.state.checkoutSessions.size, sessionsBefore);
+    assert.equal((await db.collection("membershipIntents").get()).size, 0);
+    assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 0);
+  } finally {
+    Object.assign(promotion, originalPromotion);
+    Date.now = realNow;
+  }
+});
+
+test("the shared Promotion Code id allowlist is required before reservation", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const configuredId = process.env.STRIPE_EXISTING_MEMBER_PROMOTION_CODE_ID;
+  const sessionsBefore = fakeStripe.state.checkoutSessions.size;
+  try {
+    process.env.STRIPE_EXISTING_MEMBER_PROMOTION_CODE_ID = "";
+    await assert.rejects(
+      () => handler(request({
+        ...validCheckoutData("attempt_shared_code_missing_allowlist_123456"),
+        promotionCode: "EXISTING-FAKE",
+      })),
+      /Promotion Code allowlist is not configured/i
+    );
+    assert.equal(fakeStripe.state.checkoutSessions.size, sessionsBefore);
+    assert.equal((await db.collection("membershipIntents").get()).size, 0);
+  } finally {
+    process.env.STRIPE_EXISTING_MEMBER_PROMOTION_CODE_ID = configuredId;
+  }
+});
+
+test("unknown and unrelated campaign codes fail before reservation or Stripe", async () => {
   const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
     () => undefined
   );
@@ -578,7 +642,7 @@ test("unknown and unrelated personal codes fail before reservation or Stripe", a
     livemode: false,
     active: true,
     code: "UNRELATED-FAKE",
-    max_redemptions: 1,
+    max_redemptions: null,
     expires_at: PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
     times_redeemed: 0,
     promotion: {type: "coupon", coupon: "coupon_unrelated_campaign"},
@@ -594,7 +658,7 @@ test("unknown and unrelated personal codes fail before reservation or Stripe", a
     livemode: false,
     active: true,
     code: "CURRENCY-MINIMUM-FAKE",
-    max_redemptions: 1,
+    max_redemptions: null,
     expires_at: PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
     times_redeemed: 0,
     promotion: {type: "coupon", coupon: "coupon_existing_member_5x3"},
@@ -605,11 +669,29 @@ test("unknown and unrelated personal codes fail before reservation or Stripe", a
       currency_options: {gbp: {minimum_amount: 5000}},
     },
   });
+  fakeStripe.state.promotionCodes.set("promo_matching_not_allowlisted", {
+    id: "promo_matching_not_allowlisted",
+    object: "promotion_code",
+    livemode: false,
+    active: true,
+    code: "MATCHING-NOT-ALLOWLISTED",
+    max_redemptions: null,
+    expires_at: PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
+    times_redeemed: 0,
+    promotion: {type: "coupon", coupon: "coupon_existing_member_5x3"},
+    restrictions: {
+      first_time_transaction: false,
+      minimum_amount: null,
+      minimum_amount_currency: null,
+      currency_options: {},
+    },
+  });
   try {
     for (const [attempt, promotionCode] of [
       ["attempt_unknown_personal_code_123456", "DOES-NOT-EXIST"],
       ["attempt_unrelated_personal_code_123456", "UNRELATED-FAKE"],
       ["attempt_currency_minimum_code_123456", "CURRENCY-MINIMUM-FAKE"],
+      ["attempt_matching_not_allowlisted_123456", "MATCHING-NOT-ALLOWLISTED"],
     ]) {
       await assert.rejects(
         () => handler(request({
@@ -625,10 +707,11 @@ test("unknown and unrelated personal codes fail before reservation or Stripe", a
   } finally {
     fakeStripe.state.promotionCodes.delete("promo_unrelated_campaign");
     fakeStripe.state.promotionCodes.delete("promo_currency_minimum");
+    fakeStripe.state.promotionCodes.delete("promo_matching_not_allowlisted");
   }
 });
 
-test("personal codes are rejected outside the Adult Unlimited presale", async () => {
+test("the shared code is rejected outside the Adult Unlimited presale", async () => {
   const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
     () => undefined
   );
@@ -638,7 +721,7 @@ test("personal codes are rejected outside the Adult Unlimited presale", async ()
       () => handler(request({
         ...validCheckoutData("attempt_code_wrong_plan_123456"),
         planKey: "adult_ladies",
-        promotionCode: "EXISTING-FAKE-ONE",
+        promotionCode: "EXISTING-FAKE",
       })),
       /only for the Adult Unlimited founding presale/i
     );
@@ -648,7 +731,7 @@ test("personal codes are rejected outside the Adult Unlimited presale", async ()
       () => handler(request({
         ...validCheckoutData("attempt_code_after_presale_123456"),
         expectedBillingMode: "standard",
-        promotionCode: "EXISTING-FAKE-ONE",
+        promotionCode: "EXISTING-FAKE",
       })),
       /only for the Adult Unlimited founding presale/i
     );
@@ -1465,12 +1548,19 @@ test("first-payment activation uses the current Invoice instead of an old webhoo
 test("an approved existing-member code freezes the three-payment £55 schedule", async () => {
   const fixedCheckout = new Date("2026-08-21T10:00:00Z").getTime();
   const realNow = Date.now;
+  const promotion = fakeStripe.state.promotionCodes.get(
+    "promo_existing_member_shared"
+  );
+  const originalPromotion = {...promotion};
   Date.now = () => fixedCheckout;
   try {
+    // Other customers may have redeemed the same campaign code before Stripe
+    // delivers this member's webhook.
+    promotion.times_redeemed = 19;
     const intentRef = db.collection("membershipIntents").doc("intent_presale_discount");
     const intent = presaleIntent("presale_discount", {
       participantKey: "participant_presale_discount",
-      promotionCodeId: "promo_existing_member_single_use",
+      promotionCodeId: "promo_existing_member_shared",
     });
     await membershipTesting.reserveCheckoutAttempt(intentRef, intent, fixedCheckout);
     fakeStripe.setSubscription("sub_presale_discount", {
@@ -1482,7 +1572,7 @@ test("an approved existing-member code freezes the three-payment £55 schedule",
         id: "di_presale_discount",
         object: "discount",
         source: {type: "coupon", coupon: "coupon_existing_member_5x3"},
-        promotion_code: "promo_existing_member_single_use",
+        promotion_code: "promo_existing_member_shared",
         start: Math.floor(fixedCheckout / 1000),
         end: Math.floor(new Date("2026-11-21T10:00:00Z").getTime() / 1000),
       }],
@@ -1508,7 +1598,7 @@ test("an approved existing-member code freezes the three-payment £55 schedule",
         amount_total: 0,
         discounts: [{
           coupon: "coupon_existing_member_5x3",
-          promotion_code: "promo_existing_member_single_use",
+          promotion_code: "promo_existing_member_shared",
         }],
       }},
     }, async () => undefined);
@@ -1517,7 +1607,7 @@ test("an approved existing-member code freezes the three-payment £55 schedule",
       .doc("sub_presale_discount").get();
     assert.deepEqual(membership.get("discount"), {
       couponId: "coupon_existing_member_5x3",
-      promotionCodeId: "promo_existing_member_single_use",
+      promotionCodeId: "promo_existing_member_shared",
       amountOffPence: 500,
       currency: "gbp",
       durationInMonths: 3,
@@ -1533,6 +1623,7 @@ test("an approved existing-member code freezes the three-payment £55 schedule",
       fullPriceFrom: 1796083200,
     });
   } finally {
+    Object.assign(promotion, originalPromotion);
     Date.now = realNow;
   }
 });
@@ -1547,7 +1638,7 @@ test("a redeemed discount still fulfils when its webhook arrives after the cutof
     const checkout = await handler(request(
       {
         ...validCheckoutData("attempt_discount_delayed_webhook_123456"),
-        promotionCode: "EXISTING-FAKE-ONE",
+        promotionCode: "EXISTING-FAKE",
       }
     ));
     const intentSnap = (await db.collection("membershipIntents").get()).docs[0];
@@ -1564,7 +1655,7 @@ test("a redeemed discount still fulfils when its webhook arrives after the cutof
         id: "di_discount_delayed_webhook",
         object: "discount",
         source: {type: "coupon", coupon: "coupon_existing_member_5x3"},
-        promotion_code: "promo_existing_member_single_use",
+        promotion_code: "promo_existing_member_shared",
         start: redeemedAt,
         end: 1796083200,
       }],
@@ -1593,7 +1684,7 @@ test("a redeemed discount still fulfils when its webhook arrives after the cutof
         amount_total: 0,
         discounts: [{
           coupon: "coupon_existing_member_5x3",
-          promotion_code: "promo_existing_member_single_use",
+          promotion_code: "promo_existing_member_shared",
         }],
       }},
     }, async () => undefined);
@@ -1611,7 +1702,7 @@ test("a redeemed discount still fulfils when its webhook arrives after the cutof
 test("a Session promotion cannot be confirmed without its Subscription discount", async () => {
   const intent = presaleIntent("missing_subscription_discount", {
     participantKey: "participant_missing_subscription_discount",
-    promotionCodeId: "promo_existing_member_single_use",
+    promotionCodeId: "promo_existing_member_shared",
   });
   const subscription = fakeStripe.setSubscription(
     "sub_missing_subscription_discount",
@@ -1626,10 +1717,40 @@ test("a Session promotion cannot be confirmed without its Subscription discount"
       id: "cs_missing_subscription_discount",
       discounts: [{
         coupon: "coupon_existing_member_5x3",
-        promotion_code: "promo_existing_member_single_use",
+        promotion_code: "promo_existing_member_shared",
       }],
     }, subscription, intent, Math.floor(Date.now() / 1000)),
     /does not carry the approved Checkout discount/i
+  );
+});
+
+test("fulfilment rejects a different Promotion Code on the approved Coupon", async () => {
+  const intent = presaleIntent("different_campaign_promotion", {
+    participantKey: "participant_different_campaign_promotion",
+    promotionCodeId: "promo_matching_not_allowlisted",
+  });
+  const subscription = fakeStripe.setSubscription(
+    "sub_different_campaign_promotion",
+    {
+      customer: "cus_different_campaign_promotion",
+      billing_cycle_anchor: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+      discounts: [{
+        id: "di_different_campaign_promotion",
+        object: "discount",
+        source: {type: "coupon", coupon: "coupon_existing_member_5x3"},
+        promotion_code: "promo_matching_not_allowlisted",
+      }],
+    }
+  );
+  await assert.rejects(
+    () => membershipTesting.resolveApprovedCheckoutDiscount({
+      id: "cs_different_campaign_promotion",
+      discounts: [{
+        coupon: "coupon_existing_member_5x3",
+        promotion_code: "promo_matching_not_allowlisted",
+      }],
+    }, subscription, intent, Math.floor(Date.now() / 1000)),
+    /used an unapproved promotion/i
   );
 });
 

@@ -137,7 +137,7 @@ describe("checkout attempt identifiers", () => {
     expect(changed.fingerprint).not.toBe(first.fingerprint);
   });
 
-  it("rotates the opaque attempt when the personal code changes", async () => {
+  it("rotates the opaque attempt when the shared code changes", async () => {
     const base: CheckoutDetails = {
       expectedBillingMode: "presale_deferred",
       planKey: "adult_unlimited",

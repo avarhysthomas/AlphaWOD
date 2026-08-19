@@ -69,13 +69,13 @@ function createFakeStripe() {
       deleted: false,
       valid: true,
     }]]),
-    promotionCodes: new Map([["promo_existing_member_single_use", {
-      id: "promo_existing_member_single_use",
+    promotionCodes: new Map([["promo_existing_member_shared", {
+      id: "promo_existing_member_shared",
       object: "promotion_code",
       livemode: false,
       active: true,
-      code: "EXISTING-FAKE-ONE",
-      max_redemptions: 1,
+      code: "EXISTING-FAKE",
+      max_redemptions: null,
       expires_at: 1788217200,
       times_redeemed: 0,
       promotion: {type: "coupon", coupon: "coupon_existing_member_5x3"},

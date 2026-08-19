@@ -53,7 +53,7 @@ function PlanCard({ plan, presale }: { plan: MembershipPlan; presale: boolean })
 
       {promotionCodeAvailable && (
         <p className="mt-3 text-xs leading-6 text-amber-100/80">
-          Existing member? Enter your personal code during signup for £5 off each
+          Existing member? Enter the discount code during signup for £5 off each
           of your first three monthly payments.
         </p>
       )}

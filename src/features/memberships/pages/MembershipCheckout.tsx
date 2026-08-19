@@ -268,13 +268,13 @@ export default function MembershipCheckout() {
                 Existing-member offer
               </p>
               <p id="promotion-code-hint" className="mt-3 text-sm leading-7 text-amber-50/85">
-                Enter the personal code we sent you to get £5 off each of your first
-                three monthly payments: £55 in September, October and November, then
-                £60 from December. You can leave this blank if you do not have a code.
+                Enter the existing-member discount code to get £5 off each of your
+                first three monthly payments: £55 in September, October and November,
+                then £60 from December. Leave this blank if you do not have the code.
               </p>
               <label className="mt-5 block">
                 <span className="block text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-100/65">
-                  Personal discount code <span className="normal-case tracking-normal">(optional)</span>
+                  Discount code <span className="normal-case tracking-normal">(optional)</span>
                 </span>
                 <input
                   className={`${FIELD} border-amber-200/20 bg-black/30 focus:border-amber-100/55`}

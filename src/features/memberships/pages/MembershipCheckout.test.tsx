@@ -278,7 +278,7 @@ describe("MembershipCheckout", () => {
     expect(getCheckoutButton()).toHaveAccessibleName("Continue to Stripe — £0 today");
     expect(screen.getByText(/£55 in September, October and November/i))
       .toBeInTheDocument();
-    expect(screen.getByLabelText(/Personal discount code/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Discount code/i)).toBeInTheDocument();
     expect(screen.getByText(/verify and apply your code before opening Stripe/i))
       .toBeInTheDocument();
   });
@@ -287,7 +287,7 @@ describe("MembershipCheckout", () => {
     renderCheckout("adult_gym");
 
     expect(screen.queryByText("Existing-member offer")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText(/Personal discount code/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Discount code/i)).not.toBeInTheDocument();
   });
 
   it("returns to standard prorated checkout after the presale boundary", () => {
@@ -296,7 +296,7 @@ describe("MembershipCheckout", () => {
 
     expect(screen.queryByText("£0 charged")).not.toBeInTheDocument();
     expect(screen.queryByText("Existing-member offer")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText(/Personal discount code/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Discount code/i)).not.toBeInTheDocument();
     expect(getCheckoutButton()).toHaveAccessibleName("Subscribe and pay");
     expect(screen.getAllByText(/After opening, all memberships bill on the first/i).length)
       .toBeGreaterThan(0);
@@ -316,34 +316,34 @@ describe("MembershipCheckout", () => {
     }));
   });
 
-  it("submits a trimmed personal code from the Adult Unlimited presale", async () => {
+  it("submits a trimmed shared code from the Adult Unlimited presale", async () => {
     mockLocalJourneyEnabled = true;
     mockCreateCheckout.mockResolvedValue({sessionUrl: ""});
     renderCheckout("adult_unlimited");
 
     await userEvent.type(
-      screen.getByLabelText(/Personal discount code/i),
-      "  EXISTING5-TEST-001  "
+      screen.getByLabelText(/Discount code/i),
+      "  EXISTING5-TEST  "
     );
     await submitAdultCheckout();
 
     await waitFor(() => expect(mockCreateCheckout).toHaveBeenCalledTimes(1));
     expect(mockResolveCheckoutAttempt).toHaveBeenCalledWith(
-      expect.objectContaining({promotionCode: "EXISTING5-TEST-001"}),
+      expect.objectContaining({promotionCode: "EXISTING5-TEST"}),
       null,
       {payerUid: "payer-1"}
     );
     expect(mockCreateCheckout).toHaveBeenCalledWith(expect.objectContaining({
-      promotionCode: "EXISTING5-TEST-001",
+      promotionCode: "EXISTING5-TEST",
     }));
   });
 
-  it("omits an empty personal code from the checkout request", async () => {
+  it("omits an empty shared code from the checkout request", async () => {
     mockLocalJourneyEnabled = true;
     mockCreateCheckout.mockResolvedValue({sessionUrl: ""});
     renderCheckout("adult_unlimited");
 
-    await userEvent.type(screen.getByLabelText(/Personal discount code/i), "   ");
+    await userEvent.type(screen.getByLabelText(/Discount code/i), "   ");
     await submitAdultCheckout();
 
     await waitFor(() => expect(mockCreateCheckout).toHaveBeenCalledTimes(1));
