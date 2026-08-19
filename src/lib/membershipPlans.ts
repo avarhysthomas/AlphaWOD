@@ -14,6 +14,22 @@
 export const BILLING_TIMEZONE = "Europe/London";
 export const BILLING_CURRENCY = "gbp";
 
+/** Stripe's recurring anchor; customer copy presents the calendar date only. */
+export const PRESALE_BILLING_ANCHOR_AT_ISO = "2026-09-01T00:00:00.000Z";
+export const PRESALE_BILLING_ANCHOR_UNIX_SECONDS = 1788220800;
+
+/** Presale and promotion redemption close at midnight London on opening day. */
+export const PRESALE_SIGNUP_CUTOFF_AT_ISO = "2026-08-31T23:00:00.000Z";
+export const PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS = 1788217200;
+
+export const EXISTING_MEMBER_OFFER = {
+  planKey: "adult_unlimited",
+  amountOffPence: 500,
+  currency: BILLING_CURRENCY,
+  durationMonths: 3,
+  redemptionClosesAtUnixSeconds: PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
+} as const;
+
 export const COMPANY = {
   legalName: "ZERO ALPHA FITNESS LTD",
   tradingName: "Zero Alpha Fitness",
@@ -140,16 +156,21 @@ export const POLICY_TEXT = {
   refund: "Payments are non-refundable except where required by law.",
   rollingTerm: "There is no joining fee, free trial or minimum term. Each membership is a rolling monthly contract until cancelled.",
   cancellationRule: "To avoid the next first-of-month payment, your cancellation request must reach us at least 14 calendar days before that billing date. If it reaches us less than 14 days before the next first, that payment remains due and your membership ends at the end of the additional paid month.",
-  prorationRule: "All memberships bill on the first of each calendar month. If your membership starts after the first, Stripe calculates and displays an initial prorated charge for the period until the next first of the month, payable immediately.",
-  prorationAuthority: "The amount Stripe displays before payment is authoritative for that checkout. We do not calculate a separate proration in the browser. If the displayed initial charge or billing date appears wrong, do not pay; contact us first.",
-  pastDue: "A failed payment enters a three-calendar-day past-due grace period, during which related access continues.",
+  presaleRule: "Join before opening and nothing is charged today. Stripe securely saves your payment method, your membership starts on 1 September 2026, and the first monthly payment is taken then.",
+  existingMemberOffer: "Eligible existing members can use their personal code for £5 off each of the first three monthly payments on Adult Unlimited Membership. The standard £60 monthly price applies after that.",
+  prorationRule: "After opening, all memberships bill on the first of each calendar month. If your membership starts after the first, Stripe calculates and displays an initial prorated charge for the period until the next first of the month, payable immediately.",
+  prorationAuthority: "The amount Stripe displays before confirmation is authoritative for that checkout. A presale checkout must show £0 due today and a first payment date of 1 September 2026. We do not calculate a separate charge in the browser. If the displayed amount or billing date appears wrong, do not confirm; contact us first.",
+  pastDue: "After a membership has started, a failed payment enters a three-calendar-day past-due grace period and existing access continues temporarily. If the first scheduled payment fails, the membership and AlphaWOD access do not start.",
   dispute: "An open payment dispute suspends related access. A dispute resolved in our favour restores eligible access promptly. A lost dispute or full refund revokes related access.",
   noPause: "Membership cannot be paused, frozen or placed on holiday hold.",
-  coolingOffConsent: "I expressly request that the membership and any eligible AlphaWOD access begin immediately, before the 14-day cooling-off period ends. I understand that, if I cancel during that period, Zero Alpha Fitness may retain or charge only the proportionate amount permitted by law for services supplied before cancellation.",
+  coolingOffConsent: "I expressly request that the membership and any eligible AlphaWOD access begin on the service start date shown, even if that is before the 14-day cooling-off period ends. I understand that, if I cancel during that period, Zero Alpha Fitness may retain or charge only the proportionate amount permitted by law for services supplied before cancellation.",
+  scheduledYouthSuccess: "You're signed up. Nothing has been charged today. This membership starts and the first monthly payment is taken on 1 September 2026. Zero Alpha Fitness will contact you by email to arrange onboarding and the first session.",
+  scheduledAdultUnlimitedSuccess: "You're signed up. Nothing has been charged today. Your Adult Unlimited membership starts, the first monthly payment is taken, and eligible AlphaWOD access can begin on 1 September 2026.",
+  scheduledAdultOtherSuccess: "You're signed up. Nothing has been charged today. This membership starts and the first monthly payment is taken on 1 September 2026. Zero Alpha Fitness will contact you by email to arrange onboarding and the first session.",
   youthSuccess: "Payment confirmed. Zero Alpha Fitness will contact you by email to arrange onboarding and your first session. Questions: support@zeroalphafitness.co.uk.",
   adultUnlimitedSuccess: "Payment confirmed. Your Adult Unlimited membership is active and eligible AlphaWOD access has been unlocked.",
   adultOtherSuccess: "Payment confirmed. Zero Alpha Fitness will contact you by email to arrange onboarding and your first session. Questions: support@zeroalphafitness.co.uk.",
-  duplicateBlocked: "This account already has an active membership. Manage or cancel the existing membership before buying another one.",
+  duplicateBlocked: "This account already has an active or scheduled membership. Manage or cancel the existing membership before buying another one.",
   portalScope: "The secure Customer Portal is for updating your payment method and viewing invoices. Cancellation is handled by the request flow on this page.",
   guardianRequirement: "For a participant under 18, the payer must be their parent or legal guardian, or another adult with lawful authority to enter this arrangement for them.",
 } as const;
@@ -172,6 +193,11 @@ export function isPlanKey(value: unknown): value is PlanKey {
 
 export function getPlan(key: PlanKey): MembershipPlan {
   return MEMBERSHIP_PLANS[key];
+}
+
+/** One-off founding presale boundary used only to choose truthful UI copy. */
+export function isFoundingPresale(nowMillis: number = Date.now()): boolean {
+  return nowMillis < PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS * 1000;
 }
 
 /** Mirrors the server funnel rule: under 12 is Youngstars, 12+ is Teenstars. */

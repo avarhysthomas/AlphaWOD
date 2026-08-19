@@ -8,8 +8,14 @@ const {
   CHECKOUT_ANCHOR_MARGIN_SECONDS,
   CHECKOUT_CREATION_MARGIN_SECONDS,
   CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION,
+  EXISTING_MEMBER_OFFER,
   MEMBERSHIP_PLANS,
   PLAN_KEYS,
+  PRESALE_CHECKOUT_ANCHOR_MARGIN_SECONDS,
+  PRESALE_BILLING_ANCHOR_AT_ISO,
+  PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+  PRESALE_SIGNUP_CUTOFF_AT_ISO,
+  PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
   isAgeEligibleForPlan,
   isMembershipStateBlockingDuplicate,
   isMembershipStateEntitled,
@@ -17,6 +23,7 @@ const {
   isWithinPastDueGrace,
   resolveAgeFromDateOfBirth,
   resolveBillingCycleAnchor,
+  resolveCheckoutBillingPolicy,
   resolveCancellationOutcome,
   resolveCheckoutSessionExpiry,
   resolveCoolingOffEnd,
@@ -95,10 +102,33 @@ test("billing cycle anchors on the first of the next calendar month", () => {
   const anchor = resolveBillingCycleAnchor(londonMillis("2026-08-18T09:30:00Z"));
   assert.equal(anchor.firstFullChargeDate, "2026-09-01");
 
-  // British Summer Time: 1 September 2026 00:00 London is 23:00 UTC on 31 Aug.
+  // Stripe remains on UTC day 1 even while the UK is on British Summer Time.
   assert.equal(
     new Date(anchor.anchorUnixSeconds * 1000).toISOString(),
-    "2026-08-31T23:00:00.000Z"
+    "2026-09-01T00:00:00.000Z"
+  );
+});
+
+test("UTC day-one anchors do not drift to month-end across UK clock changes", () => {
+  const summer = resolveBillingCycleAnchor(londonMillis("2026-06-30T22:30:00Z"));
+  assert.equal(summer.firstFullChargeDate, "2026-07-01");
+  assert.equal(
+    new Date(summer.anchorUnixSeconds * 1000).toISOString(),
+    "2026-07-01T00:00:00.000Z"
+  );
+
+  const localMonthCrossover = resolveBillingCycleAnchor(londonMillis("2026-08-31T23:30:00Z"));
+  assert.equal(localMonthCrossover.firstFullChargeDate, "2026-10-01");
+  assert.equal(
+    new Date(localMonthCrossover.anchorUnixSeconds * 1000).toISOString(),
+    "2026-10-01T00:00:00.000Z"
+  );
+
+  const afterClockChange = resolveBillingCycleAnchor(londonMillis("2026-10-31T23:30:00Z"));
+  assert.equal(afterClockChange.firstFullChargeDate, "2026-11-01");
+  assert.equal(
+    new Date(afterClockChange.anchorUnixSeconds * 1000).toISOString(),
+    "2026-11-01T00:00:00.000Z"
   );
 });
 
@@ -116,33 +146,78 @@ test("winter anchor lands at midnight UTC when London is on GMT", () => {
   );
 });
 
+test("presale freezes £0 today, local opening and the UTC first-payment anchor", () => {
+  assert.equal(PRESALE_SIGNUP_CUTOFF_AT_ISO, "2026-08-31T23:00:00.000Z");
+  assert.equal(PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS, 1788217200);
+  assert.equal(PRESALE_BILLING_ANCHOR_AT_ISO, "2026-09-01T00:00:00.000Z");
+  assert.equal(PRESALE_BILLING_ANCHOR_UNIX_SECONDS, 1788220800);
+
+  assert.deepEqual(
+    resolveCheckoutBillingPolicy(londonMillis("2026-08-19T12:00:00Z")),
+    {
+      kind: "presale",
+      billingMode: "presale_deferred",
+      billingCycleAnchor: 1788220800,
+      firstFullChargeDate: "2026-09-01",
+      serviceStartsAtUnixSeconds: 1788217200,
+      firstPaymentAtUnixSeconds: 1788220800,
+      prorationBehavior: "none",
+      paymentDueToday: false,
+    }
+  );
+});
+
+test("standard immediate proration resumes at local opening midnight", () => {
+  const cutoffMillis = PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS * 1000;
+  const policy = resolveCheckoutBillingPolicy(cutoffMillis);
+
+  assert.equal(policy.kind, "standard");
+  assert.equal(policy.billingMode, "standard");
+  assert.equal(policy.firstFullChargeDate, "2026-10-01");
+  assert.equal(policy.billingCycleAnchor, 1790812800);
+  assert.equal(policy.serviceStartsAtUnixSeconds, PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS);
+  assert.equal(policy.firstPaymentAtUnixSeconds, PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS);
+  assert.equal(policy.prorationBehavior, "create_prorations");
+  assert.equal(policy.paymentDueToday, true);
+});
+
+test("existing-member offer is fixed to Adult Unlimited and three £5 discounts", () => {
+  assert.deepEqual(EXISTING_MEMBER_OFFER, {
+    planKey: "adult_unlimited",
+    amountOffPence: 500,
+    currency: "gbp",
+    durationMonths: 3,
+    redemptionClosesAtUnixSeconds: 1788217200,
+  });
+});
+
 test("a checkout session never outlives the anchor it was created against", () => {
   const now = londonMillis("2026-08-31T20:00:00Z");
   const expiry = resolveCheckoutSessionExpiry(now);
   const {anchorUnixSeconds} = resolveBillingCycleAnchor(now);
 
   assert.ok(expiry < anchorUnixSeconds, "expiry must precede the anchor");
-  assert.equal(anchorUnixSeconds - expiry, CHECKOUT_ANCHOR_MARGIN_SECONDS);
+  assert.equal(anchorUnixSeconds - expiry, PRESALE_CHECKOUT_ANCHOR_MARGIN_SECONDS);
   assert.ok(
     expiry >= Math.floor(now / 1000) + 1800 + CHECKOUT_CREATION_MARGIN_SECONDS,
     "expiry must preserve Stripe's floor after network/clock delay"
   );
 });
 
-test("checkout fails closed when the Stripe minimum cannot fit before the anchor margin", () => {
-  // 22:25:01 London leaves 34m59s before the one-hour anchor margin. That is
+test("standard checkout fails closed when the Stripe minimum cannot fit before its anchor margin", () => {
+  // 23:25:01 London leaves 34m59s before the one-hour anchor margin. That is
   // below Stripe's 30-minute floor plus the five-minute creation allowance.
-  const tooLate = londonMillis("2026-08-31T21:25:01Z");
+  const tooLate = londonMillis("2026-09-30T22:25:01Z");
   assert.throws(
     () => resolveCheckoutSessionExpiry(tooLate),
     /monthly billing boundary/i
   );
 });
 
-test("checkout permits the exact safe boundary but never reaches the anchor", () => {
-  const lastSafeInstant = londonMillis("2026-08-31T21:25:00Z");
+test("standard checkout permits the exact safe boundary but never reaches the anchor", () => {
+  const lastSafeInstant = londonMillis("2026-09-30T22:25:00Z");
   const expiry = resolveCheckoutSessionExpiry(lastSafeInstant);
-  const {anchorUnixSeconds} = resolveBillingCycleAnchor(lastSafeInstant);
+  const anchorUnixSeconds = resolveCheckoutBillingPolicy(lastSafeInstant).billingCycleAnchor;
 
   assert.equal(
     expiry,
@@ -151,6 +226,31 @@ test("checkout permits the exact safe boundary but never reaches the anchor", ()
   );
   assert.equal(anchorUnixSeconds - expiry, CHECKOUT_ANCHOR_MARGIN_SECONDS);
   assert.ok(expiry < anchorUnixSeconds);
+});
+
+test("a presale intent can start one second before cutoff and finish before billing", () => {
+  const lastPresaleInstant = PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS * 1000 - 1000;
+  const policy = resolveCheckoutBillingPolicy(lastPresaleInstant);
+  const expiry = resolveCheckoutSessionExpiry(lastPresaleInstant);
+
+  assert.equal(policy.kind, "presale");
+  assert.equal(expiry, PRESALE_BILLING_ANCHOR_UNIX_SECONDS -
+    PRESALE_CHECKOUT_ANCHOR_MARGIN_SECONDS);
+  assert.ok(
+    expiry >= Math.floor(lastPresaleInstant / 1000) + 30 * 60 +
+      CHECKOUT_CREATION_MARGIN_SECONDS
+  );
+  assert.ok(expiry < PRESALE_BILLING_ANCHOR_UNIX_SECONDS);
+});
+
+test("the exact local opening cutoff switches new sessions to standard billing", () => {
+  const cutoffMillis = PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS * 1000;
+  const policy = resolveCheckoutBillingPolicy(cutoffMillis);
+  const expiry = resolveCheckoutSessionExpiry(cutoffMillis);
+
+  assert.equal(policy.kind, "standard");
+  assert.equal(policy.billingCycleAnchor, 1790812800);
+  assert.equal(expiry, PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS + 24 * 60 * 60);
 });
 
 test("a checkout session is capped at Stripe's 24 hour maximum", () => {
@@ -243,6 +343,31 @@ test("membership state reduces Stripe status per the approved policy", () => {
   assert.equal(resolveMembershipState({stripeStatus: "incomplete"}, now), "incomplete");
 });
 
+test("presale stays scheduled until service time and first-payment proof", () => {
+  const beforeService = PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS * 1000 - 1;
+  const afterFirstPayment = PRESALE_BILLING_ANCHOR_UNIX_SECONDS * 1000 + 1;
+
+  assert.equal(resolveMembershipState({
+    stripeStatus: "active",
+    serviceStartsAtUnixSeconds: PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
+  }, beforeService), "scheduled");
+  assert.equal(resolveMembershipState({
+    stripeStatus: "active",
+    serviceStartsAtUnixSeconds: PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
+    activationPendingFirstPayment: true,
+  }, afterFirstPayment), "scheduled");
+  assert.equal(resolveMembershipState({
+    stripeStatus: "active",
+    serviceStartsAtUnixSeconds: PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
+    activationPendingFirstPayment: false,
+  }, afterFirstPayment), "active");
+  assert.equal(resolveMembershipState({
+    stripeStatus: "past_due",
+    pastDueSinceUnixSeconds: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+    activationPendingFirstPayment: true,
+  }, afterFirstPayment), "past_due_suspended");
+});
+
 test("an open dispute suspends and a lost dispute or full refund revokes", () => {
   const now = londonMillis("2026-09-10T10:00:00Z");
 
@@ -292,6 +417,9 @@ test("entitlement follows membership state for the AlphaWOD plan only", () => {
 });
 
 test("entitled and duplicate-blocking states are distinct sets", () => {
+  assert.equal(isMembershipStateEntitled("scheduled"), false);
+  assert.equal(isMembershipStateBlockingDuplicate("scheduled"), true);
+  assert.equal(resolveEntitlementForMembership("adult_unlimited", "scheduled"), null);
   assert.equal(isMembershipStateEntitled("past_due_suspended"), false);
   assert.equal(isMembershipStateBlockingDuplicate("past_due_suspended"), true);
   assert.equal(isMembershipStateBlockingDuplicate("cancelled"), false);
@@ -323,8 +451,8 @@ test("confirmation dates render in London regardless of server timezone", () => 
   assert.equal(formatBillingDate("2026-09-01"), "1 September 2026");
   assert.equal(formatBillingDate("2027-01-01"), "1 January 2027");
 
-  // 1 September 2026 00:00 London is 23:00 UTC on 31 August during BST; the
-  // date shown must still be the 1st.
+  // The provider timestamp is UTC midnight (01:00 London during BST); the
+  // customer-facing billing date remains the 1st.
   const bstAnchor = resolveBillingCycleAnchor(new Date("2026-08-18T09:30:00Z").getTime());
   assert.equal(formatUnixBillingDate(bstAnchor.anchorUnixSeconds), "1 September 2026");
   assert.equal(formatUnixBillingIsoDate(bstAnchor.anchorUnixSeconds), "2026-09-01");

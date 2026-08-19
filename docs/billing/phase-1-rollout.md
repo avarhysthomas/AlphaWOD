@@ -58,16 +58,39 @@ exactly one plan carries that flag.
 
 ## 3. Policy decisions encoded in code
 
-- **Proration.** `subscription_data.billing_cycle_anchor` is set to the first of
-  the next calendar month in Europe/London, with
-  `proration_behavior: "create_prorations"`. Stripe calculates and displays the
-  initial partial charge; the full price is then taken on the first of each
-  month. No proration is calculated anywhere in this codebase, which is what
-  Membership Terms 5 requires.
+- **Founding presale.** Until 1 September 2026 00:00 Europe/London, Checkout
+  uses `subscription_data.proration_behavior: "none"`, always collects a
+  payment method, charges £0 and fixes the first recurring anchor at 1 September
+  2026 00:00 UTC. Service is dated from local opening midnight one hour earlier.
+  The resulting Stripe Subscription can be `active`, but the application keeps
+  the membership `scheduled`, non-entitled and duplicate-blocking until a
+  positive first `invoice.paid` proves the expected £60 or discounted £55 was
+  received. A failed first invoice does not receive past-due access grace.
+- **Standard billing after opening.** At the local opening cutoff, the one-off
+  presale policy switches off. The next calendar month is derived from the
+  Europe/London business date, then the Stripe anchor is constructed on UTC day
+  1 with `proration_behavior: "create_prorations"`. Stripe calculates and
+  displays the immediate partial charge. Using UTC day 1 avoids a BST
+  London-midnight instant becoming UTC day 31 and drifting to month-end.
+- **Existing-member discount.** Adult Unlimited presale requires the approved
+  Coupon id and refuses checkout if it is missing. The customer enters their
+  personal code in the AlphaWOD registration form; the server validates it
+  before reserving the purchase and passes Stripe that exact Promotion Code.
+  Hosted Checkout's unrestricted promotion-code box stays disabled. Fulfilment
+  revalidates the exact Coupon and requires £5 GBP off, repeating three months,
+  restriction to the Adult Unlimited Product, plus a unique Promotion Code with
+  one maximum redemption and opening-time expiry. The base Price remains £60:
+  discounted members pay £55 on the September, October and November invoices,
+  then £60 from 1 December. Unknown or malformed discounts fail closed.
 - **Checkout session expiry** never outlives the anchor it was created against,
   so a session opened late on the last day of a month cannot be paid after the
-  anchor has passed and be rejected by Stripe. The corresponding uniqueness
-  locks are not reclaimed just because their local timestamp has elapsed: the
+  anchor has passed and be rejected by Stripe. Its uniqueness locks are frozen
+  with the Session. A presale intent created even one second
+  before local opening cutoff gets Stripe's required completion window and is
+  capped five minutes before the fixed first-payment anchor; an intent created
+  at the cutoff switches to standard billing. Standard Sessions retain the
+  one-hour anchor margin. Those locks are not reclaimed just because their
+  local timestamp has elapsed: the
   server first checks Stripe and releases them only after a terminal
   `expired`/failed outcome. A paid, payment-pending, orphaned or uncertain
   session remains blocked for webhook or manual recovery.
@@ -109,8 +132,9 @@ exactly one plan carries that flag.
   lost or full refund revokes. Open disputes are tracked by Stripe dispute id,
   so closing one cannot erase another. Revocation is sticky: once a lost
   dispute or full refund has revoked access, a delayed event cannot restore it.
-- **Cooling-off.** The express immediate-performance request is a separate,
-  unticked control. Fulfilment records `contractMadeAt` from the verified Stripe
+- **Cooling-off.** The express request to begin performance on the displayed
+  service-start date is a separate, unticked control. Fulfilment records
+  `contractMadeAt` from the verified Stripe
   event's `created` time and derives `coolingOffEndsAt` from that same timestamp,
   rather than from delivery time or a mutable application clock.
 - **Grandfathering.** The entitlement a member held before a purchase is stored
@@ -223,18 +247,22 @@ authoritative check 15 minutes later. The `memberships` composite index on
 
 ## 4. The one change to the Phase 0 access model
 
-Phase 0 made `approvalStatus` admin-only. Fulfilment of a paid Adult Unlimited
-membership now also sets `approvalStatus: "approved"` for the payer, because
-Membership Terms 8 says that purchase "automatically qualifies the participant
-for AlphaWOD access". Phase 0 anticipated this and listed "paid Adult Unlimited
-claiming" as Phase 1 work.
+Phase 0 made `approvalStatus` admin-only. Fulfilment of an eligible Adult
+Unlimited membership sets `approvalStatus: "approved"` for the payer only after
+payment entitlement is earned, because Membership Terms 8 says that purchase
+"automatically qualifies the participant for AlphaWOD access". A £0 presale
+fulfils as `scheduled` and deliberately projects nothing; this both prevents
+early access and preserves any legacy/manual access already held. The first
+successful recurring invoice activates and projects the membership. Phase 0
+anticipated this and listed "paid Adult Unlimited claiming" as Phase 1 work.
 
 The grant is tightly bounded. It happens only:
 
-- on the server-side webhook fulfilment path, never from client input;
+- on the server-side fulfilment/convergence path, never from client input;
 - for a plan whose `grantsAlphaWodAccess` is true;
 - when the payer bought the membership for themselves;
-- after the purchase has been claimed by that account, since an unclaimed
+- after the first required payment has succeeded and the purchase has been
+  claimed by that account, since an unclaimed
   membership has no account to grant anything to;
 - for a profile whose role is exactly `user`;
 - through `resolveUserAuthorisation`, so the derived marker and custom claims
@@ -336,13 +364,15 @@ objects. It does not change the production publication or runtime gates.
    the local `demo-*` journey is intentionally emulator-only. Only after those
    controls are verified should the Resend test delivery run.
 
-   The local `demo-alphawod-stripe` exercise completed on 19 August 2026:
+   The local `demo-alphawod-stripe` exercise completed on 19 August 2026 before
+   the presale policy was added:
    public catalogue/form -> real hosted Stripe sandbox Checkout -> £24.38 test
    payment -> Stripe-delivered webhook -> fulfilled intent and active local
    membership -> local success redirect. The exact Session and Subscription
    were independently re-read from Stripe; the durable confirmation outbox was
    present and pending. Resend, anonymous account claim and deployed staging
-   were not exercised.
+   were not exercised. Treat it as a historical seam baseline; the £0 presale
+   and discount journeys must be rerun and recorded before release.
 2. **Verify the live catalogue.** A real provider lookup on 18 August 2026
    proved the earlier `price_1U5K...` mapping is live-mode, not test-mode as the
    handover had claimed. The corrected `price_1U5P...` mapping in
@@ -363,7 +393,32 @@ objects. It does not change the production publication or runtime gates.
    `tax_behavior: unspecified` and the business is not VAT registered. Automatic
    tax is disabled in code. Confirm this matches the Stripe Dashboard so the
    displayed price is the total customer price.
-4. **Create the Customer Portal configuration** (one per mode) and put its
+4. **Create and verify the existing-member offer in each Stripe mode.** Do not
+   create a temporary £55 Price; Adult Unlimited remains £60. In the Stripe
+   Dashboard's Product catalogue/Coupons area, create a fixed-amount Coupon with
+   exactly: £5.00 off, GBP, duration `repeating`, three months, applies only to
+   the Adult Unlimited Product, and redeem-by 1 September 2026 00:00
+   Europe/London (`1788217200`). Do not set a minimum order or first-time-order
+   restriction, and leave the Coupon's global maximum redemptions unset. The
+   one-use limit belongs on each member's Promotion Code, not on the shared
+   underlying Coupon.
+
+   Create one privately distributed Promotion Code per eligible existing
+   member, backed by that Coupon. Each Code must have maximum redemptions `1`,
+   expiry `1788217200`, no minimum amount, no first-time-transaction restriction
+   and no Stripe Customer restriction (Checkout creates the Customer in this
+   pay-first journey). Never use a shared code: it can be forwarded and Stripe
+   cannot infer existing gym membership from a new Stripe Customer.
+
+   Put the resulting Coupon id—not a customer-facing Code or `promo_...` id—in
+   `STRIPE_EXISTING_MEMBER_COUPON_ID`. The checked-in test configuration uses
+   Coupon `zaf_existing_member_5off_3mo_2026_test`, restricted to test Product
+   `prod_V5ad9hrrvMkdhw`; the provider owner has a separate TEST ONLY single-use
+   code. The read-only preflight verifies the Coupon and every active Code. At
+   live cutover, switch the Dashboard to live mode and recreate both the Coupon
+   and every Code; test objects do not copy into live mode. Record the live
+   Coupon id in live Functions configuration while purchase remains closed.
+5. **Create the Customer Portal configuration** (one per mode) and put its
    `bpc_...` ID in `STRIPE_PORTAL_CONFIGURATION_ID`.
 
    `subscription_cancel` and `subscription_update` must both be disabled.
@@ -385,9 +440,9 @@ objects. It does not change the production publication or runtime gates.
    Disable every shareable hosted Customer Portal login page for unsafe/default
    configurations too. Runtime validation protects sessions this app creates;
    it cannot stop a customer using a separately enabled Stripe-hosted login URL.
-5. **Enable dynamic payment methods** in the Dashboard. The code deliberately
+6. **Enable dynamic payment methods** in the Dashboard. The code deliberately
    does not pin `payment_method_types`.
-6. **Set the Stripe API and email secrets.**
+7. **Set the Stripe API and email secrets.**
 
    ```sh
    firebase functions:secrets:set STRIPE_SECRET_KEY
@@ -398,7 +453,7 @@ objects. It does not change the production publication or runtime gates.
    Verify the `zeroalphafitness.co.uk` sending domain in Resend so confirmations
    are not rejected or spam-filed.
 
-7. **Create the webhook endpoint before the first webhook deployment.** Use the
+8. **Create the webhook endpoint before the first webhook deployment.** Use the
    deterministic final `stripeWebhook` Functions URL while purchasing is still
    closed, subscribe it to the events below, copy the endpoint's newly issued
    `whsec_...` value, and only then run
@@ -412,7 +467,7 @@ objects. It does not change the production publication or runtime gates.
    `customer.subscription.deleted`, `customer.subscription.paused`,
    `customer.subscription.resumed`, `invoice.paid`, `invoice.payment_failed`,
    `charge.dispute.created`, `charge.dispute.closed`, `charge.refunded`.
-8. **Configure Firebase Auth recovery email routing.** Add the staging and final
+9. **Configure Firebase Auth recovery email routing.** Add the staging and final
    app origins to Firebase Auth's authorised domains/action settings, then prove
    that a buyer can close the Checkout tab, follow the confirmation's sign-up or
    login route, receive and complete email verification, and claim by the billed
@@ -535,25 +590,28 @@ These are release blockers, not optional future enhancements:
 - Complete the ordered backend/rules/frontend deployment, restore callable
   client transport only after the frontend is in place, and pass the per-service
   IAM and Firebase-client smoke checks in section 8.
-- Run a real isolated Stripe test-mode journey through hosted Checkout,
-  Stripe-delivered webhooks and Events recovery, plus a real Resend test
-  delivery, before considering either purchase gate. Nothing in the emulator
-  suite substitutes for this.
+- Run both real isolated Stripe test-mode presale journeys (without a code and
+  with a single-use Adult Unlimited code) through hosted Checkout and
+  Stripe-delivered webhooks. Use a Test Clock to prove the three discounted
+  invoices and December return to £60, then exercise Events recovery and a real
+  Resend test delivery before considering either purchase gate. Nothing in the
+  emulator suite substitutes for this.
 
 ## 9a. Durable confirmation email
 
 Fulfilment queues a durable confirmation for scheduled delivery via Resend. Its
 frozen body currently includes the plan, participant and guardian summary,
-monthly price, the amount actually charged today (taken from Stripe's
-`amount_total`, never recalculated), the first full billing date, the
+monthly price, the amount actually charged today (including £0 presale evidence,
+taken from Stripe's `amount_total` and never recalculated), the service start,
+first payment and first full billing date, any approved discount schedule, the
 cancellation rule and how to exercise it, the refund and no-pause statements,
-the cooling-off end date and immediate-performance choice, accepted document
+the cooling-off end date and service-start performance choice, accepted document
 version ids, and the typed signature. It does **not** include or attach the full
 immutable legal documents. It must not be described as the complete durable
 contract copy until the document-content blocker above is implemented.
 
 For an unclaimed purchase it also carries the claim link, which is the only
-thing that brings back a buyer who paid and closed the tab.
+thing that brings back a buyer who completed Checkout and closed the tab.
 
 Fulfilment atomically creates the membership and one
 `membershipEmailOutbox` entry. That entry's frozen purchase summary,
@@ -579,8 +637,8 @@ failure rather than consuming attempts for every queued email. Every terminal
 latest error are projected onto the membership and exposed in the admin list;
 the admin attention filter includes terminal confirmation failures.
 
-Email availability never controls whether the paid membership fulfils and an
-email failure never rolls back access. Recovery is driven by the durable outbox
+Email availability never controls whether a paid or £0 scheduled membership
+fulfils, and an email failure never rolls back its state. Recovery is driven by the durable outbox
 and its scheduled worker; it does not wait for another Stripe webhook retry.
 
 Requires `RESEND_API_KEY` (already used for invites) and the
@@ -593,8 +651,10 @@ Requires `RESEND_API_KEY` (already used for invites) and the
   end are recorded, but the ordinary renewal cancellation is deliberately
   refused inside that window. A staffed immediate-stop/proportionate-service
   process and durable acknowledgement remain launch blockers in section 9.
-- **Promotion codes.** Terms 3 allows them; `allow_promotion_codes` is not
-  enabled.
+- **Automated Test Clock journey.** The local hosted Checkout verifier proves
+  the frozen September-to-December schedule but does not yet advance a Stripe
+  Test Clock through all four invoices. Run and record that separately in
+  isolated staging before treating the discount expiry as provider-proven.
 - **Price-change notice flow.** Terms 6 requires advance notice; not built.
 - **Youth onboarding workflow.** Payment deliberately does not book a first
   session; the approved message tells the guardian they will be contacted.

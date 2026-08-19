@@ -1,11 +1,35 @@
 import {
+  EXISTING_MEMBER_OFFER,
   MEMBERSHIP_PLANS,
+  PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+  PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
   formatPlanPrice,
   isAgeEligibleForPlan,
+  isFoundingPresale,
   isPlanKey,
   resolveDisplayAge,
   resolveYouthPlanForAge,
 } from "./membershipPlans";
+
+describe("founding presale", () => {
+  it("closes at London midnight while keeping Stripe billing on the UTC first", () => {
+    expect(isFoundingPresale((PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS * 1000) - 1))
+      .toBe(true);
+    expect(isFoundingPresale(PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS * 1000))
+      .toBe(false);
+    expect(PRESALE_BILLING_ANCHOR_UNIX_SECONDS)
+      .toBe(PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS + 3600);
+  });
+
+  it("scopes the £5 three-payment offer to Adult Unlimited", () => {
+    expect(EXISTING_MEMBER_OFFER).toMatchObject({
+      planKey: "adult_unlimited",
+      amountOffPence: 500,
+      currency: "gbp",
+      durationMonths: 3,
+    });
+  });
+});
 
 describe("resolveDisplayAge", () => {
   const now = new Date(2026, 7, 18); // 18 August 2026, local

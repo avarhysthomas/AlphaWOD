@@ -3,12 +3,16 @@
 /**
  * Read-only preflight for the real Stripe test catalogue. It deliberately
  * refuses live credentials and the production Firebase project, then retrieves
- * (but never mutates) the configured Prices, Products and optional Portal
- * configuration.
+ * (but never mutates) the configured Prices, Products, existing-member offer
+ * and optional Portal configuration.
  */
 
 const Stripe = require("stripe");
-const {MEMBERSHIP_PLANS, PLAN_KEYS} = require("../lib/membershipPlans");
+const {
+  EXISTING_MEMBER_OFFER,
+  MEMBERSHIP_PLANS,
+  PLAN_KEYS,
+} = require("../lib/membershipPlans");
 const {redactProviderSecrets, stripeCliTestKey} = require("./stripeCliTestKey");
 
 const TEST_PROJECT_ID = "demo-alphawod-stripe";
@@ -57,6 +61,7 @@ async function main() {
   const key = assertLocalTestBoundary();
   const stripe = new Stripe(key, {maxNetworkRetries: 2, timeout: 20000});
   const verified = [];
+  const productsByPlan = new Map();
 
   for (const planKey of PLAN_KEYS) {
     const plan = MEMBERSHIP_PLANS[planKey];
@@ -78,6 +83,67 @@ async function main() {
       throw new Error(`${planKey} does not match the approved test catalogue.`);
     }
     verified.push({planKey, priceId: price.id, productId: product.id});
+    productsByPlan.set(planKey, product.id);
+  }
+
+  const couponId = process.env.STRIPE_EXISTING_MEMBER_COUPON_ID?.trim();
+  let promotionCodeCount = 0;
+  if (!couponId && Date.now() <
+    EXISTING_MEMBER_OFFER.redemptionClosesAtUnixSeconds * 1000) {
+    throw new Error("STRIPE_EXISTING_MEMBER_COUPON_ID is required during the presale.");
+  }
+  if (couponId) {
+    const coupon = await stripe.coupons.retrieve(couponId, {
+      expand: ["applies_to"],
+    });
+    const allowedProductId = productsByPlan.get(EXISTING_MEMBER_OFFER.planKey);
+    const appliesToProducts = coupon.applies_to?.products ?? [];
+    const validCoupon = coupon.deleted !== true &&
+      coupon.livemode === false &&
+      coupon.valid === true &&
+      coupon.amount_off === EXISTING_MEMBER_OFFER.amountOffPence &&
+      coupon.currency?.toLowerCase() === EXISTING_MEMBER_OFFER.currency &&
+      coupon.percent_off === null &&
+      coupon.duration === "repeating" &&
+      coupon.duration_in_months === EXISTING_MEMBER_OFFER.durationMonths &&
+      coupon.redeem_by === EXISTING_MEMBER_OFFER.redemptionClosesAtUnixSeconds &&
+      coupon.max_redemptions === null &&
+      appliesToProducts.length === 1 &&
+      appliesToProducts[0] === allowedProductId;
+    if (!validCoupon) {
+      throw new Error(
+        "STRIPE_EXISTING_MEMBER_COUPON_ID does not match the approved test offer."
+      );
+    }
+
+    for await (const promotionCode of stripe.promotionCodes.list({
+      active: true,
+      coupon: coupon.id,
+      limit: 100,
+    })) {
+      const restrictions = promotionCode.restrictions;
+      const currencyOptions = restrictions.currency_options ?? {};
+      const validPromotionCode = promotionCode.livemode === false &&
+        promotionCode.active === true &&
+        promotionCode.max_redemptions === 1 &&
+        promotionCode.expires_at === EXISTING_MEMBER_OFFER.redemptionClosesAtUnixSeconds &&
+        promotionCode.times_redeemed <= 1 &&
+        promotionCode.customer === null &&
+        promotionCode.customer_account === null &&
+        restrictions.first_time_transaction === false &&
+        restrictions.minimum_amount === null &&
+        restrictions.minimum_amount_currency === null &&
+        Object.keys(currencyOptions).length === 0;
+      if (!validPromotionCode) {
+        throw new Error(
+          `Promotion Code ${promotionCode.id} is not unique, single-use and unrestricted.`
+        );
+      }
+      promotionCodeCount += 1;
+    }
+    if (promotionCodeCount === 0) {
+      throw new Error("The approved test Coupon has no active single-use Promotion Codes.");
+    }
   }
 
   const portalConfigurationId = process.env.STRIPE_PORTAL_CONFIGURATION_ID?.trim();
@@ -104,6 +170,9 @@ async function main() {
   console.log(portalConfigurationId ?
     `- Customer Portal: ${portalConfigurationId}` :
     "- Customer Portal: not configured (Checkout can run; management cannot)");
+  console.log(couponId ?
+    `- Existing-member Coupon: ${couponId} (${promotionCodeCount} active single-use code(s))` :
+    "- Existing-member offer: disabled (STRIPE_EXISTING_MEMBER_COUPON_ID is unset)");
 }
 
 main().catch((error) => {

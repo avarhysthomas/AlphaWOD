@@ -1,6 +1,6 @@
 # Phase 1 Handover: Public Membership Purchase & Stripe Billing
 
-Date: 2026-08-18 (provider-test status updated 2026-08-19)
+Date: 2026-08-18 (presale implementation status updated 2026-08-19)
 
 This is the current implementation handover. The detailed operating and
 deployment runbook is
@@ -12,10 +12,12 @@ documents differ, use that rollout guide.
 Phase 1 is implemented in the local working tree. It has **not** been deployed,
 and no live Stripe catalogue, portal, webhook or membership email configuration
 has been created or verified. A real emulator-bound Stripe sandbox journey ran
-successfully on 19 August 2026: the public customer form opened hosted Checkout,
-settled a £24.38 test payment, received the Stripe webhook, created an active
-local membership and pending confirmation outbox, and returned through the
-local success route. Real Resend delivery and deployed staging remain untested.
+successfully on 19 August 2026 under the earlier prorated policy: the public
+customer form opened hosted Checkout, settled a £24.38 test payment, received
+the Stripe webhook, created an active local membership and pending confirmation
+outbox, and returned through the local success route. That is a historical seam
+baseline, not proof of the newly implemented £0 presale or discount. Those paths,
+real Resend delivery and deployed staging remain untested.
 
 Public purchasing remains closed by two independent controls:
 
@@ -84,13 +86,32 @@ has reached a terminal expired/failed state. Paid, asynchronous-payment,
 orphaned and uncertain sessions stay blocked for webhook or manual recovery.
 Before a new lock is taken, the configured Stripe Price/Product is retrieved and
 matched to the exact plan name, amount, GBP currency, monthly interval, active
-state and key mode. The validated Price id is frozen on the intent. Paid
-fulfilment also binds the signed Session, frozen intent, Subscription metadata,
+state and key mode. The validated Price id is frozen on the intent. Paid or £0
+presale fulfilment also binds the signed Session, frozen intent, Subscription metadata,
 Customer, billing anchor, quantity and sole Price before creating a membership.
 A terminal Checkout event can release locks only after its Session id, mode and
 plan are atomically bound to that same intent. Every later convergence
 revalidates the immutable subscription contract; drift restricts access and is
 staff-visible, but heals when Stripe is safely restored.
+
+Before 1 September 2026 00:00 Europe/London, the frozen presale saves a payment
+method and requires `no_payment_required`, £0 total, no proration and no trial.
+Service is dated from that local opening boundary (`1788217200`); Stripe's first
+recurring anchor is midnight UTC one hour later (`1788220800`). Keeping the
+provider anchor on UTC day 1 prevents BST from encoding UTC day 31. The local
+membership remains `scheduled`, non-entitled and duplicate-blocking until a
+positive first `invoice.paid` proves the exact expected amount; failure of that
+first invoice grants no past-due access grace. At the local cutoff, standard
+immediate proration to the next UTC day-1 anchor resumes. A presale intent
+created before the cutoff can complete its already-open Session until five
+minutes before the fixed billing anchor; new intents at the cutoff are standard.
+
+Adult Unlimited presale Checkout can accept the allowlisted existing-member
+Coupon only: £5 GBP off for three months, restricted to that Product. Each
+Promotion Code must be unique, expire at the local opening cutoff and permit one
+redemption. The frozen schedule is £55 for September, October and November,
+then the unchanged £60 base Price from 1 December. Test and live Coupon/Code
+objects are separate provider configuration.
 
 Final AlphaWOD ownership is also recorded in a deterministic
 `membershipEntitlementOwners` document. Claim, fulfilment and admin linking
@@ -106,8 +127,8 @@ leaving a permanent ownership lock or mutating that profile.
 `linkMembershipParticipant` is an admin-only, one-shot operation. Linking the
 same target again is idempotent; attempting to replace an existing target is
 rejected until there is a separate audited transfer and entitlement-restoration
-workflow. A successful link acquires durable ownership, applies access
-immediately and writes the audit fields.
+workflow. A successful link acquires durable ownership and writes the audit
+fields; a scheduled presale still projects no access until first payment.
 
 The browser's resumable checkout attempt is scoped to its complete context. It
 stores only an opaque attempt id and request hash in `sessionStorage`, not raw
@@ -189,7 +210,7 @@ Checkout fulfilment atomically creates the membership and a frozen
 `membershipEmailOutbox` record. Its purchase summary, amount actually returned
 by Stripe, acceptance version ids, typed signature and Resend idempotency key are
 created once; webhook replays cannot rebuild or alter them. Email failure never
-rolls back a paid membership.
+rolls back a paid or £0 scheduled membership.
 
 `retryMembershipConfirmations` runs every five minutes. Each email gets a
 ten-minute worker lease, transient retry with backoff, and a 20-second Resend
@@ -256,7 +277,9 @@ retry; grace/suspended reconciliation; `contractMadeAt` from Stripe
 24-hour claim expiry, success-query stripping and session-scoped confirmation;
 auth-loading behaviour; immutable email payload/idempotency retry; and
 orphan-outbox manual review.
-It also covers terminal Session-to-intent binding, frozen Price rotation,
+It also covers the £0/no-proration presale contract, scheduled access and first-
+invoice activation/failure, the allowlisted three-payment discount, UTC day-1
+anchor regression, terminal Session-to-intent binding, frozen Price rotation,
 healable subscription-contract drift restriction, overdue immediate
 cancellation/refund review, current-state success copy and verified-email resend
 recovery, plus refusal of an ordinary renewal cancellation while the statutory
@@ -272,7 +295,7 @@ above, but the present test inventory does not prove them directly.
 Do not describe the automated suites themselves as a real provider end-to-end
 test. Separately, the controlled emulator-bound run documented in
 `docs/billing/local-stripe-test-journey.md` opened hosted Stripe Checkout,
-settled a test-mode payment, received Stripe-delivered events, fulfilled the
+settled a test-mode payment under the former policy, received Stripe-delivered events, fulfilled the
 local membership and returned through the success route on 19 August 2026. It
 did not exercise the real Events recovery worker, account claim, deployed
 staging or real Resend delivery; normal checkout remains closed.
@@ -323,13 +346,17 @@ then follow this order:
    Stripe-hosted portal login page that could expose an unsafe/default portal
    configuration, since runtime checks cover only sessions created by this app.
 6. The emulator-bound hosted Checkout payment and Stripe-delivered webhook seam
-   passed on 19 August 2026. In isolated deployed staging, repeat that proof and
-   additionally exercise Events recovery, anonymous account claim, a configured
-   Resend test sender/recipient and actual Resend delivery. The current local
-   provider run does not prove those remaining seams.
-7. Prepare and verify the separate live Stripe catalogue, prices, locked-down
-   Customer Portal, webhook subscriptions/secrets and verified Resend domain,
-   without enabling purchase.
+   passed under the former policy on 19 August 2026. Re-run the new £0 presale
+   twice: once without a code and once with a TEST ONLY single-use Adult
+   Unlimited code. Then use an isolated Stripe Test Clock to prove the expected
+   September/October/November £55 invoices and December £60 invoice. In deployed
+   staging, additionally exercise Events recovery, anonymous account claim, a
+   configured Resend test sender/recipient and actual Resend delivery.
+7. Prepare and verify the separate live Stripe catalogue, prices, £5/repeating-
+   three-month Product-restricted Coupon and unique single-use Promotion Codes,
+   locked-down Customer Portal, webhook subscriptions/secrets and verified
+   Resend domain, without enabling purchase. Put the live Coupon id in
+   `STRIPE_EXISTING_MEMBER_COUPON_ID`; never reuse the test Coupon or Codes.
 8. Prove all seven production billing collections are empty before accepting
    schema version 1. If they are not, stop for a migration/version plan. Then
    enter the Phase 0 maintenance, callable-transport and identity-admin freezes
@@ -355,8 +382,9 @@ then follow this order:
 Cooling-off self-service and its durable acknowledgement remain launch blockers;
 inside-window requests are failed closed to staffed review rather than passed
 through the ordinary renewal-notice calculation.
-Promotion codes, advance price-change notices, automated youth onboarding, and
-an audited linked-participant transfer workflow are deliberately not built.
+Automated Promotion Code issuance, advance price-change notices, automated youth
+onboarding, and an audited linked-participant transfer workflow are deliberately
+not built. Codes are created and distributed manually by the provider owner.
 
 ## 8) Start here
 

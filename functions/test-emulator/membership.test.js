@@ -31,6 +31,7 @@ process.env.STRIPE_PRICE_ADULT_LADIES = "price_ladies";
 process.env.STRIPE_PRICE_ADULT_GYM = "price_gym";
 process.env.STRIPE_PRICE_YOUTH_YOUNGSTARS = "price_youngstars";
 process.env.STRIPE_PRICE_YOUTH_TEENSTARS = "price_teenstars";
+process.env.STRIPE_EXISTING_MEMBER_COUPON_ID = "coupon_existing_member_5x3";
 
 const functionsTest = require("firebase-functions-test")();
 // firebase-functions-test installs its own synthetic runtime project id. Bind
@@ -40,6 +41,8 @@ process.env.MEMBERSHIP_FIREBASE_PROJECT_ID = process.env.GCLOUD_PROJECT ||
 const functions = require("../lib/index");
 const {__testing: membershipTesting} = require("../lib/membership");
 const {
+  PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+  PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
   resolveCancellationOutcome,
   resolveCoolingOffEnd,
 } = require("../lib/membershipPlans");
@@ -118,6 +121,21 @@ async function invokeStripeWebhook(payload, signature) {
   };
   await functions.stripeWebhook(req, response);
   return response;
+}
+
+/** Seeds the fake provider's authoritative object before sending its trigger. */
+async function handleStripeEvent(event, converge = async () => undefined) {
+  const object = event.data?.object;
+  if ((event.type === "checkout.session.completed" ||
+      event.type === "checkout.session.async_payment_succeeded") && object?.id) {
+    const existing = fakeStripe.state.checkoutSessions.get(object.id) ?? {};
+    fakeStripe.state.checkoutSessions.set(object.id, {...existing, ...object});
+  }
+  if (event.type === "invoice.paid" && object?.id) {
+    const existing = fakeStripe.state.invoices.get(object.id) ?? {};
+    fakeStripe.state.invoices.set(object.id, {...existing, ...object});
+  }
+  return membershipTesting.handleStripeEvent(event, converge);
 }
 
 async function clearEmulators() {
@@ -223,6 +241,8 @@ async function seedMembership(subscriptionId, overrides = {}) {
 
 function reservationIntent(id, overrides = {}) {
   const now = Date.now();
+  const billingCycleAnchor = overrides.billingCycleAnchor ??
+    Math.floor(now / 1000) + 7200;
   const payerUid = overrides.payerUid ?? null;
   const planKey = overrides.planKey ?? "adult_unlimited";
   const stripePriceId = overrides.stripePriceId ?? {
@@ -265,7 +285,13 @@ function reservationIntent(id, overrides = {}) {
     checkoutSessionId: null,
     checkoutSessionUrl: null,
     status: "reserved",
-    billingCycleAnchor: Math.floor(now / 1000) + 7200,
+    billingMode: overrides.billingMode ?? "standard",
+    billingCycleAnchor,
+    serviceStartsAt: overrides.serviceStartsAt ?? Math.floor(now / 1000),
+    firstPaymentAt: overrides.firstPaymentAt ?? billingCycleAnchor,
+    initialChargePence: overrides.initialChargePence ?? null,
+    prorationBehavior: overrides.prorationBehavior ?? "create_prorations",
+    promotionCodeId: overrides.promotionCodeId ?? null,
     firstFullChargeDate: "2026-09-01",
     checkoutExpiresAt: Math.floor(now / 1000) + 3600,
     reservationExpiresAt: overrides.reservationExpiresAt ??
@@ -273,6 +299,19 @@ function reservationIntent(id, overrides = {}) {
     reservationLockIds,
     createdAt: admin.firestore.Timestamp.now(),
   };
+}
+
+function presaleIntent(id, overrides = {}) {
+  return reservationIntent(id, {
+    ...overrides,
+    billingMode: "presale_deferred",
+    billingCycleAnchor: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+    serviceStartsAt: PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
+    firstPaymentAt: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+    initialChargePence: 0,
+    prorationBehavior: "none",
+    promotionCodeId: overrides.promotionCodeId ?? null,
+  });
 }
 
 async function accessOf(uid) {
@@ -300,6 +339,7 @@ test.beforeEach(clearEmulators);
 function validCheckoutData(attemptId = "attempt_checkout_test_123456") {
   return {
     checkoutAttemptId: attemptId,
+    expectedBillingMode: "presale_deferred",
     planKey: "adult_unlimited",
     participantFullName: "Checkout Athlete",
     participantDateOfBirth: "1990-01-01",
@@ -461,9 +501,332 @@ test("the checkout core creates one Stripe session and reuses it on retry", asyn
       "https://alpha-wod.vercel.app/memberships/success?" +
         "session_id={CHECKOUT_SESSION_ID}&plan=adult_unlimited"
     );
-    assert.equal(sent.payload["subscription_data[proration_behavior]"], "create_prorations");
+    assert.equal(sent.payload.payment_method_collection, "always");
+    assert.equal(sent.payload.allow_promotion_codes, undefined);
+    assert.equal(sent.payload["discounts[0][promotion_code]"], undefined);
+    assert.equal(sent.payload["subscription_data[proration_behavior]"], "none");
+    assert.equal(
+      Number(sent.payload["subscription_data[billing_cycle_anchor]"]),
+      1788220800
+    );
+    assert.equal(intent.get("billingMode"), "presale_deferred");
+    assert.equal(intent.get("serviceStartsAt"), 1788217200);
+    assert.equal(intent.get("firstPaymentAt"), 1788220800);
+    assert.equal(intent.get("initialChargePence"), 0);
+    assert.equal(intent.get("promotionCodeId"), null);
+    assert.equal(first.initialChargePence, 0);
+    assert.equal(first.promotionCodesEnabled, true);
     assert.ok(Number(sent.payload.expires_at) <
       Number(sent.payload["subscription_data[billing_cycle_anchor]"]));
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("an approved personal code is explicitly bound and retries without revalidation", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  const promotion = fakeStripe.state.promotionCodes.get(
+    "promo_existing_member_single_use"
+  );
+  const originalPromotion = {...promotion};
+  try {
+    const data = {
+      ...validCheckoutData("attempt_personal_code_idempotent_123456"),
+      promotionCode: "  existing-fake-one  ",
+    };
+    const first = await handler(request(data));
+    const intent = (await db.collection("membershipIntents").get()).docs[0];
+    const sent = fakeStripe.lastUpdateTo("/v1/checkout/sessions");
+
+    assert.equal(
+      sent.payload["discounts[0][promotion_code]"],
+      "promo_existing_member_single_use"
+    );
+    assert.equal(sent.payload.allow_promotion_codes, undefined);
+    assert.equal(intent.get("promotionCodeId"), "promo_existing_member_single_use");
+    assert.equal(JSON.stringify(intent.data()).includes("EXISTING-FAKE-ONE"), false);
+
+    // A lost response can be retried after the personal code has been consumed.
+    // The frozen Session must be returned without looking the raw code up again.
+    promotion.active = false;
+    promotion.times_redeemed = 1;
+    const sessionsBeforeRetry = fakeStripe.state.checkoutSessions.size;
+    const retry = await handler(request({
+      ...data,
+      promotionCode: "existing-fake-one",
+    }));
+    assert.equal(retry.sessionId, first.sessionId);
+    assert.equal(fakeStripe.state.checkoutSessions.size, sessionsBeforeRetry);
+  } finally {
+    Object.assign(promotion, originalPromotion);
+    Date.now = realNow;
+  }
+});
+
+test("unknown and unrelated personal codes fail before reservation or Stripe", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const sessionsBefore = fakeStripe.state.checkoutSessions.size;
+  fakeStripe.state.promotionCodes.set("promo_unrelated_campaign", {
+    id: "promo_unrelated_campaign",
+    object: "promotion_code",
+    livemode: false,
+    active: true,
+    code: "UNRELATED-FAKE",
+    max_redemptions: 1,
+    expires_at: PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
+    times_redeemed: 0,
+    promotion: {type: "coupon", coupon: "coupon_unrelated_campaign"},
+    restrictions: {
+      first_time_transaction: false,
+      minimum_amount: null,
+      minimum_amount_currency: null,
+    },
+  });
+  fakeStripe.state.promotionCodes.set("promo_currency_minimum", {
+    id: "promo_currency_minimum",
+    object: "promotion_code",
+    livemode: false,
+    active: true,
+    code: "CURRENCY-MINIMUM-FAKE",
+    max_redemptions: 1,
+    expires_at: PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
+    times_redeemed: 0,
+    promotion: {type: "coupon", coupon: "coupon_existing_member_5x3"},
+    restrictions: {
+      first_time_transaction: false,
+      minimum_amount: null,
+      minimum_amount_currency: null,
+      currency_options: {gbp: {minimum_amount: 5000}},
+    },
+  });
+  try {
+    for (const [attempt, promotionCode] of [
+      ["attempt_unknown_personal_code_123456", "DOES-NOT-EXIST"],
+      ["attempt_unrelated_personal_code_123456", "UNRELATED-FAKE"],
+      ["attempt_currency_minimum_code_123456", "CURRENCY-MINIMUM-FAKE"],
+    ]) {
+      await assert.rejects(
+        () => handler(request({
+          ...validCheckoutData(attempt),
+          promotionCode,
+        })),
+        /not valid for the founding-member offer/i
+      );
+    }
+    assert.equal(fakeStripe.state.checkoutSessions.size, sessionsBefore);
+    assert.equal((await db.collection("membershipIntents").get()).size, 0);
+    assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 0);
+  } finally {
+    fakeStripe.state.promotionCodes.delete("promo_unrelated_campaign");
+    fakeStripe.state.promotionCodes.delete("promo_currency_minimum");
+  }
+});
+
+test("personal codes are rejected outside the Adult Unlimited presale", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  try {
+    await assert.rejects(
+      () => handler(request({
+        ...validCheckoutData("attempt_code_wrong_plan_123456"),
+        planKey: "adult_ladies",
+        promotionCode: "EXISTING-FAKE-ONE",
+      })),
+      /only for the Adult Unlimited founding presale/i
+    );
+
+    Date.now = () => PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS * 1000;
+    await assert.rejects(
+      () => handler(request({
+        ...validCheckoutData("attempt_code_after_presale_123456"),
+        expectedBillingMode: "standard",
+        promotionCode: "EXISTING-FAKE-ONE",
+      })),
+      /only for the Adult Unlimited founding presale/i
+    );
+    assert.equal((await db.collection("membershipIntents").get()).size, 0);
+    assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 0);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("a presale opened at 23:59:59 can complete after local midnight before its frozen expiry", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  const checkoutAt = PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS - 1;
+  Date.now = () => checkoutAt * 1000;
+  try {
+    const result = await handler(request(
+      validCheckoutData("attempt_presale_final_second_123456")
+    ));
+    const intentSnap = (await db.collection("membershipIntents").get()).docs[0];
+    const intent = intentSnap.data();
+
+    assert.equal(intent.billingMode, "presale_deferred");
+    assert.equal(intent.checkoutExpiresAt, PRESALE_BILLING_ANCHOR_UNIX_SECONDS - 300);
+    assert.ok(intent.checkoutExpiresAt > PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS);
+
+    const subscriptionId = "sub_presale_final_second";
+    const customerId = "cus_presale_final_second";
+    fakeStripe.setSubscription(subscriptionId, {
+      status: "active",
+      customer: customerId,
+      billing_cycle_anchor: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+      metadata: {intentId: intentSnap.id, planKey: intent.planKey},
+    });
+
+    const completedAt = PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS + 60;
+    Date.now = () => completedAt * 1000;
+    await handleStripeEvent({
+      id: "evt_presale_final_second_completed",
+      type: "checkout.session.completed",
+      created: completedAt,
+      data: {object: {
+        id: result.sessionId,
+        object: "checkout.session",
+        livemode: false,
+        mode: "subscription",
+        status: "complete",
+        expires_at: intent.checkoutExpiresAt,
+        metadata: {intentId: intentSnap.id, planKey: intent.planKey},
+        payment_status: "no_payment_required",
+        payment_method_collection: "always",
+        subscription: subscriptionId,
+        customer: customerId,
+        customer_details: {email: "lastsecond@example.test"},
+        amount_total: 0,
+        discounts: [],
+      }},
+    }, async () => undefined);
+
+    const membership = await db.collection("memberships")
+      .doc(subscriptionId).get();
+    assert.equal(membership.get("state"), "scheduled");
+    assert.equal(membership.get("firstPaymentReceivedAt"), null);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("a presale completion after its frozen expiry is rejected", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  const checkoutAt = PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS - 1;
+  Date.now = () => checkoutAt * 1000;
+  try {
+    const result = await handler(request(
+      validCheckoutData("attempt_presale_expired_completion_123456")
+    ));
+    const intentSnap = (await db.collection("membershipIntents").get()).docs[0];
+    const intent = intentSnap.data();
+    const subscriptionId = "sub_presale_expired_completion";
+    const customerId = "cus_presale_expired_completion";
+    fakeStripe.setSubscription(subscriptionId, {
+      status: "active",
+      customer: customerId,
+      billing_cycle_anchor: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+      metadata: {intentId: intentSnap.id, planKey: intent.planKey},
+    });
+
+    const completedAt = intent.checkoutExpiresAt + 1;
+    Date.now = () => completedAt * 1000;
+    await assert.rejects(
+      () => handleStripeEvent({
+        id: "evt_presale_expired_completion",
+        type: "checkout.session.completed",
+        created: completedAt,
+        data: {object: {
+          id: result.sessionId,
+          object: "checkout.session",
+          livemode: false,
+          mode: "subscription",
+          status: "complete",
+          expires_at: intent.checkoutExpiresAt,
+          metadata: {intentId: intentSnap.id, planKey: intent.planKey},
+          payment_status: "no_payment_required",
+          payment_method_collection: "always",
+          subscription: subscriptionId,
+          customer: customerId,
+          customer_details: {email: "expired@example.test"},
+          amount_total: 0,
+          discounts: [],
+        }},
+      }, async () => undefined),
+      /frozen £0 presale contract/i
+    );
+    assert.equal(
+      (await db.collection("memberships").doc(subscriptionId).get()).exists,
+      false
+    );
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("a stale presale form is rejected after cutoff before reservation or Stripe", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS * 1000;
+  try {
+    const sessionsBefore = fakeStripe.state.checkoutSessions.size;
+    await assert.rejects(
+      () => handler(request(
+        validCheckoutData("attempt_stale_presale_terms_123456")
+      )),
+      (error) => {
+        assert.equal(error.code, "failed-precondition");
+        assert.equal(error.details?.reason, "billing_policy_changed");
+        assert.equal(error.details?.expectedBillingMode, "presale_deferred");
+        assert.equal(error.details?.currentBillingMode, "standard");
+        assert.match(error.message, /terms changed|review them/i);
+        return true;
+      }
+    );
+    assert.equal(fakeStripe.state.checkoutSessions.size, sessionsBefore);
+    assert.equal((await db.collection("membershipIntents").get()).size, 0);
+    assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 0);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("checkout after the presale cutoff restores immediate proration", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS * 1000;
+  try {
+    const result = await handler(request(
+      {
+        ...validCheckoutData("attempt_postlaunch_standard_123456"),
+        expectedBillingMode: "standard",
+      }
+    ));
+    const intent = (await db.collection("membershipIntents").get()).docs[0];
+    const sent = fakeStripe.lastUpdateTo("/v1/checkout/sessions");
+
+    assert.equal(intent.get("billingMode"), "standard");
+    assert.equal(intent.get("prorationBehavior"), "create_prorations");
+    assert.equal(intent.get("initialChargePence"), null);
+    assert.equal(sent.payload["subscription_data[proration_behavior]"], "create_prorations");
+    assert.equal(sent.payload.allow_promotion_codes, undefined);
+    assert.equal(result.promotionCodesEnabled, false);
   } finally {
     Date.now = realNow;
   }
@@ -660,6 +1023,8 @@ test("an expired reserved attempt without a Stripe session releases after valida
     intent.requestFingerprint = membershipTesting.checkoutRequestFingerprint({
       payerUid: null,
       planKey: data.planKey,
+      expectedBillingMode: data.expectedBillingMode,
+      promotionCode: data.promotionCode ?? null,
       participant: intent.participant,
       guardian: null,
       signedName: data.signedName,
@@ -805,7 +1170,7 @@ test("checkout completion fulfils membership and queues its durable confirmation
       },
     },
   };
-  await membershipTesting.handleStripeEvent(event, async () => undefined);
+  await handleStripeEvent(event, async () => undefined);
 
   const membership = await db.collection("memberships").doc("sub_fulfil_handler").get();
   assert.equal(membership.get("state"), "active");
@@ -827,12 +1192,458 @@ test("checkout completion fulfils membership and queues its durable confirmation
   assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 0);
 });
 
+test("checkout fulfilment uses the current Session instead of an old webhook snapshot", async () => {
+  const intentRef = db.collection("membershipIntents")
+    .doc("intent_authoritative_session");
+  const intent = reservationIntent("authoritative_session", {
+    participantKey: "participant_authoritative_session",
+  });
+  await membershipTesting.reserveCheckoutAttempt(intentRef, intent, Date.now());
+  fakeStripe.setSubscription("sub_authoritative_session", {
+    status: "active",
+    customer: "cus_authoritative_session",
+    billing_cycle_anchor: intent.billingCycleAnchor,
+    metadata: {intentId: intentRef.id, planKey: intent.planKey},
+  });
+  fakeStripe.state.checkoutSessions.set("cs_authoritative_session", {
+    id: "cs_authoritative_session",
+    object: "checkout.session",
+    livemode: false,
+    mode: "subscription",
+    status: "complete",
+    metadata: {intentId: intentRef.id, planKey: intent.planKey},
+    payment_status: "paid",
+    subscription: "sub_authoritative_session",
+    customer: "cus_authoritative_session",
+    customer_details: {email: "authoritative-session@example.test"},
+    amount_total: 2500,
+    discounts: [],
+  });
+
+  // This deliberately resembles an old endpoint-version snapshot with none of
+  // the fields needed to fulfil. The current Session GET above is authoritative.
+  await membershipTesting.handleStripeEvent({
+    id: "evt_authoritative_session",
+    type: "checkout.session.completed",
+    created: Math.floor(Date.now() / 1000),
+    data: {object: {
+      id: "cs_authoritative_session",
+      object: "checkout.session",
+      livemode: false,
+      payment_status: "unpaid",
+      metadata: {},
+    }},
+  }, async () => undefined);
+
+  const membership = await db.collection("memberships")
+    .doc("sub_authoritative_session").get();
+  assert.equal(membership.get("state"), "active");
+  assert.equal(membership.get("payerEmail"), "authoritative-session@example.test");
+});
+
+test("a £0 presale completion stays scheduled until its first paid invoice", async () => {
+  const fixedCheckout = new Date("2026-08-20T10:00:00Z").getTime();
+  const realNow = Date.now;
+  Date.now = () => fixedCheckout;
+  try {
+    await createMember("presalebuyer", {
+      email: "presalebuyer@example.test",
+      emailVerified: true,
+    });
+    const intentRef = db.collection("membershipIntents").doc("intent_presale_scheduled");
+    const intent = presaleIntent("presale_scheduled", {
+      payerUid: "presalebuyer",
+      participantKey: "participant_presale_scheduled",
+    });
+    await membershipTesting.reserveCheckoutAttempt(intentRef, intent, fixedCheckout);
+    fakeStripe.setSubscription("sub_presale_scheduled", {
+      status: "active",
+      customer: "cus_presale_scheduled",
+      billing_cycle_anchor: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+      metadata: {intentId: intentRef.id, planKey: intent.planKey},
+    });
+
+    await handleStripeEvent({
+      id: "evt_presale_completed",
+      type: "checkout.session.completed",
+      created: Math.floor(fixedCheckout / 1000),
+      data: {object: {
+        id: "cs_presale_scheduled",
+        object: "checkout.session",
+        livemode: false,
+        mode: "subscription",
+        status: "complete",
+        expires_at: intent.checkoutExpiresAt,
+        metadata: {intentId: intentRef.id, planKey: "adult_unlimited"},
+        payment_status: "no_payment_required",
+        payment_method_collection: "always",
+        subscription: "sub_presale_scheduled",
+        customer: "cus_presale_scheduled",
+        customer_details: {email: "presalebuyer@example.test"},
+        amount_total: 0,
+        discounts: [],
+      }},
+    }, async () => undefined);
+
+    let membership = await db.collection("memberships")
+      .doc("sub_presale_scheduled").get();
+    assert.equal(membership.get("state"), "scheduled");
+    assert.equal(membership.get("initialChargePence"), 0);
+    assert.equal(membership.get("firstPaymentReceivedAt"), null);
+    assert.equal(
+      membership.get("nextReconcileAt").seconds,
+      PRESALE_BILLING_ANCHOR_UNIX_SECONDS
+    );
+    assert.equal((await accessOf("presalebuyer")).alphaWodAccess, false);
+    assert.equal(
+      (await db.collection("membershipEmailOutbox")
+        .doc("sub_presale_scheduled").get()).get("initialChargePence"),
+      0
+    );
+
+    const paidAt = PRESALE_BILLING_ANCHOR_UNIX_SECONDS + 60;
+    Date.now = () => paidAt * 1000;
+    await handleStripeEvent({
+      id: "evt_presale_first_invoice_paid",
+      type: "invoice.paid",
+      created: paidAt,
+      data: {object: {
+        id: "in_presale_first_paid",
+        object: "invoice",
+        livemode: false,
+        status: "paid",
+        amount_paid: 6000,
+        currency: "gbp",
+        period_start: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+        status_transitions: {paid_at: paidAt},
+        parent: {
+          type: "subscription_details",
+          subscription_details: {subscription: "sub_presale_scheduled"},
+        },
+        lines: {object: "list", data: [{
+          id: "il_presale_first_paid",
+          object: "line_item",
+          parent: {
+            type: "subscription_item_details",
+            invoice_item_details: null,
+            subscription_item_details: {
+              subscription: "sub_presale_scheduled",
+              subscription_item: "si_sub_presale_scheduled",
+              invoice_item: null,
+              proration: false,
+              proration_details: null,
+            },
+          },
+          period: {
+            start: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+            end: 1790812800,
+          },
+          pricing: {
+            type: "price_details",
+            price_details: {
+              price: "price_unlimited",
+              product: "prod_price_unlimited",
+            },
+          },
+          quantity: 1,
+          subscription: "sub_presale_scheduled",
+        }]},
+      }},
+    }, async () => undefined);
+
+    membership = await db.collection("memberships")
+      .doc("sub_presale_scheduled").get();
+    assert.equal(membership.get("state"), "active");
+    assert.equal(membership.get("firstPaymentReceivedAt"), paidAt);
+    assert.equal(membership.get("firstPaidInvoiceId"), "in_presale_first_paid");
+    assert.equal((await accessOf("presalebuyer")).alphaWodAccess, true);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("first-payment activation uses the current Invoice instead of an old webhook snapshot", async () => {
+  const subscriptionId = "sub_authoritative_invoice";
+  const paidAt = PRESALE_BILLING_ANCHOR_UNIX_SECONDS + 60;
+  await seedMembership(subscriptionId, {
+    state: "scheduled",
+    stripeStatus: "active",
+    billingMode: "presale_deferred",
+    serviceStartsAt: PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
+    firstPaymentAt: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+    billingCycleAnchor: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+    initialChargePence: 0,
+    firstPaymentReceivedAt: null,
+    firstPaidInvoiceId: null,
+    discount: null,
+    paymentSchedule: {
+      amountDueTodayPence: 0,
+      firstPaymentAt: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+      standardMonthlyPence: 6000,
+      discountedMonthlyPence: null,
+      discountedPaymentCount: 0,
+      fullPriceFrom: null,
+    },
+    nextReconcileAt: admin.firestore.Timestamp.fromMillis(
+      PRESALE_BILLING_ANCHOR_UNIX_SECONDS * 1000
+    ),
+  });
+  fakeStripe.setSubscription(subscriptionId, {
+    status: "active",
+    billing_cycle_anchor: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+  });
+  fakeStripe.state.invoices.set("in_authoritative_invoice", {
+    id: "in_authoritative_invoice",
+    object: "invoice",
+    livemode: false,
+    status: "paid",
+    amount_paid: 6000,
+    currency: "gbp",
+    status_transitions: {paid_at: paidAt},
+    parent: {
+      type: "subscription_details",
+      subscription_details: {subscription: subscriptionId},
+    },
+    lines: {object: "list", data: [{
+      id: "il_authoritative_invoice",
+      object: "line_item",
+      parent: {
+        type: "subscription_item_details",
+        subscription_item_details: {
+          subscription: subscriptionId,
+          subscription_item: `si_${subscriptionId}`,
+          invoice_item: null,
+          proration: false,
+          proration_details: null,
+        },
+      },
+      period: {
+        start: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+        end: 1790812800,
+      },
+      pricing: {
+        type: "price_details",
+        price_details: {
+          price: "price_unlimited",
+          product: "prod_price_unlimited",
+        },
+      },
+      quantity: 1,
+      subscription: subscriptionId,
+    }]},
+  });
+
+  // The signed trigger carries deliberately stale/non-paying fields. Only the
+  // authoritative Invoice GET is permitted to construct activation evidence.
+  const realNow = Date.now;
+  Date.now = () => paidAt * 1000;
+  try {
+    await membershipTesting.handleStripeEvent({
+      id: "evt_authoritative_invoice",
+      type: "invoice.paid",
+      created: paidAt,
+      data: {object: {
+        id: "in_authoritative_invoice",
+        object: "invoice",
+        livemode: false,
+        status: "draft",
+        amount_paid: 0,
+        currency: "usd",
+        lines: {object: "list", data: []},
+      }},
+    }, async () => undefined);
+
+    const membership = await db.collection("memberships").doc(subscriptionId).get();
+    assert.equal(membership.get("state"), "active");
+    assert.equal(membership.get("firstPaymentReceivedAt"), paidAt);
+    assert.equal(membership.get("firstPaidInvoiceId"), "in_authoritative_invoice");
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("an approved existing-member code freezes the three-payment £55 schedule", async () => {
+  const fixedCheckout = new Date("2026-08-21T10:00:00Z").getTime();
+  const realNow = Date.now;
+  Date.now = () => fixedCheckout;
+  try {
+    const intentRef = db.collection("membershipIntents").doc("intent_presale_discount");
+    const intent = presaleIntent("presale_discount", {
+      participantKey: "participant_presale_discount",
+      promotionCodeId: "promo_existing_member_single_use",
+    });
+    await membershipTesting.reserveCheckoutAttempt(intentRef, intent, fixedCheckout);
+    fakeStripe.setSubscription("sub_presale_discount", {
+      status: "active",
+      customer: "cus_presale_discount",
+      billing_cycle_anchor: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+      metadata: {intentId: intentRef.id, planKey: intent.planKey},
+      discounts: [{
+        id: "di_presale_discount",
+        object: "discount",
+        source: {type: "coupon", coupon: "coupon_existing_member_5x3"},
+        promotion_code: "promo_existing_member_single_use",
+        start: Math.floor(fixedCheckout / 1000),
+        end: Math.floor(new Date("2026-11-21T10:00:00Z").getTime() / 1000),
+      }],
+    });
+
+    await handleStripeEvent({
+      id: "evt_presale_discount",
+      type: "checkout.session.completed",
+      created: Math.floor(fixedCheckout / 1000),
+      data: {object: {
+        id: "cs_presale_discount",
+        object: "checkout.session",
+        livemode: false,
+        mode: "subscription",
+        status: "complete",
+        expires_at: intent.checkoutExpiresAt,
+        metadata: {intentId: intentRef.id, planKey: "adult_unlimited"},
+        payment_status: "no_payment_required",
+        payment_method_collection: "always",
+        subscription: "sub_presale_discount",
+        customer: "cus_presale_discount",
+        customer_details: {email: "discount@example.test"},
+        amount_total: 0,
+        discounts: [{
+          coupon: "coupon_existing_member_5x3",
+          promotion_code: "promo_existing_member_single_use",
+        }],
+      }},
+    }, async () => undefined);
+
+    const membership = await db.collection("memberships")
+      .doc("sub_presale_discount").get();
+    assert.deepEqual(membership.get("discount"), {
+      couponId: "coupon_existing_member_5x3",
+      promotionCodeId: "promo_existing_member_single_use",
+      amountOffPence: 500,
+      currency: "gbp",
+      durationInMonths: 3,
+      startsAt: Math.floor(fixedCheckout / 1000),
+      endsAt: Math.floor(new Date("2026-11-21T10:00:00Z").getTime() / 1000),
+    });
+    assert.deepEqual(membership.get("paymentSchedule"), {
+      amountDueTodayPence: 0,
+      firstPaymentAt: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+      standardMonthlyPence: 6000,
+      discountedMonthlyPence: 5500,
+      discountedPaymentCount: 3,
+      fullPriceFrom: 1796083200,
+    });
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("a redeemed discount still fulfils when its webhook arrives after the cutoff", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => (PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS - 2) * 1000;
+  try {
+    const checkout = await handler(request(
+      {
+        ...validCheckoutData("attempt_discount_delayed_webhook_123456"),
+        promotionCode: "EXISTING-FAKE-ONE",
+      }
+    ));
+    const intentSnap = (await db.collection("membershipIntents").get()).docs[0];
+    const intent = intentSnap.data();
+    const subscriptionId = "sub_discount_delayed_webhook";
+    const customerId = "cus_discount_delayed_webhook";
+    const redeemedAt = PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS - 1;
+    fakeStripe.setSubscription(subscriptionId, {
+      status: "active",
+      customer: customerId,
+      billing_cycle_anchor: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+      metadata: {intentId: intentSnap.id, planKey: intent.planKey},
+      discounts: [{
+        id: "di_discount_delayed_webhook",
+        object: "discount",
+        source: {type: "coupon", coupon: "coupon_existing_member_5x3"},
+        promotion_code: "promo_existing_member_single_use",
+        start: redeemedAt,
+        end: 1796083200,
+      }],
+    });
+
+    // Coupon.valid is now false because redeem_by has passed. This is a
+    // delayed delivery of an already-applied redemption, not a new redemption.
+    Date.now = () => (PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS + 60) * 1000;
+    await handleStripeEvent({
+      id: "evt_discount_delayed_webhook",
+      type: "checkout.session.completed",
+      created: redeemedAt,
+      data: {object: {
+        id: checkout.sessionId,
+        object: "checkout.session",
+        livemode: false,
+        mode: "subscription",
+        status: "complete",
+        expires_at: intent.checkoutExpiresAt,
+        metadata: {intentId: intentSnap.id, planKey: intent.planKey},
+        payment_status: "no_payment_required",
+        payment_method_collection: "always",
+        subscription: subscriptionId,
+        customer: customerId,
+        customer_details: {email: "delayed-discount@example.test"},
+        amount_total: 0,
+        discounts: [{
+          coupon: "coupon_existing_member_5x3",
+          promotion_code: "promo_existing_member_single_use",
+        }],
+      }},
+    }, async () => undefined);
+
+    const membership = await db.collection("memberships")
+      .doc(subscriptionId).get();
+    assert.equal(membership.get("state"), "scheduled");
+    assert.equal(membership.get("discount.amountOffPence"), 500);
+    assert.equal(membership.get("paymentSchedule.discountedMonthlyPence"), 5500);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("a Session promotion cannot be confirmed without its Subscription discount", async () => {
+  const intent = presaleIntent("missing_subscription_discount", {
+    participantKey: "participant_missing_subscription_discount",
+    promotionCodeId: "promo_existing_member_single_use",
+  });
+  const subscription = fakeStripe.setSubscription(
+    "sub_missing_subscription_discount",
+    {
+      customer: "cus_missing_subscription_discount",
+      billing_cycle_anchor: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+      discounts: [],
+    }
+  );
+  await assert.rejects(
+    () => membershipTesting.resolveApprovedCheckoutDiscount({
+      id: "cs_missing_subscription_discount",
+      discounts: [{
+        coupon: "coupon_existing_member_5x3",
+        promotion_code: "promo_existing_member_single_use",
+      }],
+    }, subscription, intent, Math.floor(Date.now() / 1000)),
+    /does not carry the approved Checkout discount/i
+  );
+});
+
 test("paid fulfilment stays bound to the Price frozen before a config rotation", async () => {
   const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
     () => undefined
   );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-09-02T10:00:00Z").getTime();
   const checkout = await handler(request(
-    validCheckoutData("attempt_price_rotation_after_payment")
+    {
+      ...validCheckoutData("attempt_price_rotation_after_payment"),
+      expectedBillingMode: "standard",
+    }
   ));
   const intentQuery = await db.collection("membershipIntents").get();
   assert.equal(intentQuery.size, 1);
@@ -858,7 +1669,7 @@ test("paid fulfilment stays bound to the Price frozen before a config rotation",
   fakeStripe.state.prices.set(replacement.id, replacement);
   process.env.STRIPE_PRICE_ADULT_UNLIMITED = replacement.id;
   try {
-    await membershipTesting.handleStripeEvent({
+    await handleStripeEvent({
       id: "evt_price_rotation",
       type: "checkout.session.completed",
       created: Math.floor(Date.now() / 1000),
@@ -880,6 +1691,7 @@ test("paid fulfilment stays bound to the Price frozen before a config rotation",
     assert.equal(membership.get("stripePriceId"), "price_unlimited");
     assert.equal(membership.get("state"), "active");
   } finally {
+    Date.now = realNow;
     process.env.STRIPE_PRICE_ADULT_UNLIMITED = originalConfiguredPrice;
     fakeStripe.state.prices.delete(replacement.id);
   }
@@ -898,7 +1710,7 @@ test("missing confirmation evidence is escalated instead of marked not required"
     metadata: {intentId: intentRef.id, planKey: intent.planKey},
   });
 
-  await membershipTesting.handleStripeEvent({
+  await handleStripeEvent({
     id: "evt_missing_confirmation",
     type: "checkout.session.completed",
     created: Math.floor(Date.now() / 1000),
@@ -946,7 +1758,7 @@ test("a late paid session cannot fulfil after its uniqueness lock was reclaimed"
   });
 
   await assert.rejects(
-    () => membershipTesting.handleStripeEvent({
+    () => handleStripeEvent({
       id: "evt_late_payment",
       type: "checkout.session.async_payment_succeeded",
       created: Math.floor(Date.now() / 1000),
@@ -1320,6 +2132,226 @@ test("cooling-off cancellation fails closed into the staffed process", async () 
   } finally {
     Date.now = realNow;
   }
+});
+
+test("a scheduled presale can cancel before service and prevent its first charge", async () => {
+  const nowMillis = new Date("2026-08-20T10:00:00Z").getTime();
+  await createMember("presalecancel", {
+    email: "presalecancel@example.test",
+    emailVerified: true,
+  });
+  await seedMembership("sub_presale_cancel", {
+    payerUid: "presalecancel",
+    state: "scheduled",
+    billingMode: "presale_deferred",
+    serviceStartsAt: PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
+    firstPaymentAt: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+    billingCycleAnchor: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+    initialChargePence: 0,
+    firstPaymentReceivedAt: null,
+    firstPaidInvoiceId: null,
+    discount: null,
+    paymentSchedule: {
+      amountDueTodayPence: 0,
+      firstPaymentAt: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+      standardMonthlyPence: 6000,
+      discountedMonthlyPence: null,
+      discountedPaymentCount: 0,
+      fullPriceFrom: null,
+    },
+  });
+  await db.collection("memberships").doc("sub_presale_cancel").update({
+    "acceptances.coolingOffEndsAt": "2026-09-03T23:59:59.999+01:00",
+  });
+
+  const realNow = Date.now;
+  Date.now = () => nowMillis;
+  try {
+    const ordinaryPreview = resolveCancellationOutcome(nowMillis);
+    const result = await requestMembershipCancellation(request({
+      subscriptionId: "sub_presale_cancel",
+      expectedCancelAtUnixSeconds: ordinaryPreview.cancelAtUnixSeconds,
+    }, "presalecancel"));
+
+    assert.equal(result.outcome.finalPaymentDate, null);
+    assert.equal(result.outcome.cancelAtUnixSeconds, Math.floor(nowMillis / 1000));
+    assert.equal(
+      fakeStripe.state.subscriptions.get("sub_presale_cancel").status,
+      "canceled"
+    );
+    const membership = await db.collection("memberships")
+      .doc("sub_presale_cancel").get();
+    assert.equal(membership.get("state"), "cancelled");
+    assert.equal(membership.get("cancellationRequest.kind"), "presale_withdrawal");
+    assert.equal(membership.get("firstPaymentReceivedAt"), null);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("a cancelled signed-in presale releases its owner without changing legacy access", async () => {
+  const nowMillis = new Date("2026-08-20T10:00:00Z").getTime();
+  const uid = "presalelegacyreplacement";
+  await createMember(uid, {
+    email: "presalelegacyreplacement@example.test",
+    emailVerified: true,
+    profile: {
+      approvalStatus: "approved",
+      entitlementStatus: "active",
+      entitlementSource: "legacy",
+      alphaWodAccess: true,
+    },
+  });
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => nowMillis;
+  try {
+    const firstCheckout = await handler(request(
+      validCheckoutData("attempt_presale_legacy_owner_first"),
+      uid
+    ));
+    const intentSnap = (await db.collection("membershipIntents").get()).docs[0];
+    const intent = intentSnap.data();
+    const subscriptionId = "sub_presale_legacy_owner";
+    const customerId = "cus_presale_legacy_owner";
+    fakeStripe.setSubscription(subscriptionId, {
+      status: "active",
+      customer: customerId,
+      billing_cycle_anchor: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+      metadata: {intentId: intentSnap.id, planKey: intent.planKey},
+    });
+    await handleStripeEvent({
+      id: "evt_presale_legacy_owner_completed",
+      type: "checkout.session.completed",
+      created: Math.floor(nowMillis / 1000),
+      data: {object: {
+        id: firstCheckout.sessionId,
+        object: "checkout.session",
+        livemode: false,
+        mode: "subscription",
+        status: "complete",
+        expires_at: intent.checkoutExpiresAt,
+        metadata: {intentId: intentSnap.id, planKey: intent.planKey},
+        payment_status: "no_payment_required",
+        payment_method_collection: "always",
+        subscription: subscriptionId,
+        customer: customerId,
+        customer_details: {email: "presalelegacyreplacement@example.test"},
+        amount_total: 0,
+        discounts: [],
+      }},
+    }, async () => undefined);
+
+    const ownerRef = db.collection("membershipEntitlementOwners").doc(
+      createHash("sha256").update(uid).digest("hex")
+    );
+    assert.equal((await ownerRef.get()).get("state"), "active");
+    assert.deepEqual(await accessOf(uid), {
+      approvalStatus: "approved",
+      entitlementStatus: "active",
+      entitlementSource: "legacy",
+      alphaWodAccess: true,
+    });
+
+    const ordinaryPreview = resolveCancellationOutcome(nowMillis);
+    await requestMembershipCancellation(request({
+      subscriptionId,
+      expectedCancelAtUnixSeconds: ordinaryPreview.cancelAtUnixSeconds,
+    }, uid));
+
+    assert.equal((await ownerRef.get()).get("state"), "released");
+    assert.equal(
+      (await db.collection("memberships").doc(subscriptionId).get()).get("state"),
+      "cancelled"
+    );
+    assert.deepEqual(await accessOf(uid), {
+      approvalStatus: "approved",
+      entitlementStatus: "active",
+      entitlementSource: "legacy",
+      alphaWodAccess: true,
+    });
+
+    const replacement = await handler(request(
+      validCheckoutData("attempt_presale_legacy_owner_replacement"),
+      uid
+    ));
+    assert.notEqual(replacement.sessionId, firstCheckout.sessionId);
+    assert.equal((await db.collection("membershipIntents").get()).size, 2);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("presale cancellation tolerates provider end-time latency before service", async () => {
+  const receivedAtMillis = (PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS - 1) * 1000;
+  const receivedAt = Math.floor(receivedAtMillis / 1000);
+  await createMember("presalelatency", {
+    email: "presalelatency@example.test",
+    emailVerified: true,
+  });
+  await seedMembership("sub_presale_latency", {
+    payerUid: "presalelatency",
+    state: "scheduled",
+    billingMode: "presale_deferred",
+    serviceStartsAt: PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
+    firstPaymentAt: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+    billingCycleAnchor: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+    initialChargePence: 0,
+    firstPaymentReceivedAt: null,
+    firstPaidInvoiceId: null,
+    discount: null,
+    paymentSchedule: {
+      amountDueTodayPence: 0,
+      firstPaymentAt: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+      standardMonthlyPence: 6000,
+      discountedMonthlyPence: null,
+      discountedPaymentCount: 0,
+      fullPriceFrom: null,
+    },
+  });
+  const outcome = {
+    nextBillingDate: "2026-09-01",
+    noticeDeadlineMet: true,
+    noticeDaysGiven: 11,
+    noticeDeadlineDate: "2026-08-18",
+    finalPaymentDate: null,
+    accessEndsOnDate: "2026-08-31",
+    cancelAtUnixSeconds: receivedAt,
+  };
+  await db.collection("memberships").doc("sub_presale_latency").set({
+    cancellationRequest: {
+      id: "cancel_presale_latency",
+      kind: "presale_withdrawal",
+      status: "pending",
+      receivedAt: admin.firestore.Timestamp.fromMillis(receivedAtMillis),
+      outcome,
+      attemptCount: 1,
+      repairGeneration: 0,
+    },
+  }, {merge: true});
+  fakeStripe.setSubscription("sub_presale_latency", {
+    status: "canceled",
+    ended_at: receivedAt + 5,
+    cancel_at: null,
+  });
+
+  await membershipTesting.convergeMembershipFromStripe(
+    "sub_presale_latency",
+    async () => undefined,
+    {},
+    (receivedAt + 10) * 1000
+  );
+
+  const membership = await db.collection("memberships")
+    .doc("sub_presale_latency").get();
+  assert.equal(membership.get("cancellationRequest.status"), "applied");
+  assert.equal(membership.get("cancellationRequest.stripeCancelAt"), receivedAt + 5);
+  assert.ok(membership.get("cancellationRequest.stripeCancelAt") >=
+    PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS);
+  assert.equal(membership.get("cancellationOutcome.cancelAtUnixSeconds"), receivedAt);
+  assert.equal(membership.get("cancellationRequest.lastError"), undefined);
 });
 
 test("a cancellation retry reuses its frozen receipt after Stripe success", async () => {
@@ -1812,7 +2844,7 @@ test("a claim cannot give one account a second AlphaWOD membership", async () =>
   await assert.rejects(
     () => claimMembership(request({sessionId: "cs_sub_second"}, "buyer")),
     (error) => {
-      assert.match(error.message, /already has an active membership/i);
+      assert.match(error.message, /already has an active or scheduled membership/i);
       return true;
     }
   );
@@ -2065,7 +3097,7 @@ test("an elapsed checkout lock is not reusable without terminal Stripe state", a
 
   await assert.rejects(
     () => membershipTesting.reserveCheckoutAttempt(replacementRef, replacement, now),
-    /already has an active membership/i
+    /already has an active or scheduled membership/i
   );
 });
 
@@ -2094,7 +3126,7 @@ test("revoked access still blocks a replacement while Stripe billing is active",
       blockedIntent,
       Date.now()
     ),
-    /already has an active membership/i
+    /already has an active or scheduled membership/i
   );
 
   await db.collection("memberships").doc("sub_revoked_still_billing").set({
@@ -2144,7 +3176,7 @@ test("a terminal Checkout event cannot release a different Session's locks", asy
   });
 
   await assert.rejects(
-    () => membershipTesting.handleStripeEvent(
+    () => handleStripeEvent(
       terminalEvent("cs_wrong_terminal"),
       async () => undefined
     ),
@@ -2153,7 +3185,7 @@ test("a terminal Checkout event cannot release a different Session's locks", asy
   assert.equal((await intentRef.get()).get("status"), "created");
   assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 1);
 
-  await membershipTesting.handleStripeEvent(
+  await handleStripeEvent(
     terminalEvent("cs_expected_terminal"),
     async () => undefined
   );
@@ -2187,7 +3219,7 @@ test("closed disputes stay closed out of order and revocation stays sticky", asy
   });
   const eventCreated = Math.floor(Date.now() / 1000);
 
-  await membershipTesting.handleStripeEvent({
+  await handleStripeEvent({
     id: "evt_dispute_open",
     type: "charge.dispute.created",
     created: eventCreated,
@@ -2207,7 +3239,7 @@ test("closed disputes stay closed out of order and revocation stays sticky", asy
     status: "won",
     charge: "ch_dispute_order",
   });
-  await membershipTesting.handleStripeEvent({
+  await handleStripeEvent({
     id: "evt_dispute_closed",
     type: "charge.dispute.closed",
     created: eventCreated + 1,
@@ -2221,7 +3253,7 @@ test("closed disputes stay closed out of order and revocation stays sticky", asy
 
   // Delivering the old `created` snapshot after closure must use Stripe's
   // current won state, rather than reopening access from the event payload.
-  await membershipTesting.handleStripeEvent({
+  await handleStripeEvent({
     id: "evt_dispute_created_late",
     type: "charge.dispute.created",
     created: eventCreated,
@@ -2240,13 +3272,13 @@ test("closed disputes stay closed out of order and revocation stays sticky", asy
 
   const refundedCharge = fakeStripe.state.charges.get("ch_dispute_order");
   refundedCharge.amount_refunded = refundedCharge.amount;
-  await membershipTesting.handleStripeEvent({
+  await handleStripeEvent({
     id: "evt_refund_sticky",
     type: "charge.refunded",
     created: eventCreated + 2,
     data: {object: {...refundedCharge}},
   }, async () => undefined);
-  await membershipTesting.handleStripeEvent({
+  await handleStripeEvent({
     id: "evt_active_after_refund",
     type: "customer.subscription.updated",
     created: eventCreated + 3,
@@ -2275,7 +3307,7 @@ test("subscription contract drift fails access closed and becomes visible", asyn
   subscription.items.data[0].quantity = 2;
   fakeStripe.state.subscriptions.set(subscription.id, subscription);
 
-  await membershipTesting.handleStripeEvent({
+  await handleStripeEvent({
     id: "evt_contract_quantity_drift",
     type: "customer.subscription.updated",
     created: Math.floor(Date.now() / 1000),
@@ -2380,7 +3412,7 @@ test("automatic-payment grace starts at the failure event, not invoice creation"
   await seedMembership("sub_payment_failure_time");
   fakeStripe.setSubscription("sub_payment_failure_time", {status: "past_due"});
 
-  await membershipTesting.handleStripeEvent({
+  await handleStripeEvent({
     id: "evt_payment_failure_time",
     type: "invoice.payment_failed",
     created: failedAt,
@@ -2417,7 +3449,7 @@ test("a customer fallback never applies an old charge to a replacement", async (
   });
 
   await assert.rejects(
-    () => membershipTesting.handleStripeEvent({
+    () => handleStripeEvent({
       id: "evt_ambiguous_old_refund",
       type: "charge.refunded",
       created: Math.floor(Date.now() / 1000),
@@ -2451,7 +3483,7 @@ test("an unrelated customer charge cannot revoke the sole membership", async () 
   });
 
   await assert.rejects(
-    () => membershipTesting.handleStripeEvent({
+    () => handleStripeEvent({
       id: "evt_unrelated_customer_refund",
       type: "charge.refunded",
       created: Math.floor(Date.now() / 1000),
@@ -2545,7 +3577,7 @@ test("an active entitlement generation blocks replacement until restoration comp
       "sub_handoff_new",
       async () => undefined
     ),
-    /already has an active membership|already exists/i
+    /already has an active or scheduled membership|already exists/i
   );
 
   fakeStripe.setSubscription("sub_handoff_old", {status: "canceled"});
@@ -2779,6 +3811,7 @@ test("scheduled Stripe recovery replays an abandoned event from Stripe", async (
       object: {
         id: "in_recovered",
         object: "invoice",
+        livemode: false,
         parent: {
           type: "subscription_details",
           subscription_details: {subscription: "sub_event_recovery"},

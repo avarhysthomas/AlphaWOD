@@ -1,13 +1,18 @@
 /* eslint-disable no-console, max-len, require-jsdoc */
 
 /**
- * Read-only post-payment verifier. It checks a real Stripe test Session and
+ * Read-only post-Checkout verifier. It checks a real Stripe test Session and
  * Subscription, then bounded-polls the isolated Firestore emulator for exact
  * webhook fulfilment, membership and confirmation-outbox correlation.
  */
 
 const admin = require("firebase-admin");
 const Stripe = require("stripe");
+const {
+  EXISTING_MEMBER_OFFER,
+  PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+  PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
+} = require("../lib/membershipPlans");
 const {redactProviderSecrets, stripeCliTestKey} = require("./stripeCliTestKey");
 
 const TEST_PROJECT_ID = "demo-alphawod-stripe";
@@ -71,8 +76,10 @@ function isLocalSuccessUrl(session) {
 
 function assertLocalSession(session) {
   if (session.livemode !== false || session.mode !== "subscription" ||
-    session.status !== "complete" || session.payment_status !== "paid") {
-    throw new Error("The Stripe test Checkout Session is not a completed paid subscription.");
+    session.status !== "complete" ||
+    (session.payment_status !== "paid" &&
+      session.payment_status !== "no_payment_required")) {
+    throw new Error("The Stripe test Checkout Session is not a completed subscription.");
   }
   if (!isLocalSuccessUrl(session) || !session.metadata?.intentId) {
     throw new Error("The Checkout Session does not belong to this local test journey.");
@@ -128,7 +135,8 @@ async function listLocalSessions(stripe) {
     session.livemode === false &&
     session.mode === "subscription" &&
     session.status === "complete" &&
-    session.payment_status === "paid" &&
+    (session.payment_status === "paid" ||
+      session.payment_status === "no_payment_required") &&
     isLocalSuccessUrl(session) &&
     Boolean(session.metadata?.intentId)
   );
@@ -178,10 +186,97 @@ async function waitForLatestFulfilment(stripe, db) {
   );
 }
 
+function assertPresaleContract(session, subscription, fulfilment) {
+  const {intent, membership, outbox} = fulfilment;
+  if (session.payment_status !== "no_payment_required" ||
+    session.payment_method_collection !== "always" ||
+    session.amount_total !== 0) {
+    throw new Error("The presale Session did not complete for £0 with a saved payment method.");
+  }
+  if (intent.get("billingCycleAnchor") !== PRESALE_BILLING_ANCHOR_UNIX_SECONDS ||
+    intent.get("firstPaymentAt") !== PRESALE_BILLING_ANCHOR_UNIX_SECONDS ||
+    intent.get("serviceStartsAt") !== PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS ||
+    intent.get("initialChargePence") !== 0 ||
+    intent.get("prorationBehavior") !== "none") {
+    throw new Error("The fulfilled intent does not contain the exact frozen presale policy.");
+  }
+  if (subscription.status !== "active" ||
+    subscription.billing_cycle_anchor !== PRESALE_BILLING_ANCHOR_UNIX_SECONDS ||
+    subscription.trial_start !== null || subscription.trial_end !== null ||
+    subscription.latest_invoice !== null) {
+    throw new Error("The test Subscription is not the expected no-trial deferred subscription.");
+  }
+  if (membership.get("state") !== "scheduled" ||
+    membership.get("billingMode") !== "presale_deferred" ||
+    membership.get("serviceStartsAt") !== PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS ||
+    membership.get("firstPaymentAt") !== PRESALE_BILLING_ANCHOR_UNIX_SECONDS ||
+    membership.get("initialChargePence") !== 0 ||
+    membership.get("firstPaymentReceivedAt") !== null ||
+    outbox.get("initialChargePence") !== 0) {
+    throw new Error("Local fulfilment did not preserve the scheduled £0 presale evidence.");
+  }
+  const schedule = membership.get("paymentSchedule");
+  if (!schedule || schedule.amountDueTodayPence !== 0 ||
+    schedule.firstPaymentAt !== PRESALE_BILLING_ANCHOR_UNIX_SECONDS ||
+    schedule.standardMonthlyPence !== 6000 &&
+      membership.get("planKey") === EXISTING_MEMBER_OFFER.planKey) {
+    throw new Error("The membership payment schedule does not match its frozen presale.");
+  }
+  if (membership.get("planKey") === EXISTING_MEMBER_OFFER.planKey &&
+    session.allow_promotion_codes === true) {
+    throw new Error("Adult Unlimited presale Checkout exposed unbounded hosted Promotion Codes.");
+  }
+}
+
+async function assertAppliedDiscount(stripe, fulfilment, required) {
+  const discount = fulfilment.membership.get("discount");
+  if (!discount) {
+    if (required) {
+      throw new Error("No existing-member Promotion Code was applied to this journey.");
+    }
+    return false;
+  }
+
+  const configuredCouponId = process.env.STRIPE_EXISTING_MEMBER_COUPON_ID?.trim();
+  const schedule = fulfilment.membership.get("paymentSchedule");
+  if (!configuredCouponId || discount.couponId !== configuredCouponId ||
+    discount.amountOffPence !== EXISTING_MEMBER_OFFER.amountOffPence ||
+    discount.currency !== EXISTING_MEMBER_OFFER.currency ||
+    discount.durationInMonths !== EXISTING_MEMBER_OFFER.durationMonths ||
+    schedule?.discountedMonthlyPence !== 5500 ||
+    schedule?.discountedPaymentCount !== 3 ||
+    schedule?.fullPriceFrom !== 1796083200) {
+    throw new Error("The frozen existing-member discount schedule is not £55 x 3 then £60.");
+  }
+
+  const promotionCode = await stripe.promotionCodes.retrieve(discount.promotionCodeId);
+  const promotionCoupon = typeof promotionCode.promotion?.coupon === "string" ?
+    promotionCode.promotion.coupon : promotionCode.promotion?.coupon?.id;
+  const currencyOptions = promotionCode.restrictions?.currency_options ?? {};
+  if (promotionCode.livemode !== false ||
+    promotionCoupon !== configuredCouponId || promotionCode.max_redemptions !== 1 ||
+    promotionCode.times_redeemed !== 1 ||
+    promotionCode.expires_at !== PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS ||
+    promotionCode.customer !== null || promotionCode.customer_account !== null ||
+    promotionCode.restrictions?.first_time_transaction !== false ||
+    promotionCode.restrictions?.minimum_amount !== null ||
+    promotionCode.restrictions?.minimum_amount_currency !== null ||
+    Object.keys(currencyOptions).length !== 0) {
+    throw new Error("The applied Promotion Code is not the approved unique single-use code.");
+  }
+  return true;
+}
+
 async function main() {
   assertEnvironment();
   const stripe = new Stripe(stripeCliTestKey(), {maxNetworkRetries: 2, timeout: 20000});
   const requestedSession = argument("session");
+  const requireDiscountValue = argument("require-discount");
+  if (requireDiscountValue && requireDiscountValue !== "true" &&
+    requireDiscountValue !== "false") {
+    throw new Error("Pass --require-discount=true or --require-discount=false.");
+  }
+  const requireDiscount = requireDiscountValue === "true";
   if (requestedSession && requestedSession !== "latest" &&
     !requestedSession.startsWith("cs_test_")) {
     throw new Error("Pass --session=cs_test_..., --session=latest, or omit it.");
@@ -202,15 +297,31 @@ async function main() {
   }
 
   assertLocalSession(session);
-  const subscription = await stripe.subscriptions.retrieve(subscriptionIdFor(session));
+  session = await stripe.checkout.sessions.retrieve(session.id);
+  assertLocalSession(session);
+  const subscription = await stripe.subscriptions.retrieve(subscriptionIdFor(session), {
+    expand: ["discounts", "discounts.source.coupon", "discounts.promotion_code"],
+  });
   if (subscription.livemode !== false) {
     throw new Error("The subscription is not a Stripe test-mode object.");
   }
+
+  const billingMode = fulfilment.intent.get("billingMode") || "standard";
+  if (billingMode === "presale_deferred") {
+    assertPresaleContract(session, subscription, fulfilment);
+  } else if (session.payment_status !== "paid") {
+    throw new Error("A standard-billing journey must complete with paid status.");
+  }
+  const discountApplied = await assertAppliedDiscount(stripe, fulfilment, requireDiscount);
 
   console.log("Real Stripe test journey verified:");
   console.log(`- Checkout Session: ${session.id} (${session.payment_status})`);
   console.log(`- Subscription: ${subscription.id} (${subscription.status})`);
   console.log(`- Membership: ${fulfilment.membership.id} (${fulfilment.membership.get("state")})`);
+  console.log(`- Billing mode: ${billingMode}`);
+  console.log(discountApplied ?
+    "- Existing-member offer: £55 for three payments, then £60" :
+    "- Existing-member offer: no code applied");
   console.log(`- Confirmation outbox: ${fulfilment.outbox.get("status")}`);
 }
 

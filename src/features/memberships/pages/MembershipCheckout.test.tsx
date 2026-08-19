@@ -5,6 +5,7 @@ import MembershipCheckout from "./MembershipCheckout";
 
 const mockCreateCheckout = jest.fn();
 const mockResolveCheckoutAttempt = jest.fn();
+const mockClearCheckoutAttempt = jest.fn();
 let mockPlanKey = "adult_unlimited";
 let mockLocalJourneyEnabled = false;
 
@@ -15,7 +16,7 @@ jest.mock("../localTestJourney", () => ({
 }));
 
 jest.mock("../services/membership", () => ({
-  clearCheckoutAttempt: jest.fn(),
+  clearCheckoutAttempt: (...args: unknown[]) => mockClearCheckoutAttempt(...args),
   resolveCheckoutAttempt: (...args: unknown[]) => mockResolveCheckoutAttempt(...args),
   createMembershipCheckoutSession: (...args: unknown[]) => mockCreateCheckout(...args),
 }));
@@ -60,8 +61,10 @@ function renderCheckout(planKey: string) {
 }
 
 beforeEach(() => {
+  jest.spyOn(Date, "now").mockReturnValue(Date.parse("2026-08-19T09:00:00.000Z"));
   mockCreateCheckout.mockReset();
   mockResolveCheckoutAttempt.mockReset();
+  mockClearCheckoutAttempt.mockReset();
   mockResolveCheckoutAttempt.mockResolvedValue({
     id: "attempt_test",
     fingerprint: "fingerprint_test",
@@ -71,19 +74,41 @@ beforeEach(() => {
   mockLocalJourneyEnabled = false;
 });
 
+afterEach(() => {
+  jest.restoreAllMocks();
+});
+
+function getCheckoutButton() {
+  return screen.getByRole("button", {
+    name: /Continue to Stripe|Subscribe and pay/i,
+  });
+}
+
+async function submitAdultCheckout() {
+  await userEvent.type(screen.getByLabelText(/^Your full name$/i), "Payer One");
+  await userEvent.type(screen.getByLabelText(/Your date of birth/i), "1990-01-01");
+  await userEvent.click(screen.getByLabelText(/I have read and accept/i));
+  await userEvent.click(screen.getByLabelText(/I expressly request/i));
+  await userEvent.type(
+    screen.getByLabelText(/Type your full name to sign/i),
+    "Payer One"
+  );
+  await userEvent.click(getCheckoutButton());
+}
+
 describe("MembershipCheckout", () => {
   it("keeps checkout closed while the legal documents are drafts", () => {
     renderCheckout("adult_unlimited");
 
     expect(screen.getByText(/Checkout closed/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Subscribe and pay/i })).toBeDisabled();
+    expect(getCheckoutButton()).toBeDisabled();
   });
 
   it("does not start a Stripe session while the flow is closed", async () => {
     renderCheckout("adult_unlimited");
 
     await userEvent.type(screen.getByLabelText(/^Your full name$/i), "Payer One");
-    await userEvent.click(screen.getByRole("button", { name: /Subscribe and pay/i }));
+    await userEvent.click(getCheckoutButton());
 
     expect(mockCreateCheckout).not.toHaveBeenCalled();
   });
@@ -167,7 +192,7 @@ describe("MembershipCheckout", () => {
     // Membership comes before sign-up: the form itself must be reachable.
     expect(screen.getByLabelText(/^Your full name$/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Your date of birth/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Subscribe and pay/i })).toBeInTheDocument();
+    expect(getCheckoutButton()).toBeInTheDocument();
     expect(screen.queryByText(/Sign in to continue/i)).not.toBeInTheDocument();
   });
 
@@ -175,7 +200,7 @@ describe("MembershipCheckout", () => {
     mockSignedIn = false;
     renderCheckout("adult_unlimited");
 
-    expect(screen.getByText(/Complete your registration and payment first/i))
+    expect(screen.getByText(/Complete registration and Stripe checkout first/i))
       .toBeInTheDocument();
     expect(screen.getByText(/create a new AlphaWOD account or log in to an existing one/i))
       .toBeInTheDocument();
@@ -186,7 +211,7 @@ describe("MembershipCheckout", () => {
     renderCheckout("adult_unlimited");
 
     expect(screen.getByText(/You’re signed in as Payer One/i)).toBeInTheDocument();
-    expect(screen.getByText(/same registration and Stripe payment journey/i))
+    expect(screen.getByText(/same registration and Stripe checkout journey/i))
       .toBeInTheDocument();
   });
 
@@ -225,7 +250,7 @@ describe("MembershipCheckout", () => {
       screen.getByLabelText(/Type the paying adult’s full name to sign/i),
       "Ava Parent"
     );
-    await userEvent.click(screen.getByRole("button", {name: /Subscribe and pay/i}));
+    await userEvent.click(getCheckoutButton());
 
     await waitFor(() => expect(mockCreateCheckout).toHaveBeenCalledTimes(1));
     expect(mockCreateCheckout).toHaveBeenCalledWith(expect.objectContaining({
@@ -243,5 +268,120 @@ describe("MembershipCheckout", () => {
   it("redirects an unknown plan back to the catalogue", () => {
     renderCheckout("commercial");
     expect(screen.getByText("redirected:/memberships")).toBeInTheDocument();
+  });
+
+  it("makes the presale charge and service date explicit before Stripe", () => {
+    renderCheckout("adult_unlimited");
+
+    expect(screen.getByText("£0 charged")).toBeInTheDocument();
+    expect(screen.getAllByText("1 September 2026")).toHaveLength(2);
+    expect(getCheckoutButton()).toHaveAccessibleName("Continue to Stripe — £0 today");
+    expect(screen.getByText(/£55 in September, October and November/i))
+      .toBeInTheDocument();
+    expect(screen.getByLabelText(/Personal discount code/i)).toBeInTheDocument();
+    expect(screen.getByText(/verify and apply your code before opening Stripe/i))
+      .toBeInTheDocument();
+  });
+
+  it("does not advertise the Adult Unlimited promotion code on other plans", () => {
+    renderCheckout("adult_gym");
+
+    expect(screen.queryByText("Existing-member offer")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Personal discount code/i)).not.toBeInTheDocument();
+  });
+
+  it("returns to standard prorated checkout after the presale boundary", () => {
+    jest.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-02T09:00:00.000Z"));
+    renderCheckout("adult_unlimited");
+
+    expect(screen.queryByText("£0 charged")).not.toBeInTheDocument();
+    expect(screen.queryByText("Existing-member offer")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Personal discount code/i)).not.toBeInTheDocument();
+    expect(getCheckoutButton()).toHaveAccessibleName("Subscribe and pay");
+    expect(screen.getAllByText(/After opening, all memberships bill on the first/i).length)
+      .toBeGreaterThan(0);
+  });
+
+  it("binds a presale checkout to the payment policy shown on the page", async () => {
+    mockLocalJourneyEnabled = true;
+    mockCreateCheckout.mockResolvedValue({sessionUrl: ""});
+    renderCheckout("adult_unlimited");
+
+    await submitAdultCheckout();
+
+    await waitFor(() => expect(mockCreateCheckout).toHaveBeenCalledTimes(1));
+    expect(mockCreateCheckout).toHaveBeenCalledWith(expect.objectContaining({
+      expectedBillingMode: "presale_deferred",
+      planKey: "adult_unlimited",
+    }));
+  });
+
+  it("submits a trimmed personal code from the Adult Unlimited presale", async () => {
+    mockLocalJourneyEnabled = true;
+    mockCreateCheckout.mockResolvedValue({sessionUrl: ""});
+    renderCheckout("adult_unlimited");
+
+    await userEvent.type(
+      screen.getByLabelText(/Personal discount code/i),
+      "  EXISTING5-TEST-001  "
+    );
+    await submitAdultCheckout();
+
+    await waitFor(() => expect(mockCreateCheckout).toHaveBeenCalledTimes(1));
+    expect(mockResolveCheckoutAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({promotionCode: "EXISTING5-TEST-001"}),
+      null,
+      {payerUid: "payer-1"}
+    );
+    expect(mockCreateCheckout).toHaveBeenCalledWith(expect.objectContaining({
+      promotionCode: "EXISTING5-TEST-001",
+    }));
+  });
+
+  it("omits an empty personal code from the checkout request", async () => {
+    mockLocalJourneyEnabled = true;
+    mockCreateCheckout.mockResolvedValue({sessionUrl: ""});
+    renderCheckout("adult_unlimited");
+
+    await userEvent.type(screen.getByLabelText(/Personal discount code/i), "   ");
+    await submitAdultCheckout();
+
+    await waitFor(() => expect(mockCreateCheckout).toHaveBeenCalledTimes(1));
+    expect(mockCreateCheckout.mock.calls[0][0]).not.toHaveProperty("promotionCode");
+  });
+
+  it("binds a post-launch checkout to the standard payment policy shown", async () => {
+    jest.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-02T09:00:00.000Z"));
+    mockLocalJourneyEnabled = true;
+    mockCreateCheckout.mockResolvedValue({sessionUrl: ""});
+    renderCheckout("adult_unlimited");
+
+    await submitAdultCheckout();
+
+    await waitFor(() => expect(mockCreateCheckout).toHaveBeenCalledTimes(1));
+    expect(mockCreateCheckout).toHaveBeenCalledWith(expect.objectContaining({
+      expectedBillingMode: "standard",
+      planKey: "adult_unlimited",
+    }));
+  });
+
+  it("fails closed and asks for a review when the rendered policy is stale", async () => {
+    mockLocalJourneyEnabled = true;
+    mockCreateCheckout.mockRejectedValue({
+      code: "functions/failed-precondition",
+      details: {
+        reason: "billing_policy_changed",
+        expectedBillingMode: "presale_deferred",
+        currentBillingMode: "standard",
+      },
+    });
+    renderCheckout("adult_unlimited");
+
+    await submitAdultCheckout();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Payment details changed");
+    expect(screen.getByRole("button", {name: "Refresh and review"})).toBeInTheDocument();
+    expect(getCheckoutButton()).toBeDisabled();
+    expect(mockClearCheckoutAttempt).not.toHaveBeenCalled();
   });
 });

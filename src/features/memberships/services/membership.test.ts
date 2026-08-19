@@ -88,6 +88,7 @@ describe("checkout attempt identifiers", () => {
 
   it("reuses an attempt after reload without persisting checkout PII", async () => {
     const details: CheckoutDetails = {
+      expectedBillingMode: "presale_deferred",
       planKey: "adult_unlimited",
       participantFullName: "Private Person",
       participantDateOfBirth: "1990-01-01",
@@ -95,6 +96,7 @@ describe("checkout attempt identifiers", () => {
       signedName: "Private Person",
       acceptedDocuments: true,
       immediatePerformanceRequested: true,
+      promotionCode: "PRIVATE-EXISTING-001",
     };
 
     const first = await resolveCheckoutAttempt(details);
@@ -105,6 +107,8 @@ describe("checkout attempt identifiers", () => {
     const stored = window.sessionStorage.getItem("zaf.membershipCheckoutAttempt.v1") ?? "";
     expect(stored).not.toContain("Private Person");
     expect(stored).not.toContain("1990-01-01");
+    expect(stored).not.toContain("PRIVATE-EXISTING-001");
+    expect(window.localStorage.getItem("zaf.membershipCheckoutAttempt.v1")).toBeNull();
 
     clearCheckoutAttempt(first.id);
     const replacement = await resolveCheckoutAttempt(details, null);
@@ -113,6 +117,7 @@ describe("checkout attempt identifiers", () => {
 
   it("rotates the attempt when chargeable details change", async () => {
     const base: CheckoutDetails = {
+      expectedBillingMode: "presale_deferred",
       planKey: "adult_unlimited",
       participantFullName: "First Athlete",
       participantDateOfBirth: "1990-01-01",
@@ -132,8 +137,34 @@ describe("checkout attempt identifiers", () => {
     expect(changed.fingerprint).not.toBe(first.fingerprint);
   });
 
+  it("rotates the opaque attempt when the personal code changes", async () => {
+    const base: CheckoutDetails = {
+      expectedBillingMode: "presale_deferred",
+      planKey: "adult_unlimited",
+      participantFullName: "Discounted Athlete",
+      participantDateOfBirth: "1990-01-01",
+      participantIsPayer: true,
+      signedName: "Discounted Athlete",
+      acceptedDocuments: true,
+      immediatePerformanceRequested: true,
+      promotionCode: "MEMBER-CODE-ONE",
+    };
+    const first = await resolveCheckoutAttempt(base);
+    const changed = await resolveCheckoutAttempt({
+      ...base,
+      promotionCode: "MEMBER-CODE-TWO",
+    }, first);
+
+    expect(changed.id).not.toBe(first.id);
+    expect(changed.fingerprint).not.toBe(first.fingerprint);
+    const stored = window.sessionStorage.getItem("zaf.membershipCheckoutAttempt.v1") ?? "";
+    expect(stored).not.toContain("MEMBER-CODE-ONE");
+    expect(stored).not.toContain("MEMBER-CODE-TWO");
+  });
+
   it("rotates an anonymous attempt when the payer signs in or changes account", async () => {
     const details: CheckoutDetails = {
+      expectedBillingMode: "presale_deferred",
       planKey: "adult_unlimited",
       participantFullName: "Identity Change",
       participantDateOfBirth: "1990-01-01",

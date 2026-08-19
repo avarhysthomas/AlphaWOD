@@ -9,12 +9,39 @@ const functions = getFunctions(app, "europe-west1");
 
 export type MembershipState =
   | "incomplete"
+  | "scheduled"
   | "active"
   | "past_due_grace"
   | "past_due_suspended"
   | "disputed"
   | "cancelled"
   | "revoked";
+
+export type MembershipBillingMode = "presale_deferred" | "standard";
+
+/**
+ * Frozen Stripe discount details returned by the server. Every field is
+ * optional at the membership level so older records continue to render
+ * safely after this projection is introduced.
+ */
+export type MembershipDiscount = {
+  couponId: string;
+  promotionCodeId: string;
+  amountOffPence: number;
+  currency: "gbp";
+  durationInMonths: number;
+  startsAt: number;
+  endsAt: number | null;
+};
+
+export type MembershipPaymentSchedule = {
+  amountDueTodayPence: number | null;
+  firstPaymentAt: number;
+  standardMonthlyPence: number;
+  discountedMonthlyPence: number | null;
+  discountedPaymentCount: number;
+  fullPriceFrom: number | null;
+};
 
 export type CancellationOutcome = {
   nextBillingDate: string;
@@ -33,12 +60,22 @@ export type MyMembership = {
   planKey: PlanKey;
   planName: string;
   state: MembershipState;
+  billingMode?: MembershipBillingMode;
+  serviceStartsAt?: number | null;
+  firstPaymentAt?: number | null;
+  billingCycleAnchor?: number | null;
+  initialChargePence?: number | null;
+  firstPaymentReceivedAt?: number | null;
+  discount?: MembershipDiscount | null;
+  paymentSchedule?: MembershipPaymentSchedule | null;
   grantsAlphaWodAccess: boolean;
   participantFullName: string;
   participantIsPayer: boolean;
   currentPeriodEnd: number | null;
   cancelAt: number | null;
   cancellationOutcome: CancellationOutcome | null;
+  cancellationMode?: "cancel_before_start" | "standard";
+  cancellationPreview?: CancellationOutcome | null;
   cancellationPending: boolean;
   cancellationManualReview: boolean;
   cancellationRequestError: string | null;
@@ -53,6 +90,11 @@ export type MyMembership = {
 export type CheckoutRequest = {
   /** Stable across retries of the same form submission for Stripe idempotency. */
   checkoutAttemptId: string;
+  /**
+   * Billing policy the customer reviewed before submitting. The server rejects
+   * the request if the launch cutoff changed that policy while the page was open.
+   */
+  expectedBillingMode: MembershipBillingMode;
   planKey: PlanKey;
   participantFullName: string;
   participantDateOfBirth: string;
@@ -60,6 +102,8 @@ export type CheckoutRequest = {
   signedName: string;
   acceptedDocuments: boolean;
   immediatePerformanceRequested: boolean;
+  /** Optional single-use code. Included in the digest, never stored as plaintext. */
+  promotionCode?: string;
   guardianFullName?: string;
   guardianRelationship?: string;
   guardianConfirmsAuthority?: boolean;
@@ -191,7 +235,12 @@ export async function createMembershipCheckoutSession(request: CheckoutRequest) 
     ok: boolean;
     sessionUrl: string | null;
     sessionId: string;
+    billingMode: MembershipBillingMode;
+    serviceStartsAt: number | null;
+    firstPaymentAt: number | null;
     firstFullChargeDate: string;
+    initialChargePence: number | null;
+    promotionCodesEnabled: boolean;
   }>(functions, "createMembershipCheckoutSession");
 
   const result = await invoke(request);
@@ -332,6 +381,14 @@ export type AdminMembership = {
   planKey: PlanKey;
   planName: string;
   state: MembershipState;
+  billingMode?: MembershipBillingMode;
+  serviceStartsAt?: number | null;
+  firstPaymentAt?: number | null;
+  billingCycleAnchor?: number | null;
+  initialChargePence?: number | null;
+  firstPaymentReceivedAt?: number | null;
+  discount?: MembershipDiscount | null;
+  paymentSchedule?: MembershipPaymentSchedule | null;
   stripeStatus: string;
   grantsAlphaWodAccess: boolean;
   entitlementTargetUid: string | null;
@@ -381,6 +438,7 @@ export async function linkMembershipParticipant(
 /** Human labels for the membership states shown to members and admins. */
 export const MEMBERSHIP_STATE_LABEL: Record<MembershipState, string> = {
   incomplete: "Awaiting payment",
+  scheduled: "Scheduled — starts 1 September",
   active: "Active",
   past_due_grace: "Payment failed — in grace period",
   past_due_suspended: "Suspended — payment overdue",

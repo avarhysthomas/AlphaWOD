@@ -8,12 +8,14 @@ import {
   type AdminMembership,
   type MembershipState,
 } from "../../memberships/services/membership";
+import MembershipDiscountSummary from "../../memberships/components/MembershipDiscountSummary";
 
 const CARD =
   "rounded-[28px] border border-white/10 bg-[#151311] p-7 shadow-[0_26px_80px_rgba(0,0,0,0.42)]";
 const EYEBROW = "text-[12px] font-bold uppercase tracking-[0.28em] text-white/34";
 
 const STATE_TONE: Record<MembershipState, string> = {
+  scheduled: "border-sky-400/25 bg-sky-400/10 text-sky-200",
   active: "border-emerald-500/25 bg-emerald-500/10 text-emerald-200",
   past_due_grace: "border-amber-500/25 bg-amber-500/10 text-amber-200",
   past_due_suspended: "border-red-500/25 bg-red-500/10 text-red-200",
@@ -23,7 +25,7 @@ const STATE_TONE: Record<MembershipState, string> = {
   incomplete: "border-white/15 bg-white/5 text-white/60",
 };
 
-type Filter = "all" | "attention" | "active" | "ended";
+type Filter = "all" | "attention" | "scheduled" | "active" | "ended";
 
 /** Memberships an administrator should look at rather than just monitor. */
 function needsAttention(membership: AdminMembership): boolean {
@@ -41,10 +43,12 @@ function needsAttention(membership: AdminMembership): boolean {
     Boolean(membership.cancellationRequestError) ||
     membership.entitlementProjectionStatus === "manual_review" ||
     Boolean(membership.entitlementProjectionError) ||
-    (membership.grantsAlphaWodAccess &&
+    (membership.state !== "scheduled" &&
+      membership.grantsAlphaWodAccess &&
       membership.entitlementTargetUid !== null &&
       membership.entitlementProjectionStatus !== "applied") ||
-    (membership.grantsAlphaWodAccess && membership.entitlementTargetUid === null)
+    (membership.state !== "scheduled" &&
+      membership.grantsAlphaWodAccess && membership.entitlementTargetUid === null)
   );
 }
 
@@ -83,6 +87,8 @@ export default function AdminMemberships() {
       return memberships.filter(
         (entry) => entry.state === "active" || entry.state === "past_due_grace"
       );
+    case "scheduled":
+      return memberships.filter((entry) => entry.state === "scheduled");
     case "ended":
       return memberships.filter(
         (entry) => entry.state === "cancelled" || entry.state === "revoked"
@@ -96,6 +102,7 @@ export default function AdminMemberships() {
     () => ({
       total: memberships.length,
       attention: memberships.filter(needsAttention).length,
+      scheduled: memberships.filter((entry) => entry.state === "scheduled").length,
       alphaWod: memberships.filter(
         (entry) =>
           entry.grantsAlphaWodAccess &&
@@ -132,10 +139,11 @@ export default function AdminMemberships() {
         Memberships
       </h1>
 
-      <div className="mt-7 grid gap-4 sm:grid-cols-3">
+      <div className="mt-7 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {[
           { label: "Total", value: counts.total },
           { label: "Need attention", value: counts.attention },
+          { label: "Scheduled", value: counts.scheduled },
           { label: "AlphaWOD active", value: counts.alphaWod },
         ].map((stat) => (
           <div key={stat.label} className="rounded-[28px] border border-white/10 bg-[#151311] p-6">
@@ -148,7 +156,7 @@ export default function AdminMemberships() {
       </div>
 
       <div className="mt-7 flex flex-wrap gap-2">
-        {(["attention", "active", "ended", "all"] as Filter[]).map((option) => (
+        {(["attention", "scheduled", "active", "ended", "all"] as Filter[]).map((option) => (
           <button
             key={option}
             type="button"
@@ -181,7 +189,13 @@ export default function AdminMemberships() {
       )}
 
       <div className="mt-6 space-y-4">
-        {visible.map((membership) => (
+        {visible.map((membership) => {
+          const isScheduled = membership.state === "scheduled";
+          const firstPaymentAt = membership.firstPaymentAt ??
+            membership.billingCycleAnchor ?? membership.currentPeriodEnd;
+          const serviceStartsAt = membership.serviceStartsAt ?? firstPaymentAt;
+
+          return (
           <div key={membership.subscriptionId} className={CARD}>
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
@@ -216,10 +230,10 @@ export default function AdminMemberships() {
               </div>
               <div>
                 <dt className="text-[11px] font-semibold uppercase tracking-[0.2em] text-white/45">
-                  Period end
+                  {isScheduled ? "First payment" : "Period end"}
                 </dt>
                 <dd className="mt-1 text-white/75">
-                  {formatUnixDate(membership.currentPeriodEnd)}
+                  {formatUnixDate(isScheduled ? firstPaymentAt : membership.currentPeriodEnd)}
                 </dd>
               </div>
               <div>
@@ -242,6 +256,24 @@ export default function AdminMemberships() {
                 )}
               </div>
             </dl>
+
+            {isScheduled && (
+              <div className="mt-5 rounded-2xl border border-sky-400/25 bg-sky-400/10 p-5 text-sm leading-7 text-sky-50/90">
+                <p className="font-semibold text-sky-100">Pre-opening membership</p>
+                <p className="mt-1 text-xs leading-6 text-sky-100/70">
+                  £0 charged at checkout. Service starts {formatUnixDate(serviceStartsAt)};
+                  activate access only after the first payment succeeds.
+                </p>
+              </div>
+            )}
+
+            <MembershipDiscountSummary
+              planKey={membership.planKey}
+              discount={membership.discount}
+              paymentSchedule={membership.paymentSchedule}
+              firstPaymentAt={firstPaymentAt}
+              className="mt-5"
+            />
 
             {(membership.disputeOpen || membership.accessRevoked) && (
               <p className="mt-5 rounded-2xl border border-red-500/25 bg-red-500/10 p-4 text-sm leading-6 text-red-100">
@@ -291,7 +323,7 @@ export default function AdminMemberships() {
 
             {(membership.entitlementProjectionStatus === "manual_review" ||
               membership.entitlementProjectionError ||
-              (membership.grantsAlphaWodAccess &&
+              (membership.state !== "scheduled" && membership.grantsAlphaWodAccess &&
                 membership.entitlementTargetUid !== null &&
                 membership.entitlementProjectionStatus !== "applied")) && (
               <div className="mt-5 rounded-2xl border border-red-500/25 bg-red-500/10 p-4 text-sm leading-6 text-red-100">
@@ -362,7 +394,8 @@ export default function AdminMemberships() {
               </p>
             )}
           </div>
-        ))}
+          );
+        })}
       </div>
 
       <p className="mt-10 text-xs leading-6 text-white/40">

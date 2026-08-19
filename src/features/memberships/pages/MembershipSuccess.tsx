@@ -5,6 +5,7 @@ import {
   COMPANY,
   MEMBERSHIP_PLANS,
   POLICY_TEXT,
+  isFoundingPresale,
   isPlanKey,
 } from "../../../lib/membershipPlans";
 import {
@@ -16,8 +17,10 @@ import {
   readPendingClaim,
   readPendingClaimVerifier,
   rememberPendingClaim,
+  formatUnixDate,
   type MyMembership,
 } from "../services/membership";
+import MembershipDiscountSummary from "../components/MembershipDiscountSummary";
 
 const CARD =
   "rounded-[28px] border border-white/10 bg-[#151311] p-7 shadow-[0_26px_80px_rgba(0,0,0,0.42)]";
@@ -58,6 +61,19 @@ function membershipPresentation(membership: MyMembership): {
     };
   }
   switch (membership.state) {
+  case "scheduled": {
+    const serviceStartsAt = membership.serviceStartsAt ??
+      membership.firstPaymentAt ?? membership.billingCycleAnchor ?? null;
+    const serviceStart = serviceStartsAt ? formatUnixDate(serviceStartsAt) : "1 September 2026";
+    const accessMessage = membership.grantsAlphaWodAccess && membership.participantIsPayer
+      ? " This membership will not unlock AlphaWOD access until that first payment succeeds."
+      : " We’ll email you with the details you need before your first session.";
+    return {
+      eyebrow: "Membership scheduled",
+      message: `Your payment method is saved and nothing was charged today. Your membership starts on ${serviceStart}, when your first monthly payment is due.${accessMessage}`,
+      appAccessAvailable: false,
+    };
+  }
   case "active":
     return {
       eyebrow: "Payment confirmed",
@@ -120,6 +136,7 @@ export default function MembershipSuccess() {
   const [claimError, setClaimError] = useState("");
   const cancelled = useRef(false);
   const presentation = membership ? membershipPresentation(membership) : null;
+  const presale = isFoundingPresale();
   const isAlphaWodAccountJourney = membership
     ? membership.planKey === "adult_unlimited" &&
       membership.grantsAlphaWodAccess &&
@@ -230,11 +247,25 @@ export default function MembershipSuccess() {
             {presentation
               ? presentation.message
               : sessionId
-                ? isAlphaWodAccountJourney
-                  ? "We’re confirming the exact membership from this checkout. No access or payment status is shown as confirmed until that finishes."
-                  : "Thanks for registering. We’re confirming your membership and will send the details by email. There’s nothing else you need to do on this page."
+                ? presale
+                  ? isAlphaWodAccountJourney
+                    ? "Thanks for registering. Nothing was charged today. Your payment method is saved and the membership is scheduled to start with its first payment on 1 September 2026. AlphaWOD access will not be unlocked before that payment succeeds."
+                    : "Thanks for registering. Nothing was charged today. Your payment method is saved and the membership is scheduled to start with its first payment on 1 September 2026. We’ll send the details by email; there’s nothing else you need to do on this page."
+                  : isAlphaWodAccountJourney
+                    ? "We’re confirming the exact membership from this checkout. No access or payment status is shown as confirmed until that finishes."
+                    : "Thanks for registering. We’re confirming your membership and will send the details by email. There’s nothing else you need to do on this page."
                 : `This page has no checkout reference. Return to your membership page or contact ${COMPANY.supportEmail}.`}
           </p>
+
+          {membership && (
+            <MembershipDiscountSummary
+              planKey={membership.planKey}
+              discount={membership.discount}
+              paymentSchedule={membership.paymentSchedule}
+              firstPaymentAt={membership.firstPaymentAt}
+              className="mt-6"
+            />
+          )}
 
           {sessionId && !loading && !user && isAlphaWodAccountJourney && (
             <>
@@ -244,7 +275,7 @@ export default function MembershipSuccess() {
                 </p>
                 <p className="mt-3 text-sm leading-7 text-amber-50/85">
                   New to AlphaWOD? Create an account with the same email address you just
-                  paid with. Already have an account? Log in and we&rsquo;ll link this
+                  used at Stripe checkout. Already have an account? Log in and we&rsquo;ll link this
                   membership to it automatically.
                 </p>
               </div>
@@ -306,7 +337,8 @@ export default function MembershipSuccess() {
 
           <p className="mt-7 text-xs leading-6 text-white/40">
             A confirmation email will be sent from {COMPANY.confirmationSender} with your
-            plan, amounts, next payment date and cancellation information. Questions:{" "}
+            plan, amount due today, first payment date, any applied discount and cancellation
+            information. Questions:{" "}
             {COMPANY.supportEmail}.
           </p>
         </div>

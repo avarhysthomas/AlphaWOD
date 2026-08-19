@@ -5,10 +5,12 @@ import {
   BILLING_POLICY,
   CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION,
   COMPANY,
+  EXISTING_MEMBER_OFFER,
   MEMBERSHIP_PLANS,
   PLAN_LIST,
   POLICY_TEXT,
   formatPlanPrice,
+  isFoundingPresale,
   type MembershipPlan,
 } from "../../../lib/membershipPlans";
 import { LOCAL_MEMBERSHIP_TEST_JOURNEY_ENABLED } from "../localTestJourney";
@@ -17,7 +19,9 @@ const CARD =
   "rounded-[28px] border border-white/10 bg-[#151311] p-7 shadow-[0_26px_80px_rgba(0,0,0,0.42)]";
 const EYEBROW = "text-[12px] font-bold uppercase tracking-[0.28em] text-white/34";
 
-function PlanCard({ plan }: { plan: MembershipPlan }) {
+function PlanCard({ plan, presale }: { plan: MembershipPlan; presale: boolean }) {
+  const promotionCodeAvailable = presale && plan.key === EXISTING_MEMBER_OFFER.planKey;
+
   return (
     <div className={CARD}>
       <div className="flex items-start justify-between gap-4">
@@ -35,9 +39,22 @@ function PlanCard({ plan }: { plan: MembershipPlan }) {
 
       <p className="mt-4 text-sm leading-7 text-white/70">{plan.summary}</p>
 
+      {presale && (
+        <p className="mt-4 text-sm font-semibold text-sky-100">
+          £0 today · first payment 1 September 2026
+        </p>
+      )}
+
       {plan.grantsAlphaWodAccess && (
         <p className="mt-4 inline-flex rounded-full border border-amber-500/25 bg-amber-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-200">
-          Includes AlphaWOD access
+          {presale ? "AlphaWOD after first payment" : "Includes AlphaWOD access"}
+        </p>
+      )}
+
+      {promotionCodeAvailable && (
+        <p className="mt-3 text-xs leading-6 text-amber-100/80">
+          Existing member? Enter your personal code during signup for £5 off each
+          of your first three monthly payments.
         </p>
       )}
 
@@ -56,7 +73,7 @@ function PlanCard({ plan }: { plan: MembershipPlan }) {
  * so a guardian picks the right option before reaching the checkout form,
  * which re-derives the band from the participant's date of birth.
  */
-function YouthCard() {
+function YouthCard({presale}: {presale: boolean}) {
   const youngstars = MEMBERSHIP_PLANS.youth_youngstars;
   const teenstars = MEMBERSHIP_PLANS.youth_teenstars;
 
@@ -70,6 +87,11 @@ function YouthCard() {
         Coached HYROX training for young athletes. A parent or legal guardian must be the
         payer and complete checkout.
       </p>
+      {presale && (
+        <p className="mt-4 text-sm font-semibold text-sky-100">
+          £0 today · first payment 1 September 2026
+        </p>
+      )}
 
       <div className="mt-6 space-y-3">
         {[youngstars, teenstars].map((plan) => (
@@ -101,6 +123,7 @@ export default function Memberships() {
   const { user } = useAuth();
   const [params] = useSearchParams();
   const checkoutCancelled = params.get("checkout") === "cancelled";
+  const presale = isFoundingPresale();
 
   const adultPlans = useMemo(
     () => PLAN_LIST.filter((plan) => plan.cardGroup === "adult"),
@@ -115,8 +138,25 @@ export default function Memberships() {
           Memberships
         </h1>
         <p className="mt-5 max-w-2xl text-sm leading-7 text-white/70 sm:text-base">
-          {POLICY_TEXT.rollingTerm} {POLICY_TEXT.prorationRule}
+          {POLICY_TEXT.rollingTerm} {presale ? POLICY_TEXT.presaleRule : POLICY_TEXT.prorationRule}
         </p>
+
+        {presale && (
+          <dl className="mt-7 grid gap-5 border-y border-white/10 py-5 text-sm sm:grid-cols-3">
+            <div>
+              <dt className="text-xs uppercase tracking-[0.16em] text-white/45">Today</dt>
+              <dd className="mt-1 font-semibold text-white">£0 charged</dd>
+            </div>
+            <div>
+              <dt className="text-xs uppercase tracking-[0.16em] text-white/45">Membership starts</dt>
+              <dd className="mt-1 font-semibold text-white">1 September 2026</dd>
+            </div>
+            <div>
+              <dt className="text-xs uppercase tracking-[0.16em] text-white/45">First payment</dt>
+              <dd className="mt-1 font-semibold text-white">1 September 2026</dd>
+            </div>
+          </dl>
+        )}
 
         {!CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION &&
           LOCAL_MEMBERSHIP_TEST_JOURNEY_ENABLED && (
@@ -155,22 +195,23 @@ export default function Memberships() {
           <div className="mt-7 rounded-[28px] border border-white/10 bg-[#151311] p-6">
             <p className="text-sm leading-7 text-white/70">
               Checkout was cancelled and you have not been charged. Pick a membership below
-              to try again.
+              to try again; no payment method was saved.
             </p>
           </div>
         )}
 
         <div className="mt-10 grid gap-5 sm:grid-cols-2">
           {adultPlans.map((plan) => (
-            <PlanCard key={plan.key} plan={plan} />
+            <PlanCard key={plan.key} plan={plan} presale={presale} />
           ))}
-          <YouthCard />
+          <YouthCard presale={presale} />
         </div>
 
         <div className={`mt-10 ${CARD}`}>
           <p className={EYEBROW}>Before you join</p>
           <ul className="mt-4 space-y-3 text-sm leading-7 text-white/70">
-            <li>{POLICY_TEXT.prorationAuthority}</li>
+            <li>{presale ? POLICY_TEXT.prorationAuthority : POLICY_TEXT.prorationRule}</li>
+            {presale && <li>{POLICY_TEXT.existingMemberOffer}</li>}
             <li>{POLICY_TEXT.cancellationRule}</li>
             <li>{POLICY_TEXT.refund}</li>
             <li>{POLICY_TEXT.noPause}</li>

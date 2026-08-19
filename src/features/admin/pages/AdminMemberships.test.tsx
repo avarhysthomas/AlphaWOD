@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import AdminMemberships from "./AdminMemberships";
 
 const mockListMemberships = jest.fn();
@@ -8,6 +8,7 @@ const mockLinkMembershipParticipant = jest.fn();
 jest.mock("../../memberships/services/membership", () => ({
   MEMBERSHIP_STATE_LABEL: {
     incomplete: "Awaiting payment",
+    scheduled: "Scheduled — starts 1 September",
     active: "Active",
     past_due_grace: "Payment failed — in grace period",
     past_due_suspended: "Suspended — payment overdue",
@@ -79,5 +80,68 @@ describe("AdminMemberships cancellation attention", () => {
       .toBeInTheDocument();
     expect(screen.getByText("Participant profile is missing."))
       .toBeInTheDocument();
+  });
+
+  it("keeps a healthy presale membership out of attention and shows its schedule", async () => {
+    mockListMemberships.mockResolvedValue({
+      ok: true,
+      memberships: [{
+        subscriptionId: "sub_scheduled",
+        payerUid: "payer-one",
+        payerEmail: "payer@example.test",
+        planKey: "adult_unlimited",
+        planName: "Adult Unlimited Membership",
+        state: "scheduled",
+        stripeStatus: "active",
+        billingMode: "presale_deferred",
+        serviceStartsAt: 1788217200,
+        firstPaymentAt: 1788220800,
+        billingCycleAnchor: 1788220800,
+        initialChargePence: 0,
+        grantsAlphaWodAccess: true,
+        entitlementTargetUid: "payer-one",
+        participantFullName: "Scheduled Member",
+        participantAge: 34,
+        participantIsPayer: true,
+        guardianFullName: null,
+        currentPeriodEnd: 1788220800,
+        cancelAt: null,
+        disputeOpen: false,
+        accessRevoked: false,
+        providerContractStatus: "verified",
+        providerContractError: null,
+        pastDueSince: null,
+        confirmationEmailStatus: "sent",
+        confirmationEmailError: null,
+        confirmationEmailProviderId: "email_456",
+        cancellationRequestStatus: null,
+        cancellationRequestError: null,
+        entitlementProjectionStatus: null,
+        entitlementProjectionError: null,
+        discount: {
+          couponId: "coupon_existing_5",
+          promotionCodeId: "promo_1",
+          amountOffPence: 500,
+          currency: "gbp",
+          durationInMonths: 3,
+          startsAt: 1787149200,
+          endsAt: 1795035600,
+        },
+      }],
+    });
+
+    render(<AdminMemberships />);
+
+    expect(await screen.findByText("No memberships match this filter."))
+      .toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", {name: "scheduled"}));
+
+    expect(await screen.findByRole("heading", {name: "Adult Unlimited Membership"}))
+      .toBeInTheDocument();
+    expect(screen.getByText("Scheduled — starts 1 September")).toBeInTheDocument();
+    expect(screen.getByText("Pre-opening membership")).toBeInTheDocument();
+    expect(screen.getByText("Existing-member discount applied")).toBeInTheDocument();
+    expect(screen.queryByText("AlphaWOD access has not been applied"))
+      .not.toBeInTheDocument();
   });
 });

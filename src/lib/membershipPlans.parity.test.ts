@@ -94,6 +94,11 @@ describe("membership catalogue parity", () => {
   const sharedDeclarations = [
     "BILLING_TIMEZONE",
     "BILLING_CURRENCY",
+    "PRESALE_BILLING_ANCHOR_AT_ISO",
+    "PRESALE_BILLING_ANCHOR_UNIX_SECONDS",
+    "PRESALE_SIGNUP_CUTOFF_AT_ISO",
+    "PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS",
+    "EXISTING_MEMBER_OFFER",
     "COMPANY",
     "PLAN_KEYS",
     "MEMBERSHIP_PLANS",

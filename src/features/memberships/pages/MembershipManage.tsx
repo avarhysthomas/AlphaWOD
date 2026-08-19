@@ -17,18 +17,30 @@ import {
   type CancellationOutcome,
   type MyMembership,
 } from "../services/membership";
+import MembershipDiscountSummary from "../components/MembershipDiscountSummary";
 
 const CARD =
   "rounded-[28px] border border-white/10 bg-[#151311] p-7 shadow-[0_26px_80px_rgba(0,0,0,0.42)]";
 const EYEBROW = "text-[12px] font-bold uppercase tracking-[0.28em] text-white/34";
 
-function CancellationPreview({ preview }: { preview: CancellationOutcome }) {
+function CancellationPreview({
+  preview,
+  mode = "standard",
+}: {
+  preview: CancellationOutcome;
+  mode?: "cancel_before_start" | "standard";
+}) {
   return (
     <div className="mt-5 rounded-2xl border border-white/10 bg-black/30 p-5 text-sm leading-7 text-white/70">
       <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-white/45">
         If you cancel now
       </p>
-      {preview.noticeDeadlineMet ? (
+      {mode === "cancel_before_start" ? (
+        <p className="mt-3">
+          This membership has not started, so cancelling now stops it immediately.
+          Nothing will be charged and no membership access will be activated.
+        </p>
+      ) : preview.noticeDeadlineMet ? (
         <p className="mt-3">
           Your request would arrive {preview.noticeDaysGiven} calendar days before{" "}
           {formatIsoDate(preview.nextBillingDate)}, which meets the 14 day deadline. No
@@ -44,10 +56,12 @@ function CancellationPreview({ preview }: { preview: CancellationOutcome }) {
           {formatIsoDate(preview.accessEndsOnDate)}.
         </p>
       )}
-      <p className="mt-3 text-xs text-white/40">
-        The deadline for the {formatIsoDate(preview.nextBillingDate)} payment is{" "}
-        {formatIsoDate(preview.noticeDeadlineDate)}.
-      </p>
+      {mode === "standard" && (
+        <p className="mt-3 text-xs text-white/40">
+          The deadline for the {formatIsoDate(preview.nextBillingDate)} payment is{" "}
+          {formatIsoDate(preview.noticeDeadlineDate)}.
+        </p>
+      )}
     </div>
   );
 }
@@ -286,8 +300,8 @@ export default function MembershipManage() {
           <div className={`mt-8 ${CARD}`}>
             <p className="text-sm leading-7 text-white/70">
               {pendingSessionId
-                ? "Your payment is still being confirmed. Try linking it again in a moment."
-                : "You do not have a membership on this account yet. If you have already paid, claim that purchase here — it links by the email address you paid with."}
+                ? "Your checkout is still being confirmed. Try linking it again in a moment."
+                : "You do not have a membership on this account yet. If you have already completed checkout, claim that membership here — it links by the email address you used with Stripe."}
             </p>
             <button
               type="button"
@@ -301,8 +315,8 @@ export default function MembershipManage() {
               {claiming
                 ? "Claiming…"
                 : pendingSessionId
-                  ? "Try linking my paid membership"
-                  : "Claim a purchase I already made"}
+                  ? "Try linking my membership"
+                  : "Claim a membership I already joined"}
             </button>
             <Link
               to="/memberships"
@@ -323,8 +337,18 @@ export default function MembershipManage() {
               !cancellationConfirmed &&
               !cancellationManualReview
             );
-            const coolingOffActive = membership.coolingOffActive;
+            const cancellationPreview = membership.cancellationPreview ?? preview;
+            const cancelBeforeStart = membership.cancellationMode === "cancel_before_start";
+            const cancelledBeforeStart = cancellationConfirmed &&
+              membership.billingMode === "presale_deferred" &&
+              membership.firstPaymentReceivedAt == null &&
+              cancellationOutcome.finalPaymentDate === null;
+            const coolingOffActive = membership.coolingOffActive && !cancelBeforeStart;
             const isConfirming = confirming === membership.subscriptionId;
+            const isScheduled = membership.state === "scheduled";
+            const firstPaymentAt = membership.firstPaymentAt ??
+              membership.billingCycleAnchor ?? membership.currentPeriodEnd;
+            const serviceStartsAt = membership.serviceStartsAt ?? firstPaymentAt;
 
             return (
               <div key={membership.subscriptionId} className={CARD}>
@@ -340,7 +364,7 @@ export default function MembershipManage() {
                   </div>
                   {membership.grantsAlphaWodAccess && (
                     <span className="rounded-full border border-amber-500/25 bg-amber-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-200">
-                      AlphaWOD
+                      {isScheduled ? "AlphaWOD after first payment" : "AlphaWOD"}
                     </span>
                   )}
                 </div>
@@ -348,19 +372,23 @@ export default function MembershipManage() {
                 <dl className="mt-6 grid gap-4 sm:grid-cols-2">
                   <div>
                     <dt className="text-[11px] font-semibold uppercase tracking-[0.2em] text-white/45">
-                      Next payment
+                      {isScheduled ? "First payment" : "Next payment"}
                     </dt>
                     <dd className="mt-1 text-sm text-white/75">
                       {cancellationConfirmed
                         ? cancellationOutcome.finalPaymentDate
                           ? formatIsoDate(cancellationOutcome.finalPaymentDate)
                           : "None scheduled"
-                        : formatUnixDate(membership.currentPeriodEnd)}
+                        : formatUnixDate(isScheduled ? firstPaymentAt : membership.currentPeriodEnd)}
                     </dd>
                   </div>
                   <div>
                     <dt className="text-[11px] font-semibold uppercase tracking-[0.2em] text-white/45">
-                      {cancellationConfirmed
+                      {isScheduled && !cancellationConfirmed
+                        ? "Membership starts"
+                        : cancelledBeforeStart
+                          ? "Cancellation"
+                        : cancellationConfirmed
                         ? "Membership ends"
                         : cancellationPending || cancellationManualReview
                           ? "Cancellation"
@@ -368,7 +396,11 @@ export default function MembershipManage() {
                     </dt>
                     <dd className="mt-1 text-sm text-white/75">
                       {cancellationConfirmed
-                        ? formatIsoDate(cancellationOutcome.accessEndsOnDate)
+                        ? cancelledBeforeStart
+                          ? "Cancelled before start"
+                          : formatIsoDate(cancellationOutcome.accessEndsOnDate)
+                        : isScheduled
+                          ? formatUnixDate(serviceStartsAt)
                         : cancellationPending
                           ? "Pending confirmation"
                           : cancellationManualReview
@@ -377,6 +409,29 @@ export default function MembershipManage() {
                     </dd>
                   </div>
                 </dl>
+
+                {isScheduled && (
+                  <div className="mt-5 rounded-2xl border border-sky-400/25 bg-sky-400/10 p-5 text-sm leading-7 text-sky-50/90">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-sky-200">
+                      Nothing charged today
+                    </p>
+                    <p className="mt-3">
+                      Your payment method is saved. The membership remains inactive until
+                      the first payment succeeds on {formatUnixDate(firstPaymentAt)}.
+                      {membership.grantsAlphaWodAccess && (
+                        <> This membership does not unlock AlphaWOD access before then.</>
+                      )}
+                    </p>
+                  </div>
+                )}
+
+                <MembershipDiscountSummary
+                  planKey={membership.planKey}
+                  discount={membership.discount}
+                  paymentSchedule={membership.paymentSchedule}
+                  firstPaymentAt={firstPaymentAt}
+                  className="mt-5"
+                />
 
                 {membership.providerContractStatus === "manual_review" && (
                   <div className="mt-5 rounded-2xl border border-red-500/25 bg-red-500/10 p-5 text-sm leading-7 text-red-100">
@@ -393,6 +448,7 @@ export default function MembershipManage() {
 
                 {membership.grantsAlphaWodAccess &&
                   membership.participantIsPayer &&
+                  !isScheduled &&
                   membership.entitlementProjectionStatus !== "applied" && (
                   <div className="mt-5 rounded-2xl border border-red-500/25 bg-red-500/10 p-5 text-sm leading-7 text-red-100">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-red-200/70">
@@ -428,13 +484,17 @@ export default function MembershipManage() {
                       Cancellation confirmed
                     </p>
                     <p className="mt-3">
-                      {cancellationOutcome.finalPaymentDate
-                        ? `Your final payment is due on ${formatIsoDate(
-                            cancellationOutcome.finalPaymentDate
-                          )}. `
-                        : "No further payment is due. "}
-                      Your access ends on{" "}
-                      {formatIsoDate(cancellationOutcome.accessEndsOnDate)}.
+                      {cancelledBeforeStart
+                        ? "No payment was taken. This membership was cancelled before it started, so no membership access was activated."
+                        : <>
+                          {cancellationOutcome.finalPaymentDate
+                            ? `Your final payment is due on ${formatIsoDate(
+                              cancellationOutcome.finalPaymentDate
+                            )}. `
+                            : "No further payment is due. "}
+                          Your access ends on{" "}
+                          {formatIsoDate(cancellationOutcome.accessEndsOnDate)}.
+                        </>}
                     </p>
                   </div>
                 )}
@@ -450,11 +510,11 @@ export default function MembershipManage() {
                     </p>
                     <button
                       type="button"
-                      onClick={() => preview && cancel(
+                      onClick={() => cancellationPreview && cancel(
                         membership.subscriptionId,
-                        preview.cancelAtUnixSeconds
+                        cancellationPreview.cancelAtUnixSeconds
                       )}
-                      disabled={!preview || busy === membership.subscriptionId}
+                      disabled={!cancellationPreview || busy === membership.subscriptionId}
                       className="mt-4 rounded-2xl border border-amber-200/30 px-5 py-3 text-sm font-bold uppercase tracking-[0.14em] text-amber-100 transition hover:border-amber-100/60 disabled:opacity-50"
                     >
                       {busy === membership.subscriptionId
@@ -493,23 +553,28 @@ export default function MembershipManage() {
                   !cancellationPending &&
                   !cancellationManualReview &&
                   !coolingOffActive &&
-                  preview &&
+                  cancellationPreview &&
                   isConfirming && (
                   <>
-                    <CancellationPreview preview={preview} />
+                    <CancellationPreview
+                      preview={cancellationPreview}
+                      mode={cancelBeforeStart ? "cancel_before_start" : "standard"}
+                    />
                     <div className="mt-5 flex flex-wrap gap-3">
                       <button
                         type="button"
                         onClick={() => cancel(
                           membership.subscriptionId,
-                          preview.cancelAtUnixSeconds
+                          cancellationPreview.cancelAtUnixSeconds
                         )}
                         disabled={busy === membership.subscriptionId}
                         className="rounded-2xl bg-red-500/90 px-5 py-3 text-sm font-bold uppercase tracking-[0.14em] text-white transition hover:bg-red-500 disabled:bg-red-500/40"
                       >
                         {busy === membership.subscriptionId
                           ? "Submitting…"
-                          : "Confirm cancellation"}
+                          : cancelBeforeStart
+                            ? "Cancel scheduled membership"
+                            : "Confirm cancellation"}
                       </button>
                       <button
                         type="button"

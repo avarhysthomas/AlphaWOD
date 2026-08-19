@@ -54,6 +54,38 @@ function createFakeStripe() {
     portalSessions: [],
     events: new Map(),
     prices,
+    coupons: new Map([["coupon_existing_member_5x3", {
+      id: "coupon_existing_member_5x3",
+      object: "coupon",
+      livemode: false,
+      amount_off: 500,
+      currency: "gbp",
+      percent_off: null,
+      duration: "repeating",
+      duration_in_months: 3,
+      max_redemptions: null,
+      redeem_by: 1788217200,
+      applies_to: {products: ["prod_price_unlimited"]},
+      deleted: false,
+      valid: true,
+    }]]),
+    promotionCodes: new Map([["promo_existing_member_single_use", {
+      id: "promo_existing_member_single_use",
+      object: "promotion_code",
+      livemode: false,
+      active: true,
+      code: "EXISTING-FAKE-ONE",
+      max_redemptions: 1,
+      expires_at: 1788217200,
+      times_redeemed: 0,
+      promotion: {type: "coupon", coupon: "coupon_existing_member_5x3"},
+      restrictions: {
+        first_time_transaction: false,
+        minimum_amount: null,
+        minimum_amount_currency: null,
+        currency_options: {},
+      },
+    }]]),
     portalConfigurations: new Map([["bpc_fake", {
       id: "bpc_fake",
       object: "billing_portal.configuration",
@@ -94,6 +126,55 @@ function createFakeStripe() {
         return send(200, price);
       }
 
+      // --- Coupons and promotion codes ---
+      const couponMatch = path.match(/^\/v1\/coupons\/([^/]+)$/);
+      if (couponMatch && req.method === "GET") {
+        const storedCoupon = state.coupons.get(couponMatch[1]);
+        if (!storedCoupon) return notFound(`No such coupon: ${couponMatch[1]}`);
+        const coupon = {
+          ...storedCoupon,
+          valid: storedCoupon.valid === true &&
+            (storedCoupon.redeem_by === null ||
+              Math.floor(Date.now() / 1000) < storedCoupon.redeem_by),
+        };
+        // Match Stripe's include-dependent response: Product restrictions are
+        // omitted unless the caller explicitly expands `applies_to`.
+        if (url.searchParams.get("expand[0]") !== "applies_to") {
+          const defaultCoupon = {...coupon};
+          delete defaultCoupon.applies_to;
+          return send(200, defaultCoupon);
+        }
+        return send(200, coupon);
+      }
+      if (path === "/v1/promotion_codes" && req.method === "GET") {
+        const requestedCode = url.searchParams.get("code");
+        const activeOnly = url.searchParams.get("active") === "true";
+        const now = Math.floor(Date.now() / 1000);
+        const data = [...state.promotionCodes.values()].filter((promotionCode) => {
+          const currentlyActive = promotionCode.active === true &&
+            (promotionCode.expires_at === null || promotionCode.expires_at > now) &&
+            (promotionCode.max_redemptions === null ||
+              promotionCode.times_redeemed < promotionCode.max_redemptions);
+          return (!requestedCode ||
+              promotionCode.code.toUpperCase() === requestedCode.toUpperCase()) &&
+            (!activeOnly || currentlyActive);
+        });
+        return send(200, {
+          object: "list",
+          data,
+          has_more: false,
+          url: "/v1/promotion_codes",
+        });
+      }
+      const promotionCodeMatch = path.match(/^\/v1\/promotion_codes\/([^/]+)$/);
+      if (promotionCodeMatch && req.method === "GET") {
+        const promotionCode = state.promotionCodes.get(promotionCodeMatch[1]);
+        if (!promotionCode) {
+          return notFound(`No such promotion code: ${promotionCodeMatch[1]}`);
+        }
+        return send(200, promotionCode);
+      }
+
       // --- Customers ---
       if (path === "/v1/customers" && req.method === "POST") {
         const id = `cus_fake_${state.customers.size + 1}`;
@@ -120,6 +201,10 @@ function createFakeStripe() {
           });
         }
         const id = `cs_fake_${state.checkoutSessions.size + 1}`;
+        const promotionCodeId = payload["discounts[0][promotion_code]"] || null;
+        const promotionCode = promotionCodeId ?
+          state.promotionCodes.get(promotionCodeId) : null;
+        const couponId = promotionCode?.promotion?.coupon ?? null;
         const session = {
           id,
           object: "checkout.session",
@@ -135,6 +220,12 @@ function createFakeStripe() {
           customer: payload.customer || null,
           status: "open",
           payment_status: "unpaid",
+          payment_method_collection: payload.payment_method_collection || null,
+          allow_promotion_codes: payload.allow_promotion_codes === "true",
+          discounts: promotionCodeId ? [{
+            coupon: couponId,
+            promotion_code: promotionCodeId,
+          }] : [],
           mode: payload.mode,
         };
         state.checkoutSessions.set(id, session);
@@ -274,6 +365,7 @@ function createFakeStripe() {
         customer: `cus_${id}`,
         billing_cycle_anchor: 1788220800,
         metadata: {planKey: "adult_unlimited"},
+        discounts: [],
         items: {
           object: "list",
           data: [{
@@ -291,6 +383,14 @@ function createFakeStripe() {
     },
     setEvent(event) {
       state.events.set(event.id, event);
+      const object = event.data?.object;
+      if ((event.type === "checkout.session.completed" ||
+          event.type === "checkout.session.async_payment_succeeded") && object?.id) {
+        state.checkoutSessions.set(object.id, object);
+      }
+      if (event.type === "invoice.paid" && object?.id) {
+        state.invoices.set(object.id, object);
+      }
       return event;
     },
     setDispute(id, overrides = {}) {

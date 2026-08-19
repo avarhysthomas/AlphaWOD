@@ -27,6 +27,11 @@ jest.mock("../services/membership", () => ({
   clearCheckoutAttempt: (...args: unknown[]) => mockClearCheckoutAttempt(...args),
   clearPendingClaim: (...args: unknown[]) => mockClearPendingClaim(...args),
   getMyMemberships: (...args: unknown[]) => mockGetMyMemberships(...args),
+  formatUnixDate: (value: number | null) => {
+    if (value === 1788217200) return "1 September 2026";
+    if (value === 1796083200) return "1 December 2026";
+    return String(value ?? "—");
+  },
   readCheckoutAttemptId: () => mockReadCheckoutAttemptId(),
   readPendingClaim: () => mockReadPendingClaim(),
   readPendingClaimVerifier: () => mockReadPendingClaimVerifier(),
@@ -68,6 +73,7 @@ const activeMembership = {
 describe("MembershipSuccess claim persistence", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    jest.spyOn(Date, "now").mockReturnValue(Date.parse("2026-08-19T09:00:00.000Z"));
     mockUser = { uid: "buyer-1" };
     mockLoading = false;
     mockSearchParams = "plan=adult_unlimited&session_id=cs_signed_in";
@@ -81,6 +87,10 @@ describe("MembershipSuccess claim persistence", () => {
       cancellationPreview: null,
     });
     mockRefreshAppUser.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
   });
 
   it("does not persist a pending claim for a buyer who was already signed in", async () => {
@@ -106,6 +116,9 @@ describe("MembershipSuccess claim persistence", () => {
     mockUser = null;
     render(<MembershipSuccess />);
 
+    expect(screen.getByText(/Nothing was charged today/i)).toBeInTheDocument();
+    expect(screen.getByText(/AlphaWOD access will not be unlocked before/i))
+      .toBeInTheDocument();
     expect(
       screen.getByRole("link", {name: "Create AlphaWOD account"})
     ).toHaveAttribute("href", "/signup");
@@ -242,5 +255,44 @@ describe("MembershipSuccess claim persistence", () => {
     expect(await screen.findByText("Payment confirmed — access pending"))
       .toBeInTheDocument();
     expect(screen.queryByText(/access has been unlocked/i)).not.toBeInTheDocument();
+  });
+
+  it("confirms a presale signup without implying payment or access is active", async () => {
+    mockGetMyMemberships.mockResolvedValue({
+      ok: true,
+      memberships: [{
+        ...activeMembership,
+        state: "scheduled",
+        billingMode: "presale_deferred",
+        serviceStartsAt: 1788217200,
+        firstPaymentAt: 1788220800,
+        billingCycleAnchor: 1788220800,
+        initialChargePence: 0,
+        entitlementProjectionStatus: null,
+        discount: {
+          couponId: "coupon_existing_5",
+          promotionCodeId: "promo_1",
+          amountOffPence: 500,
+          currency: "gbp",
+          durationInMonths: 3,
+          startsAt: 1787149200,
+          endsAt: 1795035600,
+        },
+      }],
+      cancellationPreview: null,
+    });
+
+    render(<MembershipSuccess />);
+
+    expect(await screen.findByText("Membership scheduled")).toBeInTheDocument();
+    expect(screen.getByText(/nothing was charged today/i)).toBeInTheDocument();
+    expect(screen.getByText(/will not unlock AlphaWOD access until/i))
+      .toBeInTheDocument();
+    expect(screen.getByText("Existing-member discount applied")).toBeInTheDocument();
+    expect(screen.getByText(/The standard price resumes on 1 December 2026/i))
+      .toBeInTheDocument();
+    expect(screen.queryByText("Payment confirmed")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", {name: "Go to AlphaWOD"}))
+      .not.toBeInTheDocument();
   });
 });

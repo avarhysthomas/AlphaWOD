@@ -42,6 +42,7 @@ import {
   BILLING_POLICY,
   CHECKOUT_DOCUMENTS,
   COMPANY,
+  EXISTING_MEMBER_OFFER,
   formatBillingDate,
   formatPence,
   formatUnixBillingDate,
@@ -50,6 +51,8 @@ import {
   MEMBERSHIP_SCHEMA_VERSION,
   MembershipState,
   PLAN_KEYS,
+  PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+  PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
   PlanKey,
   POLICY_TEXT,
   getPlan,
@@ -57,8 +60,8 @@ import {
   isMembershipStateBlockingDuplicate,
   isPlanKey,
   resolveAgeFromDateOfBirth,
-  resolveBillingCycleAnchor,
   resolveCancellationOutcome,
+  resolveCheckoutBillingPolicy,
   resolveCheckoutSessionExpiry,
   resolveCoolingOffEnd,
   resolveEntitlementForMembership,
@@ -107,6 +110,10 @@ const membershipFirebaseProjectId = defineString("MEMBERSHIP_FIREBASE_PROJECT_ID
 const stripeExpectedMode = defineString("STRIPE_EXPECTED_MODE", {
   default: "",
 });
+const stripeExistingMemberCouponId = defineString(
+  "STRIPE_EXISTING_MEMBER_COUPON_ID",
+  {default: ""}
+);
 
 const priceParams: Record<PlanKey, ReturnType<typeof defineString>> = {
   adult_unlimited: defineString("STRIPE_PRICE_ADULT_UNLIMITED", {default: ""}),
@@ -377,12 +384,39 @@ type MembershipIntentDoc = {
   checkoutSessionId: string | null;
   checkoutSessionUrl: string | null;
   status: "reserved" | "created" | "payment_pending" | "fulfilled" | "expired" | "failed";
+  /** Frozen commercial policy; missing only on legacy, standard-billing intents. */
+  billingMode: "presale_deferred" | "standard";
   billingCycleAnchor: number;
+  serviceStartsAt: number;
+  firstPaymentAt: number;
+  initialChargePence: number | null;
+  prorationBehavior: "none" | "create_prorations";
+  /** Resolved Stripe id only; the customer-entered code is never persisted. */
+  promotionCodeId: string | null;
   firstFullChargeDate: string;
   checkoutExpiresAt: number;
   reservationExpiresAt: Timestamp;
   reservationLockIds: string[];
   createdAt: FieldValue | Timestamp;
+};
+
+type MembershipDiscount = {
+  couponId: string;
+  promotionCodeId: string;
+  amountOffPence: number;
+  currency: "gbp";
+  durationInMonths: number;
+  startsAt: number;
+  endsAt: number | null;
+};
+
+type MembershipPaymentSchedule = {
+  amountDueTodayPence: number | null;
+  firstPaymentAt: number;
+  standardMonthlyPence: number;
+  discountedMonthlyPence: number | null;
+  discountedPaymentCount: number;
+  fullPriceFrom: number | null;
 };
 
 type MembershipDoc = {
@@ -422,7 +456,15 @@ type MembershipDoc = {
     entitlementSource: EntitlementSource;
   } | null;
   currentPeriodEnd: number | null;
+  billingMode: "presale_deferred" | "standard";
   billingCycleAnchor: number;
+  serviceStartsAt: number;
+  firstPaymentAt: number;
+  initialChargePence: number | null;
+  firstPaymentReceivedAt: number | null;
+  firstPaidInvoiceId: string | null;
+  discount: MembershipDiscount | null;
+  paymentSchedule: MembershipPaymentSchedule;
   pastDueSince: number | null;
   pastDueGraceEndsAt: Timestamp | null;
   nextReconcileAt?: Timestamp | null;
@@ -437,6 +479,7 @@ type MembershipDoc = {
   cancellationOutcome: ReturnType<typeof resolveCancellationOutcome> | null;
   cancellationRequest?: {
     id: string;
+    kind?: "presale_withdrawal";
     status: "pending" | "applied" | "manual_review";
     receivedAt: Timestamp;
     /** Starts/resets when automatic application or a later drift repair begins. */
@@ -461,6 +504,230 @@ type MembershipDoc = {
 };
 
 type CancellationOutcome = ReturnType<typeof resolveCancellationOutcome>;
+
+function isPresaleIntent(
+  intent: Pick<MembershipIntentDoc, "billingMode">
+): boolean {
+  return intent.billingMode === "presale_deferred";
+}
+
+function addUtcMonths(unixSeconds: number, months: number): number {
+  const date = new Date(unixSeconds * 1000);
+  return Math.floor(Date.UTC(
+    date.getUTCFullYear(),
+    date.getUTCMonth() + months,
+    date.getUTCDate(),
+    date.getUTCHours(),
+    date.getUTCMinutes(),
+    date.getUTCSeconds()
+  ) / 1000);
+}
+
+function resolvePresaleCancellationOutcome(
+  receivedAtMillis: number,
+  membership: Pick<MembershipDoc, "serviceStartsAt" | "firstPaymentAt">
+): CancellationOutcome {
+  const receivedAt = Math.floor(receivedAtMillis / 1000);
+  const firstPaymentDate = formatUnixBillingIsoDate(membership.firstPaymentAt);
+  const noticeDaysGiven = Math.max(
+    0,
+    Math.floor((membership.firstPaymentAt * 1000 - receivedAtMillis) /
+      (24 * 60 * 60 * 1000))
+  );
+  return {
+    nextBillingDate: firstPaymentDate,
+    noticeDeadlineMet: true,
+    noticeDaysGiven,
+    noticeDeadlineDate: formatUnixBillingIsoDate(
+      membership.firstPaymentAt - BILLING_POLICY.cancellationNoticeDays * 24 * 60 * 60
+    ),
+    finalPaymentDate: null,
+    accessEndsOnDate: formatUnixBillingIsoDate(membership.serviceStartsAt - 1),
+    // This request withdraws a not-yet-started service. Freezing receipt time
+    // makes recovery cancel immediately and guarantees no opening-day invoice.
+    cancelAtUnixSeconds: receivedAt,
+  };
+}
+
+function paymentScheduleFor(
+  intent: MembershipIntentDoc,
+  discount: MembershipDiscount | null,
+  observedInitialChargePence: number | null
+): MembershipPaymentSchedule {
+  const plan = getPlan(intent.planKey);
+  const firstPaymentAt = intent.firstPaymentAt ?? intent.billingCycleAnchor;
+  return {
+    amountDueTodayPence: intent.initialChargePence ?? observedInitialChargePence,
+    firstPaymentAt,
+    standardMonthlyPence: plan.amountPence,
+    discountedMonthlyPence: discount ?
+      Math.max(0, plan.amountPence - discount.amountOffPence) : null,
+    discountedPaymentCount: discount?.durationInMonths ?? 0,
+    fullPriceFrom: discount ?
+      addUtcMonths(firstPaymentAt, discount.durationInMonths) : null,
+  };
+}
+
+async function retrieveApprovedExistingMemberCoupon(
+  billingStripe: Stripe,
+  productId: string,
+  requireCurrentlyRedeemable = true
+): Promise<Stripe.Coupon> {
+  const configuredCouponId = stripeExistingMemberCouponId.value().trim();
+  if (!configuredCouponId) {
+    throw new HttpsError(
+      "failed-precondition",
+      "The existing-member Coupon allowlist is not configured."
+    );
+  }
+  // Stripe omits `applies_to` from the default representation. Expanding it
+  // keeps this on the typed SDK path while making the Product allowlist
+  // available for the fail-closed preflight and fulfilment checks.
+  const coupon = await billingStripe.coupons.retrieve(configuredCouponId, {
+    expand: ["applies_to"],
+  });
+  assertStripeObjectMode("Coupon", coupon.id, coupon.livemode);
+  const applicableProducts = coupon.applies_to?.products ?? [];
+  if (coupon.deleted || (requireCurrentlyRedeemable && coupon.valid !== true) ||
+    coupon.amount_off !== EXISTING_MEMBER_OFFER.amountOffPence ||
+    coupon.currency !== EXISTING_MEMBER_OFFER.currency || coupon.percent_off !== null ||
+    coupon.duration !== "repeating" ||
+    coupon.duration_in_months !== EXISTING_MEMBER_OFFER.durationMonths ||
+    coupon.redeem_by !== PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS ||
+    coupon.max_redemptions !== null ||
+    applicableProducts.length !== 1 || applicableProducts[0] !== productId) {
+    throw new HttpsError(
+      "failed-precondition",
+      "The configured existing-member Coupon does not match the approved £5 offer."
+    );
+  }
+  return coupon;
+}
+
+function promotionCodeMatchesApprovedOffer(
+  promotionCode: Stripe.PromotionCode,
+  couponId: string
+): boolean {
+  const currencyOptions = promotionCode.restrictions?.currency_options;
+  return idOf(promotionCode.promotion?.coupon) === couponId &&
+    promotionCode.max_redemptions === 1 &&
+    promotionCode.expires_at === PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS &&
+    promotionCode.customer == null && promotionCode.customer_account == null &&
+    promotionCode.restrictions?.first_time_transaction !== true &&
+    promotionCode.restrictions?.minimum_amount === null &&
+    promotionCode.restrictions?.minimum_amount_currency === null &&
+    (!currencyOptions || Object.keys(currencyOptions).length === 0);
+}
+
+async function resolveApprovedPromotionCodeForCheckout(
+  billingStripe: Stripe,
+  normalizedCode: string,
+  nowMillis: number
+): Promise<string> {
+  const configuredCouponId = stripeExistingMemberCouponId.value().trim();
+  const matches = await billingStripe.promotionCodes.list({
+    active: true,
+    code: normalizedCode,
+    limit: 10,
+  });
+  const exactMatches = matches.data.filter((promotionCode) =>
+    promotionCode.code.normalize("NFKC").trim().toUpperCase() === normalizedCode
+  );
+  if (exactMatches.length !== 1) {
+    throw new HttpsError(
+      "failed-precondition",
+      "This promotion code is not valid for the founding-member offer."
+    );
+  }
+  const promotionCode = exactMatches[0];
+  assertStripeObjectMode("Promotion Code", promotionCode.id, promotionCode.livemode);
+  if (!promotionCodeMatchesApprovedOffer(promotionCode, configuredCouponId) ||
+    promotionCode.active !== true || promotionCode.times_redeemed !== 0 ||
+    promotionCode.expires_at === null || promotionCode.expires_at * 1000 <= nowMillis) {
+    throw new HttpsError(
+      "failed-precondition",
+      "This promotion code is not valid for the founding-member offer."
+    );
+  }
+  return promotionCode.id;
+}
+
+async function resolveApprovedCheckoutDiscount(
+  session: Stripe.Checkout.Session,
+  subscription: Stripe.Subscription,
+  intent: MembershipIntentDoc,
+  completionUnixSeconds: number
+): Promise<MembershipDiscount | null> {
+  const applied = session.discounts ?? [];
+  if (applied.length === 0) {
+    if (intent.promotionCodeId || (subscription.discounts ?? []).length > 0) {
+      throw new Error(`Subscription ${subscription.id} has an unapproved discount.`);
+    }
+    return null;
+  }
+  if (!isPresaleIntent(intent) || intent.planKey !== EXISTING_MEMBER_OFFER.planKey ||
+    !intent.promotionCodeId) {
+    throw new Error(`Checkout Session ${session.id} has an unapproved discount.`);
+  }
+  if (applied.length !== 1) {
+    throw new Error(`Checkout Session ${session.id} has multiple discounts.`);
+  }
+
+  const configuredCouponId = stripeExistingMemberCouponId.value().trim();
+  const couponId = idOf(applied[0].coupon);
+  const promotionCodeId = idOf(applied[0].promotion_code);
+  if (couponId !== configuredCouponId || promotionCodeId !== intent.promotionCodeId) {
+    throw new Error(`Checkout Session ${session.id} used an unapproved promotion.`);
+  }
+
+  const billingStripe = stripe();
+  const itemPrice = subscription.items.data[0]?.price;
+  let productId = itemPrice && typeof itemPrice !== "string" ?
+    idOf(itemPrice.product) : null;
+  if (!productId) {
+    const price = await billingStripe.prices.retrieve(intent.stripePriceId);
+    assertStripeObjectMode("Price", price.id, price.livemode);
+    productId = idOf(price.product);
+  }
+  if (!productId) {
+    throw new Error(`Subscription ${subscription.id} has no membership Product.`);
+  }
+  const [coupon, promotionCode] = await Promise.all([
+    // Coupon.valid becomes false at redeem_by. Once Stripe has authoritatively
+    // applied the Coupon and Promotion Code to both Session and Subscription,
+    // delayed webhook/recovery processing must validate the frozen offer terms
+    // without pretending it is a new redemption.
+    retrieveApprovedExistingMemberCoupon(billingStripe, productId, false),
+    billingStripe.promotionCodes.retrieve(promotionCodeId),
+  ]);
+  assertStripeObjectMode("Promotion Code", promotionCode.id, promotionCode.livemode);
+  if (coupon.id !== couponId ||
+    !promotionCodeMatchesApprovedOffer(promotionCode, coupon.id) ||
+    promotionCode.times_redeemed > 1) {
+    throw new Error(`Promotion Code ${promotionCode.id} is not an approved single-use code.`);
+  }
+
+  const subscriptionDiscounts = (subscription.discounts ?? []).filter(
+    (value): value is Stripe.Discount =>
+      typeof value !== "string" && idOf(value.source?.coupon) === coupon.id &&
+      idOf(value.promotion_code) === promotionCode.id
+  );
+  if (subscriptionDiscounts.length !== 1 || subscription.discounts.length !== 1) {
+    throw new Error(
+      `Subscription ${subscription.id} does not carry the approved Checkout discount.`
+    );
+  }
+  const [subscriptionDiscount] = subscriptionDiscounts;
+  return {
+    couponId: coupon.id,
+    promotionCodeId: promotionCode.id,
+    amountOffPence: EXISTING_MEMBER_OFFER.amountOffPence,
+    currency: "gbp",
+    durationInMonths: EXISTING_MEMBER_OFFER.durationMonths,
+    startsAt: subscriptionDiscount?.start ?? completionUnixSeconds,
+    endsAt: subscriptionDiscount?.end ?? null,
+  };
+}
 
 /** Keeps stored customer-facing dates aligned with an earlier Stripe schedule. */
 function alignCancellationOutcome(
@@ -516,6 +783,22 @@ function requireBoundedString(value: unknown, field: string, min: number, max: n
   return text;
 }
 
+function normalizePromotionCode(value: unknown): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value !== "string") {
+    throw new HttpsError("invalid-argument", "promotionCode must be text.");
+  }
+  const normalized = value.normalize("NFKC").trim().toUpperCase();
+  const hasControlCharacter = [...normalized].some((character) => {
+    const code = character.charCodeAt(0);
+    return code <= 31 || code === 127;
+  });
+  if (!normalized || normalized.length > 64 || hasControlCharacter) {
+    throw new HttpsError("invalid-argument", "Enter a valid promotion code.");
+  }
+  return normalized;
+}
+
 function optionalBoundedText(
   value: unknown,
   min: number,
@@ -563,6 +846,8 @@ function requireCheckoutAttemptId(value: unknown): string {
 type CheckoutFingerprintInput = {
   payerUid: string | null;
   planKey: PlanKey;
+  expectedBillingMode: "presale_deferred" | "standard";
+  promotionCode: string | null;
   participant: ParticipantRecord;
   guardian: GuardianRecord | null;
   signedName: string;
@@ -575,6 +860,8 @@ function checkoutRequestFingerprint(input: CheckoutFingerprintInput): string {
     schemaVersion: MEMBERSHIP_SCHEMA_VERSION,
     payerUid: input.payerUid,
     planKey: input.planKey,
+    expectedBillingMode: input.expectedBillingMode,
+    promotionCode: input.promotionCode,
     participant: {
       fullName: input.participant.fullName,
       dateOfBirth: input.participant.dateOfBirth,
@@ -663,7 +950,7 @@ async function assertStripePriceMatchesPlan(
   client: Stripe,
   priceId: string,
   plan: ReturnType<typeof getPlan>
-): Promise<void> {
+): Promise<string> {
   let price: Stripe.Price;
   try {
     price = await client.prices.retrieve(priceId, {expand: ["product"]});
@@ -717,6 +1004,7 @@ async function assertStripePriceMatchesPlan(
       `The billing price for ${plan.name} does not match the approved catalogue.`
     );
   }
+  return product.id;
 }
 
 /** Prevents an operator-selected portal configuration bypassing cancellation policy. */
@@ -1323,6 +1611,28 @@ async function applyMembershipEntitlement(
     const membership = membershipSnap.data() as MembershipDoc;
     const uid = membership.entitlementTargetUid;
     if (!uid) return null;
+    // A blocking presale owns the duplicate lock but must not change an
+    // existing legacy/manual entitlement, approval, or Auth claims before first
+    // payment, including when its first invoice has failed and is suspended.
+    // Once that prepayment membership becomes terminal, release only its owner
+    // generation; the profile still must remain completely untouched.
+    if (membership.billingMode === "presale_deferred" &&
+      membership.firstPaymentReceivedAt === null) {
+      if (isMembershipStateBlockingDuplicate(membership.state)) return null;
+      const owner = await readEntitlementOwner(tx, uid, membershipRef.id);
+      if (owner.ownerSubscriptionId === membershipRef.id &&
+        owner.ownerState === "active") {
+        tx.set(owner.ref, {
+          schemaVersion: MEMBERSHIP_SCHEMA_VERSION,
+          subscriptionId: membershipRef.id,
+          userIdHash: sha256(uid),
+          state: "released",
+          releasedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        }, {merge: true});
+      }
+      return null;
+    }
 
     const decision = membership.providerContractStatus === "manual_review" &&
       isMembershipStateBlockingDuplicate(membership.state) ? {
@@ -1503,7 +1813,45 @@ type MembershipConvergenceOverrides = {
   pastDueSince?: number | null;
   accessRevoked?: boolean;
   dispute?: {id: string; status: Stripe.Dispute.Status};
+  activationPayment?: {
+    invoiceId: string;
+    paidAt: number;
+    amountPaidPence: number;
+    currency: string;
+    lines: Array<{
+      subscriptionId: string;
+      priceId: string;
+      periodStart: number;
+      quantity: number | null;
+      proration: boolean;
+    }>;
+  };
 };
+
+function subscriptionLineEvidence(invoice: Stripe.Invoice): Array<{
+  subscriptionId: string;
+  priceId: string;
+  periodStart: number;
+  quantity: number | null;
+  proration: boolean;
+}> {
+  return (invoice.lines?.data ?? []).flatMap((line) => {
+    const details = line.parent?.subscription_item_details;
+    const subscriptionId = details?.subscription ?? idOf(line.subscription);
+    const priceId = idOf(line.pricing?.price_details?.price);
+    if (line.parent?.type !== "subscription_item_details" || !details ||
+      !subscriptionId || !priceId || typeof line.period?.start !== "number") {
+      return [];
+    }
+    return [{
+      subscriptionId,
+      priceId,
+      periodStart: line.period.start,
+      quantity: line.quantity,
+      proration: details.proration,
+    }];
+  });
+}
 
 function isOpenDisputeStatus(status: Stripe.Dispute.Status): boolean {
   return status !== "won" && status !== "lost" &&
@@ -1587,6 +1935,39 @@ async function convergeMembershipFromStripe(
     throw error;
   }
 
+  let authoritativeActivationPayment = overrides.activationPayment;
+  if (!authoritativeActivationPayment) {
+    const presaleSnapshot = await membershipRef.get();
+    const firstPaymentAt = presaleSnapshot.get("firstPaymentAt");
+    if (presaleSnapshot.exists &&
+      presaleSnapshot.get("billingMode") === "presale_deferred" &&
+      presaleSnapshot.get("firstPaymentReceivedAt") == null &&
+      typeof firstPaymentAt === "number" && nowMillis >= firstPaymentAt * 1000) {
+      let latestInvoice = typeof subscription.latest_invoice === "string" ?
+        await stripe().invoices.retrieve(subscription.latest_invoice) :
+        subscription.latest_invoice;
+      if (latestInvoice && typeof latestInvoice !== "string" &&
+        "id" in latestInvoice) {
+        latestInvoice = latestInvoice as Stripe.Invoice;
+        if (typeof latestInvoice.livemode === "boolean") {
+          assertStripeObjectMode("Invoice", latestInvoice.id, latestInvoice.livemode);
+        }
+        const paidAt = latestInvoice.status_transitions?.paid_at;
+        if (resolveInvoiceSubscriptionId(latestInvoice) === subscriptionId &&
+          latestInvoice.status === "paid" && latestInvoice.amount_paid > 0 &&
+          typeof paidAt === "number" && typeof latestInvoice.currency === "string") {
+          authoritativeActivationPayment = {
+            invoiceId: latestInvoice.id,
+            paidAt,
+            amountPaidPence: latestInvoice.amount_paid,
+            currency: latestInvoice.currency,
+            lines: subscriptionLineEvidence(latestInvoice),
+          };
+        }
+      }
+    }
+  }
+
   if (lease.state === "missing") {
     // Stripe can deliver subscription/invoice/refund events before Checkout
     // completion. App-owned subscriptions must be retried after fulfilment;
@@ -1652,6 +2033,51 @@ async function convergeMembershipFromStripe(
       const accessRevoked = stored.accessRevoked === true ||
         overrides.accessRevoked === true || overrides.dispute?.status === "lost";
 
+      let firstPaymentReceivedAt = typeof stored.firstPaymentReceivedAt === "number" ?
+        stored.firstPaymentReceivedAt : null;
+      let firstPaidInvoiceId = typeof stored.firstPaidInvoiceId === "string" ?
+        stored.firstPaidInvoiceId : null;
+      const activationPayment = authoritativeActivationPayment;
+      if (stored.billingMode === "presale_deferred" && activationPayment) {
+        const matchingLines = activationPayment.lines.filter((line) =>
+          line.subscriptionId === subscriptionId &&
+          line.priceId === stored.stripePriceId &&
+          line.quantity === 1 && line.proration === false
+        );
+        if (matchingLines.length !== 1) {
+          throw new Error(
+            `Invoice ${activationPayment.invoiceId} has no unique approved membership line.`
+          );
+        }
+        const [membershipLine] = matchingLines;
+        if (activationPayment.paidAt < stored.firstPaymentAt ||
+          membershipLine.periodStart < stored.firstPaymentAt ||
+          activationPayment.amountPaidPence <= 0 ||
+          activationPayment.currency !== "gbp") {
+          throw new Error(
+            `Invoice ${activationPayment.invoiceId} is not an approved recurring payment.`
+          );
+        }
+        const discountedPeriod = Boolean(stored.discount) &&
+          typeof stored.paymentSchedule?.fullPriceFrom === "number" &&
+          membershipLine.periodStart < stored.paymentSchedule.fullPriceFrom;
+        const expectedAmount = discountedPeriod ?
+          stored.paymentSchedule?.discountedMonthlyPence :
+          (stored.paymentSchedule?.standardMonthlyPence ??
+            getPlan(stored.planKey).amountPence);
+        if (typeof expectedAmount !== "number" ||
+          activationPayment.amountPaidPence !== expectedAmount) {
+          throw new Error(
+            `Invoice ${activationPayment.invoiceId} paid an unexpected first-payment amount.`
+          );
+        }
+        if (firstPaymentReceivedAt === null ||
+          activationPayment.paidAt < firstPaymentReceivedAt) {
+          firstPaymentReceivedAt = activationPayment.paidAt;
+          firstPaidInvoiceId = activationPayment.invoiceId;
+        }
+      }
+
       let pastDueSince: number | null = null;
       if (subscription.status === "past_due") {
         const detectedAt = Math.floor(nowMillis / 1000);
@@ -1667,18 +2093,31 @@ async function convergeMembershipFromStripe(
       const graceEndMillis = resolvePastDueGraceEndMillis(pastDueSince);
       const pastDueGraceEndsAt = graceEndMillis === null ?
         null : Timestamp.fromMillis(graceEndMillis);
-      const state = resolveMembershipState({
+      let state = resolveMembershipState({
         stripeStatus: subscription.status,
         pastDueSinceUnixSeconds: pastDueSince,
         disputeOpen,
         accessRevoked,
         cancelAtUnixSeconds: subscription.cancel_at,
+        serviceStartsAtUnixSeconds: stored.serviceStartsAt,
+        activationPendingFirstPayment:
+          stored.billingMode === "presale_deferred" && firstPaymentReceivedAt === null,
       }, nowMillis);
-      const nextReconcileAt = state === "past_due_grace" ?
-        pastDueGraceEndsAt : state === "past_due_suspended" ?
-          Timestamp.fromMillis(
-            nowMillis + SUSPENDED_RECONCILE_INTERVAL_MS
-          ) : null;
+      if (stored.billingMode === "presale_deferred" &&
+        firstPaymentReceivedAt === null && state === "past_due_grace") {
+        // Past-due grace preserves already-earned access. A founding presale
+        // has no earned access until its first recurring invoice is paid.
+        state = "past_due_suspended";
+      }
+      const nextReconcileAt = state === "scheduled" ?
+        Timestamp.fromMillis(Math.max(
+          stored.firstPaymentAt * 1000,
+          nowMillis + SUSPENDED_RECONCILE_INTERVAL_MS
+        )) : state === "past_due_grace" ?
+          pastDueGraceEndsAt : state === "past_due_suspended" ?
+            Timestamp.fromMillis(
+              nowMillis + SUSPENDED_RECONCILE_INTERVAL_MS
+            ) : null;
 
       const pendingCancellation = stored.cancellationRequest;
       const authoritativeCancelAt = authoritativeSubscriptionCancellationEnd(subscription);
@@ -1697,10 +2136,32 @@ async function convergeMembershipFromStripe(
       const validRequest = typeof pendingCancellation?.id === "string" &&
         pendingCancellation.receivedAt instanceof Timestamp &&
         typeof pendingCancellation.outcome?.cancelAtUnixSeconds === "number";
+      const successfulPresaleWithdrawal = validRequest &&
+        pendingCancellation.kind === "presale_withdrawal" &&
+        subscription.status === "canceled" && authoritativeCancelAt !== null &&
+        pendingCancellation.receivedAt.toMillis() < stored.serviceStartsAt * 1000 &&
+        authoritativeCancelAt < stored.firstPaymentAt &&
+        stored.firstPaymentReceivedAt === null;
 
       if (stored.cancellationOutcome) {
         const promisedCancelAt = stored.cancellationOutcome.cancelAtUnixSeconds;
-        if (authoritativeCancelAt !== null && authoritativeCancelAt <= promisedCancelAt) {
+        if (successfulPresaleWithdrawal) {
+          projectedCancelAt = authoritativeCancelAt;
+          cancellationUpdate = {
+            cancellationOutcome: stored.cancellationOutcome,
+            cancellationRequest: {
+              ...pendingCancellation,
+              status: "applied",
+              outcome: stored.cancellationOutcome,
+              stripeCancelAt: authoritativeCancelAt,
+              nextAttemptAt: FieldValue.delete(),
+              leaseToken: FieldValue.delete(),
+              leaseExpiresAt: FieldValue.delete(),
+              lastError: FieldValue.delete(),
+            },
+          };
+        } else if (authoritativeCancelAt !== null &&
+          authoritativeCancelAt <= promisedCancelAt) {
           const aligned = alignCancellationOutcome(
             stored.cancellationOutcome,
             authoritativeCancelAt
@@ -1791,6 +2252,28 @@ async function convergeMembershipFromStripe(
             },
           };
         }
+      } else if (successfulPresaleWithdrawal) {
+        settledCancellation = {
+          requestId: pendingCancellation.id,
+          payerUid: stored.payerUid,
+          outcome: pendingCancellation.outcome,
+        };
+        projectedCancelAt = authoritativeCancelAt;
+        cancellationUpdate = {
+          cancellationRequestedAt: pendingCancellation.receivedAt,
+          cancellationOutcome: settledCancellation.outcome,
+          cancellationRequest: {
+            ...pendingCancellation,
+            status: "applied",
+            outcome: settledCancellation.outcome,
+            stripeCancelAt: authoritativeCancelAt,
+            appliedAt: serverTimestamp(),
+            nextAttemptAt: FieldValue.delete(),
+            leaseToken: FieldValue.delete(),
+            leaseExpiresAt: FieldValue.delete(),
+            lastError: FieldValue.delete(),
+          },
+        };
       } else if ((pendingCancellation?.status === "pending" ||
         pendingCancellation?.status === "manual_review") && validRequest &&
         authoritativeCancelAt !== null &&
@@ -1870,6 +2353,8 @@ async function convergeMembershipFromStripe(
       tx.set(membershipRef, {
         state,
         stripeStatus: subscription.status,
+        firstPaymentReceivedAt,
+        firstPaidInvoiceId,
         currentPeriodEnd: resolveCurrentPeriodEnd(subscription),
         cancelAt: projectedCancelAt,
         openDisputeIds,
@@ -1946,7 +2431,7 @@ async function convergeMembershipFromStripe(
   }
 }
 
-/** Re-checks memberships whose absolute grace deadline has passed. */
+/** Re-checks memberships whose activation or payment-recovery deadline is due. */
 async function reconcilePastDueMembershipsOnce(
   converge: (userId: string) => Promise<void>,
   nowMillis = Date.now(),
@@ -1954,7 +2439,7 @@ async function reconcilePastDueMembershipsOnce(
 ): Promise<{processed: number; failed: number}> {
   assertBillingEnvironment();
   const due = await db().collection("memberships")
-    .where("state", "in", ["past_due_grace", "past_due_suspended"])
+    .where("state", "in", ["scheduled", "past_due_grace", "past_due_suspended"])
     .where("nextReconcileAt", "<=", Timestamp.fromMillis(nowMillis))
     .orderBy("nextReconcileAt", "asc")
     .limit(limit)
@@ -2046,6 +2531,22 @@ function buildCreateMembershipCheckoutHandler(
     }
 
     const now = Date.now();
+    const billingPolicy = resolveCheckoutBillingPolicy(now);
+    const expectedBillingMode = request.data?.expectedBillingMode;
+    if (expectedBillingMode !== "presale_deferred" && expectedBillingMode !== "standard") {
+      throw new HttpsError(
+        "invalid-argument",
+        "expectedBillingMode must identify the billing terms shown before checkout."
+      );
+    }
+    const promotionCode = normalizePromotionCode(request.data?.promotionCode);
+    if (promotionCode && (billingPolicy.kind !== "presale" ||
+      planKey !== EXISTING_MEMBER_OFFER.planKey)) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Promotion codes are available only for the Adult Unlimited founding presale."
+      );
+    }
     const age = resolveAgeFromDateOfBirth(dateOfBirth, now);
     if (age === null) {
       throw new HttpsError("invalid-argument", "Enter a valid participant date of birth.");
@@ -2099,6 +2600,8 @@ function buildCreateMembershipCheckoutHandler(
     const requestFingerprint = checkoutRequestFingerprint({
       payerUid,
       planKey,
+      expectedBillingMode,
+      promotionCode,
       participant,
       guardian,
       signedName,
@@ -2108,7 +2611,12 @@ function buildCreateMembershipCheckoutHandler(
       (await admin.auth().getUser(payerUid)).email?.trim().toLowerCase() || null :
       null;
 
-    let checkoutConfig: {client: Stripe; priceId: string; origin: string} | null = null;
+    let checkoutConfig: {
+      client: Stripe;
+      priceId: string;
+      productId: string;
+      origin: string;
+    } | null = null;
     const ensureCheckoutConfig = async (frozenPriceId?: string) => {
       if (checkoutConfig) {
         if (frozenPriceId && checkoutConfig.priceId !== frozenPriceId) {
@@ -2119,13 +2627,31 @@ function buildCreateMembershipCheckoutHandler(
       const priceId = frozenPriceId ?? resolvePriceId(planKey);
       const origin = resolveReturnOrigin();
       const client = stripe();
-      await assertStripePriceMatchesPlan(client, priceId, plan);
-      checkoutConfig = {client, priceId, origin};
+      const productId = await assertStripePriceMatchesPlan(client, priceId, plan);
+      if (billingPolicy.kind === "presale" &&
+        planKey === EXISTING_MEMBER_OFFER.planKey) {
+        await retrieveApprovedExistingMemberCoupon(client, productId);
+      }
+      checkoutConfig = {client, priceId, productId, origin};
       return checkoutConfig;
     };
 
     let reservation: CheckoutReservationResult;
     const existingSnap = await intentRef.get();
+    if (!existingSnap.exists && expectedBillingMode !== billingPolicy.billingMode) {
+      // A page left open across the presale cutoff must never display £0 terms
+      // and then silently create an immediately chargeable standard Checkout.
+      // Existing frozen attempts remain retryable under their recorded terms.
+      throw new HttpsError(
+        "failed-precondition",
+        "The membership billing terms changed while this page was open. Refresh and review them before continuing.",
+        {
+          reason: "billing_policy_changed",
+          expectedBillingMode,
+          currentBillingMode: billingPolicy.billingMode,
+        }
+      );
+    }
     if (existingSnap.exists) {
       const existing = existingSnap.data() as MembershipIntentDoc;
       if (existing.requestFingerprint !== requestFingerprint) {
@@ -2140,7 +2666,12 @@ function buildCreateMembershipCheckoutHandler(
       // existing recorded Session can still be returned during a later Stripe
       // outage without risking its recovery verifier.
       const validatedConfig = await ensureCheckoutConfig();
-      const {anchorUnixSeconds, firstFullChargeDate} = resolveBillingCycleAnchor(now);
+      const promotionCodeId = promotionCode ?
+        await resolveApprovedPromotionCodeForCheckout(
+          validatedConfig.client,
+          promotionCode,
+          now
+        ) : null;
       let checkoutExpiresAt: number;
       try {
         checkoutExpiresAt = resolveCheckoutSessionExpiry(now);
@@ -2178,8 +2709,14 @@ function buildCreateMembershipCheckoutHandler(
         checkoutSessionId: null,
         checkoutSessionUrl: null,
         status: "reserved",
-        billingCycleAnchor: anchorUnixSeconds,
-        firstFullChargeDate,
+        billingMode: billingPolicy.billingMode,
+        billingCycleAnchor: billingPolicy.billingCycleAnchor,
+        serviceStartsAt: billingPolicy.serviceStartsAtUnixSeconds,
+        firstPaymentAt: billingPolicy.firstPaymentAtUnixSeconds,
+        initialChargePence: billingPolicy.paymentDueToday ? null : 0,
+        prorationBehavior: billingPolicy.prorationBehavior,
+        promotionCodeId,
+        firstFullChargeDate: billingPolicy.firstFullChargeDate,
         checkoutExpiresAt,
         reservationExpiresAt: Timestamp.fromMillis(
           (checkoutExpiresAt + CHECKOUT_SETTLEMENT_GRACE_SECONDS) * 1000
@@ -2232,6 +2769,12 @@ function buildCreateMembershipCheckoutHandler(
         sessionUrl: intent.checkoutSessionUrl,
         sessionId: intent.checkoutSessionId,
         firstFullChargeDate: intent.firstFullChargeDate,
+        billingMode: intent.billingMode ?? "standard",
+        serviceStartsAt: intent.serviceStartsAt ?? null,
+        firstPaymentAt: intent.firstPaymentAt ?? intent.billingCycleAnchor,
+        initialChargePence: intent.initialChargePence ?? null,
+        promotionCodesEnabled: isPresaleIntent(intent) &&
+          intent.planKey === EXISTING_MEMBER_OFFER.planKey,
       };
     }
     if (intent.status !== "reserved") {
@@ -2278,6 +2821,10 @@ function buildCreateMembershipCheckoutHandler(
         ...(customerId ? {customer: customerId} : {}),
         ...(payerUid ? {client_reference_id: payerUid} : {}),
         line_items: [{price: priceId, quantity: 1}],
+        payment_method_collection: "always",
+        ...(intent.promotionCodeId ? {
+          discounts: [{promotion_code: intent.promotionCodeId}],
+        } : {}),
         // Dynamic payment methods are managed from the Stripe Dashboard, so
         // `payment_method_types` is deliberately omitted.
         billing_address_collection: BILLING_POLICY.collectBillingAddress ? "required" : "auto",
@@ -2291,11 +2838,11 @@ function buildCreateMembershipCheckoutHandler(
         cancel_url: `${origin}/memberships?checkout=cancelled`,
         subscription_data: {
           description: plan.name,
-          // Stripe calculates and displays the initial proration for the period
-          // up to the anchor, and bills the full price on the first of each
-          // month thereafter. No proration is computed in this codebase.
+          // The frozen policy is either the one-off £0 presale period or the
+          // normal immediate-start proration. Stripe remains the amount
+          // authority in both cases.
           billing_cycle_anchor: intent.billingCycleAnchor,
-          proration_behavior: "create_prorations",
+          proration_behavior: intent.prorationBehavior ?? "create_prorations",
           metadata: {
             ...(payerUid ? {firebaseUid: payerUid} : {}),
             planKey,
@@ -2398,6 +2945,12 @@ function buildCreateMembershipCheckoutHandler(
       sessionUrl: session.url,
       sessionId: session.id,
       firstFullChargeDate: intent.firstFullChargeDate,
+      billingMode: intent.billingMode ?? "standard",
+      serviceStartsAt: intent.serviceStartsAt ?? null,
+      firstPaymentAt: intent.firstPaymentAt ?? intent.billingCycleAnchor,
+      initialChargePence: intent.initialChargePence ?? null,
+      promotionCodesEnabled: isPresaleIntent(intent) &&
+        intent.planKey === EXISTING_MEMBER_OFFER.planKey,
     };
   };
 }
@@ -2462,6 +3015,11 @@ export const getMyMemberships = onCall({region: REGION}, async (request) => {
 
   const memberships = snap.docs.map((doc) => {
     const membership = doc.data() as MembershipDoc;
+    const presaleWithdrawalAvailable =
+      membership.billingMode === "presale_deferred" &&
+      membership.firstPaymentReceivedAt === null &&
+      Date.now() < membership.serviceStartsAt * 1000 &&
+      isMembershipStateBlockingDuplicate(membership.state);
     const coolingOffEndsAt = membership.acceptances?.coolingOffEndsAt ?? null;
     const coolingOffEndMillis = typeof coolingOffEndsAt === "string" ?
       Date.parse(coolingOffEndsAt) : Number.NaN;
@@ -2473,12 +3031,27 @@ export const getMyMemberships = onCall({region: REGION}, async (request) => {
       grantsAlphaWodAccess: membership.grantsAlphaWodAccess,
       participantFullName: membership.participant?.fullName ?? "",
       participantIsPayer: membership.participant?.isPayer ?? false,
+      billingMode: membership.billingMode ?? "standard",
+      serviceStartsAt: membership.serviceStartsAt ?? null,
+      firstPaymentAt: membership.firstPaymentAt ?? membership.billingCycleAnchor ?? null,
+      billingCycleAnchor: membership.billingCycleAnchor ?? null,
+      initialChargePence: membership.initialChargePence ?? null,
+      firstPaymentReceivedAt: membership.firstPaymentReceivedAt ?? null,
+      discount: membership.discount ?? null,
+      paymentSchedule: membership.paymentSchedule ?? null,
       currentPeriodEnd: membership.currentPeriodEnd ?? null,
       cancelAt: membership.cancelAt ?? null,
       cancellationOutcome: membership.cancellationOutcome ?? null,
       cancellationPending: membership.cancellationRequest?.status === "pending",
       cancellationManualReview: membership.cancellationRequest?.status === "manual_review",
       cancellationRequestError: membership.cancellationRequest?.lastError ?? null,
+      cancellationMode: presaleWithdrawalAvailable ? "cancel_before_start" : "standard",
+      cancellationPreview: presaleWithdrawalAvailable ? {
+        ...resolvePresaleCancellationOutcome(Date.now(), membership),
+        // The receipt-time cancellation instant is recomputed and frozen only
+        // when the member submits. This stable boundary is display-only.
+        cancelAtUnixSeconds: membership.serviceStartsAt,
+      } : preview,
       providerContractStatus: membership.providerContractStatus ?? null,
       providerContractError: membership.providerContractError ?? null,
       entitlementProjectionStatus: membership.entitlementProjectionStatus ?? null,
@@ -2952,6 +3525,39 @@ export function buildRequestMembershipCancellation(
             "This cancellation is already with support for manual review."
           );
         }
+        if (membership.billingMode === "presale_deferred" &&
+          membership.firstPaymentReceivedAt === null &&
+          receivedAtMillis < membership.serviceStartsAt * 1000) {
+          const receivedAt = Timestamp.fromMillis(receivedAtMillis);
+          const outcome = resolvePresaleCancellationOutcome(
+            receivedAtMillis,
+            membership
+          );
+          tx.set(membershipRef, {
+            cancellationRequest: {
+              id: proposedRequestId,
+              status: "pending",
+              receivedAt,
+              recoveryStartedAt: receivedAt,
+              outcome,
+              attemptCount: 1,
+              repairGeneration: 0,
+              lastAttemptAt: receivedAt,
+              nextAttemptAt: Timestamp.fromMillis(
+                receivedAtMillis + CANCELLATION_RECOVERY_LEASE_MS
+              ),
+              kind: "presale_withdrawal",
+            },
+            updatedAt: serverTimestamp(),
+          }, {merge: true});
+          return {
+            alreadyFinalized: false as const,
+            requestId: proposedRequestId,
+            receivedAt,
+            outcome,
+            repairGeneration: 0,
+          };
+        }
         const coolingOffEndsAt = membership.acceptances?.coolingOffEndsAt;
         const coolingOffEndMillis = typeof coolingOffEndsAt === "string" ?
           Date.parse(coolingOffEndsAt) : Number.NaN;
@@ -3360,23 +3966,45 @@ async function fulfilCheckoutSession(
     throw new Error(`Checkout Session ${session.id} has the wrong membership plan.`);
   }
 
-  // Some dynamic payment methods complete Checkout before funds settle. Keep
-  // the uniqueness locks alive until the async success/failure event arrives.
+  const presale = isPresaleIntent(intent);
+  // Some dynamic payment methods complete standard Checkout before funds
+  // settle. Keep uniqueness locks alive for its async success/failure event.
   if (session.payment_status === "unpaid") {
     await extendCheckoutReservationForAsyncPayment(intentRef);
     return;
   }
-  if (session.payment_status !== "paid") {
+  if (presale) {
+    const exactPresaleContract =
+      intent.billingCycleAnchor === PRESALE_BILLING_ANCHOR_UNIX_SECONDS &&
+      intent.firstPaymentAt === PRESALE_BILLING_ANCHOR_UNIX_SECONDS &&
+      intent.serviceStartsAt === PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS &&
+      intent.initialChargePence === 0 &&
+      intent.prorationBehavior === "none" &&
+      session.status === "complete" &&
+      session.payment_status === "no_payment_required" &&
+      session.payment_method_collection === "always" &&
+      session.amount_total === 0 &&
+      session.expires_at === intent.checkoutExpiresAt &&
+      completionUnixSeconds <= intent.checkoutExpiresAt &&
+      completionUnixSeconds < intent.billingCycleAnchor;
+    if (!exactPresaleContract) {
+      throw new Error(
+        `Checkout Session ${session.id} does not match the frozen £0 presale contract.`
+      );
+    }
+  } else if (session.payment_status !== "paid") {
     throw new Error(
       `Checkout Session ${session.id} is not paid (${session.payment_status}).`
     );
   }
   if (!subscriptionId) {
-    throw new Error(`Paid Checkout Session ${session.id} has no subscription.`);
+    throw new Error(`Completed Checkout Session ${session.id} has no subscription.`);
   }
 
   const plan = getPlan(intent.planKey);
-  const subscription = await stripe().subscriptions.retrieve(subscriptionId);
+  const subscription = await stripe().subscriptions.retrieve(subscriptionId, {
+    expand: ["discounts"],
+  });
   assertStripeObjectMode("Subscription", subscription.id, subscription.livemode);
   const sessionCustomerId = idOf(session.customer);
   if (!sessionCustomerId) {
@@ -3392,6 +4020,12 @@ async function fulfilCheckoutSession(
     intentId: intentRef.id,
   });
   if (contractMismatch) throw new Error(contractMismatch);
+  const discount = await resolveApprovedCheckoutDiscount(
+    session,
+    subscription,
+    intent,
+    completionUnixSeconds
+  );
   const membershipRef = db().collection("memberships").doc(subscriptionId);
 
   const fulfilmentNow = Date.now();
@@ -3403,11 +4037,13 @@ async function fulfilCheckoutSession(
   const graceEndMillis = resolvePastDueGraceEndMillis(pastDueSince);
   const pastDueGraceEndsAt = graceEndMillis === null ?
     null : Timestamp.fromMillis(graceEndMillis);
-  const state = resolveMembershipState({
+  const providerState = resolveMembershipState({
     stripeStatus: subscription.status,
     pastDueSinceUnixSeconds: pastDueSince,
     cancelAtUnixSeconds: subscription.cancel_at,
   }, fulfilmentNow);
+  const state: MembershipState = presale && providerState === "active" ?
+    "scheduled" : providerState;
 
   // Stripe collected the billing email during checkout. It is the identity a
   // later claim is matched against, so it takes precedence over anything the
@@ -3450,13 +4086,23 @@ async function fulfilCheckoutSession(
       null,
     preMembershipEntitlement: null,
     currentPeriodEnd: resolveCurrentPeriodEnd(subscription),
+    billingMode: intent.billingMode ?? "standard",
     billingCycleAnchor: intent.billingCycleAnchor,
+    serviceStartsAt: intent.serviceStartsAt ?? Math.floor(contractMadeMillis / 1000),
+    firstPaymentAt: intent.firstPaymentAt ?? intent.billingCycleAnchor,
+    initialChargePence: session.amount_total ?? null,
+    firstPaymentReceivedAt: presale ? null : Math.floor(contractMadeMillis / 1000),
+    firstPaidInvoiceId: null,
+    discount,
+    paymentSchedule: paymentScheduleFor(intent, discount, session.amount_total ?? null),
     pastDueSince,
     pastDueGraceEndsAt,
-    nextReconcileAt: state === "past_due_grace" ? pastDueGraceEndsAt :
-      state === "past_due_suspended" ? Timestamp.fromMillis(
-        fulfilmentNow + SUSPENDED_RECONCILE_INTERVAL_MS
-      ) : null,
+    nextReconcileAt: state === "scheduled" ?
+      Timestamp.fromMillis((intent.firstPaymentAt ?? intent.billingCycleAnchor) * 1000) :
+      state === "past_due_grace" ? pastDueGraceEndsAt :
+        state === "past_due_suspended" ? Timestamp.fromMillis(
+          fulfilmentNow + SUSPENDED_RECONCILE_INTERVAL_MS
+        ) : null,
     openDisputeIds: [],
     disputeOpen: false,
     accessRevoked: false,
@@ -3987,8 +4633,19 @@ async function handleStripeEvent(
   switch (event.type) {
   case "checkout.session.completed":
   case "checkout.session.async_payment_succeeded": {
+    const trigger = event.data.object as Stripe.Checkout.Session;
+    if (typeof trigger.id !== "string" || !trigger.id) {
+      throw new Error(`Stripe event ${event.id} has no Checkout Session id.`);
+    }
+    // Webhook endpoint versions can lag the deployed SDK schema. Treat the
+    // signed payload only as a trigger, then fulfil from Stripe's authoritative
+    // current-API representation with its applied discounts expanded.
+    const session = await stripe().checkout.sessions.retrieve(trigger.id, {
+      expand: ["discounts.coupon", "discounts.promotion_code"],
+    });
+    assertStripeObjectMode("Checkout Session", session.id, session.livemode);
     await fulfilCheckoutSession(
-      event.data.object as Stripe.Checkout.Session,
+      session,
       converge,
       event.created
     );
@@ -4031,10 +4688,31 @@ async function handleStripeEvent(
   }
 
   case "invoice.paid": {
-    const invoice = event.data.object as Stripe.Invoice;
+    const trigger = event.data.object as Stripe.Invoice;
+    if (typeof trigger.id !== "string" || !trigger.id) {
+      throw new Error(`Stripe event ${event.id} has no Invoice id.`);
+    }
+    // Line parent/pricing shapes changed across Stripe API versions. Retrieve
+    // the current invoice before constructing activation evidence so an older
+    // webhook snapshot can never falsely grant or withhold access.
+    const invoice = await stripe().invoices.retrieve(trigger.id);
+    assertStripeObjectMode("Invoice", invoice.id, invoice.livemode);
     const subscriptionId = resolveInvoiceSubscriptionId(invoice);
     if (subscriptionId) {
-      await convergeMembershipFromStripe(subscriptionId, converge, {pastDueSince: null});
+      const paidAt = invoice.status_transitions?.paid_at ?? event.created;
+      const activationPayment = invoice.status === "paid" &&
+          typeof invoice.amount_paid === "number" && invoice.amount_paid > 0 &&
+          typeof paidAt === "number" && typeof invoice.currency === "string" ? {
+          invoiceId: invoice.id,
+          paidAt,
+          amountPaidPence: invoice.amount_paid,
+          currency: invoice.currency,
+          lines: subscriptionLineEvidence(invoice),
+        } : undefined;
+      await convergeMembershipFromStripe(subscriptionId, converge, {
+        pastDueSince: null,
+        ...(activationPayment ? {activationPayment} : {}),
+      });
     }
     return;
   }
@@ -4123,6 +4801,14 @@ export function buildListMemberships(requireAdmin: (request: any) => Promise<voi
         participantAge: membership.participant?.age ?? null,
         participantIsPayer: membership.participant?.isPayer ?? false,
         guardianFullName: membership.guardian?.fullName ?? null,
+        billingMode: membership.billingMode ?? "standard",
+        serviceStartsAt: membership.serviceStartsAt ?? null,
+        firstPaymentAt: membership.firstPaymentAt ?? membership.billingCycleAnchor ?? null,
+        billingCycleAnchor: membership.billingCycleAnchor ?? null,
+        initialChargePence: membership.initialChargePence ?? null,
+        firstPaymentReceivedAt: membership.firstPaymentReceivedAt ?? null,
+        discount: membership.discount ?? null,
+        paymentSchedule: membership.paymentSchedule ?? null,
         currentPeriodEnd: membership.currentPeriodEnd ?? null,
         cancelAt: membership.cancelAt ?? null,
         disputeOpen: membership.disputeOpen ?? false,
@@ -4295,6 +4981,7 @@ export const __testing = {
   isSystemicResendFailure,
   resolveCurrentPeriodEnd,
   resolveInvoiceSubscriptionId,
+  resolveApprovedCheckoutDiscount,
 };
 
 /** ---------------------------------------------------------------
@@ -4327,6 +5014,7 @@ function buildConfirmationHtml(details: ConfirmationDetails): string {
   const {membership, initialChargePence, claimUrl} = details;
   const plan = getPlan(membership.planKey);
   const isYouthPlan = plan.audience === "youth";
+  const isPresale = membership.billingMode === "presale_deferred";
   const firstFullCharge = formatUnixBillingDate(membership.billingCycleAnchor);
   const documents = Object.entries(membership.acceptances.documents)
     .map(([name, version]) =>
@@ -4339,13 +5027,24 @@ function buildConfirmationHtml(details: ConfirmationDetails): string {
     ["Monthly price", `${formatPence(plan.amountPence)} per month`],
     [
       "Paid today",
-      initialChargePence === null ?
-        "See your Stripe receipt" :
-        `${formatPence(initialChargePence)} (pro rata to ${firstFullCharge})`,
+      isPresale && initialChargePence === 0 ?
+        "£0.00 — no payment has been taken" : initialChargePence === null ?
+          "See your Stripe receipt" :
+          `${formatPence(initialChargePence)} (pro rata to ${firstFullCharge})`,
     ],
-    ["First full monthly payment", firstFullCharge],
+    [isPresale ? "First monthly payment" : "First full monthly payment", firstFullCharge],
     ["Then", "The first of each month"],
   ];
+
+  if (membership.discount) {
+    rows.splice(3, 0, [
+      "Existing-member offer",
+      `${formatPence(plan.amountPence - membership.discount.amountOffPence)} for the ` +
+      `first ${membership.discount.durationInMonths} monthly payments; ` +
+      `${formatPence(plan.amountPence)} from ` +
+      `${formatUnixBillingDate(membership.paymentSchedule.fullPriceFrom as number)}`,
+    ]);
+  }
 
   if (membership.guardian) {
     rows.splice(2, 0, [
@@ -4375,12 +5074,19 @@ function buildConfirmationHtml(details: ConfirmationDetails): string {
   <p style="margin:0 0 20px;color:#555;">Keep this email. It is your durable copy of this
   agreement.</p>
 
+  ${isPresale ? `<p style="margin:0 0 20px;"><strong>Your membership is scheduled to start on
+  ${escapeHtml(formatUnixBillingDate(membership.serviceStartsAt))}. Nothing has been charged
+  today.</strong></p>` : ""}
+
   ${claimBlock}
 
   <table style="border-collapse:collapse;margin:0 0 24px;">${tableRows}</table>
 
   <h2 style="font-size:15px;margin:24px 0 8px;">Cancelling</h2>
-  <p style="margin:0 0 8px;">${escapeHtml(POLICY_TEXT.cancellationRule)}</p>
+  <p style="margin:0 0 8px;">${escapeHtml(isPresale ?
+    `You can cancel before ${formatUnixBillingDate(membership.serviceStartsAt)} and no first ` +
+      `payment will be taken. After service starts, ${POLICY_TEXT.cancellationRule}` :
+    POLICY_TEXT.cancellationRule)}</p>
   <p style="margin:0 0 8px;">Request cancellation from your membership page when signed in,
   or email ${escapeHtml(COMPANY.supportEmail)} from this address if the page is unavailable.
   Staff will confirm the effective dates in writing; do not assume an email request is complete
@@ -4393,10 +5099,11 @@ function buildConfirmationHtml(details: ConfirmationDetails): string {
   ${BILLING_POLICY.coolingOffDays} days of the day this contract was made. Your period ends
   ${escapeHtml(formatBillingDate(membership.acceptances.coolingOffEndsAt.slice(0, 10)))}.
   ${membership.acceptances.immediatePerformanceRequested ?
-    "You expressly requested that the membership begin immediately, so if you cancel within " +
+    `You expressly requested that the membership begin ${isPresale ?
+      `on ${formatUnixBillingDate(membership.serviceStartsAt)}` : "immediately"}, so if you cancel within ` +
     "that period we may charge only the proportionate amount permitted by law for services " +
     "already supplied." :
-    "You did not request immediate performance."}</p>
+    "You did not request service to begin before the cooling-off period ends."}</p>
 
   <h2 style="font-size:15px;margin:24px 0 8px;">Documents you accepted</h2>
   <ul style="margin:0 0 8px;padding-left:20px;">${documents}</ul>

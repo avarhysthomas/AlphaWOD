@@ -23,6 +23,7 @@ jest.mock("../../../context/AuthContext", () => ({
 jest.mock("../services/membership", () => ({
   MEMBERSHIP_STATE_LABEL: {
     incomplete: "Awaiting payment",
+    scheduled: "Scheduled — starts 1 September",
     active: "Active",
     past_due_grace: "Payment failed — in grace period",
     past_due_suspended: "Suspended — payment overdue",
@@ -110,9 +111,9 @@ describe("MembershipManage pending-claim recovery", () => {
 
     await waitFor(() => expect(mockGetMyMemberships).toHaveBeenCalledTimes(1));
     expect(screen.queryByText("Loading your memberships…")).not.toBeInTheDocument();
-    expect(screen.getByText(/payment is still being confirmed/i)).toBeInTheDocument();
+    expect(screen.getByText(/checkout is still being confirmed/i)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /Try linking my paid membership/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Try linking my membership/i }));
     await waitFor(() => expect(mockClaimMembership).toHaveBeenCalledTimes(2));
     expect(mockClaimMembership).toHaveBeenLastCalledWith(
       "cs_waiting_for_webhook",
@@ -204,6 +205,56 @@ describe("MembershipManage cancellation confirmation", () => {
       "sub_active",
       cancellationPreview.cancelAtUnixSeconds
     ));
+  });
+
+  it("shows a presale membership as scheduled with £0 today and no access warning", async () => {
+    mockGetMyMemberships.mockResolvedValue({
+      ok: true,
+      memberships: [{
+        ...activeMembership,
+        state: "scheduled",
+        billingMode: "presale_deferred",
+        serviceStartsAt: 1788220800,
+        firstPaymentAt: 1788220800,
+        billingCycleAnchor: 1788220800,
+        initialChargePence: 0,
+        cancellationMode: "cancel_before_start",
+        cancellationPreview,
+        coolingOffActive: true,
+        entitlementProjectionStatus: null,
+        discount: {
+          couponId: "coupon_existing_5",
+          promotionCodeId: "promo_1",
+          amountOffPence: 500,
+          currency: "gbp",
+          durationInMonths: 3,
+          startsAt: 1787149200,
+          endsAt: 1795035600,
+        },
+      }],
+      cancellationPreview,
+    });
+
+    render(<MembershipManage />);
+
+    expect(await screen.findByText("Scheduled — starts 1 September"))
+      .toBeInTheDocument();
+    expect(screen.getByText("Nothing charged today")).toBeInTheDocument();
+    expect(screen.getByText(/This membership does not unlock AlphaWOD access/i))
+      .toBeInTheDocument();
+    expect(screen.getByText("Existing-member discount applied")).toBeInTheDocument();
+    expect(screen.getByText(/£5 off each of your first 3 monthly payments/i))
+      .toBeInTheDocument();
+    expect(screen.queryByText("AlphaWOD access is still pending"))
+      .not.toBeInTheDocument();
+    expect(screen.queryByText("Cooling-off cancellation needs staff"))
+      .not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", {name: "Request cancellation"}));
+    expect(screen.getByText(/Nothing will be charged and no membership access/i))
+      .toBeInTheDocument();
+    expect(screen.getByRole("button", {name: "Cancel scheduled membership"}))
+      .toBeInTheDocument();
   });
 
   it("routes a cooling-off request to staffed review instead of renewal cancellation", async () => {
@@ -351,5 +402,27 @@ describe("MembershipManage cancellation confirmation", () => {
     expect(screen.getByText("Cancellation needs support")).toBeInTheDocument();
     expect(screen.getByText(/charges or a refund still need staff review/i))
       .toBeInTheDocument();
+  });
+
+  it("describes a withdrawn presale as cancelled before start", async () => {
+    mockGetMyMemberships.mockResolvedValue({
+      ok: true,
+      memberships: [{
+        ...activeMembership,
+        state: "cancelled",
+        billingMode: "presale_deferred",
+        initialChargePence: 0,
+        firstPaymentReceivedAt: null,
+        cancellationOutcome: cancellationPreview,
+      }],
+      cancellationPreview,
+    });
+
+    render(<MembershipManage />);
+
+    expect(await screen.findByText("Cancelled before start")).toBeInTheDocument();
+    expect(screen.getByText(/No payment was taken.*cancelled before it started/i))
+      .toBeInTheDocument();
+    expect(screen.queryByText(/Your access ends on/i)).not.toBeInTheDocument();
   });
 });
