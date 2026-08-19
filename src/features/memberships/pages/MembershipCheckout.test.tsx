@@ -1,17 +1,22 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import MembershipCheckout from "./MembershipCheckout";
 
 const mockCreateCheckout = jest.fn();
+const mockResolveCheckoutAttempt = jest.fn();
 let mockPlanKey = "adult_unlimited";
+let mockLocalJourneyEnabled = false;
+
+jest.mock("../localTestJourney", () => ({
+  get LOCAL_MEMBERSHIP_TEST_JOURNEY_ENABLED() {
+    return mockLocalJourneyEnabled;
+  },
+}));
 
 jest.mock("../services/membership", () => ({
   clearCheckoutAttempt: jest.fn(),
-  resolveCheckoutAttempt: jest.fn(async () => ({
-    id: "attempt_test",
-    fingerprint: "fingerprint_test",
-  })),
+  resolveCheckoutAttempt: (...args: unknown[]) => mockResolveCheckoutAttempt(...args),
   createMembershipCheckoutSession: (...args: unknown[]) => mockCreateCheckout(...args),
 }));
 
@@ -56,8 +61,14 @@ function renderCheckout(planKey: string) {
 
 beforeEach(() => {
   mockCreateCheckout.mockReset();
+  mockResolveCheckoutAttempt.mockReset();
+  mockResolveCheckoutAttempt.mockResolvedValue({
+    id: "attempt_test",
+    fingerprint: "fingerprint_test",
+  });
   mockSignedIn = true;
   mockAuthLoading = false;
+  mockLocalJourneyEnabled = false;
 });
 
 describe("MembershipCheckout", () => {
@@ -71,7 +82,7 @@ describe("MembershipCheckout", () => {
   it("does not start a Stripe session while the flow is closed", async () => {
     renderCheckout("adult_unlimited");
 
-    await userEvent.type(screen.getByLabelText(/Participant full name/i), "Payer One");
+    await userEvent.type(screen.getByLabelText(/^Your full name$/i), "Payer One");
     await userEvent.click(screen.getByRole("button", { name: /Subscribe and pay/i }));
 
     expect(mockCreateCheckout).not.toHaveBeenCalled();
@@ -87,18 +98,37 @@ describe("MembershipCheckout", () => {
   it("asks a youth purchase for guardian details and authority", () => {
     renderCheckout("youth_teenstars");
 
-    expect(screen.getByText("Parent or guardian")).toBeInTheDocument();
-    expect(screen.getByLabelText(/Relationship to participant/i)).toBeInTheDocument();
+    const payingAdult = screen.getByText("Paying adult");
+    const childDetails = screen.getByText("Child details");
+
+    expect(payingAdult).toBeInTheDocument();
+    expect(childDetails).toBeInTheDocument();
+    expect(payingAdult.compareDocumentPosition(childDetails) &
+      Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByLabelText(/^Paying adult’s full name$/i)).toHaveAttribute(
+      "autocomplete",
+      "name"
+    );
+    expect(screen.getByLabelText(/Child’s full name/i)).toHaveAttribute(
+      "autocomplete",
+      "off"
+    );
+    expect(screen.getByLabelText(/Child’s date of birth/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Relationship to child/i)).toBeInTheDocument();
     expect(
-      screen.getByText(/parent or legal guardian, or an adult with lawful authority/i)
+      screen.getByText(/this child’s parent or legal guardian, or an adult/i)
     ).toBeInTheDocument();
+    expect(screen.getByLabelText(/Type the paying adult’s full name to sign/i))
+      .toBeInTheDocument();
   });
 
   it("never offers the guardian section on an adult plan", () => {
     renderCheckout("adult_unlimited");
 
-    expect(screen.queryByText("Parent or guardian")).not.toBeInTheDocument();
-    expect(screen.getByLabelText(/I am the participant/i)).toBeInTheDocument();
+    expect(screen.queryByText("Paying adult")).not.toBeInTheDocument();
+    expect(screen.getByText(/Adult memberships can only be purchased for yourself/i))
+      .toBeInTheDocument();
+    expect(screen.queryByLabelText(/I am the participant/i)).not.toBeInTheDocument();
   });
 
   it("warns when the date of birth falls outside the plan's age band", async () => {
@@ -109,7 +139,7 @@ describe("MembershipCheckout", () => {
     eightYearsAgo.setFullYear(eightYearsAgo.getFullYear() - 8);
     const iso = eightYearsAgo.toISOString().slice(0, 10);
 
-    await userEvent.type(screen.getByLabelText(/Participant date of birth/i), iso);
+    await userEvent.type(screen.getByLabelText(/Child’s date of birth/i), iso);
 
     expect(screen.getByText(/is for ages 12 to 16/i)).toBeInTheDocument();
     expect(
@@ -124,10 +154,10 @@ describe("MembershipCheckout", () => {
     fourteenYearsAgo.setFullYear(fourteenYearsAgo.getFullYear() - 14);
     const iso = fourteenYearsAgo.toISOString().slice(0, 10);
 
-    await userEvent.type(screen.getByLabelText(/Participant date of birth/i), iso);
+    await userEvent.type(screen.getByLabelText(/Child’s date of birth/i), iso);
 
     expect(screen.queryByText(/is for ages 12 to 16/i)).not.toBeInTheDocument();
-    expect(screen.getByText("Age 14")).toBeInTheDocument();
+    expect(screen.getByText("Child age 14")).toBeInTheDocument();
   });
 
   it("lets a signed-out visitor reach the purchase form without signing in", () => {
@@ -135,8 +165,8 @@ describe("MembershipCheckout", () => {
     renderCheckout("adult_unlimited");
 
     // Membership comes before sign-up: the form itself must be reachable.
-    expect(screen.getByLabelText(/Participant full name/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Participant date of birth/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Your full name$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Your date of birth/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Subscribe and pay/i })).toBeInTheDocument();
     expect(screen.queryByText(/Sign in to continue/i)).not.toBeInTheDocument();
   });
@@ -145,7 +175,69 @@ describe("MembershipCheckout", () => {
     mockSignedIn = false;
     renderCheckout("adult_unlimited");
 
-    expect(screen.getByText(/You do not need an account to join/i)).toBeInTheDocument();
+    expect(screen.getByText(/Complete your registration and payment first/i))
+      .toBeInTheDocument();
+    expect(screen.getByText(/create a new AlphaWOD account or log in to an existing one/i))
+      .toBeInTheDocument();
+    expect(screen.queryByRole("link", {name: /sign in first/i})).not.toBeInTheDocument();
+  });
+
+  it("explains that an existing account still uses the same payment journey", () => {
+    renderCheckout("adult_unlimited");
+
+    expect(screen.getByText(/You’re signed in as Payer One/i)).toBeInTheDocument();
+    expect(screen.getByText(/same registration and Stripe payment journey/i))
+      .toBeInTheDocument();
+  });
+
+  it("keeps non-AlphaWOD plans account-free and promises a simple confirmation", () => {
+    mockSignedIn = false;
+    renderCheckout("adult_gym");
+
+    expect(screen.getByText(/You do not need an AlphaWOD account/i)).toBeInTheDocument();
+    expect(screen.getByText(/return to a simple confirmation page/i)).toBeInTheDocument();
+    expect(screen.queryByText(/create a new AlphaWOD account/i)).not.toBeInTheDocument();
+  });
+
+  it("submits the paying adult and child as distinct youth records", async () => {
+    mockLocalJourneyEnabled = true;
+    mockSignedIn = false;
+    mockCreateCheckout.mockResolvedValue({sessionUrl: ""});
+    renderCheckout("youth_teenstars");
+
+    const fourteenYearsAgo = new Date();
+    fourteenYearsAgo.setFullYear(fourteenYearsAgo.getFullYear() - 14);
+    const dateOfBirth = fourteenYearsAgo.toISOString().slice(0, 10);
+
+    await userEvent.type(
+      screen.getByLabelText(/^Paying adult’s full name$/i),
+      "Ava Parent"
+    );
+    await userEvent.type(screen.getByLabelText(/Relationship to child/i), "Parent");
+    await userEvent.click(
+      screen.getByLabelText(/I confirm I am this child’s parent or legal guardian/i)
+    );
+    await userEvent.type(screen.getByLabelText(/Child’s full name/i), "Alex Child");
+    await userEvent.type(screen.getByLabelText(/Child’s date of birth/i), dateOfBirth);
+    await userEvent.click(screen.getByLabelText(/I have read and accept/i));
+    await userEvent.click(screen.getByLabelText(/I expressly request/i));
+    await userEvent.type(
+      screen.getByLabelText(/Type the paying adult’s full name to sign/i),
+      "Ava Parent"
+    );
+    await userEvent.click(screen.getByRole("button", {name: /Subscribe and pay/i}));
+
+    await waitFor(() => expect(mockCreateCheckout).toHaveBeenCalledTimes(1));
+    expect(mockCreateCheckout).toHaveBeenCalledWith(expect.objectContaining({
+      planKey: "youth_teenstars",
+      participantFullName: "Alex Child",
+      participantDateOfBirth: dateOfBirth,
+      participantIsPayer: false,
+      guardianFullName: "Ava Parent",
+      guardianRelationship: "Parent",
+      guardianConfirmsAuthority: true,
+      signedName: "Ava Parent",
+    }));
   });
 
   it("redirects an unknown plan back to the catalogue", () => {

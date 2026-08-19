@@ -133,7 +133,7 @@ export const BILLING_POLICY = {
   collectPhoneNumber: false,
   blockDuplicateActiveSubscriptions: true,
   guardianMustBePayerForYouth: true,
-  adultPayerMustBeParticipant: false,
+  adultPayerMustBeParticipant: true,
 } as const;
 
 export const POLICY_TEXT = {

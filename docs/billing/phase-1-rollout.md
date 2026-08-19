@@ -240,13 +240,17 @@ The grant is tightly bounded. It happens only:
 - through `resolveUserAuthorisation`, so the derived marker and custom claims
   are computed by the same Phase 0 routine as every other path.
 
-A purchase where the payer is not the participant grants nothing automatically.
-It is surfaced in the admin membership view and linked deliberately with
-`linkMembershipParticipant`. The callable atomically acquires the target's
-durable entitlement-owner row, applies access immediately and records the
-admin/link audit. Linking is intentionally one-shot: repeating the same target
-is idempotent, but changing an already linked target is refused until a separate
-audited transfer/restoration workflow exists.
+Adult online checkout is self-purchase only: the form always records the adult
+as both participant and payer, and the backend rejects a forged adult request
+where those roles differ before reserving anything or contacting Stripe.
+Delegated registration is limited to youth plans, which retain separate child
+and paying-adult records. `linkMembershipParticipant` remains fail-closed support
+for legacy/test records where an AlphaWOD-granting purchase predates this rule;
+it is not part of the public adult purchase journey. The callable atomically
+acquires the target's durable entitlement-owner row, applies access immediately
+and records the admin/link audit. Linking is intentionally one-shot: repeating
+the same target is idempotent, but changing an already linked target is refused
+until a separate audited transfer/restoration workflow exists.
 
 An entitlement-owner document is retained as an `active` or `released`
 tombstone. Ending a membership releases only its own active generation; keeping

@@ -1,13 +1,20 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useAuth } from "../../../context/AuthContext";
-import { COMPANY, MEMBERSHIP_PLANS, POLICY_TEXT } from "../../../lib/membershipPlans";
+import {
+  COMPANY,
+  MEMBERSHIP_PLANS,
+  POLICY_TEXT,
+  isPlanKey,
+} from "../../../lib/membershipPlans";
 import {
   claimMembership,
   clearCheckoutAttempt,
   clearPendingClaim,
   getMyMemberships,
   readCheckoutAttemptId,
+  readPendingClaim,
+  readPendingClaimVerifier,
   rememberPendingClaim,
   type MyMembership,
 } from "../services/membership";
@@ -99,14 +106,25 @@ function membershipPresentation(membership: MyMembership): {
 export default function MembershipSuccess() {
   const { user, loading, refreshAppUser } = useAuth();
   const [params] = useSearchParams();
-  const sessionId = params.get("session_id");
-  const [checkoutAttemptId] = useState(() => readCheckoutAttemptId());
+  const returnedSessionId = params.get("session_id");
+  const [rememberedSessionId] = useState(() => readPendingClaim());
+  const sessionId = returnedSessionId ?? rememberedSessionId;
+  const returnedPlan = params.get("plan");
+  const returnedPlanKey = isPlanKey(returnedPlan) ? returnedPlan : null;
+  const [checkoutAttemptId] = useState(
+    () => readCheckoutAttemptId() ?? readPendingClaimVerifier()
+  );
 
   const [membership, setMembership] = useState<MyMembership | null>(null);
   const [settled, setSettled] = useState(false);
   const [claimError, setClaimError] = useState("");
   const cancelled = useRef(false);
   const presentation = membership ? membershipPresentation(membership) : null;
+  const isAlphaWodAccountJourney = membership
+    ? membership.planKey === "adult_unlimited" &&
+      membership.grantsAlphaWodAccess &&
+      membership.participantIsPayer
+    : returnedPlanKey === "adult_unlimited";
 
   // Held locally so the buyer can create an account now and claim from the
   // membership page, without the checkout session id being lost on the way.
@@ -126,12 +144,11 @@ export default function MembershipSuccess() {
   }, [sessionId]);
 
   useEffect(() => {
-    // A buyer who was already signed in is attached by the webhook itself. Do
-    // not leave that completed checkout behind as a pending claim: the claim
-    // callable quite correctly ignores memberships that already have a payer.
     if (!sessionId || loading) return;
-    if (user) clearPendingClaim();
-    else rememberPendingClaim(sessionId, checkoutAttemptId);
+    // Keep the verifier until attachment actually succeeds or fails
+    // terminally. That lets an existing member log in, refresh during webhook
+    // lag, and continue the same verified claim instead of losing it early.
+    if (!user) rememberPendingClaim(sessionId, checkoutAttemptId);
   }, [sessionId, checkoutAttemptId, user, loading]);
 
   const attach = useCallback(async () => {
@@ -213,19 +230,22 @@ export default function MembershipSuccess() {
             {presentation
               ? presentation.message
               : sessionId
-                ? "We’re confirming the exact membership from this checkout. No access or payment status is shown as confirmed until that finishes."
+                ? isAlphaWodAccountJourney
+                  ? "We’re confirming the exact membership from this checkout. No access or payment status is shown as confirmed until that finishes."
+                  : "Thanks for registering. We’re confirming your membership and will send the details by email. There’s nothing else you need to do on this page."
                 : `This page has no checkout reference. Return to your membership page or contact ${COMPANY.supportEmail}.`}
           </p>
 
-          {sessionId && !loading && !user && (
+          {sessionId && !loading && !user && isAlphaWodAccountJourney && (
             <>
               <div className="mt-7 rounded-2xl border border-amber-500/25 bg-amber-500/10 p-5">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-amber-200">
-                  One step left
+                  Use AlphaWOD with your membership
                 </p>
                 <p className="mt-3 text-sm leading-7 text-amber-50/85">
-                  Create your account with the same email address you just paid with, and
-                  your membership will be linked to it automatically.
+                  New to AlphaWOD? Create an account with the same email address you just
+                  paid with. Already have an account? Log in and we&rsquo;ll link this
+                  membership to it automatically.
                 </p>
               </div>
 
@@ -234,13 +254,13 @@ export default function MembershipSuccess() {
                   to="/signup"
                   className="block rounded-2xl bg-white px-5 py-3 text-center text-sm font-bold uppercase tracking-[0.14em] text-black"
                 >
-                  Create my account
+                  Create AlphaWOD account
                 </Link>
                 <Link
                   to="/"
                   className="block text-center text-sm text-white/50 underline underline-offset-4"
                 >
-                  I already have an account
+                  Log in to AlphaWOD
                 </Link>
               </div>
             </>
@@ -265,7 +285,7 @@ export default function MembershipSuccess() {
             </p>
           )}
 
-          {user && (
+          {user && isAlphaWodAccountJourney && (
             <div className="mt-8 space-y-3">
               <Link
                 to="/account/membership"
@@ -273,7 +293,7 @@ export default function MembershipSuccess() {
               >
                 View my membership
               </Link>
-              {(!presentation || presentation.appAccessAvailable) && (
+              {presentation?.appAccessAvailable === true && (
                 <Link
                   to="/dashboard"
                   className="block text-center text-sm text-white/50 underline underline-offset-4"

@@ -456,12 +456,92 @@ test("the checkout core creates one Stripe session and reuses it on retry", asyn
 
     const sent = fakeStripe.lastUpdateTo("/v1/checkout/sessions");
     assert.ok(sent);
+    assert.equal(
+      sent.payload.success_url,
+      "https://alpha-wod.vercel.app/memberships/success?" +
+        "session_id={CHECKOUT_SESSION_ID}&plan=adult_unlimited"
+    );
     assert.equal(sent.payload["subscription_data[proration_behavior]"], "create_prorations");
     assert.ok(Number(sent.payload.expires_at) <
       Number(sent.payload["subscription_data[billing_cycle_anchor]"]));
   } finally {
     Date.now = realNow;
   }
+});
+
+test("a youth checkout preserves the child and paying adult and redirects with its plan", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  try {
+    const result = await handler(request({
+      ...validCheckoutData("attempt_youth_details_123456"),
+      planKey: "youth_teenstars",
+      participantFullName: "Young Athlete",
+      participantDateOfBirth: "2012-05-05",
+      participantIsPayer: false,
+      signedName: "Paying Adult",
+      guardianFullName: "Paying Adult",
+      guardianRelationship: "Parent",
+      guardianConfirmsAuthority: true,
+    }));
+
+    const intent = (await db.collection("membershipIntents").get()).docs[0];
+    assert.deepEqual(intent.get("participant"), {
+      fullName: "Young Athlete",
+      dateOfBirth: "2012-05-05",
+      age: 14,
+      isPayer: false,
+      participantKey: membershipTesting.participantKeyFor(
+        "Young Athlete",
+        "2012-05-05"
+      ),
+    });
+    assert.deepEqual(intent.get("guardian"), {
+      fullName: "Paying Adult",
+      relationship: "Parent",
+      confirmedAuthority: true,
+    });
+    assert.equal(intent.get("checkoutSessionId"), result.sessionId);
+
+    const sent = fakeStripe.lastUpdateTo("/v1/checkout/sessions");
+    assert.ok(sent);
+    assert.equal(
+      sent.payload.success_url,
+      "https://alpha-wod.vercel.app/memberships/success?" +
+        "session_id={CHECKOUT_SESSION_ID}&plan=youth_teenstars"
+    );
+    assert.equal(sent.payload["metadata[planKey]"], "youth_teenstars");
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("every adult plan rejects a purchase made for another adult before Stripe", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const sessionsBefore = fakeStripe.state.checkoutSessions.size;
+  const adultPlanKeys = ["adult_unlimited", "adult_ladies", "adult_gym"];
+
+  for (const planKey of adultPlanKeys) {
+    await assert.rejects(
+      () => handler(request({
+        ...validCheckoutData(`attempt_third_party_${planKey}`),
+        planKey,
+        participantFullName: "Adult Participant",
+        participantIsPayer: false,
+        signedName: "Paying Adult",
+      })),
+      /adult membership must be purchased by the participant for themselves/i
+    );
+  }
+
+  assert.equal(fakeStripe.state.checkoutSessions.size, sessionsBefore);
+  assert.equal((await db.collection("membershipIntents").get()).size, 0);
+  assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 0);
 });
 
 test("a retry never returns a Checkout Session frozen in another Stripe mode", async () => {
@@ -2863,6 +2943,38 @@ test("confirmation outbox freezes one payload and retries with one provider key"
   assert.equal(sentOutbox.get("status"), "sent");
   assert.equal(sentOutbox.get("providerMessageId"), "email_resend_1");
   assert.ok((await membershipRef.get()).get("confirmationEmailSentAt"));
+});
+
+test("a youth confirmation clearly labels the child and paying adult", async () => {
+  await seedMembership("sub_youth_confirmation_labels", {
+    planKey: "youth_teenstars",
+    planName: "HYROX Teenstars",
+    stripePriceId: "price_teenstars",
+    grantsAlphaWodAccess: false,
+    participant: {
+      fullName: "Young Athlete",
+      dateOfBirth: "2012-05-05",
+      age: 14,
+      isPayer: false,
+      participantKey: "key_youth_confirmation_labels",
+    },
+    guardian: {
+      fullName: "Paying Adult",
+      relationship: "Parent",
+      confirmedAuthority: true,
+    },
+  });
+  const membership = (await db.collection("memberships")
+    .doc("sub_youth_confirmation_labels").get()).data();
+  const payload = membershipTesting.buildConfirmationPayload(membership, 1234);
+
+  assert.ok(payload);
+  assert.match(payload.html, />Child<\/td>/);
+  assert.match(payload.html, />Young Athlete<\/strong>/);
+  assert.match(payload.html, />Paying adult<\/td>/);
+  assert.match(payload.html, />Paying Adult \(Parent\)<\/strong>/);
+  assert.doesNotMatch(payload.html, />Participant<\/td>/);
+  assert.doesNotMatch(payload.html, />Parent or guardian<\/td>/);
 });
 
 test("an orphan confirmation outbox never recreates its membership", async () => {

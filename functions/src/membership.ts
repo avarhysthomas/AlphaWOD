@@ -2056,6 +2056,12 @@ function buildCreateMembershipCheckoutHandler(
         `The participant's age (${age}) is not eligible for ${plan.name}.`
       );
     }
+    if (plan.audience === "adult" && !participantIsPayer) {
+      throw new HttpsError(
+        "failed-precondition",
+        "An adult membership must be purchased by the participant for themselves."
+      );
+    }
 
     // Guardian rules: for a youth plan the payer must be the guardian and can
     // never be the participant.
@@ -2280,7 +2286,8 @@ function buildCreateMembershipCheckoutHandler(
         submit_type: "subscribe",
         locale: "en-GB",
         expires_at: intent.checkoutExpiresAt,
-        success_url: `${origin}/memberships/success?session_id={CHECKOUT_SESSION_ID}`,
+        success_url: `${origin}/memberships/success?session_id={CHECKOUT_SESSION_ID}` +
+          `&plan=${encodeURIComponent(plan.key)}`,
         cancel_url: `${origin}/memberships?checkout=cancelled`,
         subscription_data: {
           description: plan.name,
@@ -4319,6 +4326,7 @@ type ConfirmationDetails = {
 function buildConfirmationHtml(details: ConfirmationDetails): string {
   const {membership, initialChargePence, claimUrl} = details;
   const plan = getPlan(membership.planKey);
+  const isYouthPlan = plan.audience === "youth";
   const firstFullCharge = formatUnixBillingDate(membership.billingCycleAnchor);
   const documents = Object.entries(membership.acceptances.documents)
     .map(([name, version]) =>
@@ -4327,7 +4335,7 @@ function buildConfirmationHtml(details: ConfirmationDetails): string {
 
   const rows: Array<[string, string]> = [
     ["Plan", plan.name],
-    ["Participant", membership.participant.fullName],
+    [isYouthPlan ? "Child" : "Participant", membership.participant.fullName],
     ["Monthly price", `${formatPence(plan.amountPence)} per month`],
     [
       "Paid today",
@@ -4341,7 +4349,7 @@ function buildConfirmationHtml(details: ConfirmationDetails): string {
 
   if (membership.guardian) {
     rows.splice(2, 0, [
-      "Parent or guardian",
+      isYouthPlan ? "Paying adult" : "Parent or guardian",
       `${membership.guardian.fullName} (${membership.guardian.relationship})`,
     ]);
   }

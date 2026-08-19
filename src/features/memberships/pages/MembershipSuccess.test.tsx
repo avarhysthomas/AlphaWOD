@@ -6,11 +6,14 @@ const mockRememberPendingClaim = jest.fn();
 const mockClearPendingClaim = jest.fn();
 const mockClearCheckoutAttempt = jest.fn();
 const mockReadCheckoutAttemptId = jest.fn();
+const mockReadPendingClaim = jest.fn();
+const mockReadPendingClaimVerifier = jest.fn();
 const mockClaimMembership = jest.fn();
 const mockGetMyMemberships = jest.fn();
 const mockRefreshAppUser = jest.fn();
 let mockUser: { uid: string } | null = { uid: "buyer-1" };
 let mockLoading = false;
+let mockSearchParams = "plan=adult_unlimited&session_id=cs_signed_in";
 
 jest.mock("../../../context/AuthContext", () => ({
   useAuth: () => ({
@@ -25,6 +28,8 @@ jest.mock("../services/membership", () => ({
   clearPendingClaim: (...args: unknown[]) => mockClearPendingClaim(...args),
   getMyMemberships: (...args: unknown[]) => mockGetMyMemberships(...args),
   readCheckoutAttemptId: () => mockReadCheckoutAttemptId(),
+  readPendingClaim: () => mockReadPendingClaim(),
+  readPendingClaimVerifier: () => mockReadPendingClaimVerifier(),
   rememberPendingClaim: (...args: unknown[]) => mockRememberPendingClaim(...args),
 }));
 jest.mock(
@@ -33,7 +38,7 @@ jest.mock(
     Link: ({ children, to }: { children: React.ReactNode; to: string }) => (
       <a href={to}>{children}</a>
     ),
-    useSearchParams: () => [new URLSearchParams("session_id=cs_signed_in")],
+    useSearchParams: () => [new URLSearchParams(mockSearchParams)],
   }),
   { virtual: true }
 );
@@ -65,7 +70,10 @@ describe("MembershipSuccess claim persistence", () => {
     jest.clearAllMocks();
     mockUser = { uid: "buyer-1" };
     mockLoading = false;
+    mockSearchParams = "plan=adult_unlimited&session_id=cs_signed_in";
     mockReadCheckoutAttemptId.mockReturnValue("12345678-1234-4123-8123-123456789abc");
+    mockReadPendingClaim.mockReturnValue(null);
+    mockReadPendingClaimVerifier.mockReturnValue(null);
     mockClaimMembership.mockResolvedValue({ok: true, claimed: ["sub_1"]});
     mockGetMyMemberships.mockResolvedValue({
       ok: true,
@@ -92,6 +100,68 @@ describe("MembershipSuccess claim persistence", () => {
       "cs_signed_in",
       "12345678-1234-4123-8123-123456789abc"
     );
+  });
+
+  it("offers both account paths after an Adult Unlimited purchase", () => {
+    mockUser = null;
+    render(<MembershipSuccess />);
+
+    expect(
+      screen.getByRole("link", {name: "Create AlphaWOD account"})
+    ).toHaveAttribute("href", "/signup");
+    expect(screen.getByRole("link", {name: "Log in to AlphaWOD"}))
+      .toHaveAttribute("href", "/");
+  });
+
+  it("keeps the Adult Unlimited account choices usable after a refresh", () => {
+    mockUser = null;
+    mockSearchParams = "plan=adult_unlimited";
+    mockReadCheckoutAttemptId.mockReturnValue(null);
+    mockReadPendingClaim.mockReturnValue("cs_remembered");
+    mockReadPendingClaimVerifier.mockReturnValue(
+      "12345678-1234-4123-8123-123456789abc"
+    );
+    render(<MembershipSuccess />);
+
+    expect(screen.getByRole("link", {name: "Create AlphaWOD account"}))
+      .toBeInTheDocument();
+    expect(screen.getByRole("link", {name: "Log in to AlphaWOD"}))
+      .toBeInTheDocument();
+    expect(mockRememberPendingClaim).toHaveBeenCalledWith(
+      "cs_remembered",
+      "12345678-1234-4123-8123-123456789abc"
+    );
+  });
+
+  it.each([
+    "adult_ladies",
+    "adult_gym",
+    "youth_youngstars",
+    "youth_teenstars",
+  ])("shows thank-you only for the %s plan", (planKey) => {
+    mockUser = null;
+    mockSearchParams = `plan=${planKey}&session_id=cs_signed_in`;
+    render(<MembershipSuccess />);
+
+    expect(screen.getByRole("heading", {name: "Thank you"})).toBeInTheDocument();
+    expect(screen.getByText(/There’s nothing else you need to do on this page/i))
+      .toBeInTheDocument();
+    expect(screen.queryByText("Use AlphaWOD with your membership"))
+      .not.toBeInTheDocument();
+    expect(screen.queryByRole("link", {name: "Create AlphaWOD account"}))
+      .not.toBeInTheDocument();
+    expect(screen.queryByRole("link", {name: "Log in to AlphaWOD"}))
+      .not.toBeInTheDocument();
+  });
+
+  it("fails closed to thank-you only when the returned plan is missing or invalid", () => {
+    mockUser = null;
+    mockSearchParams = "plan=not-a-plan&session_id=cs_signed_in";
+    render(<MembershipSuccess />);
+
+    expect(screen.getByRole("heading", {name: "Thank you"})).toBeInTheDocument();
+    expect(screen.queryByRole("link", {name: /AlphaWOD account/i}))
+      .not.toBeInTheDocument();
   });
 
   it("waits for Firebase Auth, then persists the claim only after signed-out resolution", () => {
@@ -121,6 +191,26 @@ describe("MembershipSuccess claim persistence", () => {
     expect(screen.getByText("Checkout received")).toBeInTheDocument();
     expect(screen.queryByText("Payment confirmed")).not.toBeInTheDocument();
     expect(mockGetMyMemberships).not.toHaveBeenCalled();
+    expect(screen.queryByText("Go to AlphaWOD")).not.toBeInTheDocument();
+  });
+
+  it("does not show AlphaWOD account actions for a signed-in non-access plan", async () => {
+    mockSearchParams = "plan=adult_gym&session_id=cs_signed_in";
+    mockGetMyMemberships.mockResolvedValue({
+      ok: true,
+      memberships: [{
+        ...activeMembership,
+        planKey: "adult_gym",
+        planName: "Adult Gym Only",
+        grantsAlphaWodAccess: false,
+      }],
+      cancellationPreview: null,
+    });
+    render(<MembershipSuccess />);
+
+    expect(await screen.findByText("Payment confirmed")).toBeInTheDocument();
+    expect(screen.queryByText("View my membership")).not.toBeInTheDocument();
+    expect(screen.queryByText("Go to AlphaWOD")).not.toBeInTheDocument();
   });
 
   it("shows the exact membership's current revoked state instead of active-access copy", async () => {

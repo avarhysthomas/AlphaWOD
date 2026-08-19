@@ -34,7 +34,6 @@ export default function MembershipCheckout() {
 
   const [participantFullName, setParticipantFullName] = useState("");
   const [participantDateOfBirth, setParticipantDateOfBirth] = useState("");
-  const [participantIsPayer, setParticipantIsPayer] = useState(true);
   const [guardianFullName, setGuardianFullName] = useState("");
   const [guardianRelationship, setGuardianRelationship] = useState("");
   const [guardianConfirmsAuthority, setGuardianConfirmsAuthority] = useState(false);
@@ -94,7 +93,9 @@ export default function MembershipCheckout() {
         planKey: plan.key,
         participantFullName: participantFullName.trim(),
         participantDateOfBirth,
-        participantIsPayer: isYouth ? false : participantIsPayer,
+        // Adult memberships are self-purchase only. Youth memberships attach
+        // the child as participant and collect the paying adult separately.
+        participantIsPayer: !isYouth,
         signedName: typedSignature,
         acceptedDocuments: true,
         immediatePerformanceRequested,
@@ -188,34 +189,93 @@ export default function MembershipCheckout() {
         {!user && (
           <div className="mt-7 rounded-[28px] border border-white/10 bg-[#151311] p-6">
             <p className="text-sm leading-7 text-white/70">
-              You do not need an account to join. Complete your details and pay, then
-              create your account to claim the membership.{" "}
-              <Link to="/" className="underline underline-offset-4">
-                Already train with us? Sign in first
-              </Link>{" "}
-              and your purchase is linked automatically.
+              {plan.grantsAlphaWodAccess
+                ? "Complete your registration and payment first. Afterwards, you can create a new AlphaWOD account or log in to an existing one, and we’ll securely link this purchase."
+                : "You do not need an AlphaWOD account to buy this membership. Complete the registration and payment below, then you’ll return to a simple confirmation page."}
+            </p>
+          </div>
+        )}
+
+        {user && (
+          <div className="mt-7 rounded-[28px] border border-white/10 bg-[#151311] p-6">
+            <p className="text-sm leading-7 text-white/70">
+              You&rsquo;re signed in{payerName ? ` as ${payerName}` : ""}. Complete the
+              same registration and Stripe payment journey below; after payment, this
+              purchase will be linked to your existing AlphaWOD account automatically.
             </p>
           </div>
         )}
 
         <form onSubmit={handleSubmit} className="mt-8 space-y-5">
+          {isYouth && (
+            <div className={CARD}>
+              <p className={EYEBROW}>Paying adult</p>
+              <p className="mt-4 text-sm leading-7 text-white/70">
+                Enter the details of the adult who will pay for this child&rsquo;s
+                membership. {POLICY_TEXT.guardianRequirement}
+              </p>
+
+              <label className="mt-5 block">
+                <span className={LABEL}>Paying adult&rsquo;s full name</span>
+                <input
+                  className={FIELD}
+                  value={guardianFullName}
+                  onChange={(event) => setGuardianFullName(event.target.value)}
+                  autoComplete="name"
+                  maxLength={160}
+                  required
+                />
+              </label>
+
+              <label className="mt-5 block">
+                <span className={LABEL}>Relationship to child</span>
+                <input
+                  className={FIELD}
+                  value={guardianRelationship}
+                  onChange={(event) => setGuardianRelationship(event.target.value)}
+                  placeholder="Parent, legal guardian"
+                  maxLength={80}
+                  required
+                />
+              </label>
+
+              <label className="mt-5 flex items-start gap-3 text-sm leading-6 text-white/70">
+                <input
+                  type="checkbox"
+                  className="mt-1 h-4 w-4 shrink-0"
+                  checked={guardianConfirmsAuthority}
+                  onChange={(event) => setGuardianConfirmsAuthority(event.target.checked)}
+                />
+                <span>
+                  I confirm I am this child&rsquo;s parent or legal guardian, or an adult
+                  with lawful authority to enter this arrangement for them, and I am the
+                  payer.
+                </span>
+              </label>
+            </div>
+          )}
+
           <div className={CARD}>
-            <p className={EYEBROW}>Participant</p>
+            <p className={EYEBROW}>{isYouth ? "Child details" : "Your details"}</p>
 
             <label className="mt-5 block">
-              <span className={LABEL}>Participant full name</span>
+              <span className={LABEL}>
+                {isYouth ? "Child’s full name" : "Your full name"}
+              </span>
               <input
                 className={FIELD}
                 value={participantFullName}
                 onChange={(event) => setParticipantFullName(event.target.value)}
-                autoComplete="name"
+                autoComplete={isYouth ? "off" : "name"}
                 maxLength={160}
                 required
               />
             </label>
 
             <label className="mt-5 block">
-              <span className={LABEL}>Participant date of birth</span>
+              <span className={LABEL}>
+                {isYouth ? "Child’s date of birth" : "Your date of birth"}
+              </span>
               <input
                 type="date"
                 className={FIELD}
@@ -226,7 +286,9 @@ export default function MembershipCheckout() {
             </label>
 
             {age !== null && (
-              <p className="mt-3 text-xs text-white/45">Age {age}</p>
+              <p className="mt-3 text-xs text-white/45">
+                {isYouth ? "Child age" : "Age"} {age}
+              </p>
             )}
 
             {ageMismatch && (
@@ -248,69 +310,12 @@ export default function MembershipCheckout() {
                 )}
               </div>
             )}
-
             {!isYouth && (
-              <label className="mt-5 flex items-start gap-3 text-sm leading-6 text-white/70">
-                <input
-                  type="checkbox"
-                  className="mt-1 h-4 w-4 shrink-0"
-                  checked={participantIsPayer}
-                  onChange={(event) => setParticipantIsPayer(event.target.checked)}
-                />
-                <span>
-                  I am the participant{payerName ? ` (${payerName})` : ""}. Untick this if
-                  you are paying for another adult; they will accept their own waiver and we
-                  will link their access.
-                </span>
-              </label>
+              <p className="mt-5 text-sm leading-6 text-white/55">
+                Adult memberships can only be purchased for yourself.
+              </p>
             )}
           </div>
-
-          {isYouth && (
-            <div className={CARD}>
-              <p className={EYEBROW}>Parent or guardian</p>
-              <p className="mt-4 text-sm leading-7 text-white/70">
-                {POLICY_TEXT.guardianRequirement}
-              </p>
-
-              <label className="mt-5 block">
-                <span className={LABEL}>Your full name</span>
-                <input
-                  className={FIELD}
-                  value={guardianFullName}
-                  onChange={(event) => setGuardianFullName(event.target.value)}
-                  maxLength={160}
-                  required
-                />
-              </label>
-
-              <label className="mt-5 block">
-                <span className={LABEL}>Relationship to participant</span>
-                <input
-                  className={FIELD}
-                  value={guardianRelationship}
-                  onChange={(event) => setGuardianRelationship(event.target.value)}
-                  placeholder="Parent, legal guardian"
-                  maxLength={80}
-                  required
-                />
-              </label>
-
-              <label className="mt-5 flex items-start gap-3 text-sm leading-6 text-white/70">
-                <input
-                  type="checkbox"
-                  className="mt-1 h-4 w-4 shrink-0"
-                  checked={guardianConfirmsAuthority}
-                  onChange={(event) => setGuardianConfirmsAuthority(event.target.checked)}
-                />
-                <span>
-                  I confirm I am this participant&rsquo;s parent or legal guardian, or an
-                  adult with lawful authority to enter this arrangement for them, and I am
-                  the payer.
-                </span>
-              </label>
-            </div>
-          )}
 
           <div className={CARD}>
             <p className={EYEBROW}>Documents and signature</p>
@@ -349,7 +354,11 @@ export default function MembershipCheckout() {
             </label>
 
             <label className="mt-6 block">
-              <span className={LABEL}>Type your full name to sign</span>
+              <span className={LABEL}>
+                {isYouth
+                  ? "Type the paying adult’s full name to sign"
+                  : "Type your full name to sign"}
+              </span>
               <input
                 className={FIELD}
                 value={signedName}

@@ -11,8 +11,16 @@ const Stripe = require("stripe");
 const {redactProviderSecrets, stripeCliTestKey} = require("./stripeCliTestKey");
 
 const TEST_PROJECT_ID = "demo-alphawod-stripe";
-const LOCAL_SUCCESS_URL =
-  "http://localhost:3002/memberships/success?session_id={CHECKOUT_SESSION_ID}";
+const LOCAL_SUCCESS_ORIGIN = "http://localhost:3002";
+const LOCAL_SUCCESS_PATH = "/memberships/success";
+const CHECKOUT_SESSION_TEMPLATE = "{CHECKOUT_SESSION_ID}";
+const PLAN_KEYS = new Set([
+  "adult_unlimited",
+  "adult_ladies",
+  "adult_gym",
+  "youth_youngstars",
+  "youth_teenstars",
+]);
 const POLL_TIMEOUT_MILLISECONDS = 30000;
 const POLL_INTERVAL_MILLISECONDS = 750;
 
@@ -39,12 +47,34 @@ function assertEnvironment() {
   process.env.FIRESTORE_EMULATOR_HOST = firestoreHost;
 }
 
+function isLocalSuccessUrl(session) {
+  const planKey = session.metadata?.planKey;
+  if (typeof session.success_url !== "string" || !PLAN_KEYS.has(planKey)) return false;
+
+  try {
+    const url = new URL(session.success_url);
+    const queryKeys = [...url.searchParams.keys()].sort();
+    return url.origin === LOCAL_SUCCESS_ORIGIN &&
+      url.pathname === LOCAL_SUCCESS_PATH &&
+      url.username === "" &&
+      url.password === "" &&
+      url.hash === "" &&
+      queryKeys.length === 2 &&
+      queryKeys[0] === "plan" &&
+      queryKeys[1] === "session_id" &&
+      url.searchParams.get("plan") === planKey &&
+      url.searchParams.get("session_id") === CHECKOUT_SESSION_TEMPLATE;
+  } catch {
+    return false;
+  }
+}
+
 function assertLocalSession(session) {
   if (session.livemode !== false || session.mode !== "subscription" ||
     session.status !== "complete" || session.payment_status !== "paid") {
     throw new Error("The Stripe test Checkout Session is not a completed paid subscription.");
   }
-  if (session.success_url !== LOCAL_SUCCESS_URL || !session.metadata?.intentId) {
+  if (!isLocalSuccessUrl(session) || !session.metadata?.intentId) {
     throw new Error("The Checkout Session does not belong to this local test journey.");
   }
 }
@@ -99,7 +129,7 @@ async function listLocalSessions(stripe) {
     session.mode === "subscription" &&
     session.status === "complete" &&
     session.payment_status === "paid" &&
-    session.success_url === LOCAL_SUCCESS_URL &&
+    isLocalSuccessUrl(session) &&
     Boolean(session.metadata?.intentId)
   );
 }
