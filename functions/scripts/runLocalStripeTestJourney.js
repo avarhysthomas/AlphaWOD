@@ -17,6 +17,71 @@ const APP_PORT = 3002;
 const APP_ORIGIN = `http://localhost:${APP_PORT}`;
 const FUNCTIONS_DIR = path.resolve(__dirname, "..");
 const REPO_ROOT = path.resolve(FUNCTIONS_DIR, "..");
+
+function firebaseCliMetadata(command) {
+  try {
+    const executable = fs.realpathSync(command);
+    const packageRoot = path.resolve(path.dirname(executable), "../..");
+    const packageJson = JSON.parse(
+      fs.readFileSync(path.join(packageRoot, "package.json"), "utf8")
+    );
+    const runtimeDefinitions = fs.readFileSync(
+      path.join(
+        packageRoot,
+        "lib/deploy/functions/runtimes/supported/types.js"
+      ),
+      "utf8"
+    );
+    return {
+      command,
+      version: String(packageJson.version || "0.0.0"),
+      supportsNode24: runtimeDefinitions.includes("nodejs24"),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function compareVersionsDescending(left, right) {
+  const parts = (value) => value.split(".").map((part) => Number(part) || 0);
+  const leftParts = parts(left.version);
+  const rightParts = parts(right.version);
+  for (let index = 0; index < 3; index += 1) {
+    if (leftParts[index] !== rightParts[index]) {
+      return rightParts[index] - leftParts[index];
+    }
+  }
+  return 0;
+}
+
+function resolveFirebaseCommand() {
+  const binaryName = process.platform === "win32" ? "firebase.cmd" : "firebase";
+  const candidates = new Set(
+    String(process.env.PATH || "")
+      .split(path.delimiter)
+      .filter(Boolean)
+      .map((directory) => path.join(directory, binaryName))
+  );
+  const nvmVersions = path.join(String(process.env.HOME || ""), ".nvm/versions/node");
+  if (fs.existsSync(nvmVersions)) {
+    for (const version of fs.readdirSync(nvmVersions)) {
+      candidates.add(path.join(nvmVersions, version, "bin", binaryName));
+    }
+  }
+  const compatible = [...candidates]
+    .filter((candidate) => fs.existsSync(candidate))
+    .map(firebaseCliMetadata)
+    .filter((candidate) => candidate?.supportsNode24)
+    .sort(compareVersionsDescending);
+  if (!compatible.length) {
+    throw new Error(
+      "The local Stripe journey requires a Firebase CLI that supports the repository's Node 24 Functions runtime."
+    );
+  }
+  return compatible[0].command;
+}
+
+const FIREBASE_COMMAND = resolveFirebaseCommand();
 const WEBHOOK_URL =
   `http://127.0.0.1:5001/${PROJECT_ID}/europe-west1/stripeWebhook`;
 const CALLABLE_URL =
@@ -419,7 +484,7 @@ async function main() {
 
   const firebase = spawnChild(
     "Firebase emulators",
-    "firebase",
+    FIREBASE_COMMAND,
     [
       "emulators:start",
       "--project", PROJECT_ID,

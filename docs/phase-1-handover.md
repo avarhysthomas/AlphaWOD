@@ -108,14 +108,18 @@ minutes before the fixed billing anchor; new intents at the cutoff are standard.
 
 Adult Unlimited presale Checkout can accept the allowlisted existing-member
 Coupon only: £5 GBP off for three months, restricted to that Product. One shared
-reusable Promotion Code is distributed to eligible members. It expires at the
-local opening cutoff and has no minimum, first-time-transaction, Customer,
-currency-options or maximum-redemptions restriction. Its exact provider id is
-resolved before Checkout and bound through fulfilment; Stripe's unrestricted
-hosted code field stays disabled. The frozen schedule is £55 for September,
-October and November, then the unchanged £60 base Price from 1 December. Staff
-manually moderate redemptions against the small eligible cohort. Test and live
-Coupon/Code objects are separate provider configuration.
+reusable Promotion Code is distributed to eligible members. The app stops
+accepting it at the local opening cutoff (`1788217200`), while the provider-side
+Code expires at the fixed Stripe billing anchor (`1788220800`) one hour later.
+The underlying Coupon has no `redeem_by`, so it cannot expire before the
+deferred subscription's first invoice. The Code has no minimum,
+first-time-transaction, Customer, currency-options or maximum-redemptions
+restriction. Its exact provider id is resolved before Checkout and bound through
+fulfilment; Stripe's unrestricted hosted code field stays disabled. The frozen
+schedule is £55 for September, October and November, then the unchanged £60 base
+Price from 1 December. Staff manually moderate redemptions against the small
+eligible cohort. Test and live Coupon/Code objects are separate provider
+configuration.
 
 Final AlphaWOD ownership is also recorded in a deterministic
 `membershipEntitlementOwners` document. Claim, fulfilment and admin linking

@@ -12,6 +12,8 @@ const {
   EXISTING_MEMBER_OFFER,
   MEMBERSHIP_PLANS,
   PLAN_KEYS,
+  PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+  PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
 } = require("../lib/membershipPlans");
 const {redactProviderSecrets, stripeCliTestKey} = require("./stripeCliTestKey");
 
@@ -98,8 +100,7 @@ async function main() {
   const couponId = process.env.STRIPE_EXISTING_MEMBER_COUPON_ID?.trim();
   const promotionCodeId = process.env.STRIPE_EXISTING_MEMBER_PROMOTION_CODE_ID?.trim();
   let sharedPromotionCodeVerified = false;
-  if (!couponId && Date.now() <
-    EXISTING_MEMBER_OFFER.redemptionClosesAtUnixSeconds * 1000) {
+  if (!couponId && Date.now() < PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS * 1000) {
     throw new Error("STRIPE_EXISTING_MEMBER_COUPON_ID is required during the presale.");
   }
   if (!couponId && promotionCodeId) {
@@ -126,7 +127,7 @@ async function main() {
       coupon.percent_off === null &&
       coupon.duration === "repeating" &&
       coupon.duration_in_months === EXISTING_MEMBER_OFFER.durationMonths &&
-      coupon.redeem_by === EXISTING_MEMBER_OFFER.redemptionClosesAtUnixSeconds &&
+      coupon.redeem_by === null &&
       coupon.max_redemptions === null &&
       appliesToProducts.length === 1 &&
       appliesToProducts[0] === allowedProductId;
@@ -144,7 +145,7 @@ async function main() {
       couponIdForPromotionCode(promotionCode) === coupon.id &&
       promotionCode.max_redemptions === null &&
       isValidRedemptionCount(promotionCode.times_redeemed) &&
-      promotionCode.expires_at === EXISTING_MEMBER_OFFER.redemptionClosesAtUnixSeconds &&
+      promotionCode.expires_at === PRESALE_BILLING_ANCHOR_UNIX_SECONDS &&
       promotionCode.customer === null &&
       promotionCode.customer_account === null &&
       restrictions.first_time_transaction === false &&

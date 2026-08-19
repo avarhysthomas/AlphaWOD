@@ -609,6 +609,86 @@ test("capped and malformed shared campaign counters fail closed", async () => {
   }
 });
 
+test("shared campaign provider expiry cannot precede the deferred anchor", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  const coupon = fakeStripe.state.coupons.get("coupon_existing_member_5x3");
+  const promotion = fakeStripe.state.promotionCodes.get(
+    "promo_existing_member_shared"
+  );
+  const originalCoupon = {...coupon};
+  const originalPromotion = {...promotion};
+  const sessionsBefore = fakeStripe.state.checkoutSessions.size;
+  try {
+    coupon.redeem_by = PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS;
+    await assert.rejects(
+      () => handler(request({
+        ...validCheckoutData("attempt_coupon_expiry_before_anchor_123456"),
+        promotionCode: "EXISTING-FAKE",
+      })),
+      /configured existing-member Coupon does not match/i
+    );
+
+    Object.assign(coupon, originalCoupon);
+    promotion.expires_at = PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS;
+    await assert.rejects(
+      () => handler(request({
+        ...validCheckoutData("attempt_promotion_expiry_before_anchor_123456"),
+        promotionCode: "EXISTING-FAKE",
+      })),
+      /not valid for the founding-member offer/i
+    );
+
+    assert.equal(fakeStripe.state.checkoutSessions.size, sessionsBefore);
+    assert.equal((await db.collection("membershipIntents").get()).size, 0);
+    assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 0);
+  } finally {
+    Object.assign(coupon, originalCoupon);
+    Object.assign(promotion, originalPromotion);
+    Date.now = realNow;
+  }
+});
+
+test("fake Stripe reproduces coupon_expired at a deferred billing anchor", async () => {
+  const coupon = fakeStripe.state.coupons.get("coupon_existing_member_5x3");
+  const originalCoupon = {...coupon};
+  const realNow = Date.now;
+  const client = new Stripe("sk_test_fake", {
+    apiVersion: "2024-06-20",
+    host: "127.0.0.1",
+    port: STRIPE_PORT,
+    protocol: "http",
+  });
+  try {
+    Date.now = () => (PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS - 3600) * 1000;
+    coupon.redeem_by = PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS;
+    await assert.rejects(
+      () => client.checkout.sessions.create({
+        mode: "subscription",
+        line_items: [{price: "price_unlimited", quantity: 1}],
+        discounts: [{promotion_code: "promo_existing_member_shared"}],
+        expires_at: PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS - 60,
+        success_url: "https://example.test/success",
+        cancel_url: "https://example.test/cancel",
+        subscription_data: {
+          billing_cycle_anchor: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+          proration_behavior: "none",
+        },
+      }),
+      (error) => {
+        assert.equal(error.code, "coupon_expired");
+        return true;
+      }
+    );
+  } finally {
+    Object.assign(coupon, originalCoupon);
+    Date.now = realNow;
+  }
+});
+
 test("the shared Promotion Code id allowlist is required before reservation", async () => {
   const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
     () => undefined
@@ -643,7 +723,7 @@ test("unknown and unrelated campaign codes fail before reservation or Stripe", a
     active: true,
     code: "UNRELATED-FAKE",
     max_redemptions: null,
-    expires_at: PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
+    expires_at: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
     times_redeemed: 0,
     promotion: {type: "coupon", coupon: "coupon_unrelated_campaign"},
     restrictions: {
@@ -659,7 +739,7 @@ test("unknown and unrelated campaign codes fail before reservation or Stripe", a
     active: true,
     code: "CURRENCY-MINIMUM-FAKE",
     max_redemptions: null,
-    expires_at: PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
+    expires_at: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
     times_redeemed: 0,
     promotion: {type: "coupon", coupon: "coupon_existing_member_5x3"},
     restrictions: {
@@ -676,7 +756,7 @@ test("unknown and unrelated campaign codes fail before reservation or Stripe", a
     active: true,
     code: "MATCHING-NOT-ALLOWLISTED",
     max_redemptions: null,
-    expires_at: PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
+    expires_at: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
     times_redeemed: 0,
     promotion: {type: "coupon", coupon: "coupon_existing_member_5x3"},
     restrictions: {
@@ -735,8 +815,43 @@ test("the shared code is rejected outside the Adult Unlimited presale", async ()
       })),
       /only for the Adult Unlimited founding presale/i
     );
+    await assert.rejects(
+      () => handler(request({
+        ...validCheckoutData("attempt_stale_code_page_123456"),
+        promotionCode: "EXISTING-FAKE",
+      })),
+      (error) => {
+        assert.equal(error.details?.reason, "billing_policy_changed");
+        return true;
+      }
+    );
     assert.equal((await db.collection("membershipIntents").get()).size, 0);
     assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 0);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("a frozen discounted Session remains retryable after the app cutoff", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  const checkoutAt = PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS - 1;
+  const data = {
+    ...validCheckoutData("attempt_discount_retry_after_cutoff_123456"),
+    promotionCode: "EXISTING-FAKE",
+  };
+  try {
+    Date.now = () => checkoutAt * 1000;
+    const first = await handler(request(data));
+
+    Date.now = () => (PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS + 60) * 1000;
+    const retry = await handler(request(data));
+
+    assert.equal(retry.sessionId, first.sessionId);
+    assert.equal(retry.sessionUrl, first.sessionUrl);
+    assert.equal((await db.collection("membershipIntents").get()).size, 1);
   } finally {
     Date.now = realNow;
   }
@@ -1117,10 +1232,75 @@ test("an expired reserved attempt without a Stripe session releases after valida
 
     await assert.rejects(
       () => handler(request(data)),
-      /could not create this checkout|new checkout attempt/i
+      (error) => {
+        assert.match(error.message, /checkout attempt expired/i);
+        assert.equal(error.code, "deadline-exceeded");
+        return true;
+      }
     );
 
-    assert.equal((await intentRef.get()).get("status"), "failed");
+    const failedIntent = await intentRef.get();
+    assert.equal(failedIntent.get("status"), "failed");
+    assert.equal(failedIntent.get("failureKind"), "checkout_attempt_expired");
+    assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 0);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("a reserved attempt below Stripe's minimum window ends as an attempt expiry", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  const fixedNow = new Date("2026-08-18T10:00:00Z").getTime();
+  Date.now = () => fixedNow;
+  try {
+    const data = validCheckoutData("attempt_reserved_below_stripe_minimum");
+    const attemptHash = createHash("sha256")
+      .update(`membership-checkout:${data.checkoutAttemptId}`)
+      .digest("hex");
+    const participantKey = membershipTesting.participantKeyFor(
+      data.participantFullName,
+      data.participantDateOfBirth
+    );
+    const intentRef = db.collection("membershipIntents")
+      .doc(`attempt_${attemptHash}`);
+    const intent = reservationIntent("reserved_below_stripe_minimum", {
+      participantKey,
+      participantName: data.participantFullName,
+    });
+    intent.checkoutAttemptHash = attemptHash;
+    intent.acceptances.signedName = data.signedName;
+    intent.checkoutExpiresAt = Math.floor(fixedNow / 1000) + 10 * 60;
+    intent.billingCycleAnchor = Math.floor(fixedNow / 1000) + 60 * 60;
+    intent.reservationExpiresAt = admin.firestore.Timestamp.fromMillis(
+      fixedNow + 70 * 60 * 1000
+    );
+    intent.requestFingerprint = membershipTesting.checkoutRequestFingerprint({
+      payerUid: null,
+      planKey: data.planKey,
+      expectedBillingMode: data.expectedBillingMode,
+      promotionCode: data.promotionCode ?? null,
+      participant: intent.participant,
+      guardian: null,
+      signedName: data.signedName,
+      immediatePerformanceRequested: data.immediatePerformanceRequested,
+    });
+    await membershipTesting.reserveCheckoutAttempt(intentRef, intent, fixedNow);
+
+    await assert.rejects(
+      () => handler(request(data)),
+      (error) => {
+        assert.match(error.message, /checkout attempt expired/i);
+        assert.equal(error.code, "deadline-exceeded");
+        return true;
+      }
+    );
+
+    const failedIntent = await intentRef.get();
+    assert.equal(failedIntent.get("status"), "failed");
+    assert.equal(failedIntent.get("failureKind"), "checkout_attempt_expired");
     assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 0);
   } finally {
     Date.now = realNow;
@@ -1628,11 +1808,15 @@ test("an approved existing-member code freezes the three-payment £55 schedule",
   }
 });
 
-test("a redeemed discount still fulfils when its webhook arrives after the cutoff", async () => {
+test("a discounted Session can complete after cutoff and fulfil after code expiry", async () => {
   const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
     () => undefined
   );
   const realNow = Date.now;
+  const promotion = fakeStripe.state.promotionCodes.get(
+    "promo_existing_member_shared"
+  );
+  const originalPromotion = {...promotion};
   Date.now = () => (PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS - 2) * 1000;
   try {
     const checkout = await handler(request(
@@ -1645,7 +1829,8 @@ test("a redeemed discount still fulfils when its webhook arrives after the cutof
     const intent = intentSnap.data();
     const subscriptionId = "sub_discount_delayed_webhook";
     const customerId = "cus_discount_delayed_webhook";
-    const redeemedAt = PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS - 1;
+    const completedAt = PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS + 60;
+    assert.ok(completedAt < intent.checkoutExpiresAt);
     fakeStripe.setSubscription(subscriptionId, {
       status: "active",
       customer: customerId,
@@ -1656,18 +1841,20 @@ test("a redeemed discount still fulfils when its webhook arrives after the cutof
         object: "discount",
         source: {type: "coupon", coupon: "coupon_existing_member_5x3"},
         promotion_code: "promo_existing_member_shared",
-        start: redeemedAt,
+        start: completedAt,
         end: 1796083200,
       }],
     });
 
-    // Coupon.valid is now false because redeem_by has passed. This is a
-    // delayed delivery of an already-applied redemption, not a new redemption.
-    Date.now = () => (PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS + 60) * 1000;
+    // The Promotion Code has now expired. This is a delayed delivery of an
+    // already-applied redemption, not a new redemption.
+    promotion.active = false;
+    promotion.times_redeemed = 1;
+    Date.now = () => (PRESALE_BILLING_ANCHOR_UNIX_SECONDS + 60) * 1000;
     await handleStripeEvent({
       id: "evt_discount_delayed_webhook",
       type: "checkout.session.completed",
-      created: redeemedAt,
+      created: completedAt,
       data: {object: {
         id: checkout.sessionId,
         object: "checkout.session",
@@ -1695,6 +1882,7 @@ test("a redeemed discount still fulfils when its webhook arrives after the cutof
     assert.equal(membership.get("discount.amountOffPence"), 500);
     assert.equal(membership.get("paymentSchedule.discountedMonthlyPence"), 5500);
   } finally {
+    Object.assign(promotion, originalPromotion);
     Date.now = realNow;
   }
 });

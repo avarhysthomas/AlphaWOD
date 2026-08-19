@@ -64,7 +64,7 @@ function createFakeStripe() {
       duration: "repeating",
       duration_in_months: 3,
       max_redemptions: null,
-      redeem_by: 1788217200,
+      redeem_by: null,
       applies_to: {products: ["prod_price_unlimited"]},
       deleted: false,
       valid: true,
@@ -76,7 +76,7 @@ function createFakeStripe() {
       active: true,
       code: "EXISTING-FAKE",
       max_redemptions: null,
-      expires_at: 1788217200,
+      expires_at: 1788220800,
       times_redeemed: 0,
       promotion: {type: "coupon", coupon: "coupon_existing_member_5x3"},
       restrictions: {
@@ -190,13 +190,16 @@ function createFakeStripe() {
 
       // --- Checkout sessions ---
       if (path === "/v1/checkout/sessions" && req.method === "POST") {
-        if (Number(payload.expires_at) * 1000 <= Date.now()) {
+        const checkoutExpiresAt = Number(payload.expires_at);
+        const nowUnixSeconds = Math.floor(Date.now() / 1000);
+        if (checkoutExpiresAt <= nowUnixSeconds ||
+          checkoutExpiresAt < nowUnixSeconds + 30 * 60) {
           return send(400, {
             error: {
               type: "invalid_request_error",
               code: "parameter_invalid_integer",
               param: "expires_at",
-              message: "expires_at must be in the future",
+              message: "expires_at must be at least 30 minutes in the future",
             },
           });
         }
@@ -205,6 +208,24 @@ function createFakeStripe() {
         const promotionCode = promotionCodeId ?
           state.promotionCodes.get(promotionCodeId) : null;
         const couponId = promotionCode?.promotion?.coupon ?? null;
+        const coupon = couponId ? state.coupons.get(couponId) : null;
+        const billingAnchor = Number(
+          payload["subscription_data[billing_cycle_anchor]"]
+        );
+        // Mirror Stripe's deferred-subscription validation. A Coupon can be
+        // valid at request time yet still be unusable when its provider expiry
+        // precedes the first full invoice anchor.
+        if (coupon?.redeem_by !== null &&
+          Number.isFinite(coupon?.redeem_by) &&
+          coupon.redeem_by <= billingAnchor) {
+          return send(400, {
+            error: {
+              type: "invalid_request_error",
+              code: "coupon_expired",
+              message: `Coupon ${coupon.id} is expired and cannot be applied.`,
+            },
+          });
+        }
         const session = {
           id,
           object: "checkout.session",

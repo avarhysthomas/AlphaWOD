@@ -384,4 +384,26 @@ describe("MembershipCheckout", () => {
     expect(getCheckoutButton()).toBeDisabled();
     expect(mockClearCheckoutAttempt).not.toHaveBeenCalled();
   });
+
+  it("shows a no-charge billing setup error and retires the failed attempt", async () => {
+    mockLocalJourneyEnabled = true;
+    mockCreateCheckout.mockRejectedValue(Object.assign(
+      new Error(
+        "Stripe could not start checkout because the billing setup needs attention. " +
+        "No checkout was created or charged. Please contact us."
+      ),
+      {
+        code: "functions/failed-precondition",
+        details: {reason: "stripe_checkout_configuration"},
+      }
+    ));
+    renderCheckout("adult_unlimited");
+
+    await submitAdultCheckout();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "No checkout was created or charged"
+    );
+    expect(mockClearCheckoutAttempt).toHaveBeenCalledTimes(1);
+  });
 });

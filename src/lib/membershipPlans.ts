@@ -18,7 +18,7 @@ export const BILLING_CURRENCY = "gbp";
 export const PRESALE_BILLING_ANCHOR_AT_ISO = "2026-09-01T00:00:00.000Z";
 export const PRESALE_BILLING_ANCHOR_UNIX_SECONDS = 1788220800;
 
-/** Presale and promotion redemption close at midnight London on opening day. */
+/** New presale intents stop at midnight London on opening day. */
 export const PRESALE_SIGNUP_CUTOFF_AT_ISO = "2026-08-31T23:00:00.000Z";
 export const PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS = 1788217200;
 
@@ -28,6 +28,7 @@ export const EXISTING_MEMBER_OFFER = {
   currency: BILLING_CURRENCY,
   durationMonths: 3,
   redemptionClosesAtUnixSeconds: PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
+  promotionCodeExpiresAtUnixSeconds: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
 } as const;
 
 export const COMPANY = {

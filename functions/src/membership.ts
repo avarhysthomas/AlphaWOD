@@ -597,7 +597,12 @@ async function retrieveApprovedExistingMemberCoupon(
     coupon.currency !== EXISTING_MEMBER_OFFER.currency || coupon.percent_off !== null ||
     coupon.duration !== "repeating" ||
     coupon.duration_in_months !== EXISTING_MEMBER_OFFER.durationMonths ||
-    coupon.redeem_by !== PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS ||
+    // Stripe validates an amount-off Coupon against this deferred
+    // subscription's future billing anchor. A Coupon that expires at the
+    // earlier local-midnight signup cutoff is rejected as `coupon_expired`
+    // even while `coupon.valid` is still true. Eligibility is bounded by the
+    // exact allowlisted Promotion Code and app cutoff instead.
+    coupon.redeem_by !== null ||
     coupon.max_redemptions !== null ||
     applicableProducts.length !== 1 || applicableProducts[0] !== productId) {
     throw new HttpsError(
@@ -615,7 +620,8 @@ function promotionCodeMatchesApprovedOffer(
   const currencyOptions = promotionCode.restrictions?.currency_options;
   return idOf(promotionCode.promotion?.coupon) === couponId &&
     promotionCode.max_redemptions === null &&
-    promotionCode.expires_at === PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS &&
+    promotionCode.expires_at ===
+      EXISTING_MEMBER_OFFER.promotionCodeExpiresAtUnixSeconds &&
     promotionCode.customer == null && promotionCode.customer_account == null &&
     promotionCode.restrictions?.first_time_transaction !== true &&
     promotionCode.restrictions?.minimum_amount === null &&
@@ -723,10 +729,10 @@ async function resolveApprovedCheckoutDiscount(
     throw new Error(`Subscription ${subscription.id} has no membership Product.`);
   }
   const [coupon, promotionCode] = await Promise.all([
-    // Coupon.valid becomes false at redeem_by. Once Stripe has authoritatively
-    // applied the Coupon and Promotion Code to both Session and Subscription,
-    // delayed webhook/recovery processing must validate the frozen offer terms
-    // without pretending it is a new redemption.
+    // Once Stripe has authoritatively applied the Coupon and Promotion Code to
+    // both Session and Subscription, delayed webhook/recovery processing must
+    // validate the frozen offer terms without pretending it is a new
+    // redemption or requiring the code to remain active.
     retrieveApprovedExistingMemberCoupon(billingStripe, productId, false),
     billingStripe.promotionCodes.retrieve(promotionCodeId),
   ]);
@@ -2572,13 +2578,6 @@ function buildCreateMembershipCheckoutHandler(
       );
     }
     const promotionCode = normalizePromotionCode(request.data?.promotionCode);
-    if (promotionCode && (billingPolicy.kind !== "presale" ||
-      planKey !== EXISTING_MEMBER_OFFER.planKey)) {
-      throw new HttpsError(
-        "failed-precondition",
-        "Promotion codes are available only for the Adult Unlimited founding presale."
-      );
-    }
     const age = resolveAgeFromDateOfBirth(dateOfBirth, now);
     if (age === null) {
       throw new HttpsError("invalid-argument", "Enter a valid participant date of birth.");
@@ -2682,6 +2681,14 @@ function buildCreateMembershipCheckoutHandler(
           expectedBillingMode,
           currentBillingMode: billingPolicy.billingMode,
         }
+      );
+    }
+    if (!existingSnap.exists && promotionCode &&
+      (billingPolicy.kind !== "presale" ||
+        planKey !== EXISTING_MEMBER_OFFER.planKey)) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Promotion codes are available only for the Adult Unlimited founding presale."
       );
     }
     if (existingSnap.exists) {
@@ -2890,13 +2897,45 @@ function buildCreateMembershipCheckoutHandler(
       assertStripeObjectMode("Checkout Session", session.id, session.livemode);
     } catch (error) {
       if (isDefinitiveCheckoutCreateFailure(error)) {
+        const stripeFailure = error as {
+          type?: unknown;
+          code?: unknown;
+          param?: unknown;
+          statusCode?: unknown;
+          requestId?: unknown;
+        };
+        // `expires_at` is fully server-generated. Any definitive provider
+        // rejection of it means this frozen attempt can no longer produce a
+        // Session (including Stripe's 30-minute minimum window), not that the
+        // operator's billing catalogue is broken.
+        const expiredAttempt = stripeFailure.param === "expires_at";
         await transitionCheckoutReservation(intentRef, "failed", {
-          failureKind: "stripe_checkout_validation",
+          failureKind: expiredAttempt ?
+            "checkout_attempt_expired" : "stripe_checkout_validation",
           failedAt: serverTimestamp(),
         });
+        const safeDiagnostic = (value: unknown) =>
+          typeof value === "string" ? value.slice(0, 120) : null;
+        console.error("Stripe Checkout Session creation was rejected", {
+          planKey,
+          hasPromotion: Boolean(intent.promotionCodeId),
+          type: safeDiagnostic(stripeFailure.type),
+          code: safeDiagnostic(stripeFailure.code),
+          param: safeDiagnostic(stripeFailure.param),
+          statusCode: typeof stripeFailure.statusCode === "number" ?
+            stripeFailure.statusCode : null,
+          requestId: safeDiagnostic(stripeFailure.requestId),
+        });
+        if (expiredAttempt) {
+          throw new HttpsError(
+            "deadline-exceeded",
+            "This checkout attempt expired before Stripe created it. Start again with a new checkout attempt."
+          );
+        }
         throw new HttpsError(
-          "deadline-exceeded",
-          "Stripe could not create this checkout. Start again with a new checkout attempt."
+          "failed-precondition",
+          "Stripe could not start checkout because the billing setup needs attention. No checkout was created or charged. Please contact us.",
+          {reason: "stripe_checkout_configuration"}
         );
       }
       // A timeout, connection loss or Stripe 5xx may have happened after the

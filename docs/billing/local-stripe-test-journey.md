@@ -64,14 +64,18 @@ as drafts.
 For Adult Unlimited, enter the explicitly test-only shared code
 `EXISTING5-TEST` in the AlphaWOD registration form before opening Stripe.
 The hosted Stripe promotion-code box is deliberately disabled because it
-cannot be restricted to this campaign. The reusable test code expires at
-opening and must never be presented as a live customer code. A successful
-application freezes a
+cannot be restricted to this campaign. The app stops accepting the shared code
+for new registrations at the local opening cutoff. The provider-side Promotion
+Code expires one hour later at the fixed Stripe billing anchor, and its
+underlying Coupon deliberately has no `redeem_by` timestamp. This keeps an
+already-open presale Session valid and prevents the Coupon expiring before the
+deferred subscription's first invoice. The test code must never be presented as
+a live customer code. A successful application freezes a
 schedule of £55 on 1 September, 1 October and 1 November, followed by the base
 £60 price from 1 December.
 
 `STRIPE_EXISTING_MEMBER_PROMOTION_CODE_ID` is the exact provider-side allowlist;
-the test value is `promo_1U69iNFzNDZoGGA0C3i8uyAJ`, and the preflight requires
+the test value is `promo_1U6AJYFzNDZoGGA0ybHPTeU6`, and the preflight requires
 it to be the Coupon's only active Promotion Code. The shared Code and Coupon
 have no redemption cap. The verifier accepts any non-negative current redemption
 count, so repeat test journeys do not require a fresh Code. Live use is manually
@@ -133,8 +137,12 @@ a deployed staging environment, or change either normal purchase gate.
 
 ## Presale time boundaries
 
-- Presale signup and Promotion Code redemption close at **1 September 2026
-  00:00 Europe/London** (`2026-08-31T23:00:00Z`, Unix `1788217200`).
+- Presale signup and the app's acceptance of the shared code close at **1
+  September 2026 00:00 Europe/London** (`2026-08-31T23:00:00Z`, Unix
+  `1788217200`).
+- The Coupon has no Stripe `redeem_by`. Its only active shared Promotion Code
+  expires at the fixed billing anchor (`1788220800`), one hour after the app
+  cutoff. The application cutoff remains the customer-facing policy boundary.
 - A buyer who creates their presale intent before that cutoff may finish the
   already-open Stripe Session until five minutes before the billing anchor
   (`1788220500`, 00:55 BST). New intents at or after the cutoff use standard

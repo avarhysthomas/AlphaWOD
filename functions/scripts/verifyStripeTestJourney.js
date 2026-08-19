@@ -257,16 +257,21 @@ async function assertAppliedDiscount(stripe, fulfilment, required) {
     throw new Error("The frozen existing-member discount schedule is not £55 x 3 then £60.");
   }
 
-  const promotionCode = await stripe.promotionCodes.retrieve(discount.promotionCodeId);
+  const [coupon, promotionCode] = await Promise.all([
+    stripe.coupons.retrieve(discount.couponId),
+    stripe.promotionCodes.retrieve(discount.promotionCodeId),
+  ]);
   const promotionCoupon = typeof promotionCode.promotion?.coupon === "string" ?
     promotionCode.promotion.coupon : promotionCode.promotion?.coupon?.id;
   const currencyOptions = promotionCode.restrictions?.currency_options ?? {};
-  if (promotionCode.livemode !== false ||
+  if (coupon.deleted === true || coupon.livemode !== false ||
+    coupon.id !== configuredCouponId || coupon.redeem_by !== null ||
+    promotionCode.livemode !== false ||
     promotionCoupon !== configuredCouponId ||
     promotionCode.id !== configuredPromotionCodeId ||
     promotionCode.max_redemptions !== null ||
     !isValidRedemptionCount(promotionCode.times_redeemed) ||
-    promotionCode.expires_at !== PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS ||
+    promotionCode.expires_at !== PRESALE_BILLING_ANCHOR_UNIX_SECONDS ||
     promotionCode.customer !== null || promotionCode.customer_account !== null ||
     promotionCode.restrictions?.first_time_transaction !== false ||
     promotionCode.restrictions?.minimum_amount !== null ||

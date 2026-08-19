@@ -79,9 +79,11 @@ exactly one plan carries that flag.
   that exact allowlisted Promotion Code id. Hosted Checkout's unrestricted
   promotion-code box stays disabled. Fulfilment revalidates the exact Coupon and
   requires £5 GBP off, repeating three months, restriction to the Adult
-  Unlimited Product, plus the shared reusable Promotion Code with opening-time
-  expiry and no customer, minimum, first-time-transaction or currency-options
-  restrictions. The base Price remains £60:
+  Unlimited Product and no Coupon `redeem_by`, plus the shared reusable
+  Promotion Code with expiry at the fixed Stripe billing anchor and no customer,
+  minimum, first-time-transaction or currency-options restrictions. The app
+  still stops accepting the code at the earlier local opening cutoff. The base
+  Price remains £60:
   discounted members pay £55 on the September, October and November invoices,
   then £60 from 1 December. Unknown or malformed discounts fail closed.
 - **Checkout session expiry** never outlives the anchor it was created against,
@@ -399,13 +401,15 @@ objects. It does not change the production publication or runtime gates.
    create a temporary £55 Price; Adult Unlimited remains £60. In the Stripe
    Dashboard's Product catalogue/Coupons area, create a fixed-amount Coupon with
    exactly: £5.00 off, GBP, duration `repeating`, three months, applies only to
-   the Adult Unlimited Product, and redeem-by 1 September 2026 00:00
-   Europe/London (`1788217200`). Do not set a minimum order or first-time-order
-   restriction, and leave the Coupon's global maximum redemptions unset.
+   the Adult Unlimited Product, and no `redeem_by` timestamp. Do not set a
+   minimum order or first-time-order restriction, and leave the Coupon's global
+   maximum redemptions unset. The application—not the Coupon—enforces the local
+   presale signup cutoff (`1788217200`).
 
    Create one privately distributed shared Promotion Code backed by that
-   Coupon. It must also have maximum redemptions unset, expiry `1788217200`, no
-   minimum amount, no first-time-transaction restriction, no currency-options
+   Coupon. It must also have maximum redemptions unset, expiry `1788220800` (the
+   fixed Stripe billing anchor), no minimum amount, no first-time-transaction
+   restriction, no currency-options
    restriction and no Stripe Customer restriction (Checkout creates the
    Customer in this pay-first journey). Put its `promo_...` id in
    `STRIPE_EXISTING_MEMBER_PROMOTION_CODE_ID`. The server resolves that exact
@@ -420,9 +424,9 @@ objects. It does not change the production publication or runtime gates.
 
    Put the resulting Coupon id—not the customer-facing code—in
    `STRIPE_EXISTING_MEMBER_COUPON_ID`. The checked-in test configuration uses
-   Coupon `zaf_existing_member_5off_3mo_2026_test`, restricted to test Product
+   Coupon `zaf_existing_member_5off_3mo_2026_test_v2`, restricted to test Product
    `prod_V5ad9hrrvMkdhw`, and shared Promotion Code id
-   `promo_1U69iNFzNDZoGGA0C3i8uyAJ` (customer code `EXISTING5-TEST`). The
+   `promo_1U6AJYFzNDZoGGA0ybHPTeU6` (customer code `EXISTING5-TEST`). The
    read-only preflight retrieves that exact Code, verifies its campaign
    restrictions and requires it to be the Coupon's only active Code. It accepts
    any non-negative `times_redeemed` count so repeated tests do not need a new

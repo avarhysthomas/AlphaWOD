@@ -188,6 +188,7 @@ test("existing-member offer is fixed to Adult Unlimited and three £5 discounts"
     currency: "gbp",
     durationMonths: 3,
     redemptionClosesAtUnixSeconds: 1788217200,
+    promotionCodeExpiresAtUnixSeconds: 1788220800,
   });
 });
 
