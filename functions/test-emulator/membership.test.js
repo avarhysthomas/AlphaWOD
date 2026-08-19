@@ -12,7 +12,7 @@ const Stripe = require("stripe");
 const {createHash} = require("node:crypto");
 const {createFakeStripe} = require("./fakeStripe");
 
-const STRIPE_PORT = 12111;
+const STRIPE_PORT = Number(process.env.MEMBERSHIP_TEST_STRIPE_PORT || 12111);
 process.env.STRIPE_API_HOST = "127.0.0.1";
 process.env.STRIPE_API_PORT = String(STRIPE_PORT);
 process.env.STRIPE_API_PROTOCOL = "http";
@@ -45,9 +45,25 @@ const {__testing: membershipTesting} = require("../lib/membership");
 const {
   PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
   PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
+  createCommercialPlanSnapshot,
+  resolveCheckoutAcceptanceStatements,
+  resolveCheckoutDocuments,
+  resolveCheckoutSignerRole,
   resolveCancellationOutcome,
   resolveCoolingOffEnd,
 } = require("../lib/membershipPlans");
+
+function checkoutAcceptanceSnapshot(planKey, signedName) {
+  const statements = resolveCheckoutAcceptanceStatements(planKey);
+  return {
+    signedName,
+    signerRole: resolveCheckoutSignerRole(planKey),
+    documents: resolveCheckoutDocuments(planKey),
+    statements,
+    acceptedStatementIds: statements.map(({id}) => id),
+    immediatePerformanceRequested: true,
+  };
+}
 
 const projectId = process.env.GCLOUD_PROJECT || "alpha-wod-functions-test";
 const db = admin.firestore();
@@ -169,6 +185,8 @@ async function createMember(uid, {email = `${uid}@example.test`, emailVerified =
 /** Writes a fulfilled membership the way the webhook would leave it. */
 async function seedMembership(subscriptionId, overrides = {}) {
   const checkoutSessionId = overrides.checkoutSessionId ?? `cs_${subscriptionId}`;
+  const planKey = overrides.planKey ?? "adult_unlimited";
+  const commercialTerms = createCommercialPlanSnapshot(planKey);
   const doc = {
     schemaVersion: 1,
     subscriptionId,
@@ -181,10 +199,11 @@ async function seedMembership(subscriptionId, overrides = {}) {
     payerEmail: "buyer@example.test",
     fulfilledAt: admin.firestore.Timestamp.now(),
     claimedAt: null,
-    planKey: "adult_unlimited",
+    planKey,
     stripePriceId: "price_unlimited",
-    planName: "Adult Unlimited Membership",
-    grantsAlphaWodAccess: true,
+    commercialTerms,
+    planName: commercialTerms.planName,
+    grantsAlphaWodAccess: commercialTerms.grantsAlphaWodAccess,
     participant: {
       fullName: "Buyer One",
       dateOfBirth: "1990-01-01",
@@ -194,9 +213,7 @@ async function seedMembership(subscriptionId, overrides = {}) {
     },
     guardian: null,
     acceptances: {
-      signedName: "Buyer One",
-      documents: {membershipTerms: "ZAF-TERMS-DRAFT-2026-08-17-01"},
-      immediatePerformanceRequested: true,
+      ...checkoutAcceptanceSnapshot(planKey, "Buyer One"),
       contractMadeAt: admin.firestore.Timestamp.fromDate(
         new Date("2026-01-01T12:00:00Z")
       ),
@@ -269,6 +286,7 @@ function reservationIntent(id, overrides = {}) {
     planKey,
     stripeMode: "test",
     stripePriceId,
+    commercialTerms: createCommercialPlanSnapshot(planKey),
     participant: {
       fullName: overrides.participantName ?? "Reserved Athlete",
       dateOfBirth: "1990-01-01",
@@ -278,9 +296,7 @@ function reservationIntent(id, overrides = {}) {
     },
     guardian: null,
     acceptances: {
-      signedName: "Reserved Athlete",
-      documents: {membershipTerms: "test"},
-      immediatePerformanceRequested: true,
+      ...checkoutAcceptanceSnapshot(planKey, "Reserved Athlete"),
       acceptedAt: admin.firestore.Timestamp.now(),
       userAgent: "test",
     },
@@ -347,8 +363,8 @@ function validCheckoutData(attemptId = "attempt_checkout_test_123456") {
     participantDateOfBirth: "1990-01-01",
     participantIsPayer: true,
     signedName: "Checkout Athlete",
-    immediatePerformanceRequested: true,
-    acceptedDocuments: true,
+    acceptedStatementIds: resolveCheckoutAcceptanceStatements("adult_unlimited")
+      .map(({id}) => id),
   };
 }
 
@@ -516,6 +532,17 @@ test("the checkout core creates one Stripe session and reuses it on retry", asyn
     assert.equal(intent.get("firstPaymentAt"), 1788220800);
     assert.equal(intent.get("initialChargePence"), 0);
     assert.equal(intent.get("promotionCodeId"), null);
+    assert.deepEqual(
+      intent.get("acceptances.acceptedStatementIds"),
+      validCheckoutData().acceptedStatementIds
+    );
+    assert.deepEqual(
+      intent.get("acceptances.documents").map(({key}) => key),
+      ["membershipTerms", "cancellationPolicy", "privacyNotice", "adultWaiver"]
+    );
+    assert.equal(intent.get("acceptances.signerRole"), "adult_participant_and_payer");
+    assert.equal(intent.get("commercialTerms.planName"), "Adult Unlimited Membership");
+    assert.equal(intent.get("commercialTerms.amountPence"), 6000);
     assert.equal(first.initialChargePence, 0);
     assert.equal(first.promotionCodesEnabled, true);
     assert.ok(Number(sent.payload.expires_at) <
@@ -523,6 +550,151 @@ test("the checkout core creates one Stripe session and reuses it on retry", asyn
   } finally {
     Date.now = realNow;
   }
+});
+
+test("checkout converges a stale terminal duplicate before admission", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  try {
+    const data = validCheckoutData("attempt_authoritative_duplicate_checkout");
+    await seedMembership("sub_authoritative_duplicate_checkout", {
+      state: "cancelled",
+      stripeStatus: "canceled",
+      participant: {
+        fullName: data.participantFullName,
+        dateOfBirth: data.participantDateOfBirth,
+        age: 36,
+        isPayer: true,
+        participantKey: membershipTesting.participantKeyFor(
+          data.participantFullName,
+          data.participantDateOfBirth
+        ),
+      },
+    });
+    // seedMembership leaves Stripe active. The stale Firestore terminal state
+    // must be healed before the duplicate transaction is allowed to decide.
+    await assert.rejects(
+      () => handler(request(data)),
+      /already has an active or scheduled membership/i
+    );
+
+    assert.equal(
+      (await db.collection("memberships")
+        .doc("sub_authoritative_duplicate_checkout").get()).get("state"),
+      "active"
+    );
+    assert.equal((await db.collection("membershipIntents").get()).size, 0);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("checkout fails closed when a relevant Stripe subscription is uncertain", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  try {
+    const data = validCheckoutData("attempt_uncertain_duplicate_checkout");
+    await seedMembership("sub_uncertain_duplicate_checkout", {
+      state: "cancelled",
+      stripeStatus: "canceled",
+      participant: {
+        fullName: data.participantFullName,
+        dateOfBirth: data.participantDateOfBirth,
+        age: 36,
+        isPayer: true,
+        participantKey: membershipTesting.participantKeyFor(
+          data.participantFullName,
+          data.participantDateOfBirth
+        ),
+      },
+    });
+    fakeStripe.state.subscriptions.delete("sub_uncertain_duplicate_checkout");
+
+    await assert.rejects(
+      () => handler(request(data)),
+      (error) => {
+        assert.equal(error.code, "unavailable");
+        assert.match(error.message, /could not be verified with Stripe/i);
+        return true;
+      }
+    );
+    assert.equal((await db.collection("membershipIntents").get()).size, 0);
+    assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 0);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("signed checkout converges the payer's stale terminal membership", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  try {
+    await createMember("signedduplicate", {
+      email: "signedduplicate@example.test",
+      emailVerified: true,
+    });
+    await seedMembership("sub_signed_payer_duplicate", {
+      payerUid: "signedduplicate",
+      entitlementTargetUid: "signedduplicate",
+      state: "cancelled",
+      stripeStatus: "canceled",
+      participant: {
+        fullName: "Earlier Participant Name",
+        dateOfBirth: "1985-01-01",
+        age: 41,
+        isPayer: true,
+        participantKey: "different_participant_identity",
+      },
+    });
+
+    await assert.rejects(
+      () => handler(request(
+        validCheckoutData("attempt_signed_payer_duplicate"),
+        "signedduplicate"
+      )),
+      /already has an active or scheduled membership/i
+    );
+    assert.equal(
+      (await db.collection("memberships")
+        .doc("sub_signed_payer_duplicate").get()).get("state"),
+      "active"
+    );
+    assert.equal((await db.collection("membershipIntents").get()).size, 0);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("checkout rejects every non-exact legal acceptance set before reserving", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const base = validCheckoutData("attempt_non_exact_acceptance_123456");
+  const missing = base.acceptedStatementIds.slice(0, -1);
+  const duplicated = [...base.acceptedStatementIds, base.acceptedStatementIds[0]];
+  const extra = [...base.acceptedStatementIds, "guardian_authority"];
+
+  for (const [index, acceptedStatementIds] of [missing, duplicated, extra].entries()) {
+    await assert.rejects(
+      () => handler(request({
+        ...base,
+        checkoutAttemptId: `${base.checkoutAttemptId}_${index}`,
+        acceptedStatementIds,
+      })),
+      /accept every required checkout statement separately/i
+    );
+  }
+  assert.equal((await db.collection("membershipIntents").get()).size, 0);
+  assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 0);
 });
 
 test("the approved shared code is explicitly bound and remains reusable", async () => {
@@ -1046,7 +1218,8 @@ test("a youth checkout preserves the child and paying adult and redirects with i
       signedName: "Paying Adult",
       guardianFullName: "Paying Adult",
       guardianRelationship: "Parent",
-      guardianConfirmsAuthority: true,
+      acceptedStatementIds: resolveCheckoutAcceptanceStatements("youth_teenstars")
+        .map(({id}) => id),
     }));
 
     const intent = (await db.collection("membershipIntents").get()).docs[0];
@@ -1226,7 +1399,14 @@ test("an expired reserved attempt without a Stripe session releases after valida
       participant: intent.participant,
       guardian: null,
       signedName: data.signedName,
-      immediatePerformanceRequested: data.immediatePerformanceRequested,
+      commercialTerms: intent.commercialTerms,
+      acceptances: {
+        signerRole: intent.acceptances.signerRole,
+        documents: intent.acceptances.documents,
+        statements: intent.acceptances.statements,
+        acceptedStatementIds: intent.acceptances.acceptedStatementIds,
+        immediatePerformanceRequested: true,
+      },
     });
     await membershipTesting.reserveCheckoutAttempt(intentRef, intent, fixedNow);
 
@@ -1285,7 +1465,14 @@ test("a reserved attempt below Stripe's minimum window ends as an attempt expiry
       participant: intent.participant,
       guardian: null,
       signedName: data.signedName,
-      immediatePerformanceRequested: data.immediatePerformanceRequested,
+      commercialTerms: intent.commercialTerms,
+      acceptances: {
+        signerRole: intent.acceptances.signerRole,
+        documents: intent.acceptances.documents,
+        statements: intent.acceptances.statements,
+        acceptedStatementIds: intent.acceptances.acceptedStatementIds,
+        immediatePerformanceRequested: true,
+      },
     });
     await membershipTesting.reserveCheckoutAttempt(intentRef, intent, fixedNow);
 
@@ -1324,25 +1511,40 @@ test("the customer portal handler uses the locked-down portal configuration", as
   assert.equal(payload.return_url, "https://alpha-wod.vercel.app/account/membership");
 });
 
-test("the customer portal refuses a configuration that can swap subscriptions", async () => {
+test("the customer portal refuses drift from every locked-down feature", async () => {
   await createMember("unsafeportalbuyer");
   await seedMembership("sub_unsafe_portal", {
     payerUid: "unsafeportalbuyer",
     stripeCustomerId: "cus_unsafe_portal",
   });
   const configuration = fakeStripe.state.portalConfigurations.get("bpc_fake");
-  configuration.features.subscription_update.enabled = true;
   const sessionsBefore = fakeStripe.state.portalSessions.length;
-  try {
-    await assert.rejects(
-      () => createCustomerPortalSession(request({
-        subscriptionId: "sub_unsafe_portal",
-      }, "unsafeportalbuyer")),
-      /cancellation controls are unsafe/i
-    );
-    assert.equal(fakeStripe.state.portalSessions.length, sessionsBefore);
-  } finally {
-    configuration.features.subscription_update.enabled = false;
+  const unsafeMutations = [
+    ["hosted login", configuration.login_page, true],
+    ["customer updates", configuration.features.customer_update, true],
+    ["invoice history", configuration.features.invoice_history, false],
+    ["payment-method updates", configuration.features.payment_method_update, false],
+    ["subscription cancellation", configuration.features.subscription_cancel, true],
+    ["subscription pause", configuration.features.subscription_pause, true],
+    ["subscription updates", configuration.features.subscription_update, true],
+  ];
+
+  for (const [label, feature, unsafeValue] of unsafeMutations) {
+    const original = feature.enabled;
+    feature.enabled = unsafeValue;
+    try {
+      await assert.rejects(
+        () => createCustomerPortalSession(request({
+          subscriptionId: "sub_unsafe_portal",
+        }, "unsafeportalbuyer")),
+        (error) => error.code === "failed-precondition" &&
+          /configuration is unsafe/i.test(error.message),
+        label
+      );
+      assert.equal(fakeStripe.state.portalSessions.length, sessionsBefore, label);
+    } finally {
+      feature.enabled = original;
+    }
   }
 });
 
@@ -2243,6 +2445,9 @@ test("concurrent same-session claims are both idempotent for one owner", async (
 test("an unverified email cannot claim a purchase without the session id", async () => {
   await createMember("attacker", {email: "buyer@example.test", emailVerified: false});
   await seedMembership("sub_unverified");
+  // If the handler touched Stripe before verifying the email this missing
+  // provider object would surface as an availability error instead.
+  fakeStripe.state.subscriptions.delete("sub_unverified");
 
   await assert.rejects(
     () => claimMembership(request({}, "attacker")),
@@ -2253,6 +2458,10 @@ test("an unverified email cannot claim a purchase without the session id", async
   );
 
   assert.equal((await accessOf("attacker")).alphaWodAccess, false);
+  assert.equal(
+    (await db.collection("memberships").doc("sub_unverified").get()).get("payerUid"),
+    null
+  );
 });
 
 test("a verified matching email can claim without the session id", async () => {
@@ -2406,15 +2615,423 @@ test("cancellation sends the policy's cancel_at to Stripe and records the outcom
   );
 });
 
-test("cooling-off cancellation fails closed into the staffed process", async () => {
+test("cooling-off cancellation records an immutable receipt before stopping Stripe", async () => {
   const nowMillis = new Date("2026-08-18T10:00:00Z").getTime();
   await createMember("coolingoffbuyer", {
     email: "coolingoffbuyer@example.test",
     emailVerified: true,
   });
-  await seedMembership("sub_cooling_off", {payerUid: "coolingoffbuyer"});
+  await seedMembership("sub_cooling_off", {
+    payerUid: "coolingoffbuyer",
+    billingMode: "standard",
+    serviceStartsAt: Math.floor(new Date("2026-09-01T00:00:00Z").getTime() / 1000),
+    firstPaymentAt: Math.floor(new Date("2026-09-01T00:00:00Z").getTime() / 1000),
+    firstPaymentReceivedAt: null,
+  });
   await db.collection("memberships").doc("sub_cooling_off").update({
+    "acceptances.contractMadeAt": admin.firestore.Timestamp.fromDate(
+      new Date("2026-08-17T10:00:00Z")
+    ),
     "acceptances.coolingOffEndsAt": "2026-08-31T23:59:59.999+01:00",
+  });
+
+  const realNow = Date.now;
+  Date.now = () => nowMillis;
+  try {
+    const preview = resolveCancellationOutcome(nowMillis);
+    const result = await requestMembershipCancellation(request({
+      subscriptionId: "sub_cooling_off",
+      expectedCancelAtUnixSeconds: preview.cancelAtUnixSeconds,
+      kind: "cooling_off",
+    }, "coolingoffbuyer"));
+
+    assert.equal(result.ok, true);
+    assert.equal(result.requestStatus, "applied");
+    assert.equal(result.receipt.kind, "cooling_off");
+    assert.equal(result.receipt.receivedAt, new Date(nowMillis).toISOString());
+    assert.equal(result.receipt.refundReviewRequired, false);
+    assert.equal(
+      fakeStripe.lastUpdateTo("/v1/subscriptions/sub_cooling_off").method,
+      "DELETE"
+    );
+
+    let stored = await db.collection("memberships").doc("sub_cooling_off").get();
+    assert.equal(stored.get("cancellationRequest.kind"), "cooling_off");
+    assert.equal(stored.get("cancellationRequest.status"), "applied");
+    assert.equal(stored.get("cancellationRequest.collectFuturePayments"), false);
+    assert.equal(stored.get("cancellationRequest.futurePaymentDuePence"), 0);
+    assert.equal(stored.get("cancellationRequest.refundAmountPence"), null);
+    assert.equal(
+      stored.get("cancellationRequest.cancellationEffectiveAtMillis"),
+      nowMillis
+    );
+    assert.equal(
+      stored.get("cancellationOutcome.cancelAtUnixSeconds"),
+      Math.floor(nowMillis / 1000)
+    );
+
+    // Stripe's provider completion may be later than the legal receipt. It is
+    // recorded separately and cannot move the effective/access stop.
+    fakeStripe.setSubscription("sub_cooling_off", {
+      status: "canceled",
+      ended_at: Math.floor(nowMillis / 1000) + 45,
+      cancel_at: null,
+    });
+    await membershipTesting.convergeMembershipFromStripe(
+      "sub_cooling_off",
+      async () => undefined,
+      {},
+      nowMillis + 60_000
+    );
+    stored = await db.collection("memberships").doc("sub_cooling_off").get();
+    assert.equal(stored.get("cancellationRequest.status"), "applied");
+    assert.equal(
+      stored.get("cancellationRequest.providerEndedAtMillis"),
+      nowMillis + 45_000
+    );
+    assert.equal(
+      stored.get("cancellationRequest.cancellationEffectiveAtMillis"),
+      nowMillis
+    );
+    assert.equal(
+      stored.get("cancellationOutcome.cancelAtUnixSeconds"),
+      Math.floor(nowMillis / 1000)
+    );
+    assert.equal(stored.get("cancellationRequest.lastError"), undefined);
+
+    const receipt = await db.collection("membershipCancellationReceipts")
+      .doc(result.receipt.reference).get();
+    assert.equal(receipt.exists, true);
+    assert.equal(receipt.get("receivedAtMillis"), nowMillis);
+    assert.equal(receipt.get("outcome.collectFuturePayments"), false);
+    assert.equal(receipt.get("outcome.refundAmountPence"), null);
+    const outbox = await db.collection("membershipEmailOutbox")
+      .doc(`cancellation-${result.receipt.reference}`).get();
+    assert.equal(outbox.get("kind"), "membership_cancellation_acknowledgement");
+    assert.equal(outbox.get("subscriptionId"), "sub_cooling_off");
+    assert.match(outbox.get("payload.html"), /No further recurring membership payment/);
+
+    const projected = await getMyMemberships(request({}, "coolingoffbuyer"));
+    assert.equal(
+      projected.memberships[0].cancellationReceipt.reference,
+      result.receipt.reference
+    );
+    assert.equal(projected.memberships[0].cancellationRequestStatus, "applied");
+    assert.equal(
+      projected.memberships[0].cancellationReceipt.acknowledgementStatus,
+      "pending"
+    );
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("a Stripe outage cannot undo an accepted cooling-off receipt", async () => {
+  const nowMillis = new Date("2026-08-18T11:00:00Z").getTime();
+  const subscriptionId = "sub_cooling_off_outage";
+  await createMember("coolingoffoutage", {
+    email: "coolingoffoutage@example.test",
+    emailVerified: true,
+  });
+  await seedMembership(subscriptionId, {
+    payerUid: "coolingoffoutage",
+    payerEmail: "coolingoffoutage@example.test",
+    billingMode: "standard",
+    serviceStartsAt: Math.floor(new Date("2026-09-01T00:00:00Z").getTime() / 1000),
+    firstPaymentAt: Math.floor(new Date("2026-09-01T00:00:00Z").getTime() / 1000),
+    firstPaymentReceivedAt: null,
+  });
+  await db.collection("memberships").doc(subscriptionId).update({
+    "acceptances.contractMadeAt": admin.firestore.Timestamp.fromDate(
+      new Date("2026-08-17T11:00:00Z")
+    ),
+    "acceptances.coolingOffEndsAt": "2026-08-31T23:59:59.999+01:00",
+  });
+  fakeStripe.state.subscriptions.delete(subscriptionId);
+
+  const realNow = Date.now;
+  Date.now = () => nowMillis;
+  try {
+    const preview = resolveCancellationOutcome(nowMillis);
+    const result = await requestMembershipCancellation(request({
+      subscriptionId,
+      expectedCancelAtUnixSeconds: preview.cancelAtUnixSeconds,
+      kind: "cooling_off",
+    }, "coolingoffoutage"));
+
+    assert.equal(result.ok, true);
+    assert.equal(result.outcome, null);
+    assert.equal(result.requestStatus, "accepted");
+    assert.ok(result.receipt.reference);
+    const receiptBefore = (await db.collection("membershipCancellationReceipts")
+      .doc(result.receipt.reference).get()).data();
+    const pending = await db.collection("memberships").doc(subscriptionId).get();
+    assert.equal(pending.get("cancellationRequest.status"), "pending");
+    assert.ok(pending.get("cancellationRequest.nextAttemptAt"));
+
+    const projectedPending = await getMyMemberships(
+      request({}, "coolingoffoutage")
+    );
+    assert.equal(
+      projectedPending.memberships[0].cancellationRequestStatus,
+      "accepted"
+    );
+    assert.equal(
+      projectedPending.memberships[0].cancellationReceipt.reference,
+      result.receipt.reference
+    );
+
+    fakeStripe.setSubscription(subscriptionId, {
+      status: "active",
+      customer: "cus_fake_1",
+    });
+    const recovery = await membershipTesting.recoverPendingCancellationsOnce(
+      nowMillis + 11 * 60 * 1000
+    );
+    assert.deepEqual(recovery, {processed: 1, failed: 0, skipped: 0});
+    assert.equal(
+      fakeStripe.state.subscriptions.get(subscriptionId).status,
+      "canceled"
+    );
+    const recovered = await db.collection("memberships").doc(subscriptionId).get();
+    assert.equal(recovered.get("cancellationRequest.status"), "applied");
+    assert.equal(
+      recovered.get("cancellationRequest.cancellationEffectiveAtMillis"),
+      nowMillis
+    );
+    assert.deepEqual(
+      (await db.collection("membershipCancellationReceipts")
+        .doc(result.receipt.reference).get()).data(),
+      receiptBefore
+    );
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("cooling-off acknowledgement retries update only acknowledgement state", async () => {
+  const nowMillis = new Date("2026-08-18T12:00:00Z").getTime();
+  const subscriptionId = "sub_cooling_off_ack";
+  await createMember("coolingoffack", {
+    email: "coolingoffack@example.test",
+    emailVerified: true,
+  });
+  await seedMembership(subscriptionId, {
+    payerUid: "coolingoffack",
+    payerEmail: "coolingoffack@example.test",
+    billingMode: "standard",
+    serviceStartsAt: Math.floor(new Date("2026-09-01T00:00:00Z").getTime() / 1000),
+    firstPaymentAt: Math.floor(new Date("2026-09-01T00:00:00Z").getTime() / 1000),
+    firstPaymentReceivedAt: null,
+  });
+  await db.collection("memberships").doc(subscriptionId).update({
+    "acceptances.contractMadeAt": admin.firestore.Timestamp.fromDate(
+      new Date("2026-08-17T12:00:00Z")
+    ),
+    "acceptances.coolingOffEndsAt": "2026-08-31T23:59:59.999+01:00",
+  });
+
+  const realNow = Date.now;
+  Date.now = () => nowMillis;
+  try {
+    const preview = resolveCancellationOutcome(nowMillis);
+    const cancellation = await requestMembershipCancellation(request({
+      subscriptionId,
+      expectedCancelAtUnixSeconds: preview.cancelAtUnixSeconds,
+      kind: "cooling_off",
+    }, "coolingoffack"));
+    const outboxId = `cancellation-${cancellation.receipt.reference}`;
+    const outboxReadyAt = (await db.collection("membershipEmailOutbox")
+      .doc(outboxId).get()).get("nextAttemptAt").toMillis() + 1;
+    const sends = [];
+    assert.equal(
+      await membershipTesting.processMembershipConfirmationOutbox(
+        outboxId,
+        outboxReadyAt,
+        async (payload, idempotencyKey) => {
+          sends.push({payload, idempotencyKey});
+          throw new Error("provider accepted but response was lost");
+        }
+      ),
+      "failed"
+    );
+    let membership = await db.collection("memberships").doc(subscriptionId).get();
+    assert.equal(membership.get("cancellationAcknowledgementStatus"), "pending");
+    assert.match(
+      membership.get("cancellationAcknowledgementError"),
+      /response was lost/
+    );
+    assert.ok(membership.get("confirmationEmailSentAt"));
+
+    assert.equal(
+      await membershipTesting.processMembershipConfirmationOutbox(
+        outboxId,
+        outboxReadyAt + 6 * 60 * 1000,
+        async (payload, idempotencyKey) => {
+          sends.push({payload, idempotencyKey});
+          return {providerMessageId: "email_cancel_ack_1"};
+        }
+      ),
+      "sent"
+    );
+    assert.equal(sends.length, 2);
+    assert.deepEqual(sends[0], sends[1]);
+    assert.equal(sends[0].payload.reply_to, "support@zeroalphafitness.co.uk");
+    assert.match(sends[0].payload.subject, /Cancellation received/);
+    membership = await db.collection("memberships").doc(subscriptionId).get();
+    assert.equal(membership.get("cancellationAcknowledgementStatus"), "sent");
+    assert.equal(
+      membership.get("cancellationAcknowledgementProviderId"),
+      "email_cancel_ack_1"
+    );
+    assert.equal(membership.get("cancellationAcknowledgementError"), undefined);
+    assert.ok(membership.get("confirmationEmailSentAt"));
+
+    const projected = await getMyMemberships(request({}, "coolingoffack"));
+    assert.equal(
+      projected.memberships[0].cancellationReceipt.acknowledgementStatus,
+      "sent"
+    );
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("cooling-off keeps cancellation acceptance separate from refund review", async () => {
+  const nowMillis = new Date("2026-08-18T13:00:00Z").getTime();
+  const contractMillis = new Date("2026-08-17T13:00:00Z").getTime();
+  const subscriptionId = "sub_cooling_off_refund_review";
+  await createMember("coolingoffrefund", {
+    email: "coolingoffrefund@example.test",
+    emailVerified: true,
+  });
+  await seedMembership(subscriptionId, {
+    payerUid: "coolingoffrefund",
+    payerEmail: "coolingoffrefund@example.test",
+    billingMode: "standard",
+    serviceStartsAt: Math.floor(contractMillis / 1000),
+    firstPaymentAt: Math.floor(contractMillis / 1000),
+    firstPaymentReceivedAt: Math.floor(contractMillis / 1000),
+  });
+  await db.collection("memberships").doc(subscriptionId).update({
+    "acceptances.contractMadeAt": admin.firestore.Timestamp.fromMillis(
+      contractMillis
+    ),
+    "acceptances.coolingOffEndsAt": "2026-08-31T23:59:59.999+01:00",
+  });
+
+  const realNow = Date.now;
+  Date.now = () => nowMillis;
+  try {
+    const preview = resolveCancellationOutcome(nowMillis);
+    const result = await requestMembershipCancellation(request({
+      subscriptionId,
+      expectedCancelAtUnixSeconds: preview.cancelAtUnixSeconds,
+      kind: "cooling_off",
+    }, "coolingoffrefund"));
+
+    assert.equal(result.ok, true);
+    assert.equal(result.requestStatus, "refund_review");
+    assert.equal(result.receipt.refundReviewRequired, true);
+    const receipt = await db.collection("membershipCancellationReceipts")
+      .doc(result.receipt.reference).get();
+    assert.equal(receipt.get("outcome.refundReviewRequired"), true);
+    assert.equal(receipt.get("outcome.refundAmountPence"), null);
+    const projected = await getMyMemberships(
+      request({}, "coolingoffrefund")
+    );
+    assert.equal(
+      projected.memberships[0].cancellationRequestStatus,
+      "refund_review"
+    );
+    assert.equal(
+      projected.memberships[0].cancellationReceipt.refundReviewRequired,
+      true
+    );
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("a missing payer email accepts cooling-off but immediately audits acknowledgement review", async () => {
+  const nowMillis = new Date("2026-08-18T13:30:00Z").getTime();
+  const subscriptionId = "sub_cooling_off_missing_email";
+  await createMember("coolingoffmissingemail", {
+    email: "coolingoffmissingemail@example.test",
+    emailVerified: true,
+  });
+  await seedMembership(subscriptionId, {
+    payerUid: "coolingoffmissingemail",
+    payerEmail: null,
+    billingMode: "standard",
+    serviceStartsAt: Math.floor(new Date("2026-09-01T00:00:00Z").getTime() / 1000),
+    firstPaymentAt: Math.floor(new Date("2026-09-01T00:00:00Z").getTime() / 1000),
+    firstPaymentReceivedAt: null,
+  });
+  await db.collection("memberships").doc(subscriptionId).update({
+    "acceptances.contractMadeAt": admin.firestore.Timestamp.fromDate(
+      new Date("2026-08-17T13:30:00Z")
+    ),
+    "acceptances.coolingOffEndsAt": "2026-08-31T23:59:59.999+01:00",
+  });
+
+  const realNow = Date.now;
+  Date.now = () => nowMillis;
+  try {
+    const preview = resolveCancellationOutcome(nowMillis);
+    const result = await requestMembershipCancellation(request({
+      subscriptionId,
+      expectedCancelAtUnixSeconds: preview.cancelAtUnixSeconds,
+      kind: "cooling_off",
+    }, "coolingoffmissingemail"));
+
+    assert.equal(result.ok, true);
+    assert.equal(result.requestStatus, "applied");
+    assert.equal(result.receipt.acknowledgementStatus, "failed");
+    const membership = await db.collection("memberships").doc(subscriptionId).get();
+    assert.equal(
+      membership.get("cancellationAcknowledgementStatus"),
+      "manual_review"
+    );
+    assert.match(
+      membership.get("cancellationAcknowledgementError"),
+      /payer email was unavailable/i
+    );
+    const outbox = await db.collection("membershipEmailOutbox")
+      .doc(`cancellation-${result.receipt.reference}`).get();
+    assert.equal(outbox.get("status"), "manual_review");
+    assert.equal(outbox.get("nextAttemptAt"), undefined);
+    const audits = await db.collection("membershipAudit")
+      .where("subscriptionId", "==", subscriptionId)
+      .where("type", "==", "cancellation_acknowledgement_terminal")
+      .get();
+    assert.equal(audits.size, 1);
+    assert.equal(audits.docs[0].get("severity"), "critical");
+    assert.match(audits.docs[0].get("error"), /payer email was unavailable/i);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("an expired cooling-off confirmation cannot become a contractual cancellation", async () => {
+  const nowMillis = new Date("2026-08-18T14:00:00Z").getTime();
+  const subscriptionId = "sub_cooling_off_expired";
+  await createMember("coolingoffexpired", {
+    email: "coolingoffexpired@example.test",
+    emailVerified: true,
+  });
+  await seedMembership(subscriptionId, {
+    payerUid: "coolingoffexpired",
+    billingMode: "standard",
+    serviceStartsAt: Math.floor(nowMillis / 1000),
+    firstPaymentAt: Math.floor(nowMillis / 1000),
+    firstPaymentReceivedAt: Math.floor(nowMillis / 1000),
+  });
+  await db.collection("memberships").doc(subscriptionId).update({
+    "acceptances.contractMadeAt": admin.firestore.Timestamp.fromMillis(
+      nowMillis - 15 * 24 * 60 * 60 * 1000
+    ),
+    "acceptances.coolingOffEndsAt": new Date(nowMillis - 1).toISOString(),
   });
 
   const realNow = Date.now;
@@ -2423,19 +3040,20 @@ test("cooling-off cancellation fails closed into the staffed process", async () 
     const preview = resolveCancellationOutcome(nowMillis);
     await assert.rejects(
       () => requestMembershipCancellation(request({
-        subscriptionId: "sub_cooling_off",
+        subscriptionId,
         expectedCancelAtUnixSeconds: preview.cancelAtUnixSeconds,
-      }, "coolingoffbuyer")),
+        kind: "cooling_off",
+      }, "coolingoffexpired")),
       (error) => {
-        assert.match(error.message, /cooling-off period/i);
-        assert.equal(error.details?.reason, "cooling_off_manual_review");
+        assert.match(error.message, /cooling-off period ended/i);
+        assert.equal(error.details?.reason, "cooling_off_expired");
         return true;
       }
     );
-    const stored = await db.collection("memberships").doc("sub_cooling_off").get();
-    assert.equal(stored.get("cancellationRequest"), undefined);
+    const membership = await db.collection("memberships").doc(subscriptionId).get();
+    assert.equal(membership.get("cancellationRequest"), undefined);
     assert.equal(
-      fakeStripe.lastUpdateTo("/v1/subscriptions/sub_cooling_off"),
+      fakeStripe.lastUpdateTo(`/v1/subscriptions/${subscriptionId}`),
       null
     );
   } finally {
@@ -3159,6 +3777,104 @@ test("a claim cannot give one account a second AlphaWOD membership", async () =>
   );
 });
 
+test("a claim converges a stale terminal account membership before granting", async () => {
+  await createMember("authoritativeclaim", {
+    email: "buyer@example.test",
+    emailVerified: true,
+  });
+  await seedMembership("sub_authoritative_claim_existing", {
+    payerUid: "authoritativeclaim",
+    entitlementTargetUid: "authoritativeclaim",
+    state: "cancelled",
+    stripeStatus: "canceled",
+    participant: {
+      fullName: "Existing Buyer",
+      dateOfBirth: "1990-01-01",
+      age: 36,
+      isPayer: true,
+      participantKey: "key_authoritative_claim_existing",
+    },
+  });
+  await seedMembership("sub_authoritative_claim_new", {
+    participant: {
+      fullName: "Buyer One",
+      dateOfBirth: "1990-01-01",
+      age: 36,
+      isPayer: true,
+      participantKey: "key_authoritative_claim_new",
+    },
+  });
+
+  await assert.rejects(
+    () => claimMembership(request({
+      sessionId: "cs_sub_authoritative_claim_new",
+    }, "authoritativeclaim")),
+    /already has an active or scheduled membership/i
+  );
+
+  assert.equal(
+    (await db.collection("memberships")
+      .doc("sub_authoritative_claim_existing").get()).get("state"),
+    "active"
+  );
+  assert.equal(
+    (await db.collection("memberships")
+      .doc("sub_authoritative_claim_new").get()).get("payerUid"),
+    null
+  );
+});
+
+test("verified-email claim fails closed when Stripe state is unavailable", async () => {
+  await createMember("uncertainemailclaim", {
+    email: "buyer@example.test",
+    emailVerified: true,
+  });
+  await seedMembership("sub_uncertain_email_claim");
+  fakeStripe.state.subscriptions.delete("sub_uncertain_email_claim");
+
+  await assert.rejects(
+    () => claimMembership(request({}, "uncertainemailclaim")),
+    (error) => {
+      assert.equal(error.code, "unavailable");
+      assert.match(error.message, /could not be verified with Stripe/i);
+      return true;
+    }
+  );
+  assert.equal(
+    (await db.collection("memberships")
+      .doc("sub_uncertain_email_claim").get()).get("payerUid"),
+    null
+  );
+  assert.equal((await accessOf("uncertainemailclaim")).alphaWodAccess, false);
+});
+
+test("session claim does not grant when Stripe has already canceled", async () => {
+  await createMember("canceledsessionclaim", {
+    email: "buyer@example.test",
+    emailVerified: false,
+  });
+  await seedMembership("sub_canceled_session_claim", {
+    state: "active",
+    stripeStatus: "active",
+  });
+  fakeStripe.setSubscription("sub_canceled_session_claim", {
+    status: "canceled",
+    ended_at: Math.floor(Date.now() / 1000),
+    cancel_at: null,
+  });
+
+  const result = await claimMembership(request({
+    sessionId: "cs_sub_canceled_session_claim",
+  }, "canceledsessionclaim"));
+
+  assert.deepEqual(result.claimed, ["sub_canceled_session_claim"]);
+  assert.equal((await accessOf("canceledsessionclaim")).alphaWodAccess, false);
+  const membership = await db.collection("memberships")
+    .doc("sub_canceled_session_claim").get();
+  assert.equal(membership.get("state"), "cancelled");
+  assert.equal(membership.get("entitlementTargetUid"), null);
+});
+
 test("admin participant linking grants and converges access immediately", async () => {
   await createMember("admin", {
     profile: {
@@ -3206,6 +3922,125 @@ test("admin participant linking grants and converges access immediately", async 
   assert.equal(repeat.alreadyLinked, true);
   assert.equal(afterRepeat.get("entitlementTargetLinkedAt").toMillis(), linkedAt);
   assert.equal(auditsAfter.size, auditsBefore.size);
+});
+
+test("admin link callable repairs a self-payer projection on the same target", async () => {
+  await createMember("repairadmin", {
+    profile: {
+      role: "admin",
+      approvalStatus: "approved",
+      entitlementStatus: "active",
+      entitlementSource: "staff",
+      alphaWodAccess: true,
+    },
+  });
+  await createMember("repairtarget", {email: "repairtarget@example.test"});
+  await seedMembership("sub_self_projection_repair", {
+    payerUid: "repairtarget",
+    payerEmail: "repairtarget@example.test",
+    entitlementTargetUid: "repairtarget",
+    entitlementProjectionStatus: "manual_review",
+    entitlementProjectionError: "Interrupted before access projection.",
+  });
+
+  const result = await linkMembershipParticipant(request({
+    subscriptionId: "sub_self_projection_repair",
+    participantUid: "repairtarget",
+  }, "repairadmin"));
+
+  assert.equal(result.alreadyLinked, true);
+  assert.equal(result.repaired, true);
+  assert.deepEqual(await accessOf("repairtarget"), {
+    approvalStatus: "approved",
+    entitlementStatus: "active",
+    entitlementSource: "stripe",
+    alphaWodAccess: true,
+  });
+  const membership = await db.collection("memberships")
+    .doc("sub_self_projection_repair").get();
+  assert.equal(membership.get("entitlementTargetUid"), "repairtarget");
+  assert.equal(membership.get("entitlementProjectionStatus"), "applied");
+  assert.equal(membership.get("entitlementProjectionError"), undefined);
+  const audits = await db.collection("membershipAudit")
+    .where("type", "==", "membership_entitlement_projection_repair").get();
+  assert.equal(audits.size, 1);
+  assert.equal(audits.docs[0].get("subscriptionId"), "sub_self_projection_repair");
+  assert.equal(audits.docs[0].get("repairedBy"), "repairadmin");
+  assert.equal(audits.docs[0].get("priorProjectionStatus"), "manual_review");
+  assert.equal(
+    audits.docs[0].get("priorProjectionError"),
+    "Interrupted before access projection."
+  );
+});
+
+test("admin participant link rechecks the candidate and fails closed on uncertainty", async () => {
+  await createMember("boundaryadmin", {
+    profile: {
+      role: "admin",
+      approvalStatus: "approved",
+      entitlementStatus: "active",
+      entitlementSource: "staff",
+      alphaWodAccess: true,
+    },
+  });
+  await createMember("boundarytarget", {email: "boundarytarget@example.test"});
+  await seedMembership("sub_admin_provider_canceled", {
+    payerUid: "different-payer",
+    participant: {
+      fullName: "Delegated Participant",
+      dateOfBirth: "1990-01-01",
+      age: 36,
+      isPayer: false,
+      participantKey: "key_admin_provider_canceled",
+    },
+  });
+  fakeStripe.setSubscription("sub_admin_provider_canceled", {
+    status: "canceled",
+    ended_at: Math.floor(Date.now() / 1000),
+    cancel_at: null,
+  });
+
+  await assert.rejects(
+    () => linkMembershipParticipant(request({
+      subscriptionId: "sub_admin_provider_canceled",
+      participantUid: "boundarytarget",
+    }, "boundaryadmin")),
+    /no longer eligible/i
+  );
+  assert.equal(
+    (await db.collection("memberships")
+      .doc("sub_admin_provider_canceled").get()).get("state"),
+    "cancelled"
+  );
+  assert.equal((await accessOf("boundarytarget")).alphaWodAccess, false);
+
+  await seedMembership("sub_admin_provider_uncertain", {
+    payerUid: "different-payer",
+    participant: {
+      fullName: "Another Delegated Participant",
+      dateOfBirth: "1991-01-01",
+      age: 35,
+      isPayer: false,
+      participantKey: "key_admin_provider_uncertain",
+    },
+  });
+  fakeStripe.state.subscriptions.delete("sub_admin_provider_uncertain");
+  await assert.rejects(
+    () => linkMembershipParticipant(request({
+      subscriptionId: "sub_admin_provider_uncertain",
+      participantUid: "boundarytarget",
+    }, "boundaryadmin")),
+    (error) => {
+      assert.equal(error.code, "unavailable");
+      return true;
+    }
+  );
+  assert.equal(
+    (await db.collection("memberships")
+      .doc("sub_admin_provider_uncertain").get()).get("entitlementTargetUid"),
+    null
+  );
+  assert.equal((await accessOf("boundarytarget")).alphaWodAccess, false);
 });
 
 test("admin linking refuses a membership bought by its participant", async () => {
@@ -3328,6 +4163,40 @@ test("a stable checkout attempt is idempotent and fingerprint-bound", async () =
     ),
     /different membership details/i
   );
+});
+
+test("checkout transaction refuses an unconverged membership discovered after preflight", async () => {
+  const intentRef = db.collection("membershipIntents").doc("attempt_new_membership_race");
+  const intent = reservationIntent("new_membership_race", {
+    participantKey: "participant_new_membership_race",
+  });
+  await seedMembership("sub_new_membership_race", {
+    state: "cancelled",
+    stripeStatus: "canceled",
+    participant: {
+      fullName: "Concurrent Member",
+      dateOfBirth: "1990-01-01",
+      age: 36,
+      isPayer: true,
+      participantKey: intent.participant.participantKey,
+    },
+  });
+
+  await assert.rejects(
+    () => membershipTesting.reserveCheckoutAttempt(
+      intentRef,
+      intent,
+      Date.now(),
+      new Set()
+    ),
+    (error) => {
+      assert.equal(error.code, "unavailable");
+      assert.equal(error.details?.reason, "membership_state_changed");
+      return true;
+    }
+  );
+  assert.equal((await intentRef.get()).exists, false);
+  assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 0);
 });
 
 test("participant checkout reservations close the concurrent duplicate race", async () => {
@@ -4247,6 +5116,24 @@ test("confirmation outbox freezes one payload and retries with one provider key"
   assert.match(
     before.get("payload.html"),
     /\/account\/membership\?claim=email/
+  );
+  assert.equal(before.get("commercialTerms.planName"), "Adult Unlimited Membership");
+  assert.equal(before.get("commercialTerms.amountPence"), 6000);
+  assert.deepEqual(
+    before.get("acceptedDocuments").map(({key}) => key),
+    ["membershipTerms", "cancellationPolicy", "privacyNotice", "adultWaiver"]
+  );
+  assert.deepEqual(
+    before.get("acceptedStatements").map(({id}) => id),
+    membership.acceptances.acceptedStatementIds
+  );
+  assert.match(before.get("payload.html"), /Complete immutable document copies/);
+  assert.match(before.get("payload.html"), /Statements you accepted separately/);
+  assert.match(before.get("payload.html"), /acknowledgement is evidence of receipt/);
+  assert.equal(before.get("payload.attachments").length, 4);
+  assert.equal(
+    Buffer.from(before.get("payload.attachments")[0].content, "base64").toString("utf8"),
+    membership.acceptances.documents[0].content
   );
   const dispatchNow = Date.now() + 1000;
 

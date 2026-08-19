@@ -29,6 +29,7 @@ import {defineSecret, defineString} from "firebase-functions/params";
 import * as admin from "firebase-admin";
 import {
   DocumentReference,
+  DocumentSnapshot,
   FieldValue,
   Firestore,
   QueryDocumentSnapshot,
@@ -40,6 +41,12 @@ import {createHash, randomUUID} from "crypto";
 import Stripe from "stripe";
 import {
   BILLING_POLICY,
+  CheckoutAcceptanceId,
+  CheckoutAcceptanceStatement,
+  CheckoutDocument,
+  CheckoutSignerRole,
+  CommercialPlanSnapshot,
+  CHECKOUT_DOCUMENT_CONTENT_BUDGET_BYTES,
   CHECKOUT_DOCUMENTS,
   COMPANY,
   EXISTING_MEMBER_OFFER,
@@ -55,6 +62,7 @@ import {
   PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
   PlanKey,
   POLICY_TEXT,
+  createCommercialPlanSnapshot,
   getPlan,
   isAgeEligibleForPlan,
   isMembershipStateBlockingDuplicate,
@@ -62,6 +70,9 @@ import {
   resolveAgeFromDateOfBirth,
   resolveCancellationOutcome,
   resolveCheckoutBillingPolicy,
+  resolveCheckoutAcceptanceStatements,
+  resolveCheckoutDocuments,
+  resolveCheckoutSignerRole,
   resolveCheckoutSessionExpiry,
   resolveCoolingOffEnd,
   resolveEntitlementForMembership,
@@ -77,6 +88,24 @@ import {
   isUserRole,
   resolveUserAuthorisation,
 } from "./authz";
+import {
+  CheckoutAttemptFingerprintMismatchError,
+  CheckoutRateLimitExceededError,
+  CheckoutRateLimitStateError,
+  admitEarlyMembershipCheckoutRequest,
+  admitMembershipCheckoutAttempt,
+  deriveCheckoutSourceHash,
+} from "./membershipCheckoutAbuse";
+import {
+  MEMBERSHIP_CANCELLATION_RECEIPT_COLLECTION,
+  MembershipCancellationReceipt,
+  assertMembershipCancellationReceipt,
+  buildCancellationAcknowledgementPayload,
+  buildCoolingOffCancellationReceipt,
+  buildMembershipCancellationProjection,
+  cancellationAcknowledgementIdempotencyKey,
+  cancellationAcknowledgementOutboxId,
+} from "./membershipCancellation";
 
 const REGION = "europe-west1";
 
@@ -88,6 +117,9 @@ const REGION = "europe-west1";
 const stripeSecretKey = defineSecret("STRIPE_SECRET_KEY");
 const stripeWebhookSecret = defineSecret("STRIPE_WEBHOOK_SECRET");
 const resendApiKey = defineSecret("RESEND_API_KEY");
+const membershipCheckoutRateLimitSecret = defineSecret(
+  "MEMBERSHIP_CHECKOUT_RATE_LIMIT_SECRET"
+);
 const membershipFromEmail = defineString("MEMBERSHIP_FROM_EMAIL", {
   default: COMPANY.confirmationSender,
 });
@@ -105,6 +137,9 @@ const membershipTestJourneyEnabled = defineString("MEMBERSHIP_TEST_JOURNEY_ENABL
   default: "false",
 });
 const membershipFirebaseProjectId = defineString("MEMBERSHIP_FIREBASE_PROJECT_ID", {
+  default: "",
+});
+const membershipCheckoutAppId = defineString("MEMBERSHIP_CHECKOUT_APP_ID", {
   default: "",
 });
 const stripeExpectedMode = defineString("STRIPE_EXPECTED_MODE", {
@@ -147,6 +182,10 @@ function secretsForRuntime<T>(secrets: T[]): T[] {
 }
 
 export const MEMBERSHIP_SECRETS = secretsForRuntime([stripeSecretKey]);
+export const MEMBERSHIP_CHECKOUT_SECRETS = secretsForRuntime([
+  stripeSecretKey,
+  membershipCheckoutRateLimitSecret,
+]);
 export const MEMBERSHIP_WEBHOOK_SECRETS = secretsForRuntime([
   stripeSecretKey,
   stripeWebhookSecret,
@@ -356,8 +395,14 @@ type GuardianRecord = {
 
 type CheckoutAcceptanceRecord = {
   signedName: string;
-  documents: typeof CHECKOUT_DOCUMENTS;
-  immediatePerformanceRequested: boolean;
+  signerRole: CheckoutSignerRole;
+  /** Exact server-owned document contents shown for this plan and role. */
+  documents: CheckoutDocument[];
+  /** Exact server-owned statements individually accepted by the signer. */
+  statements: CheckoutAcceptanceStatement[];
+  acceptedStatementIds: CheckoutAcceptanceId[];
+  /** Derived from the required exact statement set; never trusted client data. */
+  immediatePerformanceRequested: true;
   acceptedAt: FieldValue | Timestamp;
   userAgent: string;
 };
@@ -378,6 +423,8 @@ type MembershipIntentDoc = {
   payerUid: string | null;
   payerEmail: string | null;
   planKey: PlanKey;
+  /** Complete customer-facing commercial plan frozen before Stripe opens. */
+  commercialTerms: CommercialPlanSnapshot;
   /** Stripe mode frozen with this retryable attempt. */
   stripeMode: StripeMode;
   /** Exact validated Price frozen for this attempt, even if config later rotates. */
@@ -442,6 +489,7 @@ type MembershipDoc = {
   claimedAt: FieldValue | Timestamp | null;
   planKey: PlanKey;
   stripePriceId: string;
+  commercialTerms: CommercialPlanSnapshot;
   planName: string;
   grantsAlphaWodAccess: boolean;
   participant: ParticipantRecord;
@@ -483,7 +531,7 @@ type MembershipDoc = {
   cancellationOutcome: ReturnType<typeof resolveCancellationOutcome> | null;
   cancellationRequest?: {
     id: string;
-    kind?: "presale_withdrawal";
+    kind?: "presale_withdrawal" | "cooling_off" | "contractual";
     status: "pending" | "applied" | "manual_review";
     receivedAt: Timestamp;
     /** Starts/resets when automatic application or a later drift repair begins. */
@@ -496,6 +544,17 @@ type MembershipDoc = {
     leaseToken?: string;
     leaseExpiresAt?: Timestamp;
     lastError?: string;
+    /** Immutable cooling-off receipt; absent on legacy/contractual requests. */
+    receiptId?: string;
+    cancellationEffectiveAtMillis?: number;
+    accessEndsAtMillis?: number;
+    collectFuturePayments?: false;
+    futurePaymentDuePence?: 0;
+    providerEndedAtMillis?: number | null;
+    refundReviewRequired?: boolean;
+    refundAmountPence?: null;
+    acknowledgementOutboxId?: string;
+    acknowledgementIdempotencyKey?: string;
   };
   entitlementProjectionStatus?: "applied" | "manual_review";
   entitlementProjectionError?: string;
@@ -503,11 +562,43 @@ type MembershipDoc = {
   confirmationEmailError?: string;
   confirmationEmailProviderId?: string;
   confirmationEmailSentAt?: Timestamp | FieldValue | null;
+  cancellationAcknowledgementStatus?: string;
+  cancellationAcknowledgementError?: string;
+  cancellationAcknowledgementProviderId?: string;
+  cancellationAcknowledgementSentAt?: Timestamp | FieldValue | null;
   createdAt: FieldValue | Timestamp;
   updatedAt: FieldValue | Timestamp;
 };
 
 type CancellationOutcome = ReturnType<typeof resolveCancellationOutcome>;
+
+/**
+ * Compatibility projection for the existing Stripe cancellation recovery.
+ * The immutable cooling-off receipt remains authoritative for the legal
+ * effective/access stop; this shape only lets the established worker perform
+ * and verify an immediate provider cancellation.
+ */
+function resolveCoolingOffCancellationOutcome(
+  receivedAtMillis: number
+): CancellationOutcome {
+  const receivedAtUnixSeconds = Math.floor(receivedAtMillis / 1000);
+  return {
+    ...resolveCancellationOutcome(receivedAtMillis),
+    noticeDeadlineMet: true,
+    finalPaymentDate: null,
+    accessEndsOnDate: formatUnixBillingIsoDate(receivedAtUnixSeconds),
+    cancelAtUnixSeconds: receivedAtUnixSeconds,
+  };
+}
+
+function cancellationAcknowledgementStatusForClient(
+  status: unknown
+): "pending" | "sent" | "failed" | null {
+  if (status === "sent") return "sent";
+  if (status === "pending" || status === "sending") return "pending";
+  if (status === "dead_letter" || status === "manual_review") return "failed";
+  return null;
+}
 
 function isPresaleIntent(
   intent: Pick<MembershipIntentDoc, "billingMode">
@@ -558,14 +649,15 @@ function paymentScheduleFor(
   discount: MembershipDiscount | null,
   observedInitialChargePence: number | null
 ): MembershipPaymentSchedule {
-  const plan = getPlan(intent.planKey);
+  const commercialTerms = intent.commercialTerms ??
+    createCommercialPlanSnapshot(intent.planKey);
   const firstPaymentAt = intent.firstPaymentAt ?? intent.billingCycleAnchor;
   return {
     amountDueTodayPence: intent.initialChargePence ?? observedInitialChargePence,
     firstPaymentAt,
-    standardMonthlyPence: plan.amountPence,
+    standardMonthlyPence: commercialTerms.amountPence,
     discountedMonthlyPence: discount ?
-      Math.max(0, plan.amountPence - discount.amountOffPence) : null,
+      Math.max(0, commercialTerms.amountPence - discount.amountOffPence) : null,
     discountedPaymentCount: discount?.durationInMonths ?? 0,
     fullPriceFrom: discount ?
       addUtcMonths(firstPaymentAt, discount.durationInMonths) : null,
@@ -889,7 +981,10 @@ type CheckoutFingerprintInput = {
   participant: ParticipantRecord;
   guardian: GuardianRecord | null;
   signedName: string;
-  immediatePerformanceRequested: boolean;
+  commercialTerms: CommercialPlanSnapshot;
+  acceptances: Pick<CheckoutAcceptanceRecord,
+    "signerRole" | "documents" | "statements" | "acceptedStatementIds" |
+    "immediatePerformanceRequested">;
 };
 
 /** Prevents a stable attempt id being replayed with materially different data. */
@@ -908,9 +1003,39 @@ function checkoutRequestFingerprint(input: CheckoutFingerprintInput): string {
     },
     guardian: input.guardian,
     signedName: input.signedName,
-    immediatePerformanceRequested: input.immediatePerformanceRequested,
-    documents: CHECKOUT_DOCUMENTS,
+    commercialTerms: input.commercialTerms,
+    acceptances: input.acceptances,
   }));
+}
+
+/**
+ * The browser submits ids only. The server independently resolves the exact
+ * plan/role set and rejects missing, duplicate, unknown or extra ids before it
+ * stores the canonical statements and immutable document contents.
+ */
+function requireExactCheckoutAcceptanceIds(
+  value: unknown,
+  expected: readonly CheckoutAcceptanceStatement[]
+): CheckoutAcceptanceId[] {
+  if (!Array.isArray(value) || value.some((id) => typeof id !== "string")) {
+    throw new HttpsError(
+      "invalid-argument",
+      "Each required checkout statement must be accepted separately."
+    );
+  }
+  const submitted = value as string[];
+  const expectedIds = expected.map(({id}) => id);
+  const submittedSet = new Set(submitted);
+  const exact = submittedSet.size === submitted.length &&
+    submittedSet.size === expectedIds.length &&
+    expectedIds.every((id) => submittedSet.has(id));
+  if (!exact) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Review and accept every required checkout statement separately."
+    );
+  }
+  return [...expectedIds];
 }
 
 /**
@@ -1068,21 +1193,183 @@ async function assertPortalConfigurationIsLockedDown(
     configuration.id,
     configuration.livemode
   );
+  const subscriptionPauseEnabled = (
+    configuration.features as typeof configuration.features & {
+      subscription_pause?: {enabled?: boolean};
+    }
+  ).subscription_pause?.enabled;
   if (configuration.active !== true ||
+    configuration.login_page?.enabled !== false ||
+    configuration.features.customer_update?.enabled !== false ||
+    configuration.features.invoice_history?.enabled !== true ||
+    configuration.features.payment_method_update?.enabled !== true ||
     configuration.features.subscription_cancel.enabled !== false ||
-    configuration.features.subscription_update.enabled !== false) {
+    configuration.features.subscription_update.enabled !== false ||
+    subscriptionPauseEnabled === true) {
     console.error("CRITICAL_BILLING_PORTAL_CONFIGURATION_MISMATCH", {
       configurationId,
       active: configuration.active,
+      hostedLoginEnabled: configuration.login_page?.enabled,
+      customerUpdateEnabled:
+        configuration.features.customer_update?.enabled,
+      invoiceHistoryEnabled:
+        configuration.features.invoice_history?.enabled,
+      paymentMethodUpdateEnabled:
+        configuration.features.payment_method_update?.enabled,
       subscriptionCancellationEnabled:
         configuration.features.subscription_cancel.enabled,
       subscriptionUpdateEnabled:
         configuration.features.subscription_update.enabled,
+      subscriptionPauseEnabled: subscriptionPauseEnabled ?? null,
     });
     throw new HttpsError(
       "failed-precondition",
-      "The billing portal is unavailable because its cancellation controls are unsafe."
+      "The billing portal is unavailable because its configuration is unsafe."
     );
+  }
+}
+
+/** Fail closed if a future gate flip leaves draft or internally inconsistent legal copy. */
+function assertCheckoutDocumentModel(publicationReadyRequired: boolean): void {
+  if (publicationReadyRequired) {
+    const companyPublicationFields = {
+      legalName: COMPANY.legalName,
+      tradingName: COMPANY.tradingName,
+      companyNumber: COMPANY.companyNumber,
+      address: COMPANY.address,
+      registeredOffice: COMPANY.registeredOffice,
+      registrationJurisdiction: COMPANY.registrationJurisdiction,
+      supportEmail: COMPANY.supportEmail,
+      confirmationSender: COMPANY.confirmationSender,
+    };
+    if (Object.values(companyPublicationFields).some((value) => !value.trim()) ||
+      /PENDING|DRAFT/i.test(JSON.stringify(companyPublicationFields))) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Company disclosures are not ready for publication."
+      );
+    }
+    const aggregateDocumentBytes = Object.values(CHECKOUT_DOCUMENTS).reduce(
+      (total, document) => total + Buffer.byteLength(document.content, "utf8"),
+      0
+    );
+    if (aggregateDocumentBytes > CHECKOUT_DOCUMENT_CONTENT_BUDGET_BYTES) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Checkout documents exceed the safe publication byte budget."
+      );
+    }
+  }
+  const exactRequirements: Record<PlanKey, {
+    documents: string[];
+    statements: CheckoutAcceptanceId[];
+    signerRole: CheckoutSignerRole;
+  }> = {
+    adult_unlimited: {
+      documents: ["membershipTerms", "cancellationPolicy", "privacyNotice", "adultWaiver"],
+      statements: [
+        "membership_contract", "privacy_notice", "adult_participant_waiver",
+        "recurring_payment_authority", "immediate_performance",
+      ],
+      signerRole: "adult_participant_and_payer",
+    },
+    adult_ladies: {
+      documents: ["membershipTerms", "cancellationPolicy", "privacyNotice", "adultWaiver"],
+      statements: [
+        "membership_contract", "privacy_notice", "adult_participant_waiver",
+        "recurring_payment_authority", "immediate_performance",
+      ],
+      signerRole: "adult_participant_and_payer",
+    },
+    adult_gym: {
+      documents: ["membershipTerms", "cancellationPolicy", "privacyNotice", "adultWaiver"],
+      statements: [
+        "membership_contract", "privacy_notice", "adult_participant_waiver",
+        "recurring_payment_authority", "immediate_performance",
+      ],
+      signerRole: "adult_participant_and_payer",
+    },
+    youth_youngstars: {
+      documents: ["membershipTerms", "cancellationPolicy", "privacyNotice", "guardianAddendum"],
+      statements: [
+        "membership_contract", "privacy_notice", "guardian_authority",
+        "guardian_youth_addendum", "recurring_payment_authority", "immediate_performance",
+      ],
+      signerRole: "youth_guardian_and_payer",
+    },
+    youth_teenstars: {
+      documents: ["membershipTerms", "cancellationPolicy", "privacyNotice", "guardianAddendum"],
+      statements: [
+        "membership_contract", "privacy_notice", "guardian_authority",
+        "guardian_youth_addendum", "recurring_payment_authority", "immediate_performance",
+      ],
+      signerRole: "youth_guardian_and_payer",
+    },
+  };
+
+  for (const planKey of PLAN_KEYS) {
+    const documents = resolveCheckoutDocuments(planKey);
+    const statements = resolveCheckoutAcceptanceStatements(planKey);
+    const requirement = exactRequirements[planKey];
+    const documentKeys = documents.map(({key}) => key);
+    const statementIds = statements.map(({id}) => id);
+    if (JSON.stringify(documentKeys) !== JSON.stringify(requirement.documents) ||
+      JSON.stringify(statementIds) !== JSON.stringify(requirement.statements) ||
+      resolveCheckoutSignerRole(planKey) !== requirement.signerRole ||
+      new Set(documentKeys).size !== documentKeys.length ||
+      new Set(statementIds).size !== statementIds.length) {
+      throw new HttpsError(
+        "failed-precondition",
+        `Checkout legal requirements are invalid for ${planKey}.`
+      );
+    }
+    const availableKeys = new Set(documentKeys);
+    if (statements.some((statement) =>
+      !statement.statement.trim() ||
+      new Set(statement.documentKeys).size !== statement.documentKeys.length ||
+      statement.documentKeys.some((key) => !availableKeys.has(key)))) {
+      throw new HttpsError(
+        "failed-precondition",
+        `A checkout statement is incomplete or references an unavailable document for ${planKey}.`
+      );
+    }
+
+    if (!publicationReadyRequired) continue;
+    for (const document of documents) {
+      const serialized = JSON.stringify(document);
+      const immutableUrl = (() => {
+        try {
+          const parsed = new URL(document.publicUrl, "https://same-origin.invalid");
+          const sameOriginPath = document.publicUrl.startsWith("/") &&
+            parsed.origin === "https://same-origin.invalid";
+          const absoluteHttps = /^https:\/\//.test(document.publicUrl);
+          return (sameOriginPath || absoluteHttps) &&
+            !parsed.search && !parsed.hash && parsed.pathname.includes(document.version);
+        } catch {
+          return false;
+        }
+      })();
+      const effectiveDate = document.effectiveDate.trim();
+      const parsedEffectiveDate = new Date(`${effectiveDate}T00:00:00.000Z`);
+      const validEffectiveDate = /^\d{4}-\d{2}-\d{2}$/.test(effectiveDate) &&
+        Number.isFinite(parsedEffectiveDate.getTime()) &&
+        parsedEffectiveDate.toISOString().slice(0, 10) === effectiveDate;
+      if (/PENDING|DRAFT/i.test(serialized) ||
+        document.contentType !== "text/plain; charset=utf-8" ||
+        document.hashCovers !== "UTF-8 bytes of content" ||
+        !document.title.trim() ||
+        !/^[A-Za-z0-9][A-Za-z0-9._-]{2,159}$/.test(document.version) ||
+        !validEffectiveDate ||
+        !document.content.trim() ||
+        !/^[a-f0-9]{64}$/.test(document.sha256) ||
+        sha256(document.content) !== document.sha256 ||
+        !immutableUrl) {
+        throw new HttpsError(
+          "failed-precondition",
+          `Checkout document ${document.key} is not ready for publication.`
+        );
+      }
+    }
   }
 }
 
@@ -1114,6 +1401,7 @@ function requirePurchaseFlowOpen(): void {
       );
     }
   }
+  assertCheckoutDocumentModel(CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION);
   if (membershipPurchaseEnabled.value().trim().toLowerCase() !== "true") {
     throw new HttpsError(
       "failed-precondition",
@@ -1322,7 +1610,8 @@ function acquireEntitlementOwner(
 async function reserveCheckoutAttempt(
   intentRef: DocumentReference,
   proposedIntent: MembershipIntentDoc,
-  nowMillis: number
+  nowMillis: number,
+  convergedMembershipIds?: ReadonlySet<string>
 ): Promise<CheckoutReservationResult> {
   const lockSpecs = checkoutLockSpecs(
     proposedIntent.payerUid,
@@ -1335,11 +1624,11 @@ async function reserveCheckoutAttempt(
   const participantQuery = db().collection("memberships")
     .where("participant.participantKey", "==", proposedIntent.participant.participantKey);
   const payerQuery = proposedIntent.payerUid &&
-      getPlan(proposedIntent.planKey).grantsAlphaWodAccess ?
+      proposedIntent.commercialTerms.grantsAlphaWodAccess ?
     db().collection("memberships").where("payerUid", "==", proposedIntent.payerUid) :
     null;
   const targetQuery = proposedIntent.payerUid &&
-      getPlan(proposedIntent.planKey).grantsAlphaWodAccess ?
+      proposedIntent.commercialTerms.grantsAlphaWodAccess ?
     db().collection("memberships")
       .where("entitlementTargetUid", "==", proposedIntent.payerUid) : null;
 
@@ -1363,6 +1652,26 @@ async function reserveCheckoutAttempt(
     const byTarget = targetQuery ? await tx.get(targetQuery) : null;
     const entitlementOwner = proposedIntent.payerUid && payerQuery ?
       await readEntitlementOwner(tx, proposedIntent.payerUid, intentRef.id) : null;
+    if (convergedMembershipIds) {
+      assertEligibilityDocsWereConverged([
+        ...byParticipant.docs,
+        ...(byPayer?.docs ?? []).filter((doc) =>
+          doc.get("grantsAlphaWodAccess") === true
+        ),
+        ...(byTarget?.docs ?? []).filter((doc) =>
+          doc.get("grantsAlphaWodAccess") === true
+        ),
+      ], convergedMembershipIds);
+      if (entitlementOwner?.ownerState === "active" &&
+        entitlementOwner.ownerSubscriptionId &&
+        !convergedMembershipIds.has(entitlementOwner.ownerSubscriptionId)) {
+        throw new HttpsError(
+          "unavailable",
+          AUTHORITATIVE_ELIGIBILITY_UNAVAILABLE,
+          {reason: "membership_state_changed"}
+        );
+      }
+    }
     const priorIntentIds = [...new Set(lockSnaps.flatMap((snap) =>
       snap.exists && typeof snap.get("intentId") === "string" ?
         [snap.get("intentId") as string] : []
@@ -2180,10 +2489,33 @@ async function convergeMembershipFromStripe(
         pendingCancellation.receivedAt.toMillis() < stored.serviceStartsAt * 1000 &&
         authoritativeCancelAt < stored.firstPaymentAt &&
         stored.firstPaymentReceivedAt === null;
+      const successfulCoolingOffCancellation = validRequest &&
+        pendingCancellation.kind === "cooling_off" &&
+        typeof pendingCancellation.receiptId === "string" &&
+        subscription.status === "canceled" && authoritativeCancelAt !== null;
 
       if (stored.cancellationOutcome) {
         const promisedCancelAt = stored.cancellationOutcome.cancelAtUnixSeconds;
-        if (successfulPresaleWithdrawal) {
+        if (successfulCoolingOffCancellation) {
+          // Stripe normally records `ended_at` a little after the notice was
+          // received. That provider completion time must not replace, delay,
+          // or invalidate the immutable cooling-off effective/access stop.
+          projectedCancelAt = promisedCancelAt;
+          cancellationUpdate = {
+            cancellationOutcome: stored.cancellationOutcome,
+            cancellationRequest: {
+              ...pendingCancellation,
+              status: "applied",
+              outcome: stored.cancellationOutcome,
+              stripeCancelAt: authoritativeCancelAt,
+              providerEndedAtMillis: authoritativeCancelAt * 1000,
+              nextAttemptAt: FieldValue.delete(),
+              leaseToken: FieldValue.delete(),
+              leaseExpiresAt: FieldValue.delete(),
+              lastError: FieldValue.delete(),
+            },
+          };
+        } else if (successfulPresaleWithdrawal) {
           projectedCancelAt = authoritativeCancelAt;
           cancellationUpdate = {
             cancellationOutcome: stored.cancellationOutcome,
@@ -2290,6 +2622,29 @@ async function convergeMembershipFromStripe(
             },
           };
         }
+      } else if (successfulCoolingOffCancellation) {
+        settledCancellation = {
+          requestId: pendingCancellation.id,
+          payerUid: stored.payerUid,
+          outcome: pendingCancellation.outcome,
+        };
+        projectedCancelAt = pendingCancellation.outcome.cancelAtUnixSeconds;
+        cancellationUpdate = {
+          cancellationRequestedAt: pendingCancellation.receivedAt,
+          cancellationOutcome: settledCancellation.outcome,
+          cancellationRequest: {
+            ...pendingCancellation,
+            status: "applied",
+            outcome: settledCancellation.outcome,
+            stripeCancelAt: authoritativeCancelAt,
+            providerEndedAtMillis: authoritativeCancelAt * 1000,
+            appliedAt: serverTimestamp(),
+            nextAttemptAt: FieldValue.delete(),
+            leaseToken: FieldValue.delete(),
+            leaseExpiresAt: FieldValue.delete(),
+            lastError: FieldValue.delete(),
+          },
+        };
       } else if (successfulPresaleWithdrawal) {
         settledCancellation = {
           requestId: pendingCancellation.id,
@@ -2469,6 +2824,176 @@ async function convergeMembershipFromStripe(
   }
 }
 
+type AuthoritativeEligibilityContext =
+  | "checkout_duplicate_admission"
+  | "membership_claim"
+  | "participant_link_or_repair";
+
+const AUTHORITATIVE_ELIGIBILITY_UNAVAILABLE =
+  "Current membership status could not be verified with Stripe. No new purchase, claim or link was made. Try again later.";
+
+/**
+ * Converges every stored subscription that can affect a state-sensitive
+ * eligibility decision. A local terminal state is not proof that Stripe has
+ * stopped billing: delayed/dead-lettered lifecycle events must therefore be
+ * healed before the final Firestore transaction is allowed to decide.
+ */
+async function convergeEligibilityMemberships(
+  snapshots: DocumentSnapshot[],
+  converge: (userId: string) => Promise<void>,
+  context: AuthoritativeEligibilityContext
+): Promise<Set<string>> {
+  const memberships = new Map<string, DocumentSnapshot>();
+  snapshots.forEach((snapshot) => {
+    if (snapshot.exists) memberships.set(snapshot.id, snapshot);
+  });
+
+  for (const snapshot of [...memberships.values()].sort((left, right) =>
+    left.id.localeCompare(right.id)
+  )) {
+    const storedSubscriptionId = snapshot.get("subscriptionId");
+    if (storedSubscriptionId !== snapshot.id) {
+      console.error("CRITICAL_BILLING_ELIGIBILITY_STATE_UNCERTAIN", {
+        context,
+        subscriptionId: snapshot.id,
+        reason: "subscription_id_mismatch",
+      });
+      await writeAudit({
+        type: "membership_eligibility_state_uncertain",
+        severity: "critical",
+        context,
+        subscriptionId: snapshot.id,
+        reason: "subscription_id_mismatch",
+      }).catch((error) =>
+        console.error("Could not write eligibility-state audit", snapshot.id, error)
+      );
+      throw new HttpsError(
+        "unavailable",
+        AUTHORITATIVE_ELIGIBILITY_UNAVAILABLE,
+        {reason: "membership_state_unavailable"}
+      );
+    }
+
+    try {
+      await convergeMembershipFromStripe(snapshot.id, converge);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("CRITICAL_BILLING_ELIGIBILITY_STATE_UNCERTAIN", {
+        context,
+        subscriptionId: snapshot.id,
+        reason: message.slice(0, 500),
+      });
+      await writeAudit({
+        type: "membership_eligibility_state_uncertain",
+        severity: "critical",
+        context,
+        subscriptionId: snapshot.id,
+        reason: message.slice(0, 500),
+      }).catch((auditError) =>
+        console.error("Could not write eligibility-state audit", snapshot.id, auditError)
+      );
+      throw new HttpsError(
+        "unavailable",
+        AUTHORITATIVE_ELIGIBILITY_UNAVAILABLE,
+        {reason: "membership_state_unavailable"}
+      );
+    }
+  }
+  return new Set(memberships.keys());
+}
+
+/** Existing AlphaWOD memberships that can block a grant to this account. */
+async function alphaWodMembershipsForAccount(
+  userId: string
+): Promise<DocumentSnapshot[]> {
+  const [byPayer, byTarget] = await Promise.all([
+    db().collection("memberships").where("payerUid", "==", userId).get(),
+    db().collection("memberships").where("entitlementTargetUid", "==", userId).get(),
+  ]);
+  const relevant = new Map<string, DocumentSnapshot>();
+  [...byPayer.docs, ...byTarget.docs].forEach((snapshot) => {
+    if (snapshot.get("grantsAlphaWodAccess") === true) {
+      relevant.set(snapshot.id, snapshot);
+    }
+  });
+  const owner = await entitlementOwnerRef(userId).get();
+  if (owner.exists && owner.get("state") !== "released") {
+    const ownerSubscriptionId = owner.get("subscriptionId");
+    if (typeof ownerSubscriptionId !== "string" || !ownerSubscriptionId) {
+      console.error("CRITICAL_BILLING_ELIGIBILITY_STATE_UNCERTAIN", {
+        context: "entitlement_owner",
+        targetUidHash: sha256(userId),
+        reason: "invalid_active_owner",
+      });
+      throw new HttpsError(
+        "unavailable",
+        AUTHORITATIVE_ELIGIBILITY_UNAVAILABLE,
+        {reason: "membership_state_unavailable"}
+      );
+    }
+    if (!relevant.has(ownerSubscriptionId)) {
+      const ownerMembership = await db().collection("memberships")
+        .doc(ownerSubscriptionId).get();
+      if (!ownerMembership.exists) {
+        console.error("CRITICAL_BILLING_ELIGIBILITY_STATE_UNCERTAIN", {
+          context: "entitlement_owner",
+          subscriptionId: ownerSubscriptionId,
+          targetUidHash: sha256(userId),
+          reason: "active_owner_membership_missing",
+        });
+        throw new HttpsError(
+          "unavailable",
+          AUTHORITATIVE_ELIGIBILITY_UNAVAILABLE,
+          {reason: "membership_state_unavailable"}
+        );
+      }
+      relevant.set(ownerMembership.id, ownerMembership);
+    }
+  }
+  return [...relevant.values()];
+}
+
+function assertEligibilityDocsWereConverged(
+  snapshots: QueryDocumentSnapshot[],
+  convergedMembershipIds: ReadonlySet<string>
+): void {
+  const unconverged = snapshots.find((snapshot) =>
+    !convergedMembershipIds.has(snapshot.id)
+  );
+  if (unconverged) {
+    console.error("CRITICAL_BILLING_ELIGIBILITY_NEW_MEMBERSHIP_RACE", {
+      subscriptionId: unconverged.id,
+    });
+    throw new HttpsError(
+      "unavailable",
+      AUTHORITATIVE_ELIGIBILITY_UNAVAILABLE,
+      {reason: "membership_state_changed"}
+    );
+  }
+}
+
+/**
+ * Reconciles every stored membership considered by a new checkout's duplicate
+ * guard. The following reservation transaction performs the final re-read, so
+ * concurrent local claims/links/checkouts still contend atomically.
+ */
+async function convergeCheckoutDuplicateScope(
+  participantKey: string,
+  payerUid: string | null,
+  grantsAlphaWodAccess: boolean,
+  converge: (userId: string) => Promise<void>
+): Promise<Set<string>> {
+  const byParticipant = await db().collection("memberships")
+    .where("participant.participantKey", "==", participantKey).get();
+  const accountMemberships = payerUid && grantsAlphaWodAccess ?
+    await alphaWodMembershipsForAccount(payerUid) : [];
+  return convergeEligibilityMemberships(
+    [...byParticipant.docs, ...accountMemberships],
+    converge,
+    "checkout_duplicate_admission"
+  );
+}
+
 /** Re-checks memberships whose activation or payment-recovery deadline is due. */
 async function reconcilePastDueMembershipsOnce(
   converge: (userId: string) => Promise<void>,
@@ -2524,10 +3049,168 @@ export function buildReconcilePastDueMemberships(
  * Callables
  * -------------------------------------------------------------- */
 
+/**
+ * App Check enforcement rejects invalid tokens before the handler. This
+ * second check binds the anonymous sale to the intended web app and rejects a
+ * valid token that replay protection reports as already consumed.
+ */
+function assertCheckoutAppCheck(
+  request: any,
+  enforce = !isFirebaseFunctionsEmulatorProcess(),
+  expectedAppId?: string
+): void {
+  if (!enforce) return;
+  const configuredAppId = expectedAppId?.trim() ||
+    membershipCheckoutAppId.value().trim();
+  if (!configuredAppId) {
+    console.error("CRITICAL_BILLING_CHECKOUT_ABUSE_CONFIGURATION", {
+      reason: "missing_app_id",
+    });
+    throw new HttpsError(
+      "unavailable",
+      "Checkout security is not configured. Try again later.",
+      {reason: "checkout_security_unavailable"}
+    );
+  }
+
+  const app = request?.app;
+  if (app?.alreadyConsumed === true) {
+    console.warn("MEMBERSHIP_CHECKOUT_APP_CHECK_REPLAY", {
+      reason: "already_consumed",
+    });
+    throw new HttpsError(
+      "permission-denied",
+      "Checkout security verification could not be completed. Refresh and try again.",
+      {reason: "app_check_replay"}
+    );
+  }
+  if (!app || app.appId !== configuredAppId) {
+    console.warn("MEMBERSHIP_CHECKOUT_APP_CHECK_REJECTED", {
+      reason: app ? "app_id_mismatch" : "missing_context",
+    });
+    throw new HttpsError(
+      "permission-denied",
+      "Checkout security verification could not be completed. Refresh and try again.",
+      {reason: "app_check_rejected"}
+    );
+  }
+}
+
+/**
+ * Bounds even malformed App-Check-verified traffic before request or Auth
+ * parsing. These generous request-volume buckets are independent from the
+ * stricter stable-attempt admission below, so legitimate provider/network
+ * retries retain their existing idempotent allowance.
+ */
+async function admitEarlyCheckoutRequest(
+  request: any,
+  nowMillis = Date.now()
+): Promise<void> {
+  try {
+    const sourceHash = deriveCheckoutSourceHash(
+      request?.rawRequest?.ip,
+      membershipCheckoutRateLimitSecret.value()
+    );
+    await admitEarlyMembershipCheckoutRequest({
+      firestore: db(),
+      sourceHash,
+      nowMillis,
+    });
+  } catch (error) {
+    if (error instanceof CheckoutRateLimitExceededError) {
+      console.warn("MEMBERSHIP_CHECKOUT_RATE_LIMITED", {
+        stage: "pre_parse",
+        windows: error.windows,
+        retryAfterSeconds: error.retryAfterSeconds,
+      });
+      throw new HttpsError(
+        "resource-exhausted",
+        "Too many checkout requests. Wait before trying again.",
+        {
+          reason: "checkout_rate_limited",
+          retryAfterSeconds: error.retryAfterSeconds,
+        }
+      );
+    }
+    if (error instanceof CheckoutRateLimitStateError) {
+      console.error("CRITICAL_BILLING_CHECKOUT_ABUSE_CONFIGURATION", {
+        reason: "early_rate_limit_state_unavailable",
+      });
+      throw new HttpsError(
+        "unavailable",
+        "Checkout security could not be verified. Try again later.",
+        {reason: "checkout_security_unavailable"}
+      );
+    }
+    throw error;
+  }
+}
+
+async function admitCheckoutRequest(input: {
+  request: any;
+  intentRef: DocumentReference;
+  checkoutAttemptHash: string;
+  requestFingerprint: string;
+  nowMillis: number;
+}): Promise<void> {
+  try {
+    const sourceHash = deriveCheckoutSourceHash(
+      input.request?.rawRequest?.ip,
+      membershipCheckoutRateLimitSecret.value()
+    );
+    await admitMembershipCheckoutAttempt({
+      firestore: db(),
+      intentRef: input.intentRef,
+      checkoutAttemptHash: input.checkoutAttemptHash,
+      requestFingerprint: input.requestFingerprint,
+      sourceHash,
+      nowMillis: input.nowMillis,
+    });
+  } catch (error) {
+    if (error instanceof CheckoutAttemptFingerprintMismatchError) {
+      throw new HttpsError(
+        "failed-precondition",
+        "This checkout attempt was already used with different membership details."
+      );
+    }
+    if (error instanceof CheckoutRateLimitExceededError) {
+      console.warn("MEMBERSHIP_CHECKOUT_RATE_LIMITED", {
+        windows: error.windows,
+        retryAfterSeconds: error.retryAfterSeconds,
+      });
+      throw new HttpsError(
+        "resource-exhausted",
+        "Too many new checkout attempts. Wait before trying again.",
+        {
+          reason: "checkout_rate_limited",
+          retryAfterSeconds: error.retryAfterSeconds,
+        }
+      );
+    }
+    if (error instanceof CheckoutRateLimitStateError) {
+      console.error("CRITICAL_BILLING_CHECKOUT_ABUSE_CONFIGURATION", {
+        reason: "rate_limit_state_unavailable",
+      });
+      throw new HttpsError(
+        "unavailable",
+        "Checkout security could not be verified. Try again later.",
+        {reason: "checkout_security_unavailable"}
+      );
+    }
+    throw error;
+  }
+}
+
 function buildCreateMembershipCheckoutHandler(
-  assertPurchaseOpen: () => void
+  assertPurchaseOpen: () => void,
+  enforceAppCheck = !isFirebaseFunctionsEmulatorProcess(),
+  converge: (userId: string) => Promise<void> = async () => undefined
 ) {
   return async (request: any) => {
+    assertCheckoutAppCheck(request, enforceAppCheck);
+    if (!isFirebaseFunctionsEmulatorProcess()) {
+      await admitEarlyCheckoutRequest(request);
+    }
     // Membership is bought before signing in. A visitor with no account can
     // complete checkout; the purchase is attached to an account afterwards by
     // `claimMembership`. A signed-in buyer is linked immediately instead.
@@ -2560,13 +3243,6 @@ function buildCreateMembershipCheckoutHandler(
     const dateOfBirth = requireBoundedString(request.data?.participantDateOfBirth, "participantDateOfBirth", 10, 10);
     const signedName = requireBoundedString(request.data?.signedName, "signedName", 2, 160);
     const participantIsPayer = request.data?.participantIsPayer === true;
-    const immediatePerformanceRequested = request.data?.immediatePerformanceRequested === true;
-    if (!immediatePerformanceRequested) {
-      throw new HttpsError(
-        "failed-precondition",
-        "Request immediate membership service before continuing to payment."
-      );
-    }
 
     const now = Date.now();
     const billingPolicy = resolveCheckoutBillingPolicy(now);
@@ -2607,17 +3283,32 @@ function buildCreateMembershipCheckoutHandler(
         relationship: requireBoundedString(request.data?.guardianRelationship, "guardianRelationship", 2, 80),
         confirmedAuthority: true,
       };
-      if (request.data?.guardianConfirmsAuthority !== true) {
-        throw new HttpsError("failed-precondition", POLICY_TEXT.guardianRequirement);
-      }
     }
 
-    if (request.data?.acceptedDocuments !== true) {
+    const expectedSignedName = guardian?.fullName ?? participantName;
+    const comparableName = (value: string) => value.normalize("NFKC")
+      .trim().replace(/\s+/g, " ").toLocaleLowerCase("en-GB");
+    if (comparableName(signedName) !== comparableName(expectedSignedName)) {
       throw new HttpsError(
         "failed-precondition",
-        "The membership terms, cancellation policy and privacy notice must be accepted."
+        `Type ${plan.audience === "youth" ? "the paying adult's" : "your"} full name exactly to sign.`
       );
     }
+
+    const commercialTerms = createCommercialPlanSnapshot(planKey);
+    const documents = resolveCheckoutDocuments(planKey);
+    const statements = resolveCheckoutAcceptanceStatements(planKey);
+    const acceptedStatementIds = requireExactCheckoutAcceptanceIds(
+      request.data?.acceptedStatementIds,
+      statements
+    );
+    const acceptanceEvidence = {
+      signerRole: resolveCheckoutSignerRole(planKey),
+      documents,
+      statements,
+      acceptedStatementIds,
+      immediatePerformanceRequested: true as const,
+    };
 
     const participantKey = participantKeyFor(participantName, dateOfBirth);
     const participant: ParticipantRecord = {
@@ -2636,11 +3327,26 @@ function buildCreateMembershipCheckoutHandler(
       participant,
       guardian,
       signedName,
-      immediatePerformanceRequested,
+      commercialTerms,
+      acceptances: acceptanceEvidence,
     });
     const payerEmail = payerUid ?
       (await admin.auth().getUser(payerUid)).email?.trim().toLowerCase() || null :
       null;
+
+    // Existing attempts and admitted fingerprints retry for free. A brand-new
+    // anonymous attempt must be admitted before any Stripe object is retrieved
+    // or created, so abuse cannot turn provider validation into an unbounded
+    // public endpoint.
+    if (!isFirebaseFunctionsEmulatorProcess()) {
+      await admitCheckoutRequest({
+        request,
+        intentRef,
+        checkoutAttemptHash,
+        requestFingerprint,
+        nowMillis: now,
+      });
+    }
 
     let checkoutConfig: {
       client: Stripe;
@@ -2669,6 +3375,18 @@ function buildCreateMembershipCheckoutHandler(
 
     let reservation: CheckoutReservationResult;
     const existingSnap = await intentRef.get();
+    let convergedMembershipIds: ReadonlySet<string> | undefined;
+    if (!existingSnap.exists) {
+      // Stripe, not a potentially delayed Firestore projection, decides
+      // whether an older subscription is terminal. The reservation
+      // transaction below re-runs every duplicate query after convergence.
+      convergedMembershipIds = await convergeCheckoutDuplicateScope(
+        participantKey,
+        payerUid,
+        commercialTerms.grantsAlphaWodAccess,
+        converge
+      );
+    }
     if (!existingSnap.exists && expectedBillingMode !== billingPolicy.billingMode) {
       // A page left open across the presale cutoff must never display £0 terms
       // and then silently create an immediately chargeable standard Checkout.
@@ -2734,14 +3452,14 @@ function buildCreateMembershipCheckoutHandler(
         payerUid,
         payerEmail,
         planKey,
+        commercialTerms,
         stripeMode: assertBillingEnvironment().stripeMode,
         stripePriceId: validatedConfig.priceId,
         participant,
         guardian,
         acceptances: {
           signedName,
-          documents: CHECKOUT_DOCUMENTS,
-          immediatePerformanceRequested,
+          ...acceptanceEvidence,
           acceptedAt: serverTimestamp(),
           userAgent: String(request.rawRequest.get("user-agent") || "").slice(0, 500),
         },
@@ -2764,7 +3482,12 @@ function buildCreateMembershipCheckoutHandler(
         createdAt: serverTimestamp(),
       };
       await reconcileExpiredCheckoutReservations(reservationLockIds, now);
-      reservation = await reserveCheckoutAttempt(intentRef, proposedIntent, now);
+      reservation = await reserveCheckoutAttempt(
+        intentRef,
+        proposedIntent,
+        now,
+        convergedMembershipIds
+      );
     }
 
     let intent = reservation.intent;
@@ -2876,7 +3599,7 @@ function buildCreateMembershipCheckoutHandler(
           `&plan=${encodeURIComponent(plan.key)}`,
         cancel_url: `${origin}/memberships?checkout=cancelled`,
         subscription_data: {
-          description: plan.name,
+          description: intent.commercialTerms.planName,
           // The frozen policy is either the one-off £0 presale period or the
           // normal immediate-start proration. Stripe remains the amount
           // authority in both cases.
@@ -3026,10 +3749,23 @@ function buildCreateMembershipCheckoutHandler(
   };
 }
 
-export const createMembershipCheckoutSession = onCall(
-  {region: REGION, secrets: MEMBERSHIP_SECRETS},
-  buildCreateMembershipCheckoutHandler(requirePurchaseFlowOpen)
-);
+export function buildCreateMembershipCheckoutSession(
+  converge: (userId: string) => Promise<void>
+) {
+  return onCall(
+    {
+      region: REGION,
+      secrets: MEMBERSHIP_CHECKOUT_SECRETS,
+      enforceAppCheck: !isFirebaseFunctionsEmulatorProcess(),
+      consumeAppCheckToken: !isFirebaseFunctionsEmulatorProcess(),
+    },
+    buildCreateMembershipCheckoutHandler(
+      requirePurchaseFlowOpen,
+      !isFirebaseFunctionsEmulatorProcess(),
+      converge
+    )
+  );
+}
 
 export const createCustomerPortalSession = onCall(
   {region: REGION, secrets: MEMBERSHIP_SECRETS},
@@ -3083,9 +3819,48 @@ export const getMyMemberships = onCall({region: REGION}, async (request) => {
   const userId = requireAuthUid(request);
   const snap = await db().collection("memberships").where("payerUid", "==", userId).get();
   const preview = resolveCancellationOutcome(Date.now());
+  const receiptIds = Array.from(new Set(snap.docs.flatMap((doc) => {
+    const receiptId = (doc.data() as MembershipDoc).cancellationRequest?.receiptId;
+    return typeof receiptId === "string" && receiptId ? [receiptId] : [];
+  })));
+  const receiptSnaps = await Promise.all(receiptIds.map((receiptId) =>
+    db().collection(MEMBERSHIP_CANCELLATION_RECEIPT_COLLECTION)
+      .doc(receiptId).get()
+  ));
+  const receipts = new Map(receiptSnaps
+    .filter((receipt) => receipt.exists)
+    .map((receipt) => [receipt.id, receipt.data()]));
 
   const memberships = snap.docs.map((doc) => {
     const membership = doc.data() as MembershipDoc;
+    const cancellationRequest = membership.cancellationRequest;
+    const cancellationKind = cancellationRequest?.kind ??
+      (cancellationRequest ? "contractual" : null);
+    let coolingOffReceipt: MembershipCancellationReceipt | null = null;
+    let coolingOffProjection: ReturnType<
+      typeof buildMembershipCancellationProjection
+    > | null = null;
+    let coolingOffProjectionError: string | null = null;
+    if (cancellationKind === "cooling_off" && cancellationRequest?.receiptId) {
+      const storedReceipt = receipts.get(cancellationRequest.receiptId);
+      try {
+        assertMembershipCancellationReceipt(storedReceipt);
+        coolingOffReceipt = storedReceipt;
+        coolingOffProjection = buildMembershipCancellationProjection(
+          storedReceipt,
+          {
+            status: cancellationRequest.status,
+            endedAtMillis: cancellationRequest.providerEndedAtMillis ?? null,
+          }
+        );
+      } catch {
+        coolingOffProjectionError =
+          "This cancellation receipt needs support because its stored evidence is incomplete.";
+      }
+    } else if (cancellationKind === "cooling_off") {
+      coolingOffProjectionError =
+        "This cancellation receipt needs support because its stored evidence is incomplete.";
+    }
     const presaleWithdrawalAvailable =
       membership.billingMode === "presale_deferred" &&
       membership.firstPaymentReceivedAt === null &&
@@ -3113,9 +3888,24 @@ export const getMyMemberships = onCall({region: REGION}, async (request) => {
       currentPeriodEnd: membership.currentPeriodEnd ?? null,
       cancelAt: membership.cancelAt ?? null,
       cancellationOutcome: membership.cancellationOutcome ?? null,
-      cancellationPending: membership.cancellationRequest?.status === "pending",
-      cancellationManualReview: membership.cancellationRequest?.status === "manual_review",
-      cancellationRequestError: membership.cancellationRequest?.lastError ?? null,
+      cancellationRequestStatus: coolingOffProjection?.status ??
+        (coolingOffProjectionError ? "manual_review" :
+          cancellationRequest?.status ?? null),
+      cancellationRequestKind: cancellationKind,
+      cancellationReceipt: coolingOffReceipt ? {
+        reference: coolingOffReceipt.receiptId,
+        receivedAt: new Date(coolingOffReceipt.receivedAtMillis).toISOString(),
+        kind: coolingOffReceipt.kind,
+        acknowledgementStatus: cancellationAcknowledgementStatusForClient(
+          membership.cancellationAcknowledgementStatus
+        ) ?? "pending",
+        refundReviewRequired: coolingOffReceipt.outcome.refundReviewRequired,
+      } : null,
+      cancellationPending: cancellationRequest?.status === "pending",
+      cancellationManualReview: cancellationRequest?.status === "manual_review" ||
+        coolingOffProjectionError !== null,
+      cancellationRequestError: coolingOffProjectionError ??
+        cancellationRequest?.lastError ?? null,
       cancellationMode: presaleWithdrawalAvailable ? "cancel_before_start" : "standard",
       cancellationPreview: presaleWithdrawalAvailable ? {
         ...resolvePresaleCancellationOutcome(Date.now(), membership),
@@ -3142,6 +3932,7 @@ const CANCELLATION_RECOVERY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 type PreparedCancellation = {
   requestId: string;
+  kind: "presale_withdrawal" | "cooling_off" | "contractual";
   receivedAt: Timestamp;
   outcome: CancellationOutcome;
   repairGeneration: number;
@@ -3180,7 +3971,8 @@ async function settlePreparedCancellation(
     (currentSubscription.ended_at ?? currentSubscription.cancel_at ?? null) :
     (currentSubscription.cancel_at ?? null);
   const overdue = prepared.outcome.cancelAtUnixSeconds <= Math.floor(Date.now() / 1000);
-  if (currentSubscription.status !== "canceled" && overdue) {
+  const cancelImmediately = prepared.kind === "cooling_off" || overdue;
+  if (currentSubscription.status !== "canceled" && cancelImmediately) {
     // Stripe cannot accept a cancel_at in the past. Honour the member's frozen
     // request by stopping billing immediately, then route any charges taken
     // after the promised date to audited refund review.
@@ -3220,7 +4012,7 @@ async function settlePreparedCancellation(
   const verifiedEnd = verifiedSubscription.status === "canceled" ?
     (verifiedSubscription.ended_at ?? verifiedSubscription.cancel_at ?? null) :
     (verifiedSubscription.cancel_at ?? null);
-  const verified = overdue ?
+  const verified = cancelImmediately ?
     verifiedSubscription.status === "canceled" && verifiedEnd !== null :
     verifiedEnd !== null && verifiedEnd <= prepared.outcome.cancelAtUnixSeconds;
   if (!verified) {
@@ -3254,6 +4046,7 @@ async function markPendingCancellationFailed(
     if (!snap.exists || snap.get("cancellationOutcome")) return false;
     const pending = snap.get("cancellationRequest") as {
       id?: unknown;
+      kind?: unknown;
       status?: unknown;
       receivedAt?: unknown;
       recoveryStartedAt?: unknown;
@@ -3326,6 +4119,7 @@ async function acquireCancellationRecoveryLease(
     const payerUid = snap.get("payerUid");
     const pending = snap.get("cancellationRequest") as {
       id?: unknown;
+      kind?: unknown;
       status?: unknown;
       receivedAt?: unknown;
       recoveryStartedAt?: unknown;
@@ -3401,6 +4195,9 @@ async function acquireCancellationRecoveryLease(
       payerUid,
       prepared: {
         requestId: pending.id,
+        kind: pending.kind === "presale_withdrawal" ||
+          pending.kind === "cooling_off" ?
+          pending.kind as PreparedCancellation["kind"] : "contractual",
         receivedAt: pending.receivedAt,
         outcome,
         repairGeneration: typeof pending.repairGeneration === "number" ?
@@ -3505,6 +4302,14 @@ export function buildRequestMembershipCancellation(
       assertBillingEnvironment();
       const userId = requireAuthUid(request);
       const subscriptionId = requireBoundedString(request.data?.subscriptionId, "subscriptionId", 3, 255);
+      const requestedKind = request.data?.kind;
+      if (requestedKind !== undefined && requestedKind !== "cooling_off" &&
+        requestedKind !== "contractual") {
+        throw new HttpsError(
+          "invalid-argument",
+          "kind must be cooling_off or contractual when supplied."
+        );
+      }
       const expectedCancelAtUnixSeconds = request.data?.expectedCancelAtUnixSeconds;
       if (typeof expectedCancelAtUnixSeconds !== "number" ||
       !Number.isSafeInteger(expectedCancelAtUnixSeconds) || expectedCancelAtUnixSeconds <= 0) {
@@ -3529,17 +4334,58 @@ export function buildRequestMembershipCancellation(
           throw new HttpsError("permission-denied", "Only the payer can cancel this membership.");
         }
         const pending = snap.get("cancellationRequest") as {
-        id?: unknown;
-        status?: unknown;
-        receivedAt?: unknown;
-        recoveryStartedAt?: unknown;
-        outcome?: unknown;
-        repairGeneration?: unknown;
-        attemptCount?: unknown;
-      } | undefined;
+          id?: unknown;
+          kind?: unknown;
+          status?: unknown;
+          receivedAt?: unknown;
+          recoveryStartedAt?: unknown;
+          outcome?: unknown;
+          repairGeneration?: unknown;
+          attemptCount?: unknown;
+          receiptId?: unknown;
+          providerEndedAtMillis?: unknown;
+        } | undefined;
         const pendingOutcome = pending?.outcome as ReturnType<
-        typeof resolveCancellationOutcome
-      > | undefined;
+          typeof resolveCancellationOutcome
+        > | undefined;
+
+        if (pending?.kind === "cooling_off" &&
+          typeof pending.id === "string" &&
+          pending.receivedAt instanceof Timestamp &&
+          typeof pendingOutcome?.cancelAtUnixSeconds === "number" &&
+          typeof pending.receiptId === "string") {
+          const receiptSnap = await tx.get(
+            db().collection(MEMBERSHIP_CANCELLATION_RECEIPT_COLLECTION)
+              .doc(pending.receiptId)
+          );
+          const receipt = receiptSnap.data();
+          try {
+            assertMembershipCancellationReceipt(receipt);
+          } catch {
+            throw new HttpsError(
+              "failed-precondition",
+              "This cancellation needs support because its receipt evidence is incomplete."
+            );
+          }
+          if (receipt.subscriptionId !== subscriptionId ||
+            receipt.requestId !== pending.id) {
+            throw new HttpsError(
+              "failed-precondition",
+              "This cancellation needs support because its receipt does not match the membership."
+            );
+          }
+          return {
+            alreadyFinalized: Boolean(membership.cancellationOutcome) ||
+              pending.status === "applied",
+            requestId: pending.id,
+            kind: "cooling_off" as const,
+            receivedAt: pending.receivedAt,
+            outcome: pendingOutcome,
+            repairGeneration: typeof pending.repairGeneration === "number" ?
+              pending.repairGeneration : 0,
+            receipt,
+          };
+        }
         if (membership.cancellationOutcome) {
           if (typeof pending?.id !== "string" ||
           !(pending.receivedAt instanceof Timestamp)) {
@@ -3573,9 +4419,12 @@ export function buildRequestMembershipCancellation(
           return {
             alreadyFinalized: true as const,
             requestId: pending.id,
+            kind: pending.kind === "presale_withdrawal" ?
+              "presale_withdrawal" as const : "contractual" as const,
             receivedAt: pending.receivedAt,
             outcome: membership.cancellationOutcome,
             repairGeneration,
+            receipt: null,
           };
         }
         if (pending?.status === "pending" && typeof pending.id === "string" &&
@@ -3584,10 +4433,13 @@ export function buildRequestMembershipCancellation(
           return {
             alreadyFinalized: false as const,
             requestId: pending.id,
+            kind: pending.kind === "presale_withdrawal" ?
+              "presale_withdrawal" as const : "contractual" as const,
             receivedAt: pending.receivedAt,
             outcome: pendingOutcome,
             repairGeneration: typeof pending.repairGeneration === "number" ?
               pending.repairGeneration : 0,
+            receipt: null,
           };
         }
         if (pending?.status === "manual_review") {
@@ -3624,9 +4476,11 @@ export function buildRequestMembershipCancellation(
           return {
             alreadyFinalized: false as const,
             requestId: proposedRequestId,
+            kind: "presale_withdrawal" as const,
             receivedAt,
             outcome,
             repairGeneration: 0,
+            receipt: null,
           };
         }
         const coolingOffEndsAt = membership.acceptances?.coolingOffEndsAt;
@@ -3634,10 +4488,180 @@ export function buildRequestMembershipCancellation(
           Date.parse(coolingOffEndsAt) : Number.NaN;
         if (Number.isFinite(coolingOffEndMillis) &&
           receivedAtMillis <= coolingOffEndMillis) {
+          if (requestedKind !== "cooling_off") {
+            throw new HttpsError(
+              "failed-precondition",
+              "This membership is still within its cooling-off period. Review and submit the cooling-off cancellation option.",
+              {reason: "cooling_off_confirmation_required", coolingOffEndsAt}
+            );
+          }
+          const contractMadeAt = membership.acceptances?.contractMadeAt;
+          if (!(contractMadeAt instanceof Timestamp) ||
+            !Number.isSafeInteger(membership.serviceStartsAt) ||
+            membership.serviceStartsAt <= 0 ||
+            membership.acceptances.immediatePerformanceRequested !== true) {
+            throw new HttpsError(
+              "failed-precondition",
+              "This cancellation needs support because its contract evidence is incomplete."
+            );
+          }
+          const receivedAt = Timestamp.fromMillis(receivedAtMillis);
+          const receipt = buildCoolingOffCancellationReceipt({
+            requestId: proposedRequestId,
+            subscriptionId,
+            channel: "membership_portal",
+            receivedAtMillis,
+            recordedAtMillis: receivedAtMillis,
+            actorUid: userId,
+            staffActorUid: null,
+            payer: {
+              uid: userId,
+              fullName: membership.guardian?.fullName ??
+                membership.participant.fullName,
+              email: membership.payerEmail,
+            },
+            sender: {
+              uid: userId,
+              fullName: membership.guardian?.fullName ??
+                membership.participant.fullName,
+              email: membership.payerEmail,
+            },
+            sourceEvidence: {
+              externalMessageIdSha256: null,
+              contentSha256: null,
+            },
+            membership: {
+              planKey: membership.planKey,
+              planName: membership.planName,
+              participantFullName: membership.participant.fullName,
+              contractMadeAtMillis: contractMadeAt.toMillis(),
+              coolingOffEndsAtMillis: coolingOffEndMillis,
+              serviceStartsAtMillis: membership.serviceStartsAt * 1000,
+              firstPaymentReceivedAtMillis:
+                typeof membership.firstPaymentReceivedAt === "number" ?
+                  membership.firstPaymentReceivedAt * 1000 : null,
+              immediatePerformanceRequested:
+                membership.acceptances.immediatePerformanceRequested,
+            },
+          });
+          const projection = buildMembershipCancellationProjection(receipt);
+          const outcome = resolveCoolingOffCancellationOutcome(receivedAtMillis);
+          const receiptRef = db()
+            .collection(MEMBERSHIP_CANCELLATION_RECEIPT_COLLECTION)
+            .doc(receipt.receiptId);
+          const outboxId = cancellationAcknowledgementOutboxId(receipt.requestId);
+          const outboxRef = db().collection(CONFIRMATION_OUTBOX_COLLECTION)
+            .doc(outboxId);
+          let acknowledgementPayload: ConfirmationEmailPayload | null = null;
+          let acknowledgementError: string | null = null;
+          if (membership.payerEmail) {
+            try {
+              acknowledgementPayload = buildCancellationAcknowledgementPayload({
+                receipt,
+                company: {
+                  legalName: COMPANY.legalName,
+                  tradingName: COMPANY.tradingName,
+                  supportEmail: COMPANY.supportEmail,
+                  fromEmail: membershipFromEmail.value().trim() ||
+                    COMPANY.confirmationSender,
+                  postalAddress: COMPANY.address,
+                },
+                membership: {
+                  subscriptionId,
+                  planName: membership.planName,
+                  participantFullName: membership.participant.fullName,
+                },
+                recipient: {
+                  fullName: membership.guardian?.fullName ??
+                    membership.participant.fullName,
+                  email: membership.payerEmail,
+                },
+              });
+            } catch {
+              acknowledgementError =
+                "The payer email could not be used for the cancellation acknowledgement.";
+            }
+          } else {
+            acknowledgementError =
+              "The payer email was unavailable for the cancellation acknowledgement.";
+          }
+
+          // Receipt, provider-recovery request, safe member projection and the
+          // durable acknowledgement are accepted atomically before Stripe.
+          tx.create(receiptRef, receipt);
+          tx.set(membershipRef, {
+            cancellationRequest: {
+              id: proposedRequestId,
+              kind: "cooling_off",
+              status: "pending",
+              receivedAt,
+              recoveryStartedAt: receivedAt,
+              outcome,
+              attemptCount: 1,
+              repairGeneration: 0,
+              lastAttemptAt: receivedAt,
+              nextAttemptAt: Timestamp.fromMillis(
+                receivedAtMillis + CANCELLATION_RECOVERY_LEASE_MS
+              ),
+              receiptId: receipt.receiptId,
+              cancellationEffectiveAtMillis:
+                projection.cancellationEffectiveAtMillis,
+              accessEndsAtMillis: projection.accessEndsAtMillis,
+              collectFuturePayments: false,
+              futurePaymentDuePence: 0,
+              providerEndedAtMillis: null,
+              refundReviewRequired: projection.refundReviewRequired,
+              refundAmountPence: null,
+              acknowledgementOutboxId: projection.acknowledgementOutboxId,
+              acknowledgementIdempotencyKey:
+                projection.acknowledgementIdempotencyKey,
+            },
+            cancellationAcknowledgementStatus: acknowledgementPayload ?
+              "pending" : "manual_review",
+            ...(acknowledgementError ? {
+              cancellationAcknowledgementError: acknowledgementError,
+            } : {
+              cancellationAcknowledgementError: FieldValue.delete(),
+            }),
+            updatedAt: serverTimestamp(),
+          }, {merge: true});
+          tx.create(outboxRef, {
+            schemaVersion: MEMBERSHIP_SCHEMA_VERSION,
+            kind: "membership_cancellation_acknowledgement",
+            subscriptionId,
+            requestId: receipt.requestId,
+            receiptId: receipt.receiptId,
+            status: acknowledgementPayload ? "pending" : "manual_review",
+            ...(acknowledgementPayload ? {
+              payload: acknowledgementPayload,
+              idempotencyKey: cancellationAcknowledgementIdempotencyKey(
+                receipt.requestId
+              ),
+              nextAttemptAt: serverTimestamp(),
+            } : {
+              deadLetterReason: acknowledgementError,
+              deadLetteredAt: serverTimestamp(),
+            }),
+            attemptCount: 0,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+          return {
+            alreadyFinalized: false as const,
+            requestId: proposedRequestId,
+            kind: "cooling_off" as const,
+            receivedAt,
+            outcome,
+            repairGeneration: 0,
+            receipt,
+            acknowledgementError,
+          };
+        }
+        if (requestedKind === "cooling_off") {
           throw new HttpsError(
             "failed-precondition",
-            "This request is inside the cooling-off period and needs the staffed cooling-off process. Contact support for written acknowledgement; the ordinary renewal-notice flow was not applied.",
-            {reason: "cooling_off_manual_review", coolingOffEndsAt}
+            "The cooling-off period ended before this request was submitted. Review the current cancellation dates and confirm again.",
+            {reason: "cooling_off_expired", coolingOffEndsAt: coolingOffEndsAt ?? null}
           );
         }
         const receivedAt = Timestamp.fromMillis(receivedAtMillis);
@@ -3652,6 +4676,7 @@ export function buildRequestMembershipCancellation(
         tx.set(membershipRef, {
           cancellationRequest: {
             id: proposedRequestId,
+            kind: "contractual",
             status: "pending",
             receivedAt,
             recoveryStartedAt: receivedAt,
@@ -3668,11 +4693,42 @@ export function buildRequestMembershipCancellation(
         return {
           alreadyFinalized: false as const,
           requestId: proposedRequestId,
+          kind: "contractual" as const,
           receivedAt,
           outcome,
           repairGeneration: 0,
+          receipt: null,
         };
       });
+
+      if (prepared.kind === "cooling_off" && prepared.receipt &&
+        "acknowledgementError" in prepared && prepared.acknowledgementError) {
+        console.error(
+          "CRITICAL_BILLING_CANCELLATION_ACKNOWLEDGEMENT_MANUAL_REVIEW",
+          {
+            subscriptionId,
+            requestId: prepared.requestId,
+            outboxId: cancellationAcknowledgementOutboxId(
+              prepared.requestId
+            ),
+            error: prepared.acknowledgementError,
+          }
+        );
+        await writeAudit({
+          type: "cancellation_acknowledgement_terminal",
+          severity: "critical",
+          subscriptionId,
+          requestId: prepared.requestId,
+          outboxId: cancellationAcknowledgementOutboxId(prepared.requestId),
+          error: prepared.acknowledgementError,
+        }).catch((auditError) =>
+          console.error(
+            "Could not write cancellation-acknowledgement terminal audit",
+            subscriptionId,
+            auditError
+          )
+        );
+      }
 
       try {
         const settled = await settlePreparedCancellation(
@@ -3681,6 +4737,41 @@ export function buildRequestMembershipCancellation(
           prepared,
           converge
         );
+        if (prepared.receipt) {
+          const finalized = await membershipRef.get();
+          const providerStatus = finalized.get("cancellationRequest.status");
+          const providerEndedAtMillis = finalized.get(
+            "cancellationRequest.providerEndedAtMillis"
+          );
+          const projection = buildMembershipCancellationProjection(
+            prepared.receipt,
+            {
+              status: providerStatus === "applied" ||
+                providerStatus === "manual_review" ?
+                providerStatus : "pending",
+              endedAtMillis: typeof providerEndedAtMillis === "number" ?
+                providerEndedAtMillis : null,
+            }
+          );
+          return {
+            ok: true,
+            outcome: settled.outcome,
+            requestStatus: projection.status,
+            receipt: {
+              reference: prepared.receipt.receiptId,
+              receivedAt: new Date(
+                prepared.receipt.receivedAtMillis
+              ).toISOString(),
+              kind: prepared.receipt.kind,
+              acknowledgementStatus: cancellationAcknowledgementStatusForClient(
+                finalized.get("cancellationAcknowledgementStatus")
+              ) ?? "pending",
+              refundReviewRequired: projection.refundReviewRequired,
+            },
+            alreadyCancelled: prepared.alreadyFinalized ||
+              !settled.newlyFinalized,
+          };
+        }
         return {
           ok: true,
           outcome: settled.outcome,
@@ -3694,6 +4785,40 @@ export function buildRequestMembershipCancellation(
         ).catch((recordError) =>
           console.error("Could not schedule cancellation recovery", subscriptionId, recordError)
         );
+        if (prepared.receipt) {
+          const current = await membershipRef.get();
+          const providerStatus = current.get("cancellationRequest.status");
+          const projection = buildMembershipCancellationProjection(
+            prepared.receipt,
+            {
+              status: providerStatus === "manual_review" ?
+                "manual_review" : "pending",
+              endedAtMillis: null,
+            }
+          );
+          console.error("Cooling-off provider cancellation queued for recovery", {
+            subscriptionId,
+            requestId: prepared.requestId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return {
+            ok: true,
+            outcome: null,
+            requestStatus: projection.status,
+            receipt: {
+              reference: prepared.receipt.receiptId,
+              receivedAt: new Date(
+                prepared.receipt.receivedAtMillis
+              ).toISOString(),
+              kind: prepared.receipt.kind,
+              acknowledgementStatus: cancellationAcknowledgementStatusForClient(
+                current.get("cancellationAcknowledgementStatus")
+              ) ?? "pending",
+              refundReviewRequired: projection.refundReviewRequired,
+            },
+            alreadyCancelled: prepared.alreadyFinalized,
+          };
+        }
         throw error;
       }
     }
@@ -3730,7 +4855,7 @@ function toMillis(
  * unclaimed, so two accounts racing on the same purchase cannot both win.
  */
 export function buildClaimMembership(converge: (userId: string) => Promise<void>) {
-  return onCall({region: REGION}, async (request) => {
+  return onCall({region: REGION, secrets: MEMBERSHIP_SECRETS}, async (request) => {
     const userId = requireAuthUid(request);
     const sessionId = optionalBoundedText(request.data?.sessionId, 3, 255);
     const checkoutAttemptId = sessionId && request.data?.checkoutAttemptId !== undefined ?
@@ -3740,6 +4865,12 @@ export function buildClaimMembership(converge: (userId: string) => Promise<void>
 
     const authUser = await admin.auth().getUser(userId);
     const email = authUser.email?.trim().toLowerCase() || null;
+    if (!sessionId && (!authUser.emailVerified || !email)) {
+      throw new HttpsError(
+        "permission-denied",
+        "Verify the email address you paid with before claiming this membership."
+      );
+    }
 
     const userRef = db().collection("users").doc(userId);
     if (!(await userRef.get()).exists) {
@@ -3749,7 +4880,7 @@ export function buildClaimMembership(converge: (userId: string) => Promise<void>
       );
     }
 
-    const candidates = sessionId ?
+    let candidates = sessionId ?
       await db().collection("memberships")
         .where("checkoutSessionId", "==", sessionId).get() :
       await (email ?
@@ -3774,30 +4905,16 @@ export function buildClaimMembership(converge: (userId: string) => Promise<void>
         "This purchase link needs support review before it can be claimed."
       );
     }
-    // A success page can call this more than once (navigation retries, Strict
-    // Mode, or a network response lost after the transaction committed). Once
-    // this exact session already belongs to the caller, treat the repeat as a
-    // successful no-op and re-run entitlement convergence in case the first
-    // attempt committed the attach but failed before convergence completed.
-    const alreadyOwned = candidates.docs.filter((doc) =>
+
+    const initiallyOwned = candidates.docs.filter((doc) =>
       doc.get("payerUid") === userId &&
       (Boolean(sessionId) || (authUser.emailVerified && Boolean(email)))
     );
-    if (sessionId && alreadyOwned.length > 0) {
-      await Promise.all(alreadyOwned.map((doc) =>
-        applyMembershipEntitlement(doc.ref, converge)
-      ));
-      return {
-        ok: true,
-        claimed: alreadyOwned.map((doc) => doc.id),
-        alreadyClaimed: true,
-      };
-    }
 
-    // The session id is bearer evidence only while the membership is still
-    // unclaimed. Once the authenticated caller already owns this exact unique
-    // Session, retries remain idempotent even after the original claim window.
-    if (sessionId && candidates.docs.length === 1) {
+    // Reject an unowned session link before it is allowed to trigger any
+    // provider reads. Exact-owner retries deliberately remain idempotent even
+    // after the original verifier window has elapsed.
+    if (sessionId && candidates.docs.length === 1 && initiallyOwned.length === 0) {
       if (!presentedAttemptHash ||
         candidates.docs[0].get("checkoutAttemptHash") !== presentedAttemptHash) {
         const checkoutSessionIdHash = sha256(sessionId);
@@ -3836,6 +4953,64 @@ export function buildClaimMembership(converge: (userId: string) => Promise<void>
           "This purchase link has expired. Sign in with the email you paid with to claim it."
         );
       }
+    }
+
+    let convergedMembershipIds = new Set<string>();
+    if (candidates.docs.length > 0) {
+      const candidateCanGrant = candidates.docs.some((doc) =>
+        doc.get("grantsAlphaWodAccess") === true &&
+        doc.get("participant.isPayer") === true
+      );
+      const accountMemberships = candidateCanGrant ?
+        await alphaWodMembershipsForAccount(userId) : [];
+      convergedMembershipIds = await convergeEligibilityMemberships(
+        [...candidates.docs, ...accountMemberships],
+        converge,
+        "membership_claim"
+      );
+
+      // Convergence can make a stale local terminal membership blocking (or
+      // vice versa). Refresh claim candidates before the final transaction,
+      // which independently rechecks all account-level duplicates.
+      candidates = sessionId ?
+        await db().collection("memberships")
+          .where("checkoutSessionId", "==", sessionId).get() :
+        await (email ?
+          db().collection("memberships").where("payerEmail", "==", email).get() :
+          Promise.resolve({docs: []} as unknown as QuerySnapshot));
+      if (sessionId && candidates.docs.length > 1) {
+        console.error("CRITICAL_BILLING_DUPLICATE_CHECKOUT_SESSION_AFTER_CONVERGENCE", {
+          checkoutSessionIdHash: sha256(sessionId),
+          membershipIds: candidates.docs.map((doc) => doc.id),
+        });
+        throw new HttpsError(
+          "failed-precondition",
+          "This purchase link needs support review before it can be claimed."
+        );
+      }
+      assertEligibilityDocsWereConverged(
+        candidates.docs,
+        convergedMembershipIds
+      );
+    }
+    // A success page can call this more than once (navigation retries, Strict
+    // Mode, or a network response lost after the transaction committed). Once
+    // this exact session already belongs to the caller, treat the repeat as a
+    // successful no-op and re-run entitlement convergence in case the first
+    // attempt committed the attach but failed before convergence completed.
+    const alreadyOwned = candidates.docs.filter((doc) =>
+      doc.get("payerUid") === userId &&
+      (Boolean(sessionId) || (authUser.emailVerified && Boolean(email)))
+    );
+    if (sessionId && alreadyOwned.length > 0) {
+      await Promise.all(alreadyOwned.map((doc) =>
+        applyMembershipEntitlement(doc.ref, converge)
+      ));
+      return {
+        ok: true,
+        claimed: alreadyOwned.map((doc) => doc.id),
+        alreadyClaimed: true,
+      };
     }
 
     const unclaimed = candidates.docs.filter((doc) => !doc.get("payerUid"));
@@ -3921,6 +5096,16 @@ export function buildClaimMembership(converge: (userId: string) => Promise<void>
           doc.get("grantsAlphaWodAccess") === true &&
           isBlockingMembershipDoc(doc)
         );
+        if (shouldOwnEntitlement) {
+          assertEligibilityDocsWereConverged([
+            ...(payerMemberships?.docs ?? []).filter((doc) =>
+              doc.get("grantsAlphaWodAccess") === true
+            ),
+            ...(targetMemberships?.docs ?? []).filter((doc) =>
+              doc.get("grantsAlphaWodAccess") === true
+            ),
+          ], convergedMembershipIds);
+        }
         if (duplicate) {
           throw new HttpsError("already-exists", POLICY_TEXT.duplicateBlocked);
         }
@@ -3930,6 +5115,15 @@ export function buildClaimMembership(converge: (userId: string) => Promise<void>
         }
         const owner = shouldOwnEntitlement ?
           await readEntitlementOwner(tx, userId, membershipRef.id) : null;
+
+        if (owner?.ownerState === "active" && owner.ownerSubscriptionId &&
+          !convergedMembershipIds.has(owner.ownerSubscriptionId)) {
+          throw new HttpsError(
+            "unavailable",
+            AUTHORITATIVE_ELIGIBILITY_UNAVAILABLE,
+            {reason: "membership_state_changed"}
+          );
+        }
 
         if (owner) acquireEntitlementOwner(tx, owner, userId, membershipRef.id);
         tx.set(membershipRef, {
@@ -4072,7 +5266,8 @@ async function fulfilCheckoutSession(
     throw new Error(`Completed Checkout Session ${session.id} has no subscription.`);
   }
 
-  const plan = getPlan(intent.planKey);
+  const commercialTerms = intent.commercialTerms ??
+    createCommercialPlanSnapshot(intent.planKey);
   const subscription = await stripe().subscriptions.retrieve(subscriptionId, {
     expand: ["discounts"],
   });
@@ -4137,8 +5332,9 @@ async function fulfilCheckoutSession(
     claimedAt: intent.payerUid ? serverTimestamp() : null,
     planKey: intent.planKey,
     stripePriceId: intent.stripePriceId,
-    planName: plan.name,
-    grantsAlphaWodAccess: plan.grantsAlphaWodAccess,
+    commercialTerms,
+    planName: commercialTerms.planName,
+    grantsAlphaWodAccess: commercialTerms.grantsAlphaWodAccess,
     participant: intent.participant,
     guardian: intent.guardian,
     acceptances: {
@@ -4152,7 +5348,7 @@ async function fulfilCheckoutSession(
     // unclaimed purchase has no account yet, so the target stays null until
     // `claimMembership` attaches one. A purchase made for another person is
     // linked by an administrator instead.
-    entitlementTargetUid: plan.grantsAlphaWodAccess && intent.participant.isPayer ?
+    entitlementTargetUid: commercialTerms.grantsAlphaWodAccess && intent.participant.isPayer ?
       intent.payerUid :
       null,
     preMembershipEntitlement: null,
@@ -4856,8 +6052,30 @@ export function buildListMemberships(requireAdmin: (request: any) => Promise<voi
     await requireAdmin(request);
 
     const snap = await db().collection("memberships").orderBy("createdAt", "desc").limit(500).get();
+    const receiptIds = Array.from(new Set(snap.docs.flatMap((doc) => {
+      const receiptId = (doc.data() as MembershipDoc).cancellationRequest?.receiptId;
+      return typeof receiptId === "string" && receiptId ? [receiptId] : [];
+    })));
+    const receiptSnaps = await Promise.all(receiptIds.map((receiptId) =>
+      db().collection(MEMBERSHIP_CANCELLATION_RECEIPT_COLLECTION)
+        .doc(receiptId).get()
+    ));
+    const receipts = new Map(receiptSnaps
+      .filter((receipt) => receipt.exists)
+      .map((receipt) => [receipt.id, receipt.data()]));
     const memberships = snap.docs.map((doc) => {
       const membership = doc.data() as MembershipDoc;
+      const requestReceiptId = membership.cancellationRequest?.receiptId;
+      let receipt: MembershipCancellationReceipt | null = null;
+      if (requestReceiptId) {
+        try {
+          const storedReceipt = receipts.get(requestReceiptId);
+          assertMembershipCancellationReceipt(storedReceipt);
+          receipt = storedReceipt;
+        } catch {
+          receipt = null;
+        }
+      }
       return {
         subscriptionId: membership.subscriptionId,
         payerUid: membership.payerUid,
@@ -4894,7 +6112,23 @@ export function buildListMemberships(requireAdmin: (request: any) => Promise<voi
         confirmationEmailProviderId: typeof membership.confirmationEmailProviderId === "string" ?
           membership.confirmationEmailProviderId : null,
         cancellationRequestStatus: membership.cancellationRequest?.status ?? null,
+        cancellationRequestKind: membership.cancellationRequest?.kind ??
+          (membership.cancellationRequest ? "contractual" : null),
+        cancellationReceipt: receipt ? {
+          reference: receipt.receiptId,
+          receivedAt: new Date(receipt.receivedAtMillis).toISOString(),
+          kind: receipt.kind,
+          channel: receipt.channel,
+        } : null,
+        refundReviewRequired: receipt?.outcome.refundReviewRequired ??
+          membership.cancellationRequest?.refundReviewRequired ?? false,
         cancellationRequestError: membership.cancellationRequest?.lastError ?? null,
+        cancellationAcknowledgementStatus:
+          membership.cancellationAcknowledgementStatus ?? null,
+        cancellationAcknowledgementError:
+          membership.cancellationAcknowledgementError ?? null,
+        cancellationAcknowledgementProviderId:
+          membership.cancellationAcknowledgementProviderId ?? null,
         entitlementProjectionStatus: membership.entitlementProjectionStatus ?? null,
         entitlementProjectionError: membership.entitlementProjectionError ?? null,
       };
@@ -4912,7 +6146,7 @@ export function buildLinkMembershipParticipant(
   requireAdmin: (request: any) => Promise<void>,
   converge: (userId: string) => Promise<void>
 ) {
-  return onCall({region: REGION}, async (request) => {
+  return onCall({region: REGION, secrets: MEMBERSHIP_SECRETS}, async (request) => {
     const callerUid = requireAuthUid(request);
     await requireAdmin(request);
 
@@ -4921,29 +6155,46 @@ export function buildLinkMembershipParticipant(
 
     const membershipRef = db().collection("memberships").doc(subscriptionId);
     const targetRef = db().collection("users").doc(targetUid);
-    const linked = await db().runTransaction(async (tx) => {
+    const [initialMembership, initialTarget] = await Promise.all([
+      membershipRef.get(),
+      targetRef.get(),
+    ]);
+    if (!initialMembership.exists) {
+      throw new HttpsError("not-found", "Membership not found.");
+    }
+    if (!initialTarget.exists) {
+      throw new HttpsError("not-found", "Participant account not found.");
+    }
+    const requestedPriorProjectionStatus =
+      initialMembership.get("entitlementProjectionStatus") ?? null;
+    const requestedPriorProjectionError =
+      initialMembership.get("entitlementProjectionError") ?? null;
+    const accountMemberships = initialMembership.get("grantsAlphaWodAccess") === true ?
+      await alphaWodMembershipsForAccount(targetUid) : [];
+    const convergedMembershipIds = await convergeEligibilityMemberships(
+      [initialMembership, ...accountMemberships],
+      converge,
+      "participant_link_or_repair"
+    );
+
+    const decision = await db().runTransaction(async (tx) => {
       const membershipSnap = await tx.get(membershipRef);
       const userSnap = await tx.get(targetRef);
       if (!membershipSnap.exists) throw new HttpsError("not-found", "Membership not found.");
       if (!userSnap.exists) throw new HttpsError("not-found", "Participant account not found.");
 
       const membership = membershipSnap.data() as MembershipDoc;
+      if (!convergedMembershipIds.has(membershipRef.id)) {
+        throw new HttpsError(
+          "unavailable",
+          AUTHORITATIVE_ELIGIBILITY_UNAVAILABLE,
+          {reason: "membership_state_changed"}
+        );
+      }
       if (!membership.grantsAlphaWodAccess) {
         throw new HttpsError(
           "failed-precondition",
           "This plan does not include AlphaWOD access."
-        );
-      }
-      if (!isMembershipStateBlockingDuplicate(membership.state)) {
-        throw new HttpsError(
-          "failed-precondition",
-          "This membership is no longer eligible to grant AlphaWOD access."
-        );
-      }
-      if (membership.participant?.isPayer !== false) {
-        throw new HttpsError(
-          "failed-precondition",
-          "A self-payer membership must be claimed by its payer account."
         );
       }
       const target = userSnap.data() as Record<string, unknown>;
@@ -4953,8 +6204,13 @@ export function buildLinkMembershipParticipant(
           "Only a member account can be linked to a membership."
         );
       }
-      if (membership.entitlementTargetUid === targetUid) {
-        return false;
+      const alreadyLinked = membership.entitlementTargetUid === targetUid;
+      const selfPayer = membership.participant?.isPayer === true;
+      if (selfPayer && (!alreadyLinked || membership.payerUid !== targetUid)) {
+        throw new HttpsError(
+          "failed-precondition",
+          "A self-payer membership must be claimed by its payer and can only be repaired on that same account."
+        );
       }
       if (membership.entitlementTargetUid &&
         membership.entitlementTargetUid !== targetUid) {
@@ -4966,33 +6222,69 @@ export function buildLinkMembershipParticipant(
         );
       }
 
-      const targetMemberships = await tx.get(
-        db().collection("memberships").where("entitlementTargetUid", "==", targetUid)
-      );
-      const payerMemberships = await tx.get(
-        db().collection("memberships").where("payerUid", "==", targetUid)
-      );
-      const duplicate = [...targetMemberships.docs, ...payerMemberships.docs].some((doc) =>
-        doc.id !== membershipRef.id &&
-        doc.get("grantsAlphaWodAccess") === true &&
-        isBlockingMembershipDoc(doc)
-      );
-      if (duplicate) {
-        throw new HttpsError("already-exists", POLICY_TEXT.duplicateBlocked);
+      const membershipBlocks = isMembershipStateBlockingDuplicate(membership.state);
+      if (!alreadyLinked && !membershipBlocks) {
+        throw new HttpsError(
+          "failed-precondition",
+          "This membership is no longer eligible to grant AlphaWOD access."
+        );
       }
-      if (await hasBlockingPayerCheckoutReservation(tx, targetUid)) {
-        throw new HttpsError("already-exists", POLICY_TEXT.duplicateBlocked);
+      if (!alreadyLinked && membership.participant?.isPayer !== false) {
+        throw new HttpsError(
+          "failed-precondition",
+          "A self-payer membership must be claimed by its payer account."
+        );
       }
-      const owner = await readEntitlementOwner(tx, targetUid, subscriptionId);
-      acquireEntitlementOwner(tx, owner, targetUid, subscriptionId);
 
-      tx.set(membershipRef, {
-        entitlementTargetUid: targetUid,
-        entitlementTargetLinkedBy: callerUid,
-        entitlementTargetLinkedAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      }, {merge: true});
-      return true;
+      if (membershipBlocks) {
+        const targetMemberships = await tx.get(
+          db().collection("memberships").where("entitlementTargetUid", "==", targetUid)
+        );
+        const payerMemberships = await tx.get(
+          db().collection("memberships").where("payerUid", "==", targetUid)
+        );
+        const duplicate = [...targetMemberships.docs, ...payerMemberships.docs].some((doc) =>
+          doc.id !== membershipRef.id &&
+          doc.get("grantsAlphaWodAccess") === true &&
+          isBlockingMembershipDoc(doc)
+        );
+        assertEligibilityDocsWereConverged([
+          ...targetMemberships.docs.filter((doc) =>
+            doc.get("grantsAlphaWodAccess") === true
+          ),
+          ...payerMemberships.docs.filter((doc) =>
+            doc.get("grantsAlphaWodAccess") === true
+          ),
+        ], convergedMembershipIds);
+        if (duplicate) {
+          throw new HttpsError("already-exists", POLICY_TEXT.duplicateBlocked);
+        }
+        if (await hasBlockingPayerCheckoutReservation(tx, targetUid)) {
+          throw new HttpsError("already-exists", POLICY_TEXT.duplicateBlocked);
+        }
+        const owner = await readEntitlementOwner(tx, targetUid, subscriptionId);
+        if (owner.ownerState === "active" && owner.ownerSubscriptionId &&
+          !convergedMembershipIds.has(owner.ownerSubscriptionId)) {
+          throw new HttpsError(
+            "unavailable",
+            AUTHORITATIVE_ELIGIBILITY_UNAVAILABLE,
+            {reason: "membership_state_changed"}
+          );
+        }
+        acquireEntitlementOwner(tx, owner, targetUid, subscriptionId);
+      }
+
+      if (!alreadyLinked) {
+        tx.set(membershipRef, {
+          entitlementTargetUid: targetUid,
+          entitlementTargetLinkedBy: callerUid,
+          entitlementTargetLinkedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        }, {merge: true});
+      }
+      return {
+        kind: alreadyLinked ? "repair" as const : "link" as const,
+      };
     });
 
     // Linking is the action that makes this paid membership authoritative for
@@ -5000,12 +6292,24 @@ export function buildLinkMembershipParticipant(
     // leave a fully paid member without access indefinitely.
     await applyMembershipEntitlement(membershipRef, converge);
 
-    if (linked) {
+    if (decision.kind === "link") {
       await writeAudit({
         type: "membership_participant_linked",
         subscriptionId,
         targetUid,
         linkedBy: callerUid,
+      });
+    } else {
+      const repaired = await membershipRef.get();
+      await writeAudit({
+        type: "membership_entitlement_projection_repair",
+        subscriptionId,
+        targetUid,
+        repairedBy: callerUid,
+        priorProjectionStatus: requestedPriorProjectionStatus,
+        priorProjectionError: requestedPriorProjectionError,
+        projectionStatus: repaired.get("entitlementProjectionStatus") ?? null,
+        projectionError: repaired.get("entitlementProjectionError") ?? null,
       });
     }
 
@@ -5013,7 +6317,8 @@ export function buildLinkMembershipParticipant(
       ok: true,
       subscriptionId,
       participantUid: targetUid,
-      alreadyLinked: !linked,
+      alreadyLinked: decision.kind === "repair",
+      repaired: decision.kind === "repair",
     };
   });
 }
@@ -5023,9 +6328,12 @@ export const __testing = {
   assertBillingEnvironment,
   assertStripeObjectMode,
   requirePurchaseFlowOpen,
+  assertCheckoutDocumentModel,
+  requireExactCheckoutAcceptanceIds,
   participantKeyFor,
   checkoutLockSpecs,
   checkoutRequestFingerprint,
+  assertCheckoutAppCheck,
   buildCreateMembershipCheckoutHandler,
   reserveCheckoutAttempt,
   transitionCheckoutReservation,
@@ -5060,11 +6368,9 @@ export const __testing = {
  *
  * The Terms require an emailed durable copy carrying the agreed plan, amounts,
  * next payment date, cancellation information, signed acceptance evidence, and
- * the actual immutable documents accepted by the buyer. This implementation
- * currently embeds the transaction details and document version identifiers,
- * but not the complete immutable document text or attachments. The legal
- * publication gate must remain closed until those approved durable copies are
- * included and tested.
+ * the actual immutable documents accepted by the buyer. The outbox freezes the
+ * complete commercial snapshot, exact statements, inline document text and
+ * one plain-text attachment per document before any delivery attempt begins.
  * -------------------------------------------------------------- */
 
 function escapeHtml(value: string): string {
@@ -5083,19 +6389,35 @@ type ConfirmationDetails = {
 
 function buildConfirmationHtml(details: ConfirmationDetails): string {
   const {membership, initialChargePence, claimUrl} = details;
-  const plan = getPlan(membership.planKey);
-  const isYouthPlan = plan.audience === "youth";
+  const commercialTerms = membership.commercialTerms ??
+    createCommercialPlanSnapshot(membership.planKey);
+  const isYouthPlan = commercialTerms.audience === "youth";
   const isPresale = membership.billingMode === "presale_deferred";
   const firstFullCharge = formatUnixBillingDate(membership.billingCycleAnchor);
-  const documents = Object.entries(membership.acceptances.documents)
-    .map(([name, version]) =>
-      `<li>${escapeHtml(name)}: <code>${escapeHtml(String(version))}</code></li>`)
+  const documents = membership.acceptances.documents
+    .map((document) =>
+      `<li><strong>${escapeHtml(document.title)}</strong> — ` +
+      `<code>${escapeHtml(document.version)}</code><br>` +
+      `SHA-256: <code>${escapeHtml(document.sha256)}</code></li>`)
+    .join("");
+  const statements = membership.acceptances.statements
+    .map(({statement}) => `<li>${escapeHtml(statement)}</li>`)
+    .join("");
+  const documentContents = membership.acceptances.documents
+    .map((document) =>
+      "<section style=\"margin:28px 0;page-break-before:always;\">" +
+      `<h3 style="font-size:15px;margin:0 0 4px;">${escapeHtml(document.title)}</h3>` +
+      "<p style=\"font-size:12px;color:#666;margin:0 0 12px;\">" +
+      `${escapeHtml(document.version)} · SHA-256 ${escapeHtml(document.sha256)}</p>` +
+      "<div style=\"white-space:pre-wrap;font:13px/1.55 Arial,Helvetica,sans-serif;" +
+      `border:1px solid #ddd;padding:14px;">${escapeHtml(document.content)}</div>` +
+      "</section>")
     .join("");
 
   const rows: Array<[string, string]> = [
-    ["Plan", plan.name],
+    ["Plan", commercialTerms.planName],
     [isYouthPlan ? "Child" : "Participant", membership.participant.fullName],
-    ["Monthly price", `${formatPence(plan.amountPence)} per month`],
+    ["Monthly price", `${formatPence(commercialTerms.amountPence)} per month`],
     [
       "Paid today",
       isPresale && initialChargePence === 0 ?
@@ -5110,9 +6432,9 @@ function buildConfirmationHtml(details: ConfirmationDetails): string {
   if (membership.discount) {
     rows.splice(3, 0, [
       "Existing-member offer",
-      `${formatPence(plan.amountPence - membership.discount.amountOffPence)} for the ` +
+      `${formatPence(commercialTerms.amountPence - membership.discount.amountOffPence)} for the ` +
       `first ${membership.discount.durationInMonths} monthly payments; ` +
-      `${formatPence(plan.amountPence)} from ` +
+      `${formatPence(commercialTerms.amountPence)} from ` +
       `${formatUnixBillingDate(membership.paymentSchedule.fullPriceFrom as number)}`,
     ]);
   }
@@ -5141,7 +6463,7 @@ function buildConfirmationHtml(details: ConfirmationDetails): string {
 
   return `<!doctype html>
 <html><body style="font-family:Arial,Helvetica,sans-serif;color:#111;line-height:1.6;">
-  <h1 style="font-size:20px;margin:0 0 6px;">Your ${escapeHtml(plan.name)} is confirmed</h1>
+  <h1 style="font-size:20px;margin:0 0 6px;">Your ${escapeHtml(commercialTerms.planName)} is confirmed</h1>
   <p style="margin:0 0 20px;color:#555;">Keep this email. It is your durable copy of this
   agreement.</p>
 
@@ -5160,8 +6482,9 @@ function buildConfirmationHtml(details: ConfirmationDetails): string {
     POLICY_TEXT.cancellationRule)}</p>
   <p style="margin:0 0 8px;">Request cancellation from your membership page when signed in,
   or email ${escapeHtml(COMPANY.supportEmail)} from this address if the page is unavailable.
-  Staff will confirm the effective dates in writing; do not assume an email request is complete
-  until you receive that confirmation.</p>
+  Your request is treated as received when it reaches that request flow or inbox; a later
+  acknowledgement is evidence of receipt, not a condition that makes the request valid. Keep
+  the acknowledgement and contact us promptly if it does not arrive.</p>
   <p style="margin:0 0 8px;">${escapeHtml(POLICY_TEXT.refund)}</p>
   <p style="margin:0 0 8px;">${escapeHtml(POLICY_TEXT.noPause)}</p>
 
@@ -5179,14 +6502,25 @@ function buildConfirmationHtml(details: ConfirmationDetails): string {
   <h2 style="font-size:15px;margin:24px 0 8px;">Documents you accepted</h2>
   <ul style="margin:0 0 8px;padding-left:20px;">${documents}</ul>
 
+  <h2 style="font-size:15px;margin:24px 0 8px;">Statements you accepted separately</h2>
+  <ul style="margin:0 0 8px;padding-left:20px;">${statements}</ul>
+
   <h2 style="font-size:15px;margin:24px 0 8px;">Your signature</h2>
   <p style="margin:0 0 8px;">Signed by typing the name
-  <strong>${escapeHtml(membership.acceptances.signedName)}</strong> at checkout.</p>
+  <strong>${escapeHtml(membership.acceptances.signedName)}</strong> at checkout as
+  ${escapeHtml(membership.acceptances.signerRole)}.</p>
+
+  <h2 style="font-size:15px;margin:28px 0 8px;">Complete immutable document copies</h2>
+  <p style="margin:0 0 8px;">The complete text accepted at checkout appears below and is
+  also attached as separate plain-text files.</p>
+  ${documentContents}
 
   <hr style="border:none;border-top:1px solid #ddd;margin:28px 0 12px;">
   <p style="margin:0;font-size:12px;color:#666;">
     ${escapeHtml(COMPANY.legalName)} · Company number ${escapeHtml(COMPANY.companyNumber)}<br>
     ${escapeHtml(COMPANY.address)}<br>
+    Registered office: ${escapeHtml(COMPANY.registeredOffice)}<br>
+    Registered in: ${escapeHtml(COMPANY.registrationJurisdiction)}<br>
     Questions: ${escapeHtml(COMPANY.supportEmail)}<br>
     We are not VAT registered; the price shown is the total price.
   </p>
@@ -5202,8 +6536,14 @@ const CONFIRMATION_EMAIL_RETRY_WINDOW_MS = 23 * 60 * 60 * 1000;
 type ConfirmationEmailPayload = {
   from: string;
   to: string[];
+  reply_to?: string;
   subject: string;
   html: string;
+  attachments?: Array<{
+    filename: string;
+    /** Base64-encoded UTF-8 canonical document content for Resend. */
+    content: string;
+  }>;
 };
 
 type ConfirmationEmailSender = (
@@ -5211,9 +6551,16 @@ type ConfirmationEmailSender = (
   idempotencyKey: string
 ) => Promise<{providerMessageId: string | null}>;
 
+type MembershipEmailKind =
+  | "membership_confirmation"
+  | "membership_cancellation_acknowledgement";
+
 type ConfirmationEmailLeaseResult =
   | {
     state: "acquired";
+    outboxId: string;
+    subscriptionId: string;
+    kind: MembershipEmailKind;
     leaseToken: string;
     payload: ConfirmationEmailPayload;
     idempotencyKey: string;
@@ -5221,12 +6568,47 @@ type ConfirmationEmailLeaseResult =
   }
   | {state: "sent" | "in_progress" | "deferred" | "terminal" | "missing"};
 
+function isMembershipEmailKind(value: unknown): value is MembershipEmailKind {
+  return value === "membership_confirmation" ||
+    value === "membership_cancellation_acknowledgement";
+}
+
+function membershipEmailProjectionFields(
+  kind: MembershipEmailKind,
+  status: "pending" | "sent" | "manual_review" | "dead_letter",
+  error: string | null = null,
+  providerMessageId: string | null = null
+): Record<string, unknown> {
+  if (kind === "membership_cancellation_acknowledgement") {
+    return {
+      cancellationAcknowledgementStatus: status,
+      cancellationAcknowledgementError: error ?? FieldValue.delete(),
+      ...(status === "sent" ? {
+        cancellationAcknowledgementSentAt: serverTimestamp(),
+        cancellationAcknowledgementProviderId: providerMessageId,
+      } : {}),
+      updatedAt: serverTimestamp(),
+    };
+  }
+  return {
+    confirmationEmailStatus: status,
+    confirmationEmailError: error ?? FieldValue.delete(),
+    ...(status === "sent" ? {
+      confirmationEmailSentAt: serverTimestamp(),
+      confirmationEmailProviderId: providerMessageId,
+    } : {}),
+    updatedAt: serverTimestamp(),
+  };
+}
+
 function buildConfirmationPayload(
   membership: MembershipDoc,
   initialChargePence: number | null
 ): ConfirmationEmailPayload | null {
   if (!membership.payerEmail || initialChargePence === null) return null;
   const fromEmail = membershipFromEmail.value().trim() || COMPANY.confirmationSender;
+  const commercialTerms = membership.commercialTerms ??
+    createCommercialPlanSnapshot(membership.planKey);
   // The Stripe Session id is not an ownership credential and must never be
   // copied into email. The recipient can claim through verified-email matching;
   // same-browser post-checkout claiming additionally uses a one-time verifier.
@@ -5235,12 +6617,16 @@ function buildConfirmationPayload(
   return {
     from: `${COMPANY.tradingName} <${fromEmail}>`,
     to: [membership.payerEmail],
-    subject: `Your ${getPlan(membership.planKey).name} is confirmed`,
+    subject: `Your ${commercialTerms.planName} is confirmed`,
     html: buildConfirmationHtml({
       membership,
       initialChargePence,
       claimUrl,
     }),
+    attachments: membership.acceptances.documents.map((document) => ({
+      filename: `${document.version}.txt`,
+      content: Buffer.from(document.content, "utf8").toString("base64"),
+    })),
   };
 }
 
@@ -5263,10 +6649,12 @@ async function ensureMembershipAndConfirmationOutbox(
       "==",
       intent.participant.participantKey
     );
-  const payerQuery = intent.payerUid && getPlan(intent.planKey).grantsAlphaWodAccess ?
+  const frozenGrantsAlphaWodAccess = intent.commercialTerms?.grantsAlphaWodAccess ??
+    getPlan(intent.planKey).grantsAlphaWodAccess;
+  const payerQuery = intent.payerUid && frozenGrantsAlphaWodAccess ?
     db().collection("memberships").where("payerUid", "==", intent.payerUid) :
     null;
-  const targetQuery = intent.payerUid && getPlan(intent.planKey).grantsAlphaWodAccess ?
+  const targetQuery = intent.payerUid && frozenGrantsAlphaWodAccess ?
     db().collection("memberships").where("entitlementTargetUid", "==", intent.payerUid) :
     null;
   const transactionOutcome = await db().runTransaction(async (tx) => {
@@ -5383,6 +6771,10 @@ async function ensureMembershipAndConfirmationOutbox(
         schemaVersion: MEMBERSHIP_SCHEMA_VERSION,
         kind: "membership_confirmation",
         subscriptionId: membershipRef.id,
+        commercialTerms: membership.commercialTerms,
+        acceptedDocuments: membership.acceptances.documents,
+        acceptedStatements: membership.acceptances.statements,
+        signerRole: membership.acceptances.signerRole,
         status: "pending",
         payload,
         idempotencyKey: `membership-confirmation/${membershipRef.id}/v1`,
@@ -5399,6 +6791,10 @@ async function ensureMembershipAndConfirmationOutbox(
         schemaVersion: MEMBERSHIP_SCHEMA_VERSION,
         kind: "membership_confirmation",
         subscriptionId: membershipRef.id,
+        commercialTerms: membership.commercialTerms,
+        acceptedDocuments: membership.acceptances.documents,
+        acceptedStatements: membership.acceptances.statements,
+        signerRole: membership.acceptances.signerRole,
         status: "manual_review",
         initialChargePence,
         deadLetterReason: manualReviewReason,
@@ -5472,24 +6868,49 @@ function isSystemicResendFailure(
 }
 
 async function acquireConfirmationEmailLease(
-  subscriptionId: string,
+  outboxId: string,
   nowMillis = Date.now(),
   leaseToken = randomUUID()
 ): Promise<ConfirmationEmailLeaseResult> {
   const outboxRef = db().collection(CONFIRMATION_OUTBOX_COLLECTION)
-    .doc(subscriptionId);
-  const membershipRef = db().collection("memberships").doc(subscriptionId);
+    .doc(outboxId);
   const outcome = await db().runTransaction(async (tx) => {
     const snap = await tx.get(outboxRef);
     if (!snap.exists) {
       return {
         result: {state: "missing"} as const,
         terminalReason: null,
+        kind: null,
+        subscriptionId: null,
       };
     }
+    const kind = snap.get("kind");
+    const subscriptionId = snap.get("subscriptionId");
+    if (!isMembershipEmailKind(kind) || typeof subscriptionId !== "string" ||
+      !subscriptionId) {
+      const terminalReason =
+        "Membership email outbox routing evidence is missing or invalid.";
+      tx.set(outboxRef, {
+        status: "dead_letter",
+        deadLetteredAt: serverTimestamp(),
+        deadLetterReason: terminalReason,
+        leaseToken: FieldValue.delete(),
+        leaseExpiresAt: FieldValue.delete(),
+        nextAttemptAt: FieldValue.delete(),
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+      return {
+        result: {state: "terminal"} as const,
+        terminalReason,
+        kind: null,
+        subscriptionId: typeof subscriptionId === "string" ?
+          subscriptionId : null,
+      };
+    }
+    const membershipRef = db().collection("memberships").doc(subscriptionId);
     const membership = await tx.get(membershipRef);
     if (!membership.exists) {
-      const terminalReason = "Confirmation outbox has no membership document.";
+      const terminalReason = "Membership email outbox has no membership document.";
       tx.set(outboxRef, {
         status: "manual_review",
         deadLetteredAt: serverTimestamp(),
@@ -5499,28 +6920,50 @@ async function acquireConfirmationEmailLease(
         nextAttemptAt: FieldValue.delete(),
         updatedAt: serverTimestamp(),
       }, {merge: true});
-      return {result: {state: "terminal"} as const, terminalReason};
+      return {
+        result: {state: "terminal"} as const,
+        terminalReason,
+        kind,
+        subscriptionId,
+      };
     }
     const status = snap.get("status");
     if (status === "sent") {
       return {
         result: {state: "sent"} as const,
         terminalReason: null,
+        kind,
+        subscriptionId,
       };
     }
     if (status === "dead_letter" || status === "manual_review") {
-      return {result: {state: "terminal"} as const, terminalReason: null};
+      return {
+        result: {state: "terminal"} as const,
+        terminalReason: null,
+        kind,
+        subscriptionId,
+      };
     }
 
     const leaseExpiresAt = timestampMillis(snap.get("leaseExpiresAt"));
     if (status === "sending" && leaseExpiresAt !== null &&
       leaseExpiresAt > nowMillis) {
-      return {result: {state: "in_progress"} as const, terminalReason: null};
+      return {
+        result: {state: "in_progress"} as const,
+        terminalReason: null,
+        kind,
+        subscriptionId,
+      };
     }
     const nextAttemptAt = timestampMillis(snap.get("nextAttemptAt"));
     if (status !== "sending" && nextAttemptAt !== null &&
       nextAttemptAt > nowMillis) {
-      return {result: {state: "deferred"} as const, terminalReason: null};
+      return {
+        result: {state: "deferred"} as const,
+        terminalReason: null,
+        kind,
+        subscriptionId,
+      };
     }
 
     const firstAttemptAt = timestampMillis(snap.get("firstAttemptAt"));
@@ -5537,18 +6980,23 @@ async function acquireConfirmationEmailLease(
         nextAttemptAt: FieldValue.delete(),
         updatedAt: serverTimestamp(),
       }, {merge: true});
-      tx.update(membershipRef, {
-        confirmationEmailStatus: "manual_review",
-        confirmationEmailError: "Delivery requires manual review.",
-        updatedAt: serverTimestamp(),
-      });
-      return {result: {state: "terminal"} as const, terminalReason};
+      tx.update(membershipRef, membershipEmailProjectionFields(
+        kind,
+        "manual_review",
+        "Delivery requires manual review."
+      ));
+      return {
+        result: {state: "terminal"} as const,
+        terminalReason,
+        kind,
+        subscriptionId,
+      };
     }
 
     const payload = snap.get("payload") as ConfirmationEmailPayload | undefined;
     const idempotencyKey = snap.get("idempotencyKey");
     if (!payload || typeof idempotencyKey !== "string") {
-      const terminalReason = "Confirmation payload is missing or invalid.";
+      const terminalReason = "Membership email payload is missing or invalid.";
       tx.set(outboxRef, {
         status: "dead_letter",
         deadLetteredAt: serverTimestamp(),
@@ -5558,12 +7006,17 @@ async function acquireConfirmationEmailLease(
         nextAttemptAt: FieldValue.delete(),
         updatedAt: serverTimestamp(),
       }, {merge: true});
-      tx.update(membershipRef, {
-        confirmationEmailStatus: "dead_letter",
-        confirmationEmailError: terminalReason,
-        updatedAt: serverTimestamp(),
-      });
-      return {result: {state: "terminal"} as const, terminalReason};
+      tx.update(membershipRef, membershipEmailProjectionFields(
+        kind,
+        "dead_letter",
+        terminalReason
+      ));
+      return {
+        result: {state: "terminal"} as const,
+        terminalReason,
+        kind,
+        subscriptionId,
+      };
     }
 
     const attemptCount = typeof snap.get("attemptCount") === "number" ?
@@ -5589,26 +7042,39 @@ async function acquireConfirmationEmailLease(
     return {
       result: {
         state: "acquired",
+        outboxId,
+        subscriptionId,
+        kind,
         leaseToken,
         payload,
         idempotencyKey,
         attemptCount: attemptCount + 1,
       } as const,
       terminalReason: null,
+      kind,
+      subscriptionId,
     };
   });
   if (outcome.terminalReason) {
-    console.error("CRITICAL_BILLING_CONFIRMATION_MANUAL_REVIEW", {
-      subscriptionId,
+    const cancellationAcknowledgement = outcome.kind ===
+      "membership_cancellation_acknowledgement";
+    console.error(cancellationAcknowledgement ?
+      "CRITICAL_BILLING_CANCELLATION_ACKNOWLEDGEMENT_MANUAL_REVIEW" :
+      "CRITICAL_BILLING_CONFIRMATION_MANUAL_REVIEW", {
+      outboxId,
+      subscriptionId: outcome.subscriptionId,
       reason: outcome.terminalReason,
     });
     await writeAudit({
-      type: "confirmation_email_terminal",
+      type: cancellationAcknowledgement ?
+        "cancellation_acknowledgement_terminal" :
+        "confirmation_email_terminal",
       severity: "critical",
-      subscriptionId,
+      outboxId,
+      subscriptionId: outcome.subscriptionId,
       reason: outcome.terminalReason,
     }).catch((error) =>
-      console.error("Could not write confirmation terminal audit", subscriptionId, error)
+      console.error("Could not write membership-email terminal audit", outboxId, error)
     );
   }
   return outcome.result;
@@ -5675,15 +7141,16 @@ const sendConfirmationViaResend: ConfirmationEmailSender = async (
 };
 
 async function processMembershipConfirmationOutbox(
-  subscriptionId: string,
+  outboxId: string,
   nowMillis = Date.now(),
   sender: ConfirmationEmailSender = sendConfirmationViaResend
 ): Promise<ConfirmationEmailLeaseResult["state"] | "failed" | "systemic_failure"> {
-  const lease = await acquireConfirmationEmailLease(subscriptionId, nowMillis);
+  const lease = await acquireConfirmationEmailLease(outboxId, nowMillis);
   if (lease.state !== "acquired") return lease.state;
 
   const outboxRef = db().collection(CONFIRMATION_OUTBOX_COLLECTION)
-    .doc(subscriptionId);
+    .doc(outboxId);
+  const {subscriptionId, kind} = lease;
   const membershipRef = db().collection("memberships").doc(subscriptionId);
   try {
     const delivery = await sender(lease.payload, lease.idempotencyKey);
@@ -5705,22 +7172,29 @@ async function processMembershipConfirmationOutbox(
         updatedAt: serverTimestamp(),
       }, {merge: true});
       if (membership.exists) {
-        tx.update(membershipRef, {
-          confirmationEmailStatus: "sent",
-          confirmationEmailSentAt: serverTimestamp(),
-          confirmationEmailProviderId: delivery.providerMessageId,
-          confirmationEmailError: FieldValue.delete(),
-          updatedAt: serverTimestamp(),
-        });
+        tx.update(membershipRef, membershipEmailProjectionFields(
+          kind,
+          "sent",
+          null,
+          delivery.providerMessageId
+        ));
       }
       return {marked: true, missingMembership: !membership.exists};
     });
     if (!markOutcome.marked) return "in_progress";
     if (markOutcome.missingMembership) {
-      console.error("CRITICAL_BILLING_SENT_CONFIRMATION_ORPHAN", {subscriptionId});
+      console.error(kind === "membership_cancellation_acknowledgement" ?
+        "CRITICAL_BILLING_SENT_CANCELLATION_ACKNOWLEDGEMENT_ORPHAN" :
+        "CRITICAL_BILLING_SENT_CONFIRMATION_ORPHAN", {
+        outboxId,
+        subscriptionId,
+      });
       await writeAudit({
-        type: "confirmation_email_orphaned_after_send",
+        type: kind === "membership_cancellation_acknowledgement" ?
+          "cancellation_acknowledgement_orphaned_after_send" :
+          "confirmation_email_orphaned_after_send",
         severity: "critical",
+        outboxId,
         subscriptionId,
         providerMessageId: delivery.providerMessageId,
       }).catch((error) =>
@@ -5728,11 +7202,13 @@ async function processMembershipConfirmationOutbox(
       );
     }
     await writeAudit({
-      type: "confirmation_email_sent",
+      type: kind === "membership_cancellation_acknowledgement" ?
+        "cancellation_acknowledgement_sent" : "confirmation_email_sent",
+      outboxId,
       subscriptionId,
       providerMessageId: delivery.providerMessageId,
     }).catch((error) =>
-      console.error("Could not write confirmation email audit", subscriptionId, error)
+      console.error("Could not write membership email audit", outboxId, error)
     );
     return "sent";
   } catch (error) {
@@ -5772,35 +7248,41 @@ async function processMembershipConfirmationOutbox(
         updatedAt: serverTimestamp(),
       }, {merge: true});
       if (membership.exists) {
-        tx.update(membershipRef, {
-          confirmationEmailStatus: terminal ? terminalStatus : "pending",
-          confirmationEmailError: message.slice(0, 500),
-          updatedAt: serverTimestamp(),
-        });
+        tx.update(membershipRef, membershipEmailProjectionFields(
+          kind,
+          terminal ? terminalStatus : "pending",
+          message.slice(0, 500)
+        ));
       }
       return {terminal, orphan};
     });
     if (!failureOutcome) return "in_progress";
     const {terminal, orphan} = failureOutcome;
     if (terminal || orphan) {
-      console.error("CRITICAL_BILLING_CONFIRMATION_MANUAL_REVIEW", {
+      console.error(kind === "membership_cancellation_acknowledgement" ?
+        "CRITICAL_BILLING_CANCELLATION_ACKNOWLEDGEMENT_MANUAL_REVIEW" :
+        "CRITICAL_BILLING_CONFIRMATION_MANUAL_REVIEW", {
+        outboxId,
         subscriptionId,
         providerErrorName,
         error: message,
         orphan,
       });
       await writeAudit({
-        type: "confirmation_email_terminal",
+        type: kind === "membership_cancellation_acknowledgement" ?
+          "cancellation_acknowledgement_terminal" :
+          "confirmation_email_terminal",
         severity: "critical",
+        outboxId,
         subscriptionId,
         providerErrorName,
         error: message.slice(0, 1000),
         orphan,
       }).catch((auditError) =>
-        console.error("Could not write confirmation terminal audit", subscriptionId, auditError)
+        console.error("Could not write membership-email terminal audit", outboxId, auditError)
       );
     } else {
-      console.error("Confirmation email delivery failed", subscriptionId, error);
+      console.error("Membership email delivery failed", outboxId, error);
     }
     if (!terminal && isSystemicResendFailure(errorStatus, providerErrorName)) {
       console.error("CRITICAL_BILLING_RESEND_CONFIGURATION", {

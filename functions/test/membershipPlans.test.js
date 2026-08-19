@@ -7,7 +7,9 @@ const {
   BILLING_POLICY,
   CHECKOUT_ANCHOR_MARGIN_SECONDS,
   CHECKOUT_CREATION_MARGIN_SECONDS,
+  CHECKOUT_DOCUMENT_CONTENT_BUDGET_BYTES,
   CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION,
+  CHECKOUT_DOCUMENTS,
   EXISTING_MEMBER_OFFER,
   MEMBERSHIP_PLANS,
   PLAN_KEYS,
@@ -35,6 +37,10 @@ const {
   formatBillingDate,
   formatUnixBillingDate,
   formatUnixBillingIsoDate,
+  createCommercialPlanSnapshot,
+  resolveCheckoutAcceptanceStatements,
+  resolveCheckoutDocuments,
+  resolveCheckoutSignerRole,
 } = require("../lib/membershipPlans");
 
 /** Europe/London instant helper: builds a UTC millis value for a London date. */
@@ -65,6 +71,77 @@ test("only Adult Unlimited automatically includes AlphaWOD access", () => {
 
 test("purchase stays closed while the checkout documents are drafts", () => {
   assert.equal(CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION, false);
+  for (const document of Object.values(CHECKOUT_DOCUMENTS)) {
+    assert.match(document.version, /DRAFT/);
+    assert.equal(document.sha256, "PENDING_LEGAL_APPROVAL");
+  }
+});
+
+test("canonical checkout documents stay within the outbox byte budget", () => {
+  const bytes = Object.values(CHECKOUT_DOCUMENTS).reduce(
+    (total, document) => total + Buffer.byteLength(document.content, "utf8"),
+    0
+  );
+  assert.ok(bytes > 0);
+  assert.ok(
+    bytes <= CHECKOUT_DOCUMENT_CONTENT_BUDGET_BYTES,
+    `${bytes} canonical document bytes exceed the ${CHECKOUT_DOCUMENT_CONTENT_BUDGET_BYTES}-byte budget`
+  );
+});
+
+test("checkout legal requirements are exact for adult self-signers and youth guardians", () => {
+  assert.deepEqual(
+    resolveCheckoutDocuments("adult_unlimited").map(({key}) => key),
+    ["membershipTerms", "cancellationPolicy", "privacyNotice", "adultWaiver"]
+  );
+  assert.deepEqual(
+    resolveCheckoutAcceptanceStatements("adult_unlimited").map(({id}) => id),
+    [
+      "membership_contract", "privacy_notice", "adult_participant_waiver",
+      "recurring_payment_authority", "immediate_performance",
+    ]
+  );
+  assert.equal(
+    resolveCheckoutSignerRole("adult_unlimited"),
+    "adult_participant_and_payer"
+  );
+  assert.deepEqual(
+    resolveCheckoutDocuments("youth_youngstars").map(({key}) => key),
+    ["membershipTerms", "cancellationPolicy", "privacyNotice", "guardianAddendum"]
+  );
+  assert.deepEqual(
+    resolveCheckoutAcceptanceStatements("youth_youngstars").map(({id}) => id),
+    [
+      "membership_contract", "privacy_notice", "guardian_authority",
+      "guardian_youth_addendum", "recurring_payment_authority",
+      "immediate_performance",
+    ]
+  );
+});
+
+test("commercial snapshots contain the complete customer-facing plan contract", () => {
+  assert.deepEqual(createCommercialPlanSnapshot("adult_unlimited"), {
+    catalogueSchemaVersion: 1,
+    planKey: "adult_unlimited",
+    planName: "Adult Unlimited Membership",
+    audience: "adult",
+    summary: MEMBERSHIP_PLANS.adult_unlimited.summary,
+    amountPence: 6000,
+    currency: "gbp",
+    billingInterval: "month",
+    billingIntervalCount: 1,
+    monthlyAnchorDayOfMonth: 1,
+    joiningFeePence: 0,
+    minimumTermMonths: 0,
+    trialDays: 0,
+    vatRegistered: false,
+    automaticTaxEnabled: false,
+    grantsAlphaWodAccess: true,
+    minAge: 18,
+    maxAge: null,
+    cancellationNoticeDays: 14,
+    pauseAllowed: false,
+  });
 });
 
 test("past-due grace persists an exact London-calendar deadline across DST", () => {

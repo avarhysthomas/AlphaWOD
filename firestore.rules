@@ -253,6 +253,23 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Immutable evidence and acknowledgement state for cancellation requests.
+    // Members receive the safe projection through getMyMemberships; neither
+    // payer nor staff browser clients may read or alter the raw server record.
+    match /membershipCancellationReceipts/{receiptId} {
+      allow read, write: if false;
+    }
+
+    // Pseudonymous abuse-control admissions and fixed-window counters are
+    // written only by the checkout callable. They never become client state.
+    match /membershipCheckoutRateAdmissions/{admissionId} {
+      allow read, write: if false;
+    }
+
+    match /membershipCheckoutRateLimits/{bucketId} {
+      allow read, write: if false;
+    }
+
     match /membershipAudit/{entryId} {
       allow read, write: if false;
     }

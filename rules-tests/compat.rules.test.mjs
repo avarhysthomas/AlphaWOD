@@ -147,12 +147,27 @@ describe("temporary Phase 0 maintenance lockdown", () => {
       "users/admin/trainingLogs/log-1": {userId: "admin"},
       "classes/class-1": {bookedCount: 0},
       "waiverAcceptances/admin__v1": {userId: "admin", version: "v1"},
+      "membershipCancellationReceipts/cancel-1": {
+        payerUid: "admin",
+        status: "accepted",
+      },
+      "membershipCheckoutRateAdmissions/attempt-1": {sourceHash: "hash"},
+      "membershipCheckoutRateLimits/source-burst-1": {count: 1},
     });
     const db = firestoreFor("admin", {role: "admin", approvalStatus: "approved"});
     await assertFails(setDoc(doc(db, "bookings", "forged"), {userId: "admin"}));
     await assertFails(updateDoc(doc(db, "classes", "class-1"), {bookedCount: 999}));
     await assertFails(getDoc(doc(db, "users/admin/trainingLogs/log-1")));
     await assertFails(getDoc(doc(db, "waiverAcceptances", "admin__v1")));
+    await assertFails(getDoc(doc(db, "membershipCancellationReceipts", "cancel-1")));
+    await assertFails(setDoc(doc(db, "membershipCancellationReceipts", "forged"), {
+      payerUid: "admin",
+      status: "accepted",
+    }));
+    await assertFails(getDoc(doc(db, "membershipCheckoutRateAdmissions", "attempt-1")));
+    await assertFails(setDoc(doc(db, "membershipCheckoutRateLimits", "forged"), {
+      count: 999,
+    }));
   });
 
   test("temporary Storage rules permit only constrained owner profile files", async () => {

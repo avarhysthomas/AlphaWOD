@@ -51,7 +51,7 @@ The new Functions surface, none deployed, is:
   `recoverMembershipCancellations`, `reconcilePastDueMemberships`, and
   `retryMembershipConfirmations`.
 
-The seven new server-only Firestore collections are:
+The ten new server-only Firestore collections are:
 
 - `memberships`;
 - `membershipIntents`;
@@ -59,6 +59,9 @@ The seven new server-only Firestore collections are:
 - `membershipEntitlementOwners`;
 - `stripeEvents`;
 - `membershipEmailOutbox`;
+- `membershipCancellationReceipts`;
+- `membershipCheckoutRateAdmissions`;
+- `membershipCheckoutRateLimits`;
 - `membershipAudit`.
 
 Every one is denied to clients in `firestore.rules`. The memberships
@@ -66,7 +69,7 @@ reconciler also requires the composite index in `firestore.indexes.json` on
 `state` and `nextReconcileAt`.
 
 The current billing schema version 1 is acceptable only because none of this
-surface has been deployed and first rollout assumes all seven collections are
+surface has been deployed and first rollout assumes all ten collections are
 empty. Release preflight must prove that assumption. Existing billing documents
 mean stop and design a version bump/migration/backfill; this implementation is
 not a compatibility layer over unknown schema-v1 data.
@@ -132,11 +135,20 @@ If a target profile is missing or unsafe to project, the ending path still
 releases the owner and sends the membership to audited manual review instead of
 leaving a permanent ownership lock or mutating that profile.
 
-`linkMembershipParticipant` is an admin-only, one-shot operation. Linking the
-same target again is idempotent; attempting to replace an existing target is
-rejected until there is a separate audited transfer and entitlement-restoration
-workflow. A successful link acquires durable ownership and writes the audit
-fields; a scheduled presale still projects no access until first payment.
+`linkMembershipParticipant` is admin-only. The first link acquires durable
+ownership; a later call for that exact target is an audited, idempotent
+entitlement-projection repair after current Stripe state is rechecked. Replacing
+an existing target is rejected until there is a separate audited transfer and
+entitlement-restoration workflow. A scheduled presale still projects no access
+until first payment.
+
+Every state-sensitive checkout duplicate decision, claim and participant link
+now converges all relevant Stripe subscriptions—including an active entitlement
+owner—before its final Firestore transaction. That transaction reruns the
+queries and refuses any newly discovered unconverged membership/owner, so a
+delayed or dead-lettered lifecycle event cannot create a second sale or stale
+grant. Provider uncertainty may heal/revoke existing access but always fails
+closed before the requested new purchase, claim or link is committed.
 
 The browser's resumable checkout attempt is scoped to its complete context. It
 stores only an opaque attempt id and request hash in `sessionStorage`, not raw
@@ -275,7 +287,9 @@ The Phase 1-specific test inventory is:
 
 Current focused coverage includes terminal-only checkout-lock reclamation;
 active/released entitlement-owner generations and missing-profile release/manual
-review; concurrent one-shot admin linking; membership-specific portal ownership;
+review; concurrent admin linking and audited same-target projection repair;
+authoritative Stripe convergence and final-transaction race closure for checkout,
+claim and linking; membership-specific portal ownership;
 runtime Price/Product matching and unsafe portal-configuration refusal;
 automatic collection with no pause/trial drift; automatic-payment grace from
 the signed failure event rather than invoice creation;
@@ -290,8 +304,10 @@ invoice activation/failure, the allowlisted three-payment discount, UTC day-1
 anchor regression, terminal Session-to-intent binding, frozen Price rotation,
 healable subscription-contract drift restriction, overdue immediate
 cancellation/refund review, current-state success copy and verified-email resend
-recovery, plus refusal of an ordinary renewal cancellation while the statutory
-cooling-off window is still open.
+recovery; App Check replay/app binding and privacy-safe checkout throttling; exact
+role-specific legal evidence and durable document copies; and an online
+cooling-off receipt that immediately stops billing, survives provider failure,
+queues recovery/refund review and sends an independently durable acknowledgement.
 
 Before release, add explicit focused cases for convergence-lease contention;
 two simultaneous dispute ids; document-version attempt rotation; confirmation
@@ -314,20 +330,21 @@ No item below authorises deployment or opening either purchase gate. Complete
 the applicable legal, abuse and data-lifecycle design before provider testing,
 then follow this order:
 
-1. Replace the draft labels with approved immutable document content, stable
-   URLs and hashes. Render and persist the exact per-plan/per-role set so the
-   record never falsely asserts adult-participant or guardian acceptance. Make
-   the frozen confirmation carry or attach that actual content, not only
-   version ids. Freeze the full validated commercial plan snapshot on the
-   intent/membership/outbox as well; a Price id alone cannot keep an open
-   Session's name and amount aligned with a later code-catalogue deployment.
-   Build the statutory cooling-off route: the current ordinary cancellation
-   path fails closed inside that window and requires staffed immediate-stop,
-   proportionate-service/refund review and durable acknowledgement.
-2. Design and verify controls for anonymous checkout: appropriate App Check,
-   per-source/attempt/participant rate limits, bot/challenge protection,
-   Stripe-session and budget monitoring/alerts, and an incident runbook. App
-   Check alone is not evidence that a buyer is human.
+1. Replace every draft legal/company placeholder with counsel-approved immutable
+   content, stable URLs, effective dates and hashes, then approve the exact
+   per-plan/per-role evidence set. Rendering, exact acceptance storage, frozen
+   commercial snapshots and full inline/attached durable copies are implemented;
+   the source gate remains deliberately closed. Approve and staff the cooling-off
+   proportionate-service/refund decision, execution and audit SLA. The online
+   notice, immutable receipt, immediate provider stop, recovery and durable
+   acknowledgement are implemented, but the refund amount remains a human review.
+2. Configure the implemented anonymous-checkout controls in production: create
+   the restricted reCAPTCHA Enterprise/App Check web registration, app-id/IAM
+   binding and 32-byte-or-longer HMAC secret; attach real alert channels/budgets;
+   and approve the human-challenge/incident response. Limited-use token replay
+   protection, privacy-safe fixed-window throttles and stable-attempt admission
+   are implemented and tested. App Check alone is not evidence that a buyer is
+   human.
 3. Approve a lawful retention and cleanup policy for terminal intents and
    redundant outbox PII. Automated cleanup must wait for authoritative Stripe
    settlement and checkout-lock release, preserve required final evidence, and
@@ -338,21 +355,15 @@ then follow this order:
    runtime project/key/object-mode guard is now implemented and locally covered;
    verify it again in that deployed staging boundary. The emulator-only
    `demo-*` journey is not evidence of a deployed staging environment.
-5. Make checkout duplicate checks, claim, and admin participant linking
-   authoritatively converge any relevant existing Stripe subscriptions before
-   their final eligibility transaction, failing closed on provider uncertainty.
-   Also integrate ordinary admin entitlement changes with the active
-   `membershipEntitlementOwners` generation so a later cancellation cannot
-   erase a newer manual decision. Add an idempotent projection-recovery worker
-   or audited repair action; pending/failed projection is visible but does not
-   heal itself after a crash. Add an audited staff intake route for email
-   cancellation requests that freezes receipt time/outcome and enters the same
-   recovery state machine; current copy requires written staff confirmation
-   because no automatic inbound-email intake exists. Add a durable idempotent
-   cancellation-acknowledgement outbox for the online path; the purchase email
-   is not a receipt for a later cancellation request. Disable every
+5. Add an audited staff intake route for cancellation requests received by
+   email. It must freeze the actual receipt time/outcome and enter the same
+   durable recovery/acknowledgement state machine as the member callable;
+   current copy requires written staff confirmation because no automatic inbound
+   intake exists. Disable every
    Stripe-hosted portal login page that could expose an unsafe/default portal
-   configuration, since runtime checks cover only sessions created by this app.
+   configuration. Runtime checks now re-read and enforce the complete selected
+   in-app configuration, but cannot disable a separate shareable Stripe login
+   page.
 6. The emulator-bound hosted Checkout payment and Stripe-delivered webhook seam
    passed under the former policy on 19 August 2026. Re-run the new £0 presale
    twice: once without a code and once with the TEST ONLY shared Adult
@@ -366,7 +377,7 @@ then follow this order:
    Resend domain, without enabling purchase. Put the live Coupon id in
    `STRIPE_EXISTING_MEMBER_COUPON_ID` and the live `promo_...` id in
    `STRIPE_EXISTING_MEMBER_PROMOTION_CODE_ID`; never reuse the test objects.
-8. Prove all seven production billing collections are empty before accepting
+8. Prove all ten production billing collections are empty before accepting
    schema version 1. If they are not, stop for a migration/version plan. Then
    enter the Phase 0 maintenance, callable-transport and identity-admin freezes
    with the required backups and IAM restoration manifest.

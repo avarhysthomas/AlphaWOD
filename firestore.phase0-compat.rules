@@ -49,6 +49,21 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Cancellation evidence remains server-only throughout the compatibility
+    // cutover. The explicit match documents this invariant even though the
+    // fallback below also closes every unknown collection.
+    match /membershipCancellationReceipts/{receiptId} {
+      allow read, write: if false;
+    }
+
+    match /membershipCheckoutRateAdmissions/{admissionId} {
+      allow read, write: if false;
+    }
+
+    match /membershipCheckoutRateLimits/{bucketId} {
+      allow read, write: if false;
+    }
+
     // All workouts, classes, bookings, settings, leaderboards and any unknown
     // collection remain closed until the audited final entitlement policy is
     // deployed. Admin SDK migration/Functions access bypasses client rules.

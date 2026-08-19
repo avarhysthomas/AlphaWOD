@@ -257,7 +257,7 @@ describe("MembershipManage cancellation confirmation", () => {
       .toBeInTheDocument();
   });
 
-  it("routes a cooling-off request to staffed review instead of renewal cancellation", async () => {
+  it("keeps a cooling-off cancellation action available and marks its request kind", async () => {
     mockGetMyMemberships.mockResolvedValue({
       ok: true,
       memberships: [{...activeMembership, coolingOffActive: true}],
@@ -266,10 +266,47 @@ describe("MembershipManage cancellation confirmation", () => {
 
     render(<MembershipManage />);
 
-    expect(await screen.findByText("Cooling-off cancellation needs staff"))
+    expect(await screen.findByText("Cooling-off period"))
       .toBeInTheDocument();
-    expect(screen.queryByRole("button", {name: "Request cancellation"}))
-      .not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", {
+      name: "Cancel during cooling-off period",
+    }));
+    fireEvent.click(screen.getByRole("button", {
+      name: "Submit cooling-off cancellation",
+    }));
+
+    await waitFor(() => expect(mockRequestMembershipCancellation).toHaveBeenCalledWith(
+      "sub_active",
+      cancellationPreview.cancelAtUnixSeconds,
+      "cooling_off"
+    ));
+  });
+
+  it("gives an actionable fallback when the old backend cannot record cooling-off", async () => {
+    mockGetMyMemberships.mockResolvedValue({
+      ok: true,
+      memberships: [{...activeMembership, coolingOffActive: true}],
+      cancellationPreview,
+    });
+    mockRequestMembershipCancellation.mockRejectedValue(Object.assign(
+      new Error("Manual cooling-off review"),
+      {
+        code: "functions/failed-precondition",
+        details: {reason: "cooling_off_manual_review"},
+      }
+    ));
+
+    render(<MembershipManage />);
+    fireEvent.click(await screen.findByRole("button", {
+      name: "Cancel during cooling-off period",
+    }));
+    fireEvent.click(screen.getByRole("button", {
+      name: "Submit cooling-off cancellation",
+    }));
+
+    expect(await screen.findByText(/could not record this cooling-off cancellation online/i))
+      .toBeInTheDocument();
+    expect(screen.getAllByText(/keep a copy of your sent message/i)).not.toHaveLength(0);
   });
 
   it("refreshes and re-presents a changed preview before allowing another confirmation", async () => {
@@ -332,7 +369,7 @@ describe("MembershipManage cancellation confirmation", () => {
     expect(screen.getByRole("button", {name: "Confirm cancellation"})).toBeInTheDocument();
   });
 
-  it("shows an unfinished cancellation as pending and lets the member retry it", async () => {
+  it("shows a retained cancellation as processing without asking for a duplicate", async () => {
     mockGetMyMemberships.mockResolvedValue({
       ok: true,
       memberships: [{
@@ -345,18 +382,72 @@ describe("MembershipManage cancellation confirmation", () => {
 
     render(<MembershipManage />);
 
-    expect(await screen.findByText("Cancellation still processing")).toBeInTheDocument();
-    expect(screen.getByText("Pending confirmation")).toBeInTheDocument();
+    expect(await screen.findByText("Cancellation request received")).toBeInTheDocument();
+    expect(screen.getByText("Update processing")).toBeInTheDocument();
     expect(screen.queryByText("Cancellation confirmed")).not.toBeInTheDocument();
     expect(screen.queryByText("Membership ends")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", {name: "Request cancellation"}))
       .not.toBeInTheDocument();
+    expect(screen.queryByRole("button", {name: "Retry cancellation"}))
+      .not.toBeInTheDocument();
+    expect(screen.getByText(/do not need to submit another request/i)).toBeInTheDocument();
+  });
 
-    fireEvent.click(screen.getByRole("button", {name: "Retry cancellation"}));
-    await waitFor(() => expect(mockRequestMembershipCancellation).toHaveBeenCalledWith(
-      "sub_active",
-      cancellationPreview.cancelAtUnixSeconds
-    ));
+  it("shows the projected cancellation receipt and accepted state", async () => {
+    mockGetMyMemberships.mockResolvedValue({
+      ok: true,
+      memberships: [{
+        ...activeMembership,
+        cancellationRequestStatus: "accepted",
+        cancellationRequestKind: "cooling_off",
+        cancellationReceipt: {
+          reference: "cancel_COFF_01J5X5YJ7S",
+          receivedAt: "2026-08-19T14:05:00.000Z",
+          kind: "cooling_off",
+          acknowledgementStatus: "sent",
+          refundReviewRequired: false,
+        },
+      }],
+      cancellationPreview,
+    });
+
+    render(<MembershipManage />);
+
+    expect(await screen.findByText("Cancellation receipt")).toBeInTheDocument();
+    expect(screen.getByText("cancel_COFF_01J5X5YJ7S")).toBeInTheDocument();
+    expect(screen.getByText("Cancellation request accepted")).toBeInTheDocument();
+    expect(screen.getByText(/Cooling-off cancellation · Acknowledgement sent/i))
+      .toBeInTheDocument();
+    expect(screen.queryByRole("button", {name: "Request cancellation"}))
+      .not.toBeInTheDocument();
+  });
+
+  it("separates refund review from acceptance of the cancellation request", async () => {
+    mockGetMyMemberships.mockResolvedValue({
+      ok: true,
+      memberships: [{
+        ...activeMembership,
+        cancellationRequestStatus: "refund_review",
+        cancellationRequestKind: "cooling_off",
+        cancellationReceipt: {
+          reference: "cancel_refund_review",
+          receivedAt: "2026-08-19T14:05:00.000Z",
+          kind: "cooling_off",
+          acknowledgementStatus: "pending",
+          refundReviewRequired: true,
+        },
+      }],
+      cancellationPreview,
+    });
+
+    render(<MembershipManage />);
+
+    expect(await screen.findByText("Cancellation accepted · refund review"))
+      .toBeInTheDocument();
+    expect(screen.getByText("Refund review")).toBeInTheDocument();
+    expect(screen.getByText(/reviewing only whether a refund/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", {name: "Request cancellation"}))
+      .not.toBeInTheDocument();
   });
 
   it("routes a cancellation in manual review to support instead of another request", async () => {

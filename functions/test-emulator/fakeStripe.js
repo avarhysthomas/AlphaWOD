@@ -91,8 +91,16 @@ function createFakeStripe() {
       object: "billing_portal.configuration",
       active: true,
       livemode: false,
+      login_page: {enabled: false, url: null},
       features: {
+        customer_update: {enabled: false, allowed_updates: []},
+        invoice_history: {enabled: true},
+        payment_method_update: {
+          enabled: true,
+          payment_method_configuration: null,
+        },
         subscription_cancel: {enabled: false},
+        subscription_pause: {enabled: false},
         subscription_update: {enabled: false},
       },
     }]]),

@@ -13,6 +13,7 @@ import {setGlobalOptions} from "firebase-functions/v2";
 import {defineSecret} from "firebase-functions/params";
 import * as admin from "firebase-admin";
 import {FieldValue, Timestamp} from "firebase-admin/firestore";
+import {createHash} from "crypto";
 import {DateTime} from "luxon";
 import {
   ACCESS_SCHEMA_VERSION,
@@ -35,6 +36,7 @@ import {
 } from "./authz";
 import {
   buildClaimMembership,
+  buildCreateMembershipCheckoutSession,
   buildListMemberships,
   buildLinkMembershipParticipant,
   buildRecoverMembershipCancellations,
@@ -59,6 +61,10 @@ const db = admin.firestore();
 const resendApiKey = defineSecret("RESEND_API_KEY");
 const resendFromEmail = defineSecret("RESEND_FROM_EMAIL");
 const defaultInviteOrigin = "https://alpha-wod.vercel.app";
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
 
 /** -----------------------------
  * Types
@@ -1960,15 +1966,39 @@ export const setMemberEntitlement = onCall(async (request) => {
       "entitlementStatus and entitlementSource are not a valid combination."
     );
   }
+  if ((status === "none" && source !== "none") ||
+    (status !== "none" && source !== "manual")) {
+    throw new HttpsError(
+      "invalid-argument",
+      "Administrative entitlement changes must use source manual, or none when removing access."
+    );
+  }
 
   const planKey = optionalBoundedString(request.data?.planKey, "planKey", 100);
   const reason = optionalBoundedString(request.data?.reason, "reason", 500);
   const userRef = db.collection("users").doc(userId);
+  const entitlementOwnerRef = db.collection("membershipEntitlementOwners")
+    .doc(sha256(userId));
   let finalUser: UserDoc | undefined;
 
   await db.runTransaction(async (tx) => {
-    const snap = await tx.get(userRef);
+    const [snap, entitlementOwner] = await Promise.all([
+      tx.get(userRef),
+      tx.get(entitlementOwnerRef),
+    ]);
     if (!snap.exists) throw new HttpsError("not-found", "User not found.");
+    // A paid membership owns both the current Stripe projection and the
+    // entitlement value that must be restored when it ends. Allowing a manual
+    // edit here would leave that frozen restoration snapshot stale, so a later
+    // cancellation could silently erase the administrator's newer decision.
+    // Fail closed until the membership generation has atomically released its
+    // owner row; support can then apply the manual change normally.
+    if (entitlementOwner.exists && entitlementOwner.get("state") !== "released") {
+      throw new HttpsError(
+        "failed-precondition",
+        "This member has an active Stripe entitlement. End or repair that membership before assigning manual access."
+      );
+    }
     const user = snap.data() as UserDoc;
     if (!isUserRole(user.role) || !isApprovalStatus(user.approvalStatus)) {
       throw new HttpsError(
@@ -2234,11 +2264,13 @@ export const inviteMemberByEmail = onCall({secrets: [resendApiKey, resendFromEma
  * one manifest.
  * ----------------------------*/
 export {
-  createMembershipCheckoutSession,
   createCustomerPortalSession,
   getMyMemberships,
 } from "./membership";
 
+export const createMembershipCheckoutSession = buildCreateMembershipCheckoutSession(
+  convergeUserDerivedAccess
+);
 export const stripeWebhook = buildStripeWebhook(convergeUserDerivedAccess);
 export const recoverStripeEvents = buildRecoverStripeEvents(convergeUserDerivedAccess);
 export const recoverMembershipCancellations = buildRecoverMembershipCancellations(

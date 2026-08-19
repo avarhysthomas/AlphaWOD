@@ -31,11 +31,16 @@ export const EXISTING_MEMBER_OFFER = {
   promotionCodeExpiresAtUnixSeconds: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
 } as const;
 
+/** Catalogue schema version frozen into every checkout commercial snapshot. */
+export const MEMBERSHIP_SCHEMA_VERSION = 1;
+
 export const COMPANY = {
   legalName: "ZERO ALPHA FITNESS LTD",
   tradingName: "Zero Alpha Fitness",
   companyNumber: "15978998",
   address: "Unit 3, Felinfoel Business Hub, Llanelli, SA14 8BE",
+  registeredOffice: "PENDING_VERIFICATION",
+  registrationJurisdiction: "PENDING_VERIFICATION",
   supportEmail: "support@zeroalphafitness.co.uk",
   confirmationSender: "hello@zeroalphafitness.co.uk",
 } as const;
@@ -176,13 +181,226 @@ export const POLICY_TEXT = {
   guardianRequirement: "For a participant under 18, the payer must be their parent or legal guardian, or another adult with lawful authority to enter this arrangement for them.",
 } as const;
 
+export type CheckoutDocumentKey =
+  | "membershipTerms"
+  | "cancellationPolicy"
+  | "privacyNotice"
+  | "adultWaiver"
+  | "guardianAddendum";
+
+export type CheckoutDocument = {
+  key: CheckoutDocumentKey;
+  title: string;
+  version: string;
+  effectiveDate: string;
+  publicUrl: string;
+  contentType: "text/plain; charset=utf-8";
+  hashCovers: "UTF-8 bytes of content";
+  sha256: string;
+  content: string;
+};
+
+/**
+ * Aggregate canonical UTF-8 copy budget for every checkout document. The
+ * checkout outbox also stores rendered HTML and base64 attachments, so this
+ * deliberately leaves ample headroom below Firestore's document-size limit.
+ */
+export const CHECKOUT_DOCUMENT_CONTENT_BUDGET_BYTES = 96 * 1024;
+
+/**
+ * Immutable legal-copy registry used by checkout, acceptance evidence and the
+ * confirmation email. The content and hashes are deliberate legal-review
+ * placeholders: the publication gate below cannot be opened until counsel's
+ * final text replaces them and each real SHA-256 digest has been recorded.
+ */
 export const CHECKOUT_DOCUMENTS = {
-  membershipTerms: "ZAF-TERMS-DRAFT-2026-08-17-01",
-  cancellationPolicy: "ZAF-CANCEL-DRAFT-2026-08-17-01",
-  privacyNotice: "ZAF-PRIVACY-DRAFT-2026-08-17-01",
-  adultWaiver: "ZAF-ADULT-WAIVER-DRAFT-2026-08-17-01",
-  guardianAddendum: "ZAF-GUARDIAN-DRAFT-2026-08-17-01",
+  membershipTerms: {
+    key: "membershipTerms",
+    title: "Membership Terms",
+    version: "ZAF-TERMS-DRAFT-2026-08-17-01",
+    effectiveDate: "PENDING_LEGAL_APPROVAL",
+    publicUrl: "/legal/memberships/ZAF-TERMS-DRAFT-2026-08-17-01.txt",
+    contentType: "text/plain; charset=utf-8",
+    hashCovers: "UTF-8 bytes of content",
+    sha256: "PENDING_LEGAL_APPROVAL",
+    content: "DRAFT FOR LEGAL REVIEW — NOT APPROVED FOR PUBLICATION\n\nThis immutable placeholder identifies the Membership Terms working draft ZAF-TERMS-DRAFT-2026-08-17-01. The approved customer-facing text and its SHA-256 digest must replace this placeholder before public checkout is enabled.\n",
+  },
+  cancellationPolicy: {
+    key: "cancellationPolicy",
+    title: "Cancellation, Refund and Cooling-off Policy",
+    version: "ZAF-CANCEL-DRAFT-2026-08-17-01",
+    effectiveDate: "PENDING_LEGAL_APPROVAL",
+    publicUrl: "/legal/memberships/ZAF-CANCEL-DRAFT-2026-08-17-01.txt",
+    contentType: "text/plain; charset=utf-8",
+    hashCovers: "UTF-8 bytes of content",
+    sha256: "PENDING_LEGAL_APPROVAL",
+    content: "DRAFT FOR LEGAL REVIEW — NOT APPROVED FOR PUBLICATION\n\nThis immutable placeholder identifies the Cancellation, Refund and Cooling-off Policy working draft ZAF-CANCEL-DRAFT-2026-08-17-01. The approved customer-facing text and its SHA-256 digest must replace this placeholder before public checkout is enabled.\n",
+  },
+  privacyNotice: {
+    key: "privacyNotice",
+    title: "Privacy Notice",
+    version: "ZAF-PRIVACY-DRAFT-2026-08-17-01",
+    effectiveDate: "PENDING_LEGAL_APPROVAL",
+    publicUrl: "/legal/memberships/ZAF-PRIVACY-DRAFT-2026-08-17-01.txt",
+    contentType: "text/plain; charset=utf-8",
+    hashCovers: "UTF-8 bytes of content",
+    sha256: "PENDING_LEGAL_APPROVAL",
+    content: "DRAFT FOR LEGAL REVIEW — NOT APPROVED FOR PUBLICATION\n\nThis immutable placeholder identifies the Privacy Notice working draft ZAF-PRIVACY-DRAFT-2026-08-17-01. The approved customer-facing text and its SHA-256 digest must replace this placeholder before public checkout is enabled.\n",
+  },
+  adultWaiver: {
+    key: "adultWaiver",
+    title: "Adult Participant Waiver and Risk Acknowledgement",
+    version: "ZAF-ADULT-WAIVER-DRAFT-2026-08-17-01",
+    effectiveDate: "PENDING_LEGAL_APPROVAL",
+    publicUrl: "/legal/memberships/ZAF-ADULT-WAIVER-DRAFT-2026-08-17-01.txt",
+    contentType: "text/plain; charset=utf-8",
+    hashCovers: "UTF-8 bytes of content",
+    sha256: "PENDING_LEGAL_APPROVAL",
+    content: "DRAFT FOR LEGAL REVIEW — NOT APPROVED FOR PUBLICATION\n\nThis immutable placeholder identifies the Adult Participant Waiver and Risk Acknowledgement working draft ZAF-ADULT-WAIVER-DRAFT-2026-08-17-01. The approved customer-facing text and its SHA-256 digest must replace this placeholder before public checkout is enabled.\n",
+  },
+  guardianAddendum: {
+    key: "guardianAddendum",
+    title: "Parent/Guardian Consent and Youth Membership Addendum",
+    version: "ZAF-GUARDIAN-DRAFT-2026-08-17-01",
+    effectiveDate: "PENDING_LEGAL_APPROVAL",
+    publicUrl: "/legal/memberships/ZAF-GUARDIAN-DRAFT-2026-08-17-01.txt",
+    contentType: "text/plain; charset=utf-8",
+    hashCovers: "UTF-8 bytes of content",
+    sha256: "PENDING_LEGAL_APPROVAL",
+    content: "DRAFT FOR LEGAL REVIEW — NOT APPROVED FOR PUBLICATION\n\nThis immutable placeholder identifies the Parent/Guardian Consent and Youth Membership Addendum working draft ZAF-GUARDIAN-DRAFT-2026-08-17-01. The approved customer-facing text and its SHA-256 digest must replace this placeholder before public checkout is enabled.\n",
+  },
 } as const;
+
+export type CheckoutAcceptanceId =
+  | "membership_contract"
+  | "privacy_notice"
+  | "adult_participant_waiver"
+  | "guardian_youth_addendum"
+  | "guardian_authority"
+  | "recurring_payment_authority"
+  | "immediate_performance";
+
+export type CheckoutAcceptanceStatement = {
+  id: CheckoutAcceptanceId;
+  statement: string;
+  documentKeys: readonly CheckoutDocumentKey[];
+};
+
+export type CheckoutSignerRole =
+  | "adult_participant_and_payer"
+  | "youth_guardian_and_payer";
+
+export type CommercialPlanSnapshot = {
+  catalogueSchemaVersion: number;
+  planKey: PlanKey;
+  planName: string;
+  audience: PlanAudience;
+  summary: string;
+  amountPence: number;
+  currency: typeof BILLING_CURRENCY;
+  billingInterval: "month";
+  billingIntervalCount: 1;
+  monthlyAnchorDayOfMonth: number;
+  joiningFeePence: number;
+  minimumTermMonths: number;
+  trialDays: number;
+  vatRegistered: boolean;
+  automaticTaxEnabled: boolean;
+  grantsAlphaWodAccess: boolean;
+  minAge: number;
+  maxAge: number | null;
+  cancellationNoticeDays: number;
+  pauseAllowed: boolean;
+};
+
+export function resolveCheckoutDocuments(planKey: PlanKey): CheckoutDocument[] {
+  const plan = getPlan(planKey);
+  const keys: CheckoutDocumentKey[] = [
+    "membershipTerms",
+    "cancellationPolicy",
+    "privacyNotice",
+    plan.audience === "youth" ? "guardianAddendum" : "adultWaiver",
+  ];
+  return keys.map((key) => ({...CHECKOUT_DOCUMENTS[key]}));
+}
+
+export function resolveCheckoutAcceptanceStatements(
+  planKey: PlanKey
+): CheckoutAcceptanceStatement[] {
+  const plan = getPlan(planKey);
+  const common: CheckoutAcceptanceStatement[] = [
+    {
+      id: "membership_contract",
+      statement: "I have read and agree to the Membership Terms and the Cancellation, Refund and Cooling-off Policy. I confirm that the participant and payer or guardian details I supplied are accurate.",
+      documentKeys: ["membershipTerms", "cancellationPolicy"],
+    },
+    {
+      id: "privacy_notice",
+      statement: "I acknowledge that I have received and read the Privacy Notice explaining how personal information is used.",
+      documentKeys: ["privacyNotice"],
+    },
+    ...(plan.audience === "youth" ? [
+      {
+        id: "guardian_authority" as const,
+        statement: "I confirm that I am aged 18 or over, I am the named child's parent or legal guardian or otherwise have lawful authority to enrol them, and I am the payer.",
+        documentKeys: [] as CheckoutDocumentKey[],
+      },
+      {
+        id: "guardian_youth_addendum" as const,
+        statement: "I have read and agree to the Parent/Guardian Consent and Youth Membership Addendum. I understand the activities and inherent risks and consent to the child's participation, subject to their statutory rights and Zero Alpha Fitness's duty to take reasonable care.",
+        documentKeys: ["guardianAddendum"] as CheckoutDocumentKey[],
+      },
+    ] : [
+      {
+        id: "adult_participant_waiver" as const,
+        statement: "I confirm that I am the named participant, I am aged 18 or over, and I have read and understood the Adult Participant Waiver and Risk Acknowledgement. I understand the activities and inherent risks and choose to participate, subject to my statutory rights and Zero Alpha Fitness's duty to take reasonable care.",
+        documentKeys: ["adultWaiver"] as CheckoutDocumentKey[],
+      },
+    ]),
+    {
+      id: "recurring_payment_authority",
+      statement: `I authorise the amount Stripe shows today and future recurring monthly payments for ${plan.name} on the billing schedule shown at checkout. The standard monthly price is ${formatPence(plan.amountPence)}; Stripe will show any verified promotion and when the standard price resumes. This authority is subject to my cancellation and statutory rights.`,
+      documentKeys: [],
+    },
+    {
+      id: "immediate_performance",
+      statement: POLICY_TEXT.coolingOffConsent,
+      documentKeys: [],
+    },
+  ];
+  return common;
+}
+
+export function resolveCheckoutSignerRole(planKey: PlanKey): CheckoutSignerRole {
+  return getPlan(planKey).audience === "youth" ?
+    "youth_guardian_and_payer" : "adult_participant_and_payer";
+}
+
+export function createCommercialPlanSnapshot(planKey: PlanKey): CommercialPlanSnapshot {
+  const plan = getPlan(planKey);
+  return {
+    catalogueSchemaVersion: MEMBERSHIP_SCHEMA_VERSION,
+    planKey: plan.key,
+    planName: plan.name,
+    audience: plan.audience,
+    summary: plan.summary,
+    amountPence: plan.amountPence,
+    currency: plan.currency,
+    billingInterval: "month",
+    billingIntervalCount: 1,
+    monthlyAnchorDayOfMonth: BILLING_POLICY.monthlyAnchorDayOfMonth,
+    joiningFeePence: BILLING_POLICY.joiningFeePence,
+    minimumTermMonths: BILLING_POLICY.minimumTermMonths,
+    trialDays: BILLING_POLICY.trialDays,
+    vatRegistered: BILLING_POLICY.vatRegistered,
+    automaticTaxEnabled: BILLING_POLICY.automaticTaxEnabled,
+    grantsAlphaWodAccess: plan.grantsAlphaWodAccess,
+    minAge: plan.minAge,
+    maxAge: plan.maxAge,
+    cancellationNoticeDays: BILLING_POLICY.cancellationNoticeDays,
+    pauseAllowed: BILLING_POLICY.pauseAllowed,
+  };
+}
 
 export const CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION = false;
 
@@ -250,4 +468,9 @@ export function formatPlanPrice(plan: MembershipPlan): string {
   const pounds = plan.amountPence / 100;
   const formatted = Number.isInteger(pounds) ? String(pounds) : pounds.toFixed(2);
   return `£${formatted}`;
+}
+
+/** Formats pence exactly as the server does in stored acceptance statements. */
+export function formatPence(amountPence: number): string {
+  return `£${(amountPence / 100).toFixed(2)}`;
 }

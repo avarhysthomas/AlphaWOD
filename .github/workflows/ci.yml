@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: Web lint, unit tests and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test:infrastructure
+      - run: npm run verify:monitoring
+      - run: npm run test:ci
+        env:
+          CI: "true"
+      - name: Production build preflight with inert Firebase fixture
+        run: npm run build:production
+        env:
+          CI: "true"
+          VERCEL: "1"
+          VERCEL_ENV: "production"
+          REACT_APP_FIREBASE_API_KEY: "ci-inert-invalid-key"
+          REACT_APP_FIREBASE_AUTH_DOMAIN: "ci.invalid"
+          REACT_APP_FIREBASE_PROJECT_ID: "alphawod-d1f2f"
+          REACT_APP_FIREBASE_STORAGE_BUCKET: "ci.invalid"
+          REACT_APP_FIREBASE_MESSAGING_SENDER_ID: "000000000000"
+          REACT_APP_FIREBASE_APP_ID: "1:000000000000:web:ci-inert"
+          REACT_APP_FIREBASE_APPCHECK_SITE_KEY: "ci-inert-invalid-site-key"
+          REACT_APP_USE_EMULATORS: "false"
+          REACT_APP_MEMBERSHIP_TEST_JOURNEY_ENABLED: "false"
+
+  functions:
+    name: Functions lint, build and unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: functions/package-lock.json
+      - run: npm ci --prefix functions
+      - run: npm run lint --prefix functions
+      - run: npm test --prefix functions
+
+  function-emulators:
+    name: Functions emulator integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: functions/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci --prefix functions
+      - run: npm install --global firebase-tools@15.5.1
+      - run: npm run test:emulator --prefix functions
+
+  security-rules:
+    name: Firestore and Storage rules tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: rules-tests/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci --prefix rules-tests
+      - run: npm install --global firebase-tools@15.5.1
+      - run: npm test --prefix rules-tests
+      - run: npm run test:compat --prefix rules-tests

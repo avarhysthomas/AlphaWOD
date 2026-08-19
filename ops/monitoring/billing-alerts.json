@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "deploymentMode": "template-only",
+  "productionProjectId": "alphawod-d1f2f",
+  "purchaseGateExpected": false,
+  "notificationChannelRequired": true,
+  "runbook": "docs/billing/production-operations.md",
+  "policies": [
+    {
+      "id": "billing-critical-runtime",
+      "priority": "page",
+      "windowSeconds": 60,
+      "threshold": 1,
+      "cloudLoggingFilter": "resource.type=\"cloud_run_revision\" AND severity>=ERROR AND (textPayload:\"CRITICAL_BILLING_\" OR jsonPayload.message:\"CRITICAL_BILLING_\")",
+      "sourceMarkers": [
+        "CRITICAL_BILLING_CANCELLATION_DRIFT",
+        "CRITICAL_BILLING_CANCELLATION_ACKNOWLEDGEMENT_MANUAL_REVIEW",
+        "CRITICAL_BILLING_CANCELLATION_MANUAL_REVIEW",
+        "CRITICAL_BILLING_CHECKOUT_ABUSE_CONFIGURATION",
+        "CRITICAL_BILLING_CHECKOUT_LOCK_MODE_MISMATCH",
+        "CRITICAL_BILLING_CONFIRMATION_MANUAL_REVIEW",
+        "CRITICAL_BILLING_CUSTOMER_CONFLICT",
+        "CRITICAL_BILLING_DUPLICATE_CHECKOUT_SESSION",
+        "CRITICAL_BILLING_DUPLICATE_CHECKOUT_SESSION_AFTER_CONVERGENCE",
+        "CRITICAL_BILLING_ELIGIBILITY_NEW_MEMBERSHIP_RACE",
+        "CRITICAL_BILLING_ELIGIBILITY_STATE_UNCERTAIN",
+        "CRITICAL_BILLING_ENTITLEMENT_PROJECTION_REVIEW",
+        "CRITICAL_BILLING_ORPHAN_CHECKOUT_LOCK",
+        "CRITICAL_BILLING_PAID_SESSION_AWAITING_FULFILMENT",
+        "CRITICAL_BILLING_PORTAL_CONFIGURATION_MISMATCH",
+        "CRITICAL_BILLING_PRICE_MISMATCH",
+        "CRITICAL_BILLING_PROVIDER_CONTRACT_MISMATCH",
+        "CRITICAL_BILLING_RESEND_CONFIGURATION",
+        "CRITICAL_BILLING_SENT_CANCELLATION_ACKNOWLEDGEMENT_ORPHAN",
+        "CRITICAL_BILLING_SENT_CONFIRMATION_ORPHAN",
+        "CRITICAL_BILLING_STRIPE_EVENT_DEAD_LETTER",
+        "CRITICAL_BILLING_STRIPE_MODE_MISMATCH",
+        "CRITICAL_BILLING_UNRESOLVED_CHARGE_MEMBERSHIP",
+        "CRITICAL_BILLING_UNVERIFIED_CHECKOUT_LOCK"
+      ]
+    },
+    {
+      "id": "billing-recovery-worker-errors",
+      "priority": "page-after-two",
+      "windowSeconds": 900,
+      "threshold": 2,
+      "cloudLoggingFilter": "resource.type=\"cloud_run_revision\" AND severity>=ERROR AND (textPayload:(\"Scheduled Stripe event recovery failed\" OR \"Past-due membership reconciliation failed\" OR \"Scheduled cancellation recovery failed\" OR \"Membership email delivery failed\") OR jsonPayload.message:(\"Scheduled Stripe event recovery failed\" OR \"Past-due membership reconciliation failed\" OR \"Scheduled cancellation recovery failed\" OR \"Membership email delivery failed\"))",
+      "sourceSignals": [
+        "Scheduled Stripe event recovery failed",
+        "Past-due membership reconciliation failed",
+        "Scheduled cancellation recovery failed",
+        "Membership email delivery failed"
+      ]
+    },
+    {
+      "id": "billing-webhook-processing-errors",
+      "priority": "page-after-two",
+      "windowSeconds": 300,
+      "threshold": 2,
+      "cloudLoggingFilter": "resource.type=\"cloud_run_revision\" AND severity>=ERROR AND (textPayload:\"Stripe webhook handling failed\" OR jsonPayload.message:\"Stripe webhook handling failed\")",
+      "sourceSignals": [
+        "Stripe webhook handling failed"
+      ]
+    },
+    {
+      "id": "billing-checkout-provider-rejections",
+      "priority": "investigate",
+      "windowSeconds": 300,
+      "threshold": 5,
+      "cloudLoggingFilter": "resource.type=\"cloud_run_revision\" AND severity>=ERROR AND (textPayload:\"Stripe Checkout Session creation was rejected\" OR jsonPayload.message:\"Stripe Checkout Session creation was rejected\")",
+      "sourceSignals": [
+        "Stripe Checkout Session creation was rejected"
+      ]
+    },
+    {
+      "id": "billing-checkout-abuse-signals",
+      "priority": "investigate",
+      "windowSeconds": 300,
+      "threshold": 10,
+      "cloudLoggingFilter": "resource.type=\"cloud_run_revision\" AND severity>=WARNING AND (textPayload:(\"MEMBERSHIP_CHECKOUT_RATE_LIMITED\" OR \"MEMBERSHIP_CHECKOUT_APP_CHECK_REPLAY\" OR \"MEMBERSHIP_CHECKOUT_APP_CHECK_REJECTED\") OR jsonPayload.message:(\"MEMBERSHIP_CHECKOUT_RATE_LIMITED\" OR \"MEMBERSHIP_CHECKOUT_APP_CHECK_REPLAY\" OR \"MEMBERSHIP_CHECKOUT_APP_CHECK_REJECTED\"))",
+      "sourceSignals": [
+        "MEMBERSHIP_CHECKOUT_RATE_LIMITED",
+        "MEMBERSHIP_CHECKOUT_APP_CHECK_REPLAY",
+        "MEMBERSHIP_CHECKOUT_APP_CHECK_REJECTED"
+      ]
+    }
+  ],
+  "externalControls": [
+    "Cloud Billing budget thresholds and owner notifications",
+    "Stripe webhook endpoint health monitoring",
+    "Stripe payment and dispute notifications",
+    "Stripe Checkout Session volume review",
+    "Firebase App Check validity and replay monitoring",
+    "reCAPTCHA Enterprise risk-score distribution review",
+    "Resend domain and delivery health monitoring"
+  ]
+}

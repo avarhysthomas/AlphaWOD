@@ -24,7 +24,12 @@
     "start": "react-scripts start",
     "stripe:test": "npm run run:stripe-test-journey --prefix functions",
     "build": "react-scripts build",
+    "build:production": "node scripts/verifyFrontendProductionEnv.js && react-scripts build",
+    "lint": "eslint --max-warnings=0 --ext .ts,.tsx src",
     "test": "react-scripts test",
+    "test:ci": "react-scripts test --watchAll=false --runInBand",
+    "test:infrastructure": "node --test scripts/*.test.js",
+    "verify:monitoring": "node scripts/verifyBillingMonitoring.js",
     "eject": "react-scripts eject"
   },
   "eslintConfig": {

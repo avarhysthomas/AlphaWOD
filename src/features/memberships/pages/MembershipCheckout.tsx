@@ -7,12 +7,15 @@ import {
   EXISTING_MEMBER_OFFER,
   MEMBERSHIP_PLANS,
   POLICY_TEXT,
+  resolveCheckoutAcceptanceStatements,
+  resolveCheckoutDocuments,
   formatPlanPrice,
   isFoundingPresale,
   isAgeEligibleForPlan,
   isPlanKey,
   resolveDisplayAge,
   resolveYouthPlanForAge,
+  type CheckoutAcceptanceId,
 } from "../../../lib/membershipPlans";
 import {
   clearCheckoutAttempt,
@@ -49,10 +52,10 @@ export default function MembershipCheckout() {
   const [participantDateOfBirth, setParticipantDateOfBirth] = useState("");
   const [guardianFullName, setGuardianFullName] = useState("");
   const [guardianRelationship, setGuardianRelationship] = useState("");
-  const [guardianConfirmsAuthority, setGuardianConfirmsAuthority] = useState(false);
   const [promotionCode, setPromotionCode] = useState("");
-  const [acceptedDocuments, setAcceptedDocuments] = useState(false);
-  const [immediatePerformanceRequested, setImmediatePerformanceRequested] = useState(false);
+  const [acceptedStatements, setAcceptedStatements] = useState<
+    Partial<Record<CheckoutAcceptanceId, boolean>>
+  >({});
   const [signedName, setSignedName] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -64,6 +67,14 @@ export default function MembershipCheckout() {
   const presale = isFoundingPresale();
   const promotionCodeAvailable =
     presale && plan?.key === EXISTING_MEMBER_OFFER.planKey;
+  const checkoutDocuments = useMemo(
+    () => plan ? resolveCheckoutDocuments(plan.key) : [],
+    [plan]
+  );
+  const checkoutStatements = useMemo(
+    () => plan ? resolveCheckoutAcceptanceStatements(plan.key) : [],
+    [plan]
+  );
 
   const age = useMemo(
     () => resolveDisplayAge(participantDateOfBirth),
@@ -76,14 +87,25 @@ export default function MembershipCheckout() {
   const ageMismatch =
     plan !== null && age !== null && !isAgeEligibleForPlan(plan, age);
 
+  const setStatementAccepted = (id: CheckoutAcceptanceId, checked: boolean) => {
+    setAcceptedStatements((current) => ({...current, [id]: checked}));
+  };
+
   if (!plan) return <Navigate to="/memberships" replace />;
 
   const payerName = appUser?.name?.trim() || user?.displayName?.trim() || "";
   const typedSignature = signedName.trim();
+  const expectedSignature = (isYouth ? guardianFullName : participantFullName).trim();
+  const comparableName = (value: string) => value.normalize("NFKC")
+    .trim().replace(/\s+/g, " ").toLocaleLowerCase("en-GB");
+  const signatureMatches = typedSignature.length >= 2 &&
+    comparableName(typedSignature) === comparableName(expectedSignature);
   const guardianReady = !isYouth || (
     guardianFullName.trim().length >= 2 &&
-    guardianRelationship.trim().length >= 2 &&
-    guardianConfirmsAuthority
+    guardianRelationship.trim().length >= 2
+  );
+  const allStatementsAccepted = checkoutStatements.every(({id}) =>
+    acceptedStatements[id] === true
   );
   const canSubmit =
     (CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION ||
@@ -92,9 +114,8 @@ export default function MembershipCheckout() {
     age !== null &&
     !ageMismatch &&
     guardianReady &&
-    acceptedDocuments &&
-    immediatePerformanceRequested &&
-    typedSignature.length >= 2 &&
+    allStatementsAccepted &&
+    signatureMatches &&
     !authLoading &&
     !billingPolicyChanged &&
     !submitting;
@@ -120,8 +141,7 @@ export default function MembershipCheckout() {
         // the child as participant and collect the paying adult separately.
         participantIsPayer: !isYouth,
         signedName: typedSignature,
-        acceptedDocuments: true,
-        immediatePerformanceRequested,
+        acceptedStatementIds: checkoutStatements.map(({id}) => id),
         ...(promotionCodeAvailable && promotionCode.trim()
           ? {promotionCode: promotionCode.trim()}
           : {}),
@@ -129,7 +149,6 @@ export default function MembershipCheckout() {
           ? {
               guardianFullName: guardianFullName.trim(),
               guardianRelationship: guardianRelationship.trim(),
-              guardianConfirmsAuthority: true,
             }
           : {}),
       };
@@ -330,14 +349,15 @@ export default function MembershipCheckout() {
                 <input
                   type="checkbox"
                   className="mt-1 h-4 w-4 shrink-0"
-                  checked={guardianConfirmsAuthority}
-                  onChange={(event) => setGuardianConfirmsAuthority(event.target.checked)}
+                  checked={acceptedStatements.guardian_authority === true}
+                  onChange={(event) => setStatementAccepted(
+                    "guardian_authority",
+                    event.target.checked
+                  )}
                 />
-                <span>
-                  I confirm I am this child&rsquo;s parent or legal guardian, or an adult
-                  with lawful authority to enter this arrangement for them, and I am the
-                  payer.
-                </span>
+                <span>{checkoutStatements.find(
+                  ({id}) => id === "guardian_authority"
+                )?.statement}</span>
               </label>
             </div>
           )}
@@ -407,38 +427,54 @@ export default function MembershipCheckout() {
           <div className={CARD}>
             <p className={EYEBROW}>Documents and signature</p>
 
-            <label className="mt-5 flex items-start gap-3 text-sm leading-6 text-white/70">
-              <input
-                type="checkbox"
-                className="mt-1 h-4 w-4 shrink-0"
-                checked={acceptedDocuments}
-                onChange={(event) => setAcceptedDocuments(event.target.checked)}
-              />
-              <span>
-                I have read and accept the Membership Terms, the Cancellation, Refund and
-                Cooling-off Policy, and the Privacy Notice
-                {isYouth ? ", and the Parent/Guardian Consent and Youth Membership Addendum" : ""}
-                .
-              </span>
-            </label>
+            <p className="mt-4 text-sm leading-7 text-white/70">
+              Open and read each versioned document. Your confirmation email will contain
+              the same immutable text and attach a separate copy of every document shown.
+            </p>
+            <div className="mt-5 divide-y divide-white/10 border-y border-white/10">
+              {checkoutDocuments.map((document) => (
+                <details key={document.key} id={`document-${document.key}`} className="py-4">
+                  <summary className="cursor-pointer list-none text-sm font-semibold text-white marker:hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white">
+                    <span className="flex flex-wrap items-baseline justify-between gap-2">
+                      <span>{document.title}</span>
+                      <span className="break-all text-xs font-normal text-white/45">
+                        {document.version}
+                      </span>
+                    </span>
+                  </summary>
+                  <pre className="mt-4 whitespace-pre-wrap break-words rounded-xl bg-black/35 p-4 font-sans text-sm leading-6 text-white/65">
+                    {document.content}
+                  </pre>
+                  <a
+                    href={document.publicUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-3 inline-block text-sm text-white/75 underline decoration-white/30 underline-offset-4 hover:text-white"
+                  >
+                    Open the versioned plain-text copy
+                  </a>
+                </details>
+              ))}
+            </div>
 
-            {/*
-              The immediate-performance request is a separate, unticked control.
-              It must never be bundled with the document acceptance above,
-              because a pre-ticked or combined consent would not be a valid
-              express request under the Consumer Contracts Regulations.
-            */}
-            <label className="mt-5 flex items-start gap-3 text-sm leading-6 text-white/70">
-              <input
-                type="checkbox"
-                className="mt-1 h-4 w-4 shrink-0"
-                checked={immediatePerformanceRequested}
-                onChange={(event) =>
-                  setImmediatePerformanceRequested(event.target.checked)
-                }
-              />
-              <span>{POLICY_TEXT.coolingOffConsent}</span>
-            </label>
+            <fieldset className="mt-6 space-y-5">
+              <legend className="text-sm font-semibold text-white">
+                Confirm each statement separately
+              </legend>
+              {checkoutStatements
+                .filter(({id}) => id !== "guardian_authority")
+                .map(({id, statement}) => (
+                  <label key={id} className="flex items-start gap-3 text-sm leading-6 text-white/70">
+                    <input
+                      type="checkbox"
+                      className="mt-1 h-4 w-4 shrink-0"
+                      checked={acceptedStatements[id] === true}
+                      onChange={(event) => setStatementAccepted(id, event.target.checked)}
+                    />
+                    <span>{statement}</span>
+                  </label>
+                ))}
+            </fieldset>
 
             <label className="mt-6 block">
               <span className={LABEL}>
@@ -450,10 +486,23 @@ export default function MembershipCheckout() {
                 className={FIELD}
                 value={signedName}
                 onChange={(event) => setSignedName(event.target.value)}
+                aria-describedby="signature-hint"
+                aria-invalid={typedSignature.length >= 2 && !signatureMatches}
                 maxLength={160}
                 required
               />
             </label>
+            <p
+              id="signature-hint"
+              className={`mt-3 text-xs leading-5 ${
+                typedSignature.length >= 2 && !signatureMatches ?
+                  "text-red-200" : "text-white/45"
+              }`}
+            >
+              {typedSignature.length >= 2 && !signatureMatches
+                ? `This must match ${isYouth ? "the paying adult’s" : "your"} full name above.`
+                : `This electronic signature must match ${isYouth ? "the paying adult’s" : "your"} full name above.`}
+            </p>
           </div>
 
           <div className={CARD}>
@@ -510,6 +559,13 @@ export default function MembershipCheckout() {
               : "You will review the exact initial charge, monthly price and first full billing date on Stripe’s secure checkout before paying."}
           </p>
         </form>
+
+        <footer className="mt-12 border-t border-white/10 pt-6 text-xs leading-6 text-white/40">
+          <p>{COMPANY.legalName}, company number {COMPANY.companyNumber}.</p>
+          <p>Trading and contact address: {COMPANY.address}.</p>
+          <p>Registered office: {COMPANY.registeredOffice}.</p>
+          <p>Registered in: {COMPANY.registrationJurisdiction}.</p>
+        </footer>
       </div>
     </div>
   );

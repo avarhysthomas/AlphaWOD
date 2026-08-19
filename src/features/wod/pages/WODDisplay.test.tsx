@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 const mockOnSnapshot = jest.fn();
 const mockGetDoc = jest.fn();
@@ -490,7 +490,7 @@ describe("WODDisplay attendee rail", () => {
           : { name: "Sam Reed", photoURL: "" },
     }));
 
-    const { container } = renderBoard();
+    renderBoard();
     emitSnapshot(dayDoc(multiBlockSession()));
 
     emitAllDayClasses();
@@ -500,13 +500,14 @@ describe("WODDisplay attendee rail", () => {
     ]);
 
     // Profiles resolve a tick later; names fall back to the booking until then.
-    await act(async () => {});
+    await waitFor(() =>
+      expect(screen.getAllByText("Ava").length).toBeGreaterThan(0)
+    );
 
     expect(screen.getByText("2 booked")).toBeInTheDocument();
-    expect(screen.getAllByText("Ava").length).toBeGreaterThan(0);
     expect(
-      container.querySelector('img[src="https://cdn.test/ava.jpg"]')
-    ).toBeInTheDocument();
+      await screen.findByRole("img", { name: "Ava Thomas" })
+    ).toHaveAttribute("src", "https://cdn.test/ava.jpg");
     // No photo on file falls back to initials rather than a broken image.
     expect(screen.getAllByText("SR").length).toBeGreaterThan(0);
   });

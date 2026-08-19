@@ -1,0 +1,3 @@
+DRAFT FOR LEGAL REVIEW — NOT APPROVED FOR PUBLICATION
+
+This immutable placeholder identifies the Privacy Notice working draft ZAF-PRIVACY-DRAFT-2026-08-17-01. The approved customer-facing text and its SHA-256 digest must replace this placeholder before public checkout is enabled.

@@ -7,6 +7,8 @@
     "test:emulator": "npm run build && firebase emulators:exec --config ../firebase.json --project alpha-wod-functions-test --only auth,firestore \"node --test --test-concurrency=1 test-emulator/*.test.js\"",
     "verify:stripe-test-config": "npm run build && node --env-file=.env.local scripts/verifyStripeTestConfig.js",
     "verify:stripe-test-journey": "npm run build && node --env-file=.env.local scripts/verifyStripeTestJourney.js",
+    "verify:production-config": "npm run build && node --env-file-if-exists=.env.production scripts/verifyProductionConfig.js",
+    "verify:stripe-live-config": "npm run build && node --env-file-if-exists=.env.production scripts/verifyStripeLiveConfig.js",
     "run:stripe-test-journey": "npm run build && node scripts/runLocalStripeTestJourney.js",
     "build:watch": "tsc --watch",
     "backfill:claims": "npm run build && node scripts/backfillClaims.js",

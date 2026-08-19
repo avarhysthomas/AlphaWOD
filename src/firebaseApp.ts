@@ -1,4 +1,8 @@
 import { initializeApp } from "firebase/app";
+import {
+  initializeAppCheck,
+  ReCaptchaEnterpriseProvider,
+} from "firebase/app-check";
 import { connectAuthEmulator, getAuth } from "firebase/auth";
 import { connectFunctionsEmulator, getFunctions } from "firebase/functions";
 
@@ -16,6 +20,23 @@ const app = initializeApp(firebaseConfig);
 
 export const auth = getAuth(app);
 
+export const useEmulators = process.env.REACT_APP_USE_EMULATORS === "true";
+
+const appCheckSiteKey = process.env.REACT_APP_FIREBASE_APPCHECK_SITE_KEY?.trim();
+if (!useEmulators) {
+  if (process.env.NODE_ENV === "production" && !appCheckSiteKey) {
+    throw new Error(
+      "REACT_APP_FIREBASE_APPCHECK_SITE_KEY is required for a production build."
+    );
+  }
+  if (appCheckSiteKey) {
+    initializeAppCheck(app, {
+      provider: new ReCaptchaEnterpriseProvider(appCheckSiteKey),
+      isTokenAutoRefreshEnabled: true,
+    });
+  }
+}
+
 /**
  * Local development against the Firebase emulators.
  *
@@ -28,8 +49,6 @@ export const auth = getAuth(app);
  * any call is made through either. Firestore is connected where its instance is
  * created, in `firebase.ts`.
  */
-export const useEmulators = process.env.REACT_APP_USE_EMULATORS === "true";
-
 export const FUNCTIONS_REGION = "europe-west1";
 
 if (useEmulators) {

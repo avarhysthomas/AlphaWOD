@@ -99,11 +99,13 @@ describe("membership catalogue parity", () => {
     "PRESALE_SIGNUP_CUTOFF_AT_ISO",
     "PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS",
     "EXISTING_MEMBER_OFFER",
+    "MEMBERSHIP_SCHEMA_VERSION",
     "COMPANY",
     "PLAN_KEYS",
     "MEMBERSHIP_PLANS",
     "BILLING_POLICY",
     "POLICY_TEXT",
+    "CHECKOUT_DOCUMENT_CONTENT_BUDGET_BYTES",
     "CHECKOUT_DOCUMENTS",
     "CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION",
   ];
@@ -154,5 +156,69 @@ describe("membership catalogue parity", () => {
     // is still marked "DRAFT FOR LEGAL REVIEW - NOT APPROVED FOR PUBLICATION".
     // Flip it only together with approved, versioned documents.
     expect(CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION).toBe(false);
+  });
+
+  it("keeps canonical legal copy within the checkout outbox byte budget", () => {
+    const {
+      CHECKOUT_DOCUMENT_CONTENT_BUDGET_BYTES,
+      CHECKOUT_DOCUMENTS,
+    } = require("./membershipPlans") as typeof import("./membershipPlans");
+    const bytes = Object.values(CHECKOUT_DOCUMENTS).reduce(
+      (total, document) => total + Buffer.byteLength(document.content, "utf8"),
+      0
+    );
+
+    expect(bytes).toBeGreaterThan(0);
+    expect(bytes).toBeLessThanOrEqual(CHECKOUT_DOCUMENT_CONTENT_BUDGET_BYTES);
+  });
+
+  it("serves the exact canonical UTF-8 document bytes linked at checkout", () => {
+    const {
+      CHECKOUT_DOCUMENTS,
+    } = require("./membershipPlans") as typeof import("./membershipPlans");
+
+    Object.values(CHECKOUT_DOCUMENTS).forEach((document) => {
+      const publicFile = path.join(
+        __dirname,
+        "..",
+        "..",
+        "public",
+        document.publicUrl.replace(/^\//, "")
+      );
+      expect(fs.readFileSync(publicFile, "utf8")).toBe(document.content);
+      expect(document.contentType).toBe("text/plain; charset=utf-8");
+      expect(document.hashCovers).toBe("UTF-8 bytes of content");
+    });
+  });
+
+  it("resolves exact adult and youth legal sets without cross-role documents", () => {
+    const {
+      resolveCheckoutAcceptanceStatements,
+      resolveCheckoutDocuments,
+      resolveCheckoutSignerRole,
+    } = require("./membershipPlans") as typeof import("./membershipPlans");
+
+    expect(resolveCheckoutDocuments("adult_unlimited").map(({key}) => key)).toEqual([
+      "membershipTerms", "cancellationPolicy", "privacyNotice", "adultWaiver",
+    ]);
+    expect(resolveCheckoutAcceptanceStatements("adult_unlimited").map(({id}) => id))
+      .toEqual([
+        "membership_contract", "privacy_notice", "adult_participant_waiver",
+        "recurring_payment_authority", "immediate_performance",
+      ]);
+    expect(resolveCheckoutSignerRole("adult_unlimited"))
+      .toBe("adult_participant_and_payer");
+
+    expect(resolveCheckoutDocuments("youth_teenstars").map(({key}) => key)).toEqual([
+      "membershipTerms", "cancellationPolicy", "privacyNotice", "guardianAddendum",
+    ]);
+    expect(resolveCheckoutAcceptanceStatements("youth_teenstars").map(({id}) => id))
+      .toEqual([
+        "membership_contract", "privacy_notice", "guardian_authority",
+        "guardian_youth_addendum", "recurring_payment_authority",
+        "immediate_performance",
+      ]);
+    expect(resolveCheckoutSignerRole("youth_teenstars"))
+      .toBe("youth_guardian_and_payer");
   });
 });

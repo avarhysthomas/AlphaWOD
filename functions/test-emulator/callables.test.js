@@ -110,6 +110,95 @@ test("admin boundaries use authoritative profiles and staff directory is project
   assert.equal(directory.users.some((user) => "privateBillingId" in user), false);
 });
 
+test("admin entitlement changes cannot forge Stripe or legacy provenance", async () => {
+  await Promise.all([createAuthUser("admin"), createAuthUser("member")]);
+  await db.collection("users").doc("admin").set({
+    ...activeProfile("admin", "staff"),
+    name: "Admin",
+    email: "admin@example.test",
+  });
+  const memberRef = db.collection("users").doc("member");
+  await memberRef.set({
+    role: "user",
+    approvalStatus: "approved",
+    entitlementStatus: "none",
+    entitlementSource: "none",
+    alphaWodAccess: false,
+  });
+
+  for (const forgedSource of ["stripe", "legacy"]) {
+    await assert.rejects(
+      setMemberEntitlement(request({
+        userId: "member",
+        entitlementStatus: "active",
+        entitlementSource: forgedSource,
+      }, "admin")),
+      (error) => error.code === "invalid-argument" && /source manual/i.test(error.message)
+    );
+  }
+  assert.equal((await memberRef.get()).get("entitlementSource"), "none");
+  assert.equal((await memberRef.get()).get("entitlementUpdatedAt"), undefined);
+
+  const applied = await setMemberEntitlement(request({
+    userId: "member",
+    entitlementStatus: "active",
+    entitlementSource: "manual",
+  }, "admin"));
+  assert.equal(applied.entitlementSource, "manual");
+  assert.equal((await memberRef.get()).get("entitlementSource"), "manual");
+
+  const removed = await setMemberEntitlement(request({
+    userId: "member",
+    entitlementStatus: "none",
+    entitlementSource: "none",
+  }, "admin"));
+  assert.equal(removed.entitlementSource, "none");
+  assert.equal((await memberRef.get()).get("entitlementSource"), "none");
+});
+
+test("manual entitlement changes cannot bypass an active Stripe owner generation", async () => {
+  await Promise.all([createAuthUser("admin"), createAuthUser("member")]);
+  await db.collection("users").doc("admin").set({
+    ...activeProfile("admin", "staff"),
+    name: "Admin",
+    email: "admin@example.test",
+  });
+  const memberRef = db.collection("users").doc("member");
+  await memberRef.set({
+    ...activeProfile("user", "stripe"),
+    name: "Member",
+    email: "member@example.test",
+  });
+  const ownerRef = db.collection("membershipEntitlementOwners")
+    .doc(require("node:crypto").createHash("sha256").update("member").digest("hex"));
+  await ownerRef.set({
+    schemaVersion: 1,
+    subscriptionId: "sub_active_membership",
+    state: "active",
+  });
+
+  await assert.rejects(
+    setMemberEntitlement(request({
+      userId: "member",
+      entitlementStatus: "restricted",
+      entitlementSource: "manual",
+      reason: "Temporary support restriction",
+    }, "admin")),
+    (error) => error.code === "failed-precondition" && /active Stripe/i.test(error.message)
+  );
+  assert.equal((await memberRef.get()).get("entitlementSource"), "stripe");
+
+  await ownerRef.set({state: "released"}, {merge: true});
+  const applied = await setMemberEntitlement(request({
+    userId: "member",
+    entitlementStatus: "restricted",
+    entitlementSource: "manual",
+    reason: "Temporary support restriction",
+  }, "admin"));
+  assert.equal(applied.entitlementStatus, "restricted");
+  assert.equal((await memberRef.get()).get("entitlementSource"), "manual");
+});
+
 test("canonical waiver evidence is immutable across a retry", async () => {
   await createAuthUser("member");
   await bootstrapUserProfile(request({displayName: "Member A"}, "member"));

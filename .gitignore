@@ -18,6 +18,10 @@
 .env.test.local
 .env.production.local
 
+# Production configuration is supplied by Vercel/Secret Manager. Commit only
+# the placeholder examples; never a populated environment file.
+.env.production
+
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -33,5 +37,6 @@ functions/.env
 functions/.env.*
 !functions/.env.example
 !functions/.env.local.example
+!functions/.env.production.example
 functions/.secret.local
 functions/.secret.*

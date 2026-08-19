@@ -15,6 +15,8 @@ import {
   readPendingClaimVerifier,
   requestMembershipCancellation,
   type CancellationOutcome,
+  type CancellationRequestKind,
+  type CancellationRequestStatus,
   type MyMembership,
 } from "../services/membership";
 import MembershipDiscountSummary from "../components/MembershipDiscountSummary";
@@ -64,6 +66,22 @@ function CancellationPreview({
       )}
     </div>
   );
+}
+
+function formatReceiptTimestamp(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("en-GB", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "Europe/London",
+  }).format(date);
+}
+
+function cancellationKindLabel(kind: CancellationRequestKind): string {
+  if (kind === "cooling_off") return "Cooling-off cancellation";
+  if (kind === "presale_withdrawal") return "Cancellation before start";
+  return "Membership cancellation";
 }
 
 export default function MembershipManage() {
@@ -218,12 +236,24 @@ export default function MembershipManage() {
 
   const cancel = async (
     subscriptionId: string,
-    expectedCancelAtUnixSeconds: number
+    expectedCancelAtUnixSeconds: number,
+    kind?: CancellationRequestKind
   ) => {
     try {
       setBusy(subscriptionId);
       setError("");
-      await requestMembershipCancellation(subscriptionId, expectedCancelAtUnixSeconds);
+      if (kind) {
+        await requestMembershipCancellation(
+          subscriptionId,
+          expectedCancelAtUnixSeconds,
+          kind
+        );
+      } else {
+        await requestMembershipCancellation(
+          subscriptionId,
+          expectedCancelAtUnixSeconds
+        );
+      }
       setConfirming(null);
       await load();
     } catch (cancelError: unknown) {
@@ -232,7 +262,7 @@ export default function MembershipManage() {
         ?.details?.reason;
       if (reason === "cooling_off_manual_review") {
         setError(
-          "This request is inside the cooling-off period and needs staff review of any proportionate service charge or refund. Contact support for written acknowledgement; the ordinary renewal cancellation was not applied."
+          `We could not record this cooling-off cancellation online. Email ${COMPANY.supportEmail} from the payer email, state clearly that you want to cancel during the cooling-off period, and keep a copy of your sent message.`
         );
         setConfirming(null);
         return;
@@ -331,11 +361,35 @@ export default function MembershipManage() {
           {memberships.map((membership) => {
             const cancellationOutcome = membership.cancellationOutcome;
             const cancellationConfirmed = cancellationOutcome !== null;
-            const cancellationManualReview = Boolean(membership.cancellationManualReview);
+            const cancellationStatus: CancellationRequestStatus | null =
+              membership.cancellationRequestStatus ??
+              (membership.cancellationManualReview
+                ? "manual_review"
+                : membership.cancellationPending
+                  ? "pending"
+                  : cancellationConfirmed
+                    ? "applied"
+                    : membership.cancellationReceipt
+                      ? "accepted"
+                      : null);
+            const cancellationManualReview = cancellationStatus === "manual_review";
+            const cancellationRefundReview =
+              cancellationStatus === "refund_review" ||
+              (cancellationStatus !== "manual_review" &&
+                membership.cancellationReceipt?.refundReviewRequired === true);
+            const cancellationAccepted = cancellationStatus === "accepted";
             const cancellationPending = Boolean(
-              membership.cancellationPending &&
+              cancellationStatus === "pending" &&
               !cancellationConfirmed &&
               !cancellationManualReview
+            );
+            const cancellationRequestRecorded = Boolean(
+              cancellationConfirmed ||
+              cancellationAccepted ||
+              cancellationPending ||
+              cancellationRefundReview ||
+              cancellationManualReview ||
+              membership.cancellationReceipt
             );
             const cancellationPreview = membership.cancellationPreview ?? preview;
             const cancelBeforeStart = membership.cancellationMode === "cancel_before_start";
@@ -384,14 +438,14 @@ export default function MembershipManage() {
                   </div>
                   <div>
                     <dt className="text-[11px] font-semibold uppercase tracking-[0.2em] text-white/45">
-                      {isScheduled && !cancellationConfirmed
-                        ? "Membership starts"
-                        : cancelledBeforeStart
+                      {cancelledBeforeStart
                           ? "Cancellation"
                         : cancellationConfirmed
                         ? "Membership ends"
-                        : cancellationPending || cancellationManualReview
+                        : cancellationRequestRecorded
                           ? "Cancellation"
+                          : isScheduled
+                            ? "Membership starts"
                           : "Status"}
                     </dt>
                     <dd className="mt-1 text-sm text-white/75">
@@ -399,12 +453,16 @@ export default function MembershipManage() {
                         ? cancelledBeforeStart
                           ? "Cancelled before start"
                           : formatIsoDate(cancellationOutcome.accessEndsOnDate)
-                        : isScheduled
-                          ? formatUnixDate(serviceStartsAt)
+                        : cancellationAccepted
+                          ? "Request accepted"
                         : cancellationPending
-                          ? "Pending confirmation"
+                          ? "Update processing"
+                        : cancellationRefundReview
+                          ? "Refund review"
                           : cancellationManualReview
                             ? "Needs support"
+                          : isScheduled
+                            ? formatUnixDate(serviceStartsAt)
                             : MEMBERSHIP_STATE_LABEL[membership.state]}
                     </dd>
                   </div>
@@ -463,18 +521,92 @@ export default function MembershipManage() {
                   </div>
                 )}
 
-                {coolingOffActive && !cancellationConfirmed &&
-                  !cancellationPending && !cancellationManualReview && (
-                  <div className="mt-5 rounded-2xl border border-amber-500/25 bg-amber-500/10 p-5 text-sm leading-7 text-amber-50/85">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-200/70">
-                      Cooling-off cancellation needs staff
+                {membership.cancellationReceipt && (
+                  <div className="mt-5 rounded-2xl border border-sky-400/25 bg-sky-400/10 p-5 text-sm leading-7 text-sky-50/90">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-sky-200">
+                      Cancellation receipt
+                    </p>
+                    <dl className="mt-3 grid gap-x-6 gap-y-3 sm:grid-cols-2">
+                      <div className="min-w-0">
+                        <dt className="text-xs text-sky-100/60">Reference</dt>
+                        <dd className="break-all font-mono text-xs text-sky-50">
+                          {membership.cancellationReceipt.reference}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs text-sky-100/60">Received</dt>
+                        <dd className="text-sky-50">
+                          {formatReceiptTimestamp(
+                            membership.cancellationReceipt.receivedAt
+                          )}
+                        </dd>
+                      </div>
+                    </dl>
+                    <p className="mt-3 text-xs text-sky-100/70">
+                      {cancellationKindLabel(membership.cancellationReceipt.kind)}
+                      {membership.cancellationReceipt.acknowledgementStatus === "sent"
+                        ? " · Acknowledgement sent"
+                        : membership.cancellationReceipt.acknowledgementStatus === "failed"
+                          ? " · Email acknowledgement needs retry; this receipt remains valid"
+                          : " · Acknowledgement pending"}
+                    </p>
+                  </div>
+                )}
+
+                {coolingOffActive && !cancellationRequestRecorded && (
+                  <div className="mt-5 rounded-2xl border border-amber-500/25 bg-amber-500/10 p-5 text-sm leading-7 text-amber-50/90">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-200">
+                      Cooling-off period
                     </p>
                     <p className="mt-3">
-                      The ordinary renewal-notice flow is not used during your cooling-off
-                      period because any service charge or refund must be reviewed
-                      proportionately. Contact {COMPANY.supportEmail} and ask for written
-                      acknowledgement.
+                      You can ask to cancel during the cooling-off period
+                      {membership.coolingOffEndsAt
+                        ? `, which ends ${formatReceiptTimestamp(membership.coolingOffEndsAt)}`
+                        : ""}.
+                      Any proportionate service charge or refund is reviewed separately
+                      and does not prevent you from submitting the cancellation request.
                     </p>
+                    {isConfirming ? (
+                      <div className="mt-4">
+                        <p className="font-semibold text-amber-50">
+                          Submit a clear request to cancel this membership during the
+                          cooling-off period. We will record when it is received.
+                        </p>
+                        <div className="mt-4 flex flex-wrap gap-3">
+                          <button
+                            type="button"
+                            onClick={() => cancellationPreview && cancel(
+                              membership.subscriptionId,
+                              cancellationPreview.cancelAtUnixSeconds,
+                              "cooling_off"
+                            )}
+                            disabled={
+                              !cancellationPreview || busy === membership.subscriptionId
+                            }
+                            className="rounded-2xl bg-red-500/90 px-5 py-3 text-sm font-bold uppercase tracking-[0.14em] text-white transition hover:bg-red-500 disabled:bg-red-500/40"
+                          >
+                            {busy === membership.subscriptionId
+                              ? "Submitting…"
+                              : "Submit cooling-off cancellation"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirming(null)}
+                            className="rounded-2xl border border-amber-200/30 px-5 py-3 text-sm font-bold uppercase tracking-[0.14em] text-amber-50 transition hover:border-amber-100/60"
+                          >
+                            Keep membership
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfirming(membership.subscriptionId)}
+                        className="mt-4 rounded-2xl border border-amber-200/30 px-5 py-3 text-sm font-bold uppercase tracking-[0.14em] text-amber-50 transition hover:border-amber-100/60"
+                      >
+                        Cancel during cooling-off period
+                      </button>
+                    )}
                   </div>
                 )}
 
@@ -499,28 +631,51 @@ export default function MembershipManage() {
                   </div>
                 )}
 
-                {cancellationPending && (
-                  <div className="mt-5 rounded-2xl border border-amber-500/25 bg-amber-500/10 p-5 text-sm leading-7 text-amber-100">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-200/70">
-                      Cancellation still processing
+                {cancellationAccepted && !cancellationConfirmed && (
+                  <div
+                    className="mt-5 rounded-2xl border border-sky-400/25 bg-sky-400/10 p-5 text-sm leading-7 text-sky-50/90"
+                    role="status"
+                  >
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-sky-200">
+                      Cancellation request accepted
                     </p>
                     <p className="mt-3">
-                      Your request is not confirmed yet. Retry so we can verify the Stripe
-                      schedule and record your final payment and membership end dates.
+                      Your request has been recorded. Final billing and membership end
+                      dates will appear here when the provider update is available. You
+                      do not need to submit another request.
                     </p>
-                    <button
-                      type="button"
-                      onClick={() => cancellationPreview && cancel(
-                        membership.subscriptionId,
-                        cancellationPreview.cancelAtUnixSeconds
-                      )}
-                      disabled={!cancellationPreview || busy === membership.subscriptionId}
-                      className="mt-4 rounded-2xl border border-amber-200/30 px-5 py-3 text-sm font-bold uppercase tracking-[0.14em] text-amber-100 transition hover:border-amber-100/60 disabled:opacity-50"
-                    >
-                      {busy === membership.subscriptionId
-                        ? "Retrying…"
-                        : "Retry cancellation"}
-                    </button>
+                  </div>
+                )}
+
+                {cancellationPending && (
+                  <div
+                    className="mt-5 rounded-2xl border border-amber-500/25 bg-amber-500/10 p-5 text-sm leading-7 text-amber-50/90"
+                    role="status"
+                  >
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-200/70">
+                      Cancellation request received
+                    </p>
+                    <p className="mt-3">
+                      Your receipt is retained while the billing update processes. Final
+                      payment and membership end dates will appear here when ready. You
+                      do not need to submit another request.
+                    </p>
+                  </div>
+                )}
+
+                {cancellationRefundReview && (
+                  <div
+                    className="mt-5 rounded-2xl border border-amber-500/25 bg-amber-500/10 p-5 text-sm leading-7 text-amber-50/90"
+                    role="status"
+                  >
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-200">
+                      Cancellation accepted · refund review
+                    </p>
+                    <p className="mt-3">
+                      Your cancellation request remains recorded. Staff are reviewing
+                      only whether a refund or proportionate service charge applies. You
+                      do not need to request cancellation again.
+                    </p>
                   </div>
                 )}
 
@@ -550,8 +705,7 @@ export default function MembershipManage() {
                 )}
 
                 {!cancellationConfirmed &&
-                  !cancellationPending &&
-                  !cancellationManualReview &&
+                  !cancellationRequestRecorded &&
                   !coolingOffActive &&
                   cancellationPreview &&
                   isConfirming && (
@@ -588,8 +742,7 @@ export default function MembershipManage() {
                 )}
 
                 {!cancellationConfirmed &&
-                  !cancellationPending &&
-                  !cancellationManualReview &&
+                  !cancellationRequestRecorded &&
                   !coolingOffActive &&
                   !isConfirming && (
                   <button
@@ -642,8 +795,9 @@ export default function MembershipManage() {
           </ul>
           <p className="mt-5 text-xs leading-6 text-white/40">
             If the cancellation flow is unavailable, email {COMPANY.supportEmail} from your
-            recorded payer email. Staff will confirm the effective dates in writing; do not
-            assume the request is complete until you receive that confirmation.
+            recorded payer email and state clearly that you want to cancel. Keep a copy of
+            your sent message. Staff will reply with a receipt reference and the effective
+            dates.
           </p>
         </div>
       </div>

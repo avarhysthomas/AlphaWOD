@@ -87,13 +87,20 @@ function getCheckoutButton() {
 async function submitAdultCheckout() {
   await userEvent.type(screen.getByLabelText(/^Your full name$/i), "Payer One");
   await userEvent.type(screen.getByLabelText(/Your date of birth/i), "1990-01-01");
-  await userEvent.click(screen.getByLabelText(/I have read and accept/i));
-  await userEvent.click(screen.getByLabelText(/I expressly request/i));
+  await acceptAllCheckoutStatements();
   await userEvent.type(
     screen.getByLabelText(/Type your full name to sign/i),
     "Payer One"
   );
   await userEvent.click(getCheckoutButton());
+}
+
+async function acceptAllCheckoutStatements() {
+  for (const checkbox of screen.getAllByRole("checkbox")) {
+    if (!(checkbox as HTMLInputElement).checked) {
+      await userEvent.click(checkbox);
+    }
+  }
 }
 
 describe("MembershipCheckout", () => {
@@ -141,7 +148,7 @@ describe("MembershipCheckout", () => {
     expect(screen.getByLabelText(/Child’s date of birth/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Relationship to child/i)).toBeInTheDocument();
     expect(
-      screen.getByText(/this child’s parent or legal guardian, or an adult/i)
+      screen.getByText(/named child.*parent or legal guardian or otherwise/i)
     ).toBeInTheDocument();
     expect(screen.getByLabelText(/Type the paying adult’s full name to sign/i))
       .toBeInTheDocument();
@@ -154,6 +161,39 @@ describe("MembershipCheckout", () => {
     expect(screen.getByText(/Adult memberships can only be purchased for yourself/i))
       .toBeInTheDocument();
     expect(screen.queryByLabelText(/I am the participant/i)).not.toBeInTheDocument();
+  });
+
+  it("shows only the immutable documents and separate statements for the signer role", () => {
+    renderCheckout("adult_unlimited");
+
+    expect(screen.getByText("Adult Participant Waiver and Risk Acknowledgement"))
+      .toBeInTheDocument();
+    expect(screen.queryByText("Parent/Guardian Consent and Youth Membership Addendum"))
+      .not.toBeInTheDocument();
+    expect(screen.getAllByRole("link", {name: /versioned plain-text copy/i}))
+      .toHaveLength(4);
+    expect(screen.getByLabelText(/I have read and agree to the Membership Terms/i))
+      .not.toBeChecked();
+    expect(screen.getByLabelText(/I acknowledge that I have received and read the Privacy Notice/i))
+      .not.toBeChecked();
+    expect(screen.getByLabelText(/I confirm that I am the named participant/i))
+      .not.toBeChecked();
+    expect(screen.getByLabelText(/I authorise the amount Stripe shows today/i))
+      .not.toBeChecked();
+    expect(screen.getByLabelText(/I expressly request/i)).not.toBeChecked();
+  });
+
+  it("uses the guardian addendum instead of an adult waiver for youth checkout", () => {
+    renderCheckout("youth_youngstars");
+
+    expect(screen.getByText("Parent/Guardian Consent and Youth Membership Addendum"))
+      .toBeInTheDocument();
+    expect(screen.queryByText("Adult Participant Waiver and Risk Acknowledgement"))
+      .not.toBeInTheDocument();
+    expect(screen.getByLabelText(/I confirm that I am aged 18 or over.*named child/i))
+      .not.toBeChecked();
+    expect(screen.getByLabelText(/I have read and agree to the Parent\/Guardian Consent/i))
+      .not.toBeChecked();
   });
 
   it("warns when the date of birth falls outside the plan's age band", async () => {
@@ -240,12 +280,11 @@ describe("MembershipCheckout", () => {
     );
     await userEvent.type(screen.getByLabelText(/Relationship to child/i), "Parent");
     await userEvent.click(
-      screen.getByLabelText(/I confirm I am this child’s parent or legal guardian/i)
+      screen.getByLabelText(/I confirm that I am aged 18 or over.*named child/i)
     );
     await userEvent.type(screen.getByLabelText(/Child’s full name/i), "Alex Child");
     await userEvent.type(screen.getByLabelText(/Child’s date of birth/i), dateOfBirth);
-    await userEvent.click(screen.getByLabelText(/I have read and accept/i));
-    await userEvent.click(screen.getByLabelText(/I expressly request/i));
+    await acceptAllCheckoutStatements();
     await userEvent.type(
       screen.getByLabelText(/Type the paying adult’s full name to sign/i),
       "Ava Parent"
@@ -260,8 +299,15 @@ describe("MembershipCheckout", () => {
       participantIsPayer: false,
       guardianFullName: "Ava Parent",
       guardianRelationship: "Parent",
-      guardianConfirmsAuthority: true,
       signedName: "Ava Parent",
+      acceptedStatementIds: [
+        "membership_contract",
+        "privacy_notice",
+        "guardian_authority",
+        "guardian_youth_addendum",
+        "recurring_payment_authority",
+        "immediate_performance",
+      ],
     }));
   });
 

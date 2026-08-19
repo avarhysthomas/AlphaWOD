@@ -29,7 +29,7 @@ function AttendeeChip({ attendee }: { attendee: SessionAttendee }) {
         {showPhoto ? (
           <img
             src={attendee.photoURL}
-            alt=""
+            alt={attendee.name}
             draggable={false}
             onError={() => setPhotoFailed(true)}
             className="h-full w-full select-none object-cover"

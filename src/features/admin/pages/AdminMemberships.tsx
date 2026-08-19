@@ -41,6 +41,10 @@ function needsAttention(membership: AdminMembership): boolean {
     Boolean(membership.confirmationEmailError) ||
     membership.cancellationRequestStatus === "manual_review" ||
     Boolean(membership.cancellationRequestError) ||
+    membership.refundReviewRequired === true ||
+    membership.cancellationAcknowledgementStatus === "dead_letter" ||
+    membership.cancellationAcknowledgementStatus === "manual_review" ||
+    Boolean(membership.cancellationAcknowledgementError) ||
     membership.entitlementProjectionStatus === "manual_review" ||
     Boolean(membership.entitlementProjectionError) ||
     (membership.state !== "scheduled" &&
@@ -126,6 +130,26 @@ export default function AdminMemberships() {
     } catch (linkError: unknown) {
       setError(
         linkError instanceof Error ? linkError.message : "Could not link the participant."
+      );
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const repairProjection = async (
+    subscriptionId: string,
+    participantUid: string
+  ) => {
+    try {
+      setBusy(subscriptionId);
+      setError("");
+      await linkMembershipParticipant(subscriptionId, participantUid);
+      await load();
+    } catch (repairError: unknown) {
+      setError(
+        repairError instanceof Error ?
+          repairError.message :
+          "Could not repair AlphaWOD access."
       );
     } finally {
       setBusy("");
@@ -321,6 +345,30 @@ export default function AdminMemberships() {
               </div>
             )}
 
+            {(membership.refundReviewRequired ||
+              membership.cancellationAcknowledgementStatus === "dead_letter" ||
+              membership.cancellationAcknowledgementStatus === "manual_review" ||
+              membership.cancellationAcknowledgementError) && (
+              <div className="mt-5 rounded-2xl border border-amber-500/25 bg-amber-500/10 p-4 text-sm leading-6 text-amber-50">
+                <p className="font-semibold">Cooling-off follow-up required</p>
+                <p className="mt-1 text-xs text-amber-100/70">
+                  {membership.refundReviewRequired
+                    ? "Refund or proportionate-service review is required. "
+                    : ""}
+                  {membership.cancellationAcknowledgementError
+                    ? `Acknowledgement: ${membership.cancellationAcknowledgementError} `
+                    : membership.cancellationAcknowledgementStatus
+                      ? `Acknowledgement status: ${membership.cancellationAcknowledgementStatus.replaceAll("_", " ")}. `
+                      : ""}
+                  {membership.cancellationReceipt
+                    ? `Receipt ${membership.cancellationReceipt.reference} · received ${new Date(
+                      membership.cancellationReceipt.receivedAt
+                    ).toLocaleString("en-GB")}.`
+                    : "Check the billing audit and immutable cancellation receipt."}
+                </p>
+              </div>
+            )}
+
             {(membership.entitlementProjectionStatus === "manual_review" ||
               membership.entitlementProjectionError ||
               (membership.state !== "scheduled" && membership.grantsAlphaWodAccess &&
@@ -336,6 +384,27 @@ export default function AdminMemberships() {
                   {membership.entitlementProjectionError ??
                     "The paid membership could not be safely projected onto the participant account. Check the billing audit and entitlement owner before making a manual change."}
                 </p>
+                {membership.entitlementTargetUid && (
+                  <div className="mt-4">
+                    <button
+                      type="button"
+                      onClick={() => repairProjection(
+                        membership.subscriptionId,
+                        membership.entitlementTargetUid as string
+                      )}
+                      disabled={busy === membership.subscriptionId}
+                      className="rounded-2xl bg-white px-4 py-2.5 text-xs font-bold uppercase tracking-[0.14em] text-black disabled:opacity-50"
+                    >
+                      {busy === membership.subscriptionId ?
+                        "Rechecking Stripe…" :
+                        "Repair AlphaWOD access"}
+                    </button>
+                    <p className="mt-2 text-xs leading-5 text-red-100/60">
+                      Rechecks this subscription in Stripe, then reapplies access only to
+                      the account already linked above.
+                    </p>
+                  </div>
+                )}
               </div>
             )}
 

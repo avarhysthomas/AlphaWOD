@@ -1,7 +1,11 @@
 import { getFunctions, httpsCallable } from "firebase/functions";
 import app from "../../../firebaseApp";
 import {
-  CHECKOUT_DOCUMENTS,
+  createCommercialPlanSnapshot,
+  resolveCheckoutAcceptanceStatements,
+  resolveCheckoutDocuments,
+  resolveCheckoutSignerRole,
+  type CheckoutAcceptanceId,
   type PlanKey,
 } from "../../../lib/membershipPlans";
 
@@ -53,7 +57,30 @@ export type CancellationOutcome = {
   cancelAtUnixSeconds: number;
 };
 
-export type CancellationRequestStatus = "pending" | "applied" | "manual_review";
+export type CancellationRequestKind =
+  | "presale_withdrawal"
+  | "cooling_off"
+  | "contractual";
+
+export type CancellationRequestStatus =
+  | "accepted"
+  | "pending"
+  | "applied"
+  | "refund_review"
+  | "manual_review";
+
+/**
+ * Safe server projection of the immutable cancellation receipt. Raw evidence
+ * remains in a deny-all Firestore collection; the payer sees only the fields
+ * needed to prove when and how their request was recorded.
+ */
+export type CancellationReceipt = {
+  reference: string;
+  receivedAt: string;
+  kind: CancellationRequestKind;
+  acknowledgementStatus?: "pending" | "sent" | "failed" | null;
+  refundReviewRequired?: boolean;
+};
 
 export type MyMembership = {
   subscriptionId: string;
@@ -76,6 +103,10 @@ export type MyMembership = {
   cancellationOutcome: CancellationOutcome | null;
   cancellationMode?: "cancel_before_start" | "standard";
   cancellationPreview?: CancellationOutcome | null;
+  cancellationRequestStatus?: CancellationRequestStatus | null;
+  cancellationRequestKind?: CancellationRequestKind | null;
+  cancellationReceipt?: CancellationReceipt | null;
+  /** Legacy projections retained until every deployed backend returns status. */
   cancellationPending: boolean;
   cancellationManualReview: boolean;
   cancellationRequestError: string | null;
@@ -100,13 +131,12 @@ export type CheckoutRequest = {
   participantDateOfBirth: string;
   participantIsPayer: boolean;
   signedName: string;
-  acceptedDocuments: boolean;
-  immediatePerformanceRequested: boolean;
+  /** Exact ids checked individually; the server rejects any non-exact set. */
+  acceptedStatementIds: CheckoutAcceptanceId[];
   /** Optional shared campaign code. Included in the digest, never stored as plaintext. */
   promotionCode?: string;
   guardianFullName?: string;
   guardianRelationship?: string;
-  guardianConfirmsAuthority?: boolean;
 };
 
 export type CheckoutDetails = Omit<CheckoutRequest, "checkoutAttemptId">;
@@ -161,7 +191,12 @@ async function fingerprintCheckoutDetails(
       schemaVersion: 1,
       payerUid: context.payerUid,
       details,
-      documents: CHECKOUT_DOCUMENTS,
+      legalAndCommercialSnapshot: {
+        commercialTerms: createCommercialPlanSnapshot(details.planKey),
+        signerRole: resolveCheckoutSignerRole(details.planKey),
+        documents: resolveCheckoutDocuments(details.planKey),
+        statements: resolveCheckoutAcceptanceStatements(details.planKey),
+      },
     }))
   );
   return Array.from(new Uint8Array(digest), (value) =>
@@ -241,7 +276,9 @@ export async function createMembershipCheckoutSession(request: CheckoutRequest) 
     firstFullChargeDate: string;
     initialChargePence: number | null;
     promotionCodesEnabled: boolean;
-  }>(functions, "createMembershipCheckoutSession");
+  }>(functions, "createMembershipCheckoutSession", {
+    limitedUseAppCheckTokens: true,
+  });
 
   const result = await invoke(request);
   return result.data;
@@ -270,17 +307,25 @@ export async function createCustomerPortalSession(subscriptionId: string) {
 
 export async function requestMembershipCancellation(
   subscriptionId: string,
-  expectedCancelAtUnixSeconds: number
+  expectedCancelAtUnixSeconds: number,
+  kind?: CancellationRequestKind
 ) {
   const invoke = httpsCallable<{
     subscriptionId: string;
     expectedCancelAtUnixSeconds: number;
+    kind?: CancellationRequestKind;
   }, {
     ok: boolean;
-    outcome: CancellationOutcome;
+    outcome?: CancellationOutcome | null;
+    requestStatus?: CancellationRequestStatus;
+    receipt?: CancellationReceipt | null;
   }>(functions, "requestMembershipCancellation");
 
-  const result = await invoke({subscriptionId, expectedCancelAtUnixSeconds});
+  const result = await invoke({
+    subscriptionId,
+    expectedCancelAtUnixSeconds,
+    ...(kind ? {kind} : {}),
+  });
   return result.data;
 }
 
@@ -407,7 +452,15 @@ export type AdminMembership = {
   confirmationEmailError: string | null;
   confirmationEmailProviderId: string | null;
   cancellationRequestStatus: CancellationRequestStatus | null;
+  cancellationRequestKind?: CancellationRequestKind | null;
+  cancellationReceipt?: (CancellationReceipt & {
+    channel?: "membership_portal" | "support_email" | "staff_recorded";
+  }) | null;
+  refundReviewRequired?: boolean;
   cancellationRequestError: string | null;
+  cancellationAcknowledgementStatus?: string | null;
+  cancellationAcknowledgementError?: string | null;
+  cancellationAcknowledgementProviderId?: string | null;
   entitlementProjectionStatus: "applied" | "manual_review" | null;
   entitlementProjectionError: string | null;
 };

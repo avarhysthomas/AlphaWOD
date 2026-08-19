@@ -2,6 +2,7 @@ import { httpsCallable } from "firebase/functions";
 import {
   clearPendingClaim,
   clearCheckoutAttempt,
+  createMembershipCheckoutSession,
   createCheckoutAttemptId,
   readCheckoutAttemptId,
   readPendingClaim,
@@ -75,6 +76,42 @@ describe("checkout attempt identifiers", () => {
     window.sessionStorage.clear();
   });
 
+  it("uses a limited-use App Check token for the sensitive checkout call", async () => {
+    const invoke = jest.fn().mockResolvedValue({
+      data: {
+        ok: true,
+        sessionUrl: "https://checkout.stripe.test/session",
+        sessionId: "cs_test_app_check",
+      },
+    });
+    (httpsCallable as jest.Mock).mockReturnValue(invoke);
+    const checkout: Parameters<typeof createMembershipCheckoutSession>[0] = {
+      checkoutAttemptId: "attempt_app_check_123456",
+      expectedBillingMode: "presale_deferred",
+      planKey: "adult_unlimited",
+      participantFullName: "App Check Member",
+      participantDateOfBirth: "1990-01-01",
+      participantIsPayer: true,
+      signedName: "App Check Member",
+      acceptedStatementIds: [
+        "membership_contract",
+        "privacy_notice",
+        "adult_participant_waiver",
+        "recurring_payment_authority",
+        "immediate_performance",
+      ],
+    };
+
+    await createMembershipCheckoutSession(checkout);
+
+    expect(httpsCallable).toHaveBeenCalledWith(
+      expect.anything(),
+      "createMembershipCheckoutSession",
+      {limitedUseAppCheckTokens: true}
+    );
+    expect(invoke).toHaveBeenCalledWith(checkout);
+  });
+
   it("creates unique opaque UUID-shaped values for Stripe idempotency", () => {
     const ids = Array.from({ length: 32 }, () => createCheckoutAttemptId());
 
@@ -94,8 +131,13 @@ describe("checkout attempt identifiers", () => {
       participantDateOfBirth: "1990-01-01",
       participantIsPayer: true,
       signedName: "Private Person",
-      acceptedDocuments: true,
-      immediatePerformanceRequested: true,
+      acceptedStatementIds: [
+        "membership_contract",
+        "privacy_notice",
+        "adult_participant_waiver",
+        "recurring_payment_authority",
+        "immediate_performance",
+      ],
       promotionCode: "PRIVATE-EXISTING-001",
     };
 
@@ -123,8 +165,13 @@ describe("checkout attempt identifiers", () => {
       participantDateOfBirth: "1990-01-01",
       participantIsPayer: true,
       signedName: "First Athlete",
-      acceptedDocuments: true,
-      immediatePerformanceRequested: true,
+      acceptedStatementIds: [
+        "membership_contract",
+        "privacy_notice",
+        "adult_participant_waiver",
+        "recurring_payment_authority",
+        "immediate_performance",
+      ],
     };
     const first = await resolveCheckoutAttempt(base);
     const changed = await resolveCheckoutAttempt({
@@ -145,8 +192,13 @@ describe("checkout attempt identifiers", () => {
       participantDateOfBirth: "1990-01-01",
       participantIsPayer: true,
       signedName: "Discounted Athlete",
-      acceptedDocuments: true,
-      immediatePerformanceRequested: true,
+      acceptedStatementIds: [
+        "membership_contract",
+        "privacy_notice",
+        "adult_participant_waiver",
+        "recurring_payment_authority",
+        "immediate_performance",
+      ],
       promotionCode: "MEMBER-CODE-ONE",
     };
     const first = await resolveCheckoutAttempt(base);
@@ -170,8 +222,13 @@ describe("checkout attempt identifiers", () => {
       participantDateOfBirth: "1990-01-01",
       participantIsPayer: true,
       signedName: "Identity Change",
-      acceptedDocuments: true,
-      immediatePerformanceRequested: true,
+      acceptedStatementIds: [
+        "membership_contract",
+        "privacy_notice",
+        "adult_participant_waiver",
+        "recurring_payment_authority",
+        "immediate_performance",
+      ],
     };
     const anonymous = await resolveCheckoutAttempt(details, null, { payerUid: null });
     const signedIn = await resolveCheckoutAttempt(details, anonymous, {
@@ -204,5 +261,33 @@ describe("checkout attempt identifiers", () => {
       subscriptionId: "sub_previewed",
       expectedCancelAtUnixSeconds: 1_788_217_200,
     });
+  });
+
+  it("marks a cooling-off request without breaking the preview-bound payload", async () => {
+    const invoke = jest.fn().mockResolvedValue({
+      data: {
+        ok: true,
+        requestStatus: "accepted",
+        receipt: {
+          reference: "cancel_test",
+          receivedAt: "2026-08-19T14:05:00.000Z",
+          kind: "cooling_off",
+        },
+      },
+    });
+    (httpsCallable as jest.Mock).mockReturnValue(invoke);
+
+    const result = await requestMembershipCancellation(
+      "sub_cooling_off",
+      1_788_217_200,
+      "cooling_off"
+    );
+
+    expect(invoke).toHaveBeenCalledWith({
+      subscriptionId: "sub_cooling_off",
+      expectedCancelAtUnixSeconds: 1_788_217_200,
+      kind: "cooling_off",
+    });
+    expect(result.receipt?.reference).toBe("cancel_test");
   });
 });

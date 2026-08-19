@@ -477,6 +477,9 @@ describe("billing collections are server-only", () => {
     "membershipEntitlementOwners/member_test",
     "stripeEvents/evt_test",
     "membershipEmailOutbox/sub_test",
+    "membershipCancellationReceipts/cancel_test",
+    "membershipCheckoutRateAdmissions/attempt_test",
+    "membershipCheckoutRateLimits/source_burst_1",
     "membershipAudit/audit_test",
   ];
 

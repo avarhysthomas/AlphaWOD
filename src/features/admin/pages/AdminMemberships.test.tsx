@@ -1,5 +1,5 @@
 import React from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import AdminMemberships from "./AdminMemberships";
 
 const mockListMemberships = jest.fn();
@@ -35,6 +35,11 @@ jest.mock(
 describe("AdminMemberships cancellation attention", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockLinkMembershipParticipant.mockResolvedValue({
+      ok: true,
+      alreadyLinked: true,
+      repaired: true,
+    });
     mockListMemberships.mockResolvedValue({
       ok: true,
       memberships: [{
@@ -60,7 +65,17 @@ describe("AdminMemberships cancellation attention", () => {
         confirmationEmailError: null,
         confirmationEmailProviderId: "email_123",
         cancellationRequestStatus: "manual_review",
+        cancellationRequestKind: "cooling_off",
+        cancellationReceipt: {
+          reference: "cancel_review_receipt",
+          receivedAt: "2026-08-19T14:05:00.000Z",
+          kind: "cooling_off",
+        },
+        refundReviewRequired: true,
         cancellationRequestError: "Stripe cancellation recovery exhausted.",
+        cancellationAcknowledgementStatus: "manual_review",
+        cancellationAcknowledgementError: "Delivery requires manual review.",
+        cancellationAcknowledgementProviderId: null,
         entitlementProjectionStatus: "manual_review",
         entitlementProjectionError: "Participant profile is missing.",
       }],
@@ -80,6 +95,14 @@ describe("AdminMemberships cancellation attention", () => {
       .toBeInTheDocument();
     expect(screen.getByText("Participant profile is missing."))
       .toBeInTheDocument();
+    expect(screen.getByText("Cooling-off follow-up required"))
+      .toBeInTheDocument();
+    expect(screen.getByText(/Refund or proportionate-service review is required/))
+      .toBeInTheDocument();
+    expect(screen.getByText(/Receipt cancel_review_receipt/))
+      .toBeInTheDocument();
+    expect(screen.queryByRole("button", {name: "Repair AlphaWOD access"}))
+      .not.toBeInTheDocument();
   });
 
   it("keeps a healthy presale membership out of attention and shows its schedule", async () => {
@@ -143,5 +166,103 @@ describe("AdminMemberships cancellation attention", () => {
     expect(screen.getByText("Existing-member discount applied")).toBeInTheDocument();
     expect(screen.queryByText("AlphaWOD access has not been applied"))
       .not.toBeInTheDocument();
+  });
+
+  it("repairs only the account already linked to the membership", async () => {
+    mockListMemberships.mockResolvedValue({
+      ok: true,
+      memberships: [{
+        subscriptionId: "sub_projection_repair",
+        payerUid: "repair-target",
+        payerEmail: "repair@example.test",
+        planKey: "adult_unlimited",
+        planName: "Adult Unlimited Membership",
+        state: "active",
+        stripeStatus: "active",
+        grantsAlphaWodAccess: true,
+        entitlementTargetUid: "repair-target",
+        participantFullName: "Repair Member",
+        participantAge: 34,
+        participantIsPayer: true,
+        guardianFullName: null,
+        currentPeriodEnd: 1_790_809_200,
+        cancelAt: null,
+        disputeOpen: false,
+        accessRevoked: false,
+        providerContractStatus: "verified",
+        providerContractError: null,
+        pastDueSince: null,
+        confirmationEmailStatus: "sent",
+        confirmationEmailError: null,
+        confirmationEmailProviderId: "email_repair",
+        cancellationRequestStatus: null,
+        cancellationRequestError: null,
+        entitlementProjectionStatus: "manual_review",
+        entitlementProjectionError: "Interrupted before access projection.",
+      }],
+    });
+
+    render(<AdminMemberships />);
+
+    fireEvent.click(await screen.findByRole("button", {
+      name: "Repair AlphaWOD access",
+    }));
+
+    await waitFor(() => {
+      expect(mockLinkMembershipParticipant).toHaveBeenCalledWith(
+        "sub_projection_repair",
+        "repair-target"
+      );
+    });
+    expect(screen.getByText(/reapplies access only to the account already linked/i))
+      .toBeInTheDocument();
+  });
+
+  it("keeps a failed repair visible for an operator to retry", async () => {
+    mockListMemberships.mockResolvedValue({
+      ok: true,
+      memberships: [{
+        subscriptionId: "sub_projection_failure",
+        payerUid: "repair-target",
+        payerEmail: "repair@example.test",
+        planKey: "adult_unlimited",
+        planName: "Adult Unlimited Membership",
+        state: "active",
+        stripeStatus: "active",
+        grantsAlphaWodAccess: true,
+        entitlementTargetUid: "repair-target",
+        participantFullName: "Repair Member",
+        participantAge: 34,
+        participantIsPayer: true,
+        guardianFullName: null,
+        currentPeriodEnd: 1_790_809_200,
+        cancelAt: null,
+        disputeOpen: false,
+        accessRevoked: false,
+        providerContractStatus: "verified",
+        providerContractError: null,
+        pastDueSince: null,
+        confirmationEmailStatus: "sent",
+        confirmationEmailError: null,
+        confirmationEmailProviderId: "email_repair",
+        cancellationRequestStatus: null,
+        cancellationRequestError: null,
+        entitlementProjectionStatus: "manual_review",
+        entitlementProjectionError: "Interrupted before access projection.",
+      }],
+    });
+    mockLinkMembershipParticipant.mockRejectedValueOnce(
+      new Error("Stripe state is temporarily unavailable.")
+    );
+
+    render(<AdminMemberships />);
+    fireEvent.click(await screen.findByRole("button", {
+      name: "Repair AlphaWOD access",
+    }));
+
+    expect(await screen.findByText("Stripe state is temporarily unavailable."))
+      .toBeInTheDocument();
+    expect(screen.getByRole("button", {name: "Repair AlphaWOD access"}))
+      .toBeEnabled();
   });
 });
