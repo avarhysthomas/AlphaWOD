@@ -1,3 +1,0 @@
-DRAFT FOR LEGAL REVIEW — NOT APPROVED FOR PUBLICATION
-
-This immutable placeholder identifies the Adult Participant Waiver and Risk Acknowledgement working draft ZAF-ADULT-WAIVER-DRAFT-2026-08-17-01. The approved customer-facing text and its SHA-256 digest must replace this placeholder before public checkout is enabled.

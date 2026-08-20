@@ -115,7 +115,12 @@ test("membership Functions deploy in complete selective batches of ten or fewer"
     path.join(root, "docs/billing/phase-1-rollout.md"),
     "utf8"
   );
-  const batches = [...rollout.matchAll(
+  const deploymentSectionStart = rollout.indexOf(
+    "## 8. Deployment notes that inherit Phase 0 constraints"
+  );
+  assert.ok(deploymentSectionStart >= 0);
+  const deploymentSection = rollout.slice(deploymentSectionStart);
+  const batches = [...deploymentSection.matchAll(
     /^firebase deploy --only (functions:[^\n]+) --project alphawod-d1f2f$/gm
   )].map((match) => match[1].split(","));
   const expectedTargets = [
@@ -151,7 +156,7 @@ test("membership Functions deploy in complete selective batches of ten or fewer"
     "firebase deploy --only functions:stripeWebhook,",
     "firebase deploy --only functions:createMembershipCheckoutSession,",
   ];
-  const positions = orderedMarkers.map((marker) => rollout.indexOf(marker));
+  const positions = orderedMarkers.map((marker) => deploymentSection.indexOf(marker));
   assert.ok(positions.every((position) => position >= 0));
   assert.deepEqual(positions, [...positions].sort((left, right) => left - right));
 });

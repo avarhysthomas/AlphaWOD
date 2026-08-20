@@ -147,15 +147,19 @@ describe("membership catalogue parity", () => {
     expect(granting).toEqual(["adult_unlimited"]);
   });
 
-  it("keeps the purchase flow closed while the legal documents are drafts", () => {
+  it("publishes only the approved immutable checkout documents", () => {
     const {
+      CHECKOUT_DOCUMENTS,
       CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION,
     } = require("./membershipPlans") as typeof import("./membershipPlans");
 
-    // This guard is intentional: every document version in CHECKOUT_DOCUMENTS
-    // is still marked "DRAFT FOR LEGAL REVIEW - NOT APPROVED FOR PUBLICATION".
-    // Flip it only together with approved, versioned documents.
-    expect(CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION).toBe(false);
+    expect(CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION).toBe(true);
+    Object.values(CHECKOUT_DOCUMENTS).forEach((document) => {
+      expect(document.version).toMatch(/^ZAF-[A-Z-]+-2026-08-20-01$/);
+      expect(document.effectiveDate).toBe("2026-08-20");
+      expect(document.sha256).toMatch(/^[a-f0-9]{64}$/);
+      expect(JSON.stringify(document)).not.toMatch(/\b(?:DRAFT|PENDING)\b/i);
+    });
   });
 
   it("keeps canonical legal copy within the checkout outbox byte budget", () => {

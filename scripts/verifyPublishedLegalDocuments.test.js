@@ -103,6 +103,33 @@ test("fetches every final URL and verifies exact canonical bytes and SHA-256", a
   ]);
 });
 
+test("accepts ordinary Depending text but rejects standalone finality markers", async () => {
+  const depending = finalDocument(
+    "privacyNotice",
+    "Depending on the circumstances, a person may have additional rights.\n"
+  );
+  await assert.doesNotReject(
+    verifyPublishedLegalDocuments(verificationInput({
+      documents: {privacyNotice: depending},
+      fetchImpl: async () => fakeResponse({body: depending.content}),
+    }))
+  );
+
+  for (const marker of ["DRAFT", "PENDING"]) {
+    const marked = finalDocument(
+      "privacyNotice",
+      `${marker} legal publication text.\n`
+    );
+    await assert.rejects(
+      verifyPublishedLegalDocuments(verificationInput({
+        documents: {privacyNotice: marked},
+        fetchImpl: async () => fakeResponse({body: marked.content}),
+      })),
+      /not a final publication registry entry/i
+    );
+  }
+});
+
 test("refuses closed, draft and canonically invalid registries before fetching", async () => {
   let fetches = 0;
   const fetchImpl = async () => {

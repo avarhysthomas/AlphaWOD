@@ -116,7 +116,7 @@ async function acceptAllCheckoutStatements() {
 }
 
 describe("MembershipCheckout", () => {
-  it("keeps checkout closed while the legal documents are drafts", () => {
+  it("keeps checkout closed when the legal publication source gate is disabled", () => {
     renderCheckout("adult_unlimited");
 
     expect(screen.getByText(/Checkout closed/i)).toBeInTheDocument();
@@ -182,7 +182,7 @@ describe("MembershipCheckout", () => {
     expect(screen.getByLabelText(/Child’s date of birth/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Relationship to child/i)).toBeInTheDocument();
     expect(
-      screen.getByText(/named child.*parent or legal guardian or otherwise/i)
+      screen.getByLabelText(/named child.*parent or legal guardian or otherwise/i)
     ).toBeInTheDocument();
     expect(screen.getByLabelText(/Type the paying adult’s full name to sign/i))
       .toBeInTheDocument();

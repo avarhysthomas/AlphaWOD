@@ -97,6 +97,31 @@ test("publication-ready legal evidence fails closed on incomplete data", () => {
       membershipTesting.assertCheckoutDocumentModel(true)
     );
 
+    const ordinaryContent = CHECKOUT_DOCUMENTS.membershipTerms.content;
+    CHECKOUT_DOCUMENTS.membershipTerms.content =
+      "Depending on the circumstances, the final terms apply.\n";
+    CHECKOUT_DOCUMENTS.membershipTerms.sha256 = createHash("sha256")
+      .update(CHECKOUT_DOCUMENTS.membershipTerms.content)
+      .digest("hex");
+    assert.doesNotThrow(() =>
+      membershipTesting.assertCheckoutDocumentModel(true)
+    );
+    for (const marker of ["DRAFT", "PENDING"]) {
+      CHECKOUT_DOCUMENTS.membershipTerms.content =
+        `${marker} publication text.\n`;
+      CHECKOUT_DOCUMENTS.membershipTerms.sha256 = createHash("sha256")
+        .update(CHECKOUT_DOCUMENTS.membershipTerms.content)
+        .digest("hex");
+      assert.throws(
+        () => membershipTesting.assertCheckoutDocumentModel(true),
+        /not ready for publication/i
+      );
+    }
+    CHECKOUT_DOCUMENTS.membershipTerms.content = ordinaryContent;
+    CHECKOUT_DOCUMENTS.membershipTerms.sha256 = createHash("sha256")
+      .update(ordinaryContent)
+      .digest("hex");
+
     for (const field of Object.keys(COMPANY)) {
       const original = COMPANY[field];
       COMPANY[field] = "";

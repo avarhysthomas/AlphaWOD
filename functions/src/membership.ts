@@ -1262,7 +1262,7 @@ function assertCheckoutDocumentModel(publicationReadyRequired: boolean): void {
       confirmationSender: COMPANY.confirmationSender,
     };
     if (Object.values(companyPublicationFields).some((value) => !value.trim()) ||
-      /PENDING|DRAFT/i.test(JSON.stringify(companyPublicationFields))) {
+      /\b(?:PENDING|DRAFT)\b/i.test(JSON.stringify(companyPublicationFields))) {
       throw new HttpsError(
         "failed-precondition",
         "Company disclosures are not ready for publication."
@@ -1373,7 +1373,7 @@ function assertCheckoutDocumentModel(publicationReadyRequired: boolean): void {
       const validEffectiveDate = /^\d{4}-\d{2}-\d{2}$/.test(effectiveDate) &&
         Number.isFinite(parsedEffectiveDate.getTime()) &&
         parsedEffectiveDate.toISOString().slice(0, 10) === effectiveDate;
-      if (/PENDING|DRAFT/i.test(serialized) ||
+      if (/\b(?:PENDING|DRAFT)\b/i.test(serialized) ||
         document.contentType !== "text/plain; charset=utf-8" ||
         document.hashCovers !== "UTF-8 bytes of content" ||
         !document.title.trim() ||
@@ -1395,8 +1395,8 @@ function assertCheckoutDocumentModel(publicationReadyRequired: boolean): void {
 /**
  * The purchase flow stays closed until the checkout documents are approved for
  * publication *and* the deployment explicitly enables purchasing. Both gates
- * are required: Phase 0 recorded that no legal document version has been
- * signed off, and an unapproved version must never reach a paying customer.
+ * are required: approved source content alone must never open a deployment,
+ * and an unapproved future version must never reach a paying customer.
  */
 function requirePurchaseFlowOpen(): void {
   const testJourneyRequested =
@@ -1404,7 +1404,7 @@ function requirePurchaseFlowOpen(): void {
   if (!CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION && !testJourneyRequested) {
     throw new HttpsError(
       "failed-precondition",
-      "Membership purchase is not open yet: the checkout documents are still in legal review."
+      "Membership purchase is not open yet: the checkout documents are not approved for publication."
     );
   }
   if (!CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION) {

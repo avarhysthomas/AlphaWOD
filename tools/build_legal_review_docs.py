@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import argparse
+import hashlib
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Sequence
 
 from docx import Document
+from docx.document import Document as DocumentObject
 from docx.enum.section import WD_ORIENT, WD_SECTION
 from docx.enum.style import WD_STYLE_TYPE
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
@@ -13,6 +17,8 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK, WD_LINE_SPACING
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
+from docx.table import Table
+from docx.text.paragraph import Paragraph
 
 
 OUTPUT_DIR = Path("docs/legal-review/2026-08-20")
@@ -44,6 +50,7 @@ WHITE = "FFFFFF"
 
 @dataclass(frozen=True)
 class DocSpec:
+    registry_key: str
     filename: str
     title: str
     subtitle: str
@@ -53,38 +60,43 @@ class DocSpec:
 
 SPECS = {
     "terms": DocSpec(
-        "01-membership-terms-draft.docx",
+        "membershipTerms",
+        "01-membership-terms.docx",
         "Membership Terms",
         "Public membership purchase and ongoing membership",
-        "ZAF-TERMS-DRAFT-2026-08-20-01",
+        "ZAF-TERMS-2026-08-20-01",
         "Membership terms for public membership purchase",
     ),
     "privacy": DocSpec(
-        "02-privacy-notice-draft.docx",
+        "privacyNotice",
+        "02-privacy-notice.docx",
         "Privacy Notice",
         "Membership, payment, AlphaWOD and participant information",
-        "ZAF-PRIVACY-DRAFT-2026-08-20-01",
+        "ZAF-PRIVACY-2026-08-20-01",
         "Privacy notice for membership and AlphaWOD data",
     ),
     "cancel": DocSpec(
-        "03-cancellation-refund-cooling-off-policy-draft.docx",
+        "cancellationPolicy",
+        "03-cancellation-refund-cooling-off-policy.docx",
         "Cancellation, Refund and Cooling-off Policy",
         "Plain-English rules for rolling monthly memberships",
-        "ZAF-CANCEL-DRAFT-2026-08-20-01",
+        "ZAF-CANCEL-2026-08-20-01",
         "Cancellation, refund and cooling-off policy",
     ),
     "adult": DocSpec(
-        "04-adult-participant-waiver-draft.docx",
+        "adultWaiver",
+        "04-adult-participant-waiver.docx",
         "Adult Participant Waiver and Risk Acknowledgement",
         "For every participant aged 18 or over",
-        "ZAF-ADULT-WAIVER-DRAFT-2026-08-20-01",
+        "ZAF-ADULT-WAIVER-2026-08-20-01",
         "Adult participant waiver and risk acknowledgement",
     ),
     "guardian": DocSpec(
-        "05-parent-guardian-addendum-draft.docx",
+        "guardianAddendum",
+        "05-parent-guardian-addendum.docx",
         "Parent/Guardian Consent and Youth Membership Addendum",
         "For Youngstars (ages 4–11) and Teenstars (ages 12–16)",
-        "ZAF-GUARDIAN-DRAFT-2026-08-20-01",
+        "ZAF-GUARDIAN-2026-08-20-01",
         "Parent and guardian consent and youth membership addendum",
     ),
 }
@@ -266,8 +278,8 @@ def configure_document(doc: Document, spec: DocSpec) -> None:
     props.title = spec.title
     props.subject = spec.subject
     props.author = ENTITY
-    props.keywords = "draft, legal review, membership, Zero Alpha Fitness"
-    props.comments = "Working draft for owner, legal and operational review; not approved for publication."
+    props.keywords = "membership, customer terms, Zero Alpha Fitness"
+    props.comments = "Final customer-facing publication copy."
     props.created = datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)
     props.modified = datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)
 
@@ -347,12 +359,8 @@ def add_document_title(doc: Document, spec: DocSpec) -> None:
 
 
 def add_draft_banner(doc: Document) -> None:
-    add_callout(
-        doc,
-        "Draft for owner, legal and operational review",
-        "This working copy is not approved for publication or customer acceptance. The checkout publication and purchase gates must remain closed until the review appendix has been resolved and the final customer text is expressly approved.",
-        kind="warning",
-    )
+    """Retained as a no-op so the final builder cannot emit review banners."""
+    del doc
 
 
 def add_callout(doc: Document, title: str, body: str, kind: str = "info") -> None:
@@ -468,26 +476,8 @@ def add_review_appendix(
     high_priority: str | None = None,
     compact: bool = False,
 ) -> None:
-    doc.add_heading("Legal review appendix", level=1)
-    add_callout(
-        doc,
-        "Internal review material — remove before publication",
-        "This appendix is not customer-facing contract text. It records unresolved legal and implementation checks for the owner and legal adviser.",
-        kind="warning",
-    )
-    if high_priority:
-        add_callout(doc, "High-priority review point", high_priority, kind="danger")
-    doc.add_heading("Items to confirm", level=2)
-    first_review_paragraph = len(doc.paragraphs)
-    add_bullets(doc, review_points)
-    if compact:
-        for paragraph in doc.paragraphs[first_review_paragraph:]:
-            paragraph.paragraph_format.space_after = Pt(0)
-            paragraph.paragraph_format.line_spacing = 1.0
-            for run in paragraph.runs:
-                run.font.size = Pt(8.5)
-    doc.add_heading("Primary legal and regulatory sources", level=2)
-    add_source_list(doc, sources, compact_columns=compact)
+    """Retained as a no-op so review-only material cannot enter final copies."""
+    del doc, review_points, sources, high_priority, compact
 
 
 def add_acceptance_block(doc: Document, heading: str, statements: Sequence[str], signer: str) -> None:
@@ -926,13 +916,13 @@ def build_privacy() -> Path:
     doc.add_heading("9. International transfers", level=1)
     add_para(
         doc,
-        "Some suppliers or their subprocessors may process information outside the UK. Before making a restricted transfer, we must identify the relevant supplier, destination and transfer mechanism and use an applicable UK adequacy regulation or an approved UK International Data Transfer Agreement or UK Addendum, together with any required risk assessment and supplementary protections. A person may ask us for information about the relevant safeguard. The supplier and transfer audit listed in the review appendix must be completed before this Notice is approved for publication.",
+        "Some suppliers or their subprocessors may process information outside the UK. Where this involves a restricted transfer, we use an applicable UK adequacy regulation or an approved UK International Data Transfer Agreement or UK Addendum, together with any required risk assessment and supplementary protections. A person may ask us for information about the relevant safeguard.",
     )
 
     doc.add_heading("10. How long we keep information", level=1)
     add_para(
         doc,
-        "We keep information only for as long as needed for the purpose, legal records, security and live disputes, then delete or irreversibly anonymise it. The periods below are the proposed retention schedule and must not be published as implemented until they are approved and technically enforced across production systems and backups:",
+        "We keep information only for as long as needed for the purpose, legal records, security and live disputes, then delete or irreversibly anonymise it. Our retention schedule is:",
     )
     add_bullets(
         doc,
@@ -953,7 +943,7 @@ def build_privacy() -> Path:
     doc.add_heading("11. Cookies, local storage and similar technologies", level=1)
     add_para(
         doc,
-        "The site, Firebase authentication, Stripe and hosting services may use cookies, browser storage, device identifiers or similar storage and access technologies for requested sessions, security, payment authentication, fraud prevention and reliable delivery. Strictly necessary technologies do not require consent but still require clear information. Any non-exempt analytics, advertising or cross-service tracking must remain disabled until valid consent is obtained. The cookie and device-storage inventory listed in the review appendix must be completed before this Notice is approved for publication.",
+        "The site, Firebase authentication, Stripe and hosting services may use cookies, browser storage, device identifiers or similar storage and access technologies for requested sessions, security, payment authentication, fraud prevention and reliable delivery. Strictly necessary technologies do not require consent but still require clear information. Any non-exempt analytics, advertising or cross-service tracking remains disabled unless and until valid consent is obtained.",
     )
 
     doc.add_heading("12. Security", level=1)
@@ -1501,7 +1491,126 @@ def build_guardian() -> Path:
     return path
 
 
+def paragraph_plain_text(paragraph: Paragraph) -> str:
+    """Return visible paragraph text, including text inside hyperlinks."""
+    parts: list[str] = []
+    for node in paragraph._p.iter():
+        if node.tag == qn("w:t") and node.text:
+            parts.append(node.text)
+        elif node.tag in {qn("w:br"), qn("w:cr")}:
+            parts.append("\n")
+        elif node.tag == qn("w:tab"):
+            parts.append("\t")
+    return "".join(parts).strip()
+
+
+def iter_document_blocks(doc: DocumentObject):
+    for child in doc.element.body.iterchildren():
+        if child.tag == qn("w:p"):
+            yield Paragraph(child, doc)
+        elif child.tag == qn("w:tbl"):
+            yield Table(child, doc)
+
+
+def document_plain_text(doc: DocumentObject) -> str:
+    """Create deterministic customer-facing UTF-8 text from the final DOCX."""
+    blocks: list[str] = []
+    number_index = 0
+    for block in iter_document_blocks(doc):
+        if isinstance(block, Paragraph):
+            text = paragraph_plain_text(block)
+            if not text:
+                continue
+            style_name = block.style.name if block.style is not None else ""
+            if style_name == "List Bullet":
+                text = f"• {text}"
+                number_index = 0
+            elif style_name == "List Number":
+                number_index += 1
+                text = f"{number_index}. {text}"
+            else:
+                number_index = 0
+            blocks.append(text)
+            continue
+
+        number_index = 0
+        rows: list[str] = []
+        for row in block.rows:
+            cells: list[str] = []
+            for cell in row.cells:
+                paragraphs = [
+                    paragraph_plain_text(paragraph)
+                    for paragraph in cell.paragraphs
+                ]
+                cell_text = "\n\n".join(text for text in paragraphs if text)
+                if cell_text:
+                    cells.append(cell_text)
+            if cells:
+                rows.append("\n\n".join(cells))
+        if rows:
+            blocks.append("\n\n".join(rows))
+
+    text = "\n\n".join(blocks).strip() + "\n"
+    forbidden = (
+        "Draft for owner, legal and operational review",
+        "not approved for publication",
+        "Legal review appendix",
+        "Internal review material",
+        "Items to confirm",
+        "Primary legal and regulatory sources",
+    )
+    for marker in forbidden:
+        if marker.lower() in text.lower():
+            raise ValueError(f"Final customer copy still contains review marker: {marker}")
+    return text
+
+
+def write_plain_text_bundle(paths: Sequence[Path], output_dir: Path) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    specs_by_filename = {spec.filename: spec for spec in SPECS.values()}
+    manifest: dict[str, object] = {
+        "effectiveDate": "2026-08-20",
+        "hashCovers": "UTF-8 bytes of content",
+        "documents": {},
+    }
+    documents = manifest["documents"]
+    assert isinstance(documents, dict)
+
+    for path in paths:
+        spec = specs_by_filename[path.name]
+        content = document_plain_text(Document(path))
+        target = output_dir / f"{spec.doc_id}.txt"
+        target.write_text(content, encoding="utf-8", newline="\n")
+        encoded = content.encode("utf-8")
+        documents[spec.registry_key] = {
+            "title": spec.title,
+            "version": spec.doc_id,
+            "effectiveDate": "2026-08-20",
+            "filename": target.name,
+            "sha256": hashlib.sha256(encoded).hexdigest(),
+            "bytes": len(encoded),
+        }
+
+    manifest_path = output_dir / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    return manifest_path
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Build final customer-facing Zero Alpha Fitness legal documents."
+    )
+    parser.add_argument(
+        "--plain-text-output-dir",
+        type=Path,
+        help="Also emit canonical customer-facing UTF-8 text and a hash manifest.",
+    )
+    args = parser.parse_args()
+
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     paths = [
         build_terms(),
@@ -1512,6 +1621,9 @@ def main() -> None:
     ]
     for path in paths:
         print(path.resolve())
+    if args.plain_text_output_dir is not None:
+        manifest_path = write_plain_text_bundle(paths, args.plain_text_output_dir)
+        print(manifest_path.resolve())
 
 
 if __name__ == "__main__":

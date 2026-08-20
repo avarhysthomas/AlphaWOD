@@ -35,7 +35,9 @@
     "verify:frontend-production-closed": "node scripts/verifyFrontendProductionEnv.js --expect-purchase-closed",
     "verify:frontend-production-open": "node scripts/verifyFrontendProductionEnv.js --expect-purchase-open",
     "verify:monitoring": "node scripts/verifyBillingMonitoring.js",
-    "verify:published-legal": "npm run build --prefix functions && node --env-file-if-exists=functions/.env.alphawod-d1f2f scripts/verifyPublishedLegalDocuments.js",
+    "sync:published-legal": "node scripts/syncPublishedLegalDocuments.js --write",
+    "verify:legal-registry-sync": "node scripts/syncPublishedLegalDocuments.js --check",
+    "verify:published-legal": "npm run verify:legal-registry-sync && npm run build --prefix functions && node --env-file-if-exists=functions/.env.alphawod-d1f2f scripts/verifyPublishedLegalDocuments.js",
     "eject": "react-scripts eject"
   },
   "eslintConfig": {

@@ -382,65 +382,34 @@ function validCheckoutData(attemptId = "attempt_checkout_test_123456") {
   };
 }
 
-test("the deployed checkout handler stays closed while legal documents are drafts", async () => {
-  await assert.rejects(
-    () => createMembershipCheckoutSession(request(validCheckoutData())),
-    /legal review/i
-  );
+test("the deployed checkout handler stays closed while the runtime gate is closed", async () => {
+  const original = process.env.MEMBERSHIP_PURCHASE_ENABLED;
+  try {
+    process.env.MEMBERSHIP_PURCHASE_ENABLED = "false";
+    await assert.rejects(
+      () => createMembershipCheckoutSession(request(validCheckoutData())),
+      /not enabled for this environment/i
+    );
+  } finally {
+    if (original === undefined) delete process.env.MEMBERSHIP_PURCHASE_ENABLED;
+    else process.env.MEMBERSHIP_PURCHASE_ENABLED = original;
+  }
 });
 
-test("draft checkout opens only for the explicit isolated local test journey", () => {
+test("the local test flag cannot bypass the normal purchase gate after publication", () => {
   const original = {
-    APP_PUBLIC_ORIGIN: process.env.APP_PUBLIC_ORIGIN,
-    GCLOUD_PROJECT: process.env.GCLOUD_PROJECT,
-    MEMBERSHIP_FIREBASE_PROJECT_ID: process.env.MEMBERSHIP_FIREBASE_PROJECT_ID,
+    MEMBERSHIP_PURCHASE_ENABLED: process.env.MEMBERSHIP_PURCHASE_ENABLED,
     MEMBERSHIP_TEST_JOURNEY_ENABLED: process.env.MEMBERSHIP_TEST_JOURNEY_ENABLED,
-    FIREBASE_AUTH_EMULATOR_HOST: process.env.FIREBASE_AUTH_EMULATOR_HOST,
-    FIRESTORE_EMULATOR_HOST: process.env.FIRESTORE_EMULATOR_HOST,
-    FUNCTIONS_EMULATOR: process.env.FUNCTIONS_EMULATOR,
-    STRIPE_EXPECTED_MODE: process.env.STRIPE_EXPECTED_MODE,
-    STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
   };
   try {
-    process.env.APP_PUBLIC_ORIGIN = "http://localhost:3000";
+    process.env.MEMBERSHIP_PURCHASE_ENABLED = "false";
     process.env.MEMBERSHIP_TEST_JOURNEY_ENABLED = "true";
-    assert.doesNotThrow(() => membershipTesting.requirePurchaseFlowOpen());
-
-    process.env.APP_PUBLIC_ORIGIN = "https://alpha-wod.vercel.app";
     assert.throws(
       () => membershipTesting.requirePurchaseFlowOpen(),
-      /isolated local Stripe test journey/i
+      /not enabled for this environment/i
     );
-
-    process.env.APP_PUBLIC_ORIGIN = "http://localhost:3000";
-    process.env.STRIPE_SECRET_KEY = "rk_test_restricted_fake";
-    assert.equal(membershipTesting.assertBillingEnvironment().stripeMode, "test");
-
-    process.env.GCLOUD_PROJECT = "alphawod-d1f2f";
-    process.env.MEMBERSHIP_FIREBASE_PROJECT_ID = "alphawod-d1f2f";
-    assert.throws(
-      () => membershipTesting.assertBillingEnvironment(),
-      /test mode is forbidden in the production Firebase project/i
-    );
-
-    process.env.GCLOUD_PROJECT = "demo-alphawod-stripe";
-    process.env.MEMBERSHIP_FIREBASE_PROJECT_ID = "demo-alphawod-stripe";
-    process.env.STRIPE_EXPECTED_MODE = "live";
-    process.env.STRIPE_SECRET_KEY = "rk_live_restricted_fake";
-    assert.throws(
-      () => membershipTesting.assertBillingEnvironment(),
-      /live mode is forbidden in the isolated local Firebase project/i
-    );
-
-    process.env.GCLOUD_PROJECT = "alpha-wod-functions-test";
-    process.env.MEMBERSHIP_FIREBASE_PROJECT_ID = "alpha-wod-functions-test";
-    process.env.FUNCTIONS_EMULATOR = "true";
-    delete process.env.FIRESTORE_EMULATOR_HOST;
-    delete process.env.FIREBASE_AUTH_EMULATOR_HOST;
-    assert.throws(
-      () => membershipTesting.assertBillingEnvironment(),
-      /live mode is forbidden in every Firebase emulator process/i
-    );
+    process.env.MEMBERSHIP_PURCHASE_ENABLED = "true";
+    assert.doesNotThrow(() => membershipTesting.requirePurchaseFlowOpen());
   } finally {
     Object.entries(original).forEach(([key, value]) => {
       if (value === undefined) delete process.env[key];

@@ -8,8 +8,10 @@ undeployed. The five live Price/Product pairs, Product-scoped no-expiry Coupon
 and Promotion Code, locked-down Portal, 14-event webhook destination and the
 existence of the three billing secrets have been verified as described in
 section 7. No signed live webhook delivery or live payment journey has passed.
-The legal, backend and frontend purchase gates remain closed and cannot be
-opened by provider configuration alone.
+All five 20 August legal documents are approved, their final DOCX and canonical
+public text are synchronized into both registries, and the legal source gate is
+`true`. The backend and frontend environment purchase gates remain `false` and
+cannot be opened by provider configuration alone.
 
 ## 1. What was built
 
@@ -48,8 +50,8 @@ New server-owned user field: `stripeCustomerId`.
 
 ## 2. Approved catalogue as implemented
 
-Taken from the Membership Terms draft, section 3, and reconciled against the
-17 August 2026 Stripe catalogue export.
+Taken from the approved Membership Terms dated 20 August 2026, section 3, and
+reconciled against the 17 August 2026 Stripe catalogue export.
 
 | Plan key | Name | Price | Ages | AlphaWOD access |
 | --- | --- | --- | --- | --- |
@@ -305,15 +307,22 @@ the owner and marks the membership for manual review, with a critical audit,
 rather than leaving a permanent ownership lock or mutating an unsuitable
 profile.
 
-The in-app waiver gate is unchanged and still applies after access is granted.
+Membership checkout presents the canonical approved Adult Participant Waiver
+to a new Adult Unlimited buyer and freezes that registered version and exact
+acknowledgement with the purchase evidence. This closed publication release
+does not change the pre-existing AlphaWOD in-app waiver gate for current users;
+any later transition of that separate gate requires a compatible callable and
+frontend rollout rather than a frontend-only deployment. Media consent remains
+separate and is not inferred from membership-waiver acceptance.
 
-## 5. Two gates keep the flow closed
+## 5. Approval and purchase gates
 
 `createMembershipCheckoutSession` refuses to run unless **both** are true:
 
 1. `CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION` is `true` in
-   `functions/src/membershipPlans.ts`. It is `false`, and a test in each of the
-   two copies asserts that.
+   `functions/src/membershipPlans.ts`. It is now `true` in both the backend and
+   frontend catalogue copies, and their parity and publication tests enforce
+   that synchronized value.
 2. `MEMBERSHIP_PURCHASE_ENABLED=true` in the Functions environment.
 
 The browser adds a separately deployed customer-visible control:
@@ -322,29 +331,24 @@ stay closed unless the approved source gate and this frontend gate are both
 true. It is a rollout/kill-switch control, not a security boundary; the two
 server checks above remain authoritative for creating a Stripe Session.
 
-The business owner confirmed the intended commercial position on 19 August
-2026. The source documents nevertheless label themselves as unapproved legal
-drafts, contain unresolved publication appendices and still describe the former
-immediate-proration journey rather than the £0 founding presale. Their own
-review instructions require the outstanding owner, counsel, insurer, privacy
-and safeguarding decisions to be resolved before publication.
-`CHECKOUT_DOCUMENTS` and the public `.txt` files also contain placeholder bytes.
-The public pages therefore continue to show a "not open yet" notice and point at
-support while the first gate is closed.
+On 20 August 2026 the business owner explicitly approved the final Membership
+Terms, Privacy Notice, Cancellation, Refund and Cooling-off Policy, Adult
+Participant Waiver and Parent/Guardian Addendum. The final DOCX files live under
+`docs/legal-review/2026-08-20/`. Their canonical text, stable versioned URLs,
+effective dates and SHA-256 digests are synchronized between the public `.txt`
+files and both `CHECKOUT_DOCUMENTS` registries. The checked-in source therefore
+passes the legal publication gate.
 
-**Do not flip gate 1 by replacing labels or version strings alone.** The code now
-resolves an exact plan/signer-specific immutable document set, renders its
-canonical content and byte-identical versioned plain-text link, requires each
-contract/privacy/waiver/payment/performance statement separately, and freezes
-the server-owned contents, statements, signer role and commercial plan snapshot
-on the intent, membership and confirmation outbox. The publication preflight
-still rejects any `DRAFT`/`PENDING` identifier, a non-matching SHA-256 content
-digest, a mutable URL or an incomplete registered-office disclosure. Final
-approved customer-facing text must first be reconciled with the implemented
-presale and every open review item, then exported without internal draft
-covers/review appendices and paired with effective dates, hashes and verified
-company disclosures. Phase 0's legacy waiver identifier `2026-30-05` remains a
-separate unapproved legacy value.
+The code resolves an exact plan/signer-specific immutable document set, renders
+its canonical content and byte-identical versioned plain-text link, requires
+each contract/privacy/waiver/payment/performance statement separately, and
+freezes the server-owned contents, statements, signer role and commercial plan
+snapshot on the intent, membership and confirmation outbox. The publication
+preflight rejects a draft/pending identifier, a non-matching SHA-256 content
+digest, a mutable URL or an incomplete registered-office disclosure. The public
+production bytes are not release-proven until this exact approved bundle is
+deployed with both environment purchase gates closed and
+`npm run verify:published-legal` passes.
 
 ## 6. Local verification
 
@@ -701,19 +705,17 @@ commands and required config preflights are in `production-operations.md`.
 
 ## 9. Launch blockers still open
 
-These are release blockers, not optional future enhancements:
+These are the remaining release blockers, not optional future enhancements:
 
-- Resolve the explicit legal-review appendices, align every customer-facing
-  document with the £0 presale and implemented operations, obtain the approvals
-  required by those drafts, then publish final text in the runtime registry and
-  byte-identical stable files. Replace every `DRAFT`/`PENDING` content,
-  effective-date and SHA-256 placeholder plus the registered-office and
-  jurisdiction placeholders. Role-specific rendering, exact separate
-  acceptance evidence, commercial snapshots and durable copies are implemented
-  and tested; the code gate remains closed until publication checks pass.
-- Obtain counsel approval for the implemented statutory cooling-off outcome
-  and establish the human refund operation before purchase opens. The member
-  callable now freezes an immutable receipt before Stripe, immediately stops
+- Deploy the approved 20 August document bundle in the exact closed Vercel
+  release, record the deployed commit SHA and pass
+  `npm run verify:published-legal` against production before the backend Phase 1
+  deployment. Approval, final DOCX generation, canonical public text, registry
+  synchronization and the checked-in source gate are complete; deployed-byte
+  verification is still outstanding.
+- Establish the staffed human cooling-off refund operation before purchase
+  opens. The member callable now freezes an immutable receipt before Stripe,
+  immediately stops
   provider billing, preserves receipt time separately from provider completion,
   queues crash/provider recovery, flags the proportionate-service/refund review
   and sends a durable acknowledgement. The business must still define and staff
@@ -769,9 +771,9 @@ the cooling-off end date and service-start performance choice, every exact
 separately accepted statement, document title/version/hash/content, signer role,
 and typed signature. The complete canonical document text appears inline and is
 also attached as one base64-encoded UTF-8 plain-text file per accepted document.
-Those copies are mechanically complete, but remain placeholder bytes; they must
-not be described as the published contract until final approved customer-facing
-content is exported and the publication gate passes.
+Those copies now contain the complete approved canonical text. They must not be
+described as the production-published contract until the exact closed frontend
+release is live and `npm run verify:published-legal` proves the deployed bytes.
 
 For an unclaimed purchase it also carries the claim link, which is the only
 thing that brings back a buyer who completed Checkout and closed the tab.
@@ -826,10 +828,9 @@ Requires `RESEND_API_KEY` (already used for invites) and the
 
 ## 10. Open items for the business
 
-1. The Cancellation Policy's own legal appendix flags the late-notice rule
-   (collecting one further month) as needing a UK consumer-law fairness review
-   before publication. The code implements the owner-supplied rule as written;
-   that implementation is not evidence of legal approval.
+1. Staff and document the human late-notice and cooling-off refund operation
+   required by the approved Cancellation, Refund and Cooling-off Policy,
+   including decision, execution and audit ownership.
 2. Youth product naming differs between the catalogue and the policy: Stripe
    calls the junior product "HYROX Youngstars U11" while the approved age band
    is 4–11 inclusive. The code follows the approved band. Consider renaming the
@@ -852,8 +853,8 @@ It covers:
 
 - the checkout core's Stripe request, stable retry, billing anchor and atomic
   participant/payer reservations, including authoritative terminal-state checks
-  before an elapsed reservation can be reclaimed, while the exported handler's
-  legal gate remains closed;
+  before an elapsed reservation can be reclaimed, source-document approval
+  validation and closed-runtime rejection at the exported handler boundary;
 - membership-specific Customer Portal ownership, configuration and return URL,
   including refusal of a configuration that permits subscription changes;
 - Price/Product catalogue preflight before a checkout reservation is written;
@@ -930,8 +931,9 @@ local run in `local-stripe-test-journey.md` did open real hosted test Checkout,
 settle a test payment, receive Stripe-delivered events, fulfil the local intent
 and membership, and return through the success route on 19 August 2026. It did
 not exercise real Resend delivery, a deployed staging boundary, anonymous claim
-or production. The normal publication and runtime gates remain closed; only the
-emulator-bound, explicit test journey can bypass publication.
+or production. The approved source-document gate is now `true`, while both
+production environment purchase gates remain `false`. The emulator-bound test
+journey used its explicit isolated test-mode path and did not open production.
 
 The Stripe host override used by the suite comes from `STRIPE_API_HOST`,
 `STRIPE_API_PORT` and `STRIPE_API_PROTOCOL`. These are never set in a deployed

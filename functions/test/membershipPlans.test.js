@@ -69,11 +69,13 @@ test("only Adult Unlimited automatically includes AlphaWOD access", () => {
   assert.deepEqual(granting, ["adult_unlimited"]);
 });
 
-test("purchase stays closed while the checkout documents are drafts", () => {
-  assert.equal(CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION, false);
+test("registry contains the approved immutable checkout documents", () => {
+  assert.equal(CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION, true);
   for (const document of Object.values(CHECKOUT_DOCUMENTS)) {
-    assert.match(document.version, /DRAFT/);
-    assert.equal(document.sha256, "PENDING_LEGAL_APPROVAL");
+    assert.match(document.version, /^ZAF-[A-Z-]+-2026-08-20-01$/);
+    assert.equal(document.effectiveDate, "2026-08-20");
+    assert.match(document.sha256, /^[a-f0-9]{64}$/);
+    assert.doesNotMatch(JSON.stringify(document), /\b(?:DRAFT|PENDING)\b/i);
   }
 });
 

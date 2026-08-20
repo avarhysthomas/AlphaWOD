@@ -5,9 +5,11 @@ Firebase state stays inside local emulators under `demo-alphawod-stripe`. It
 does not deploy anything, touch production Firebase data, take real money or
 open the normal purchase gates.
 
-The normal legal publication gate remains `false`. The narrow test bypass works
-only when every frontend and backend local-test condition matches; production
-project `alphawod-d1f2f` is explicitly forbidden from using Stripe test mode.
+The canonical legal publication gate is now `true` for the five approved 20
+August documents. Both production environment purchase gates remain `false`.
+The narrow test-mode path works only when every frontend and backend local-test
+condition matches; production project `alphawod-d1f2f` is explicitly forbidden
+from using Stripe test mode.
 
 ## One-time local setup
 
@@ -58,8 +60,8 @@ Checkout with a Stripe test card such as `4242 4242 4242 4242`, any future
 expiry and any CVC/postcode. During the founding presale Stripe saves the test
 payment method but charges **£0 today**. The subscription is scheduled for
 service from 1 September and its first payment anchor is 1 September. The app
-shows a prominent test-only notice and continues to label the legal documents
-as drafts.
+shows a prominent test-only notice and presents the same approved, versioned
+legal documents used by the release candidate.
 
 For Adult Unlimited, enter the explicitly test-only shared code
 `EXISTING5-TEST` in the AlphaWOD registration form before opening Stripe.
@@ -168,7 +170,8 @@ changing the Product/Price mapping:
   allowlisted shared reusable live Promotion Code;
 - a locked-down live Customer Portal configuration;
 - a live webhook endpoint and its own live signing secret;
-- approved immutable checkout documents and the normal purchase switch;
+- a closed Vercel deployment of the approved immutable checkout documents,
+  followed by `npm run verify:published-legal`, and the normal purchase switch;
 - completion of every remaining launch blocker in the Phase 1 rollout.
 
 Never reuse the CLI listener secret, test Portal configuration, test Prices or

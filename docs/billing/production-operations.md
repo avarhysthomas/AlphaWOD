@@ -2,9 +2,12 @@
 
 This is a preparation runbook, not deployment authorisation. The checked-in
 production examples keep both `MEMBERSHIP_PURCHASE_ENABLED=false` and
-`REACT_APP_MEMBERSHIP_PURCHASE_ENABLED=false`, the legal source gate remains
-closed, and `ops/monitoring/billing-alerts.json` is deliberately a template. No
-alert, notification channel, budget, Stripe object, Firebase resource or Vercel
+`REACT_APP_MEMBERSHIP_PURCHASE_ENABLED=false`. The five 20 August legal
+documents are approved, their final DOCX/public text/registries are synchronized,
+and the legal source gate is `true`; their production bytes still require a
+closed Vercel deployment and `npm run verify:published-legal`.
+`ops/monitoring/billing-alerts.json` is deliberately a template. No alert,
+notification channel, budget, Stripe object, Firebase resource or Vercel
 deployment is created by this repository change.
 
 Verified live prerequisite state as of 20 August 2026: Coupon
@@ -16,8 +19,9 @@ the Adult Unlimited Product and have no automatic expiry; Portal configuration
 Enabled Secret Manager versions exist for the Stripe API, webhook-signing and
 checkout-rate-limit secrets. The public `stripeWebhook` receiver is active on
 Node.js 24 in `europe-west1`; GET `405` and unsigned POST `400` probes passed.
-These probes do not prove a signed delivery or payment journey. The legal and
-purchase gates remain closed, and all membership callables and workers remain
+These probes do not prove a signed delivery or payment journey. Both environment
+purchase gates remain closed, the approved legal bytes have not yet been
+verified on the production site, and all membership callables and workers remain
 undeployed.
 
 ## Release preflights
@@ -36,7 +40,7 @@ npm run verify:frontend-production-closed
 npm ci --prefix functions
 npm run lint --prefix functions
 npm test --prefix functions
-npm run verify:production-config --prefix functions
+npm run verify:production-armed-config --prefix functions
 ```
 
 Run the frontend production build with the exact reviewed Vercel Production
@@ -49,10 +53,11 @@ cp functions/.env.production.example functions/.env.alphawod-d1f2f
 
 Firebase CLI 15.5.1 loads `.env.alphawod-d1f2f` for project
 `alphawod-d1f2f`; it does not treat `.env.production` as that project's deploy
-environment. `verify:production-config` reads the same file and requires the
-exact production project, live Stripe mode, a bare HTTPS origin, exact approved
-Price IDs, the Portal/Coupon/Promotion Code IDs, a real sender, no provider host
-override and both purchase gates closed. It rejects every checked-in sandbox
+environment. `verify:production-armed-config` reads the same file and requires
+the exact production project, live Stripe mode, a bare HTTPS origin, exact
+approved Price IDs, the Portal/Coupon/Promotion Code IDs, a real sender, no
+provider host override, the approved document source gate `true`, and the
+backend runtime purchase gate `false`. It rejects every checked-in sandbox
 Stripe object. Keep secrets in Secret Manager, not this file.
 
 After an authorised operator has created the live Stripe catalogue, expose a
@@ -161,10 +166,11 @@ while a scheduled worker is unhealthy.
 ## Opening and rollback boundary
 
 Monitoring, live-object verification and a deployed staging run are necessary
-but not sufficient. Legal publication, the staffed cooling-off refund and
-inbound-email cancellation operations, and every open launch blocker in
-`phase-1-rollout.md` remain mandatory. Publish and deploy the approved document
-registry and compatible frontend first while
+but not sufficient. Production deployed-byte verification for the approved
+legal bundle, the staffed cooling-off refund and inbound-email cancellation
+operations, and every open launch blocker in `phase-1-rollout.md` remain
+mandatory. Publish and deploy the approved document registry and compatible
+frontend first while
 `MEMBERSHIP_PURCHASE_ENABLED=false` and
 `REACT_APP_MEMBERSHIP_PURCHASE_ENABLED=false`, then run:
 

@@ -30,29 +30,29 @@ outbox, and returned through the local success route. That is a historical seam
 baseline, not proof of the newly implemented £0 presale or discount. Those paths,
 real Resend delivery and deployed staging remain untested.
 
-The business owner confirmed the intended commercial position on 19 August
-2026. The documents themselves remain explicitly unapproved legal drafts,
-contain unresolved publication appendices and include former immediate-
-proration language that does not match the £0 presale. Their stated owner,
-counsel, insurer, privacy and safeguarding review items remain on the release
-checklist. Backend purchase intake remains closed by two independent controls:
+The business owner explicitly approved all five final legal documents on 20
+August 2026: the Membership Terms, Privacy Notice, Cancellation, Refund and
+Cooling-off Policy, Adult Participant Waiver and Parent/Guardian Addendum. The
+final DOCX files are under `docs/legal-review/2026-08-20/`; their canonical text
+has been exported to the stable public `.txt` files and synchronized into both
+plan catalogues with matching effective dates and SHA-256 digests.
+`CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION` is now `true` in both catalogue
+sources.
 
-1. `CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION` is `false` in both plan
-   catalogues because the checkout registry and public `.txt` files still contain
-   placeholder bytes rather than final approved customer-facing document text.
-2. `MEMBERSHIP_PURCHASE_ENABLED` must be enabled in the Functions environment.
+Purchase remains closed by two separately deployed environment controls:
 
-The customer-visible catalogue and checkout add a third, separately deployed
-control: `REACT_APP_MEMBERSHIP_PURCHASE_ENABLED` must be `true` in the Vercel
-Production build. This frontend control does not replace either authoritative
-backend gate. Do not open any control as a shortcut around another. Legal
-publication, deployment and live provider configuration are still separate
-release gates.
-Final release test results and counts have not been frozen in this handover.
-Publication must still produce immutable document content/URLs and hashes plus
-the exact plan- and role-specific acceptance set rendered to the buyer; changing
-draft version strings is not enough, and the system must not record adult-waiver
-or guardian evidence for an acceptance that did not occur.
+1. `MEMBERSHIP_PURCHASE_ENABLED=false` in the Functions environment keeps the
+   authoritative backend purchase intake closed.
+2. `REACT_APP_MEMBERSHIP_PURCHASE_ENABLED=false` in the Vercel Production build
+   keeps the customer-visible catalogue and form controls closed.
+
+The approved legal bundle must still be deployed through the confirmed Vercel
+Production workflow with both purchase controls closed, followed by
+`npm run verify:published-legal`, before the backend Phase 1 deployment or any
+gate opening. Final release test results and counts have not been frozen in this
+handover. The system must continue to render and freeze the exact plan- and
+role-specific acceptance set; it must not record adult-waiver or guardian
+evidence for an acceptance that did not occur.
 
 ## 2) Implemented surface
 
@@ -272,11 +272,11 @@ Terminal `dead_letter` and `manual_review` paths emit a critical log and a
 and provider message id are projected onto the membership and shown to admins;
 the admin attention filter includes terminal confirmation failures.
 
-The current email is not yet the complete durable contract copy: it lists
-document version ids but does not include or attach the immutable approved
-document contents. Before launch, the frozen outbox/confirmation must carry the
-actual accepted documents (with immutable identity/hash evidence), not merely
-identifiers or links whose contents can later change.
+The frozen confirmation carries each accepted approved document's title,
+version, SHA-256 digest and complete canonical content both inline and as an
+attached UTF-8 plain-text file. That evidence is created with the outbox record
+and cannot be rebuilt from mutable links during a retry. Real Resend delivery
+remains unverified and must pass the rollout checks before opening purchase.
 
 ## 6) Verification inventory and limits
 
@@ -348,23 +348,21 @@ staging or real Resend delivery; normal checkout remains closed.
 
 ## 7) Release work still required
 
-No item below authorises deployment or opening either purchase gate. Complete
-the applicable legal, abuse and data-lifecycle design before provider testing,
-then follow this order:
+No item below authorises deployment or opening either purchase gate. The legal
+documents are approved and the checked-in source bundle is complete; complete
+the remaining operational, abuse and data-lifecycle work, then follow this
+order:
 
-1. Resolve the drafts' explicit review appendices, align the text with the £0
-   presale and implemented operations, obtain the approvals required by the
-   drafts, then publish final customer-facing documents into the checkout
-   registry and byte-identical public `.txt` files. Exclude internal draft
-   covers/review appendices; assign stable URLs, effective dates and SHA-256
-   hashes; fill the registered-office/jurisdiction fields; and verify the exact
-   per-plan/per-role evidence set. Rendering, exact acceptance storage, frozen
-   commercial snapshots and full inline/attached durable copies are implemented;
-   the source gate remains deliberately closed until those technical publication
-   checks pass. Staff the cooling-off proportionate-service/refund decision,
-   execution and audit SLA. The online notice, immutable receipt, immediate
-   provider stop, recovery and durable acknowledgement are implemented, but the
-   refund amount remains a human review.
+1. The five 20 August documents are approved and finalized as DOCX files, the
+   byte-identical customer text is registered at stable public URLs, the
+   effective dates and SHA-256 digests are frozen, and the source gate is `true`
+   in both catalogues. Deploy that exact bundle in the closed frontend release
+   and run `npm run verify:published-legal`; do not deploy the backend Phase 1
+   services if the production bytes differ. Separately staff the cooling-off
+   proportionate-service/refund decision, execution and audit SLA. The online
+   notice, immutable receipt, immediate provider stop, recovery and durable
+   acknowledgement are implemented, but the refund amount remains a human
+   review.
 2. Configure the implemented anonymous-checkout controls in production: create
    the restricted reCAPTCHA Enterprise/App Check web registration and app-id/IAM
    binding; verify checkout access to the existing HMAC secret; attach real

@@ -57,7 +57,7 @@ function assertFinalDocumentRegistry({
   }
   for (const [key, document] of entries) {
     if (!document || typeof document !== "object" ||
-      /DRAFT|PENDING/i.test(JSON.stringify(document))) {
+      /\b(?:DRAFT|PENDING)\b/i.test(JSON.stringify(document))) {
       throw new Error(`Checkout document ${key} is not a final publication registry entry.`);
     }
   }
