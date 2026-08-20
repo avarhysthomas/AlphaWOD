@@ -53,6 +53,7 @@ describe("Memberships presale presentation", () => {
     render(<Memberships />);
 
     expect(screen.getByText("Ages 6 to 11")).toBeInTheDocument();
+    expect(screen.getByText("£30")).toBeInTheDocument();
     expect(screen.getByText("£0 charged")).toBeInTheDocument();
     expect(screen.getAllByText("1 September 2026")).toHaveLength(2);
     expect(screen.getByText("Zero Alpha App after first payment")).toBeInTheDocument();

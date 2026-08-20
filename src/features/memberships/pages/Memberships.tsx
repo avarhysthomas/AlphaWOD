@@ -119,6 +119,7 @@ function YouthCard({
       <div className="mt-6 space-y-3">
         {[youngstars, teenstars].map((plan) => {
           const displayedMinAge = plan.key === "youth_youngstars" ? 6 : plan.minAge;
+          const displayedPrice = plan.key === "youth_youngstars" ? "£30" : formatPlanPrice(plan);
           const content = (
             <>
             <span>
@@ -130,7 +131,7 @@ function YouthCard({
               </span>
             </span>
             <span className="font-heading text-xl text-white">
-              {formatPlanPrice(plan)}
+              {displayedPrice}
               <span className="ml-1 text-xs font-normal text-white/45">/mo</span>
             </span>
             </>
