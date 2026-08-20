@@ -118,6 +118,7 @@ function YouthCard({
 
       <div className="mt-6 space-y-3">
         {[youngstars, teenstars].map((plan) => {
+          const displayedMinAge = plan.key === "youth_youngstars" ? 6 : plan.minAge;
           const content = (
             <>
             <span>
@@ -125,7 +126,7 @@ function YouthCard({
                 {plan.name}
               </span>
               <span className="block text-xs text-white/50">
-                Ages {plan.minAge} to {plan.maxAge}
+                Ages {displayedMinAge} to {plan.maxAge}
               </span>
             </span>
             <span className="font-heading text-xl text-white">
