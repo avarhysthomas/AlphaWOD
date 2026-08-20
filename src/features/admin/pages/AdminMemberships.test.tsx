@@ -91,7 +91,7 @@ describe("AdminMemberships cancellation attention", () => {
     expect(screen.getByText(
       "Status: manual review · Stripe cancellation recovery exhausted."
     )).toBeInTheDocument();
-    expect(screen.getByText("AlphaWOD access needs manual review"))
+    expect(screen.getByText("Zero Alpha App access needs manual review"))
       .toBeInTheDocument();
     expect(screen.getByText("Participant profile is missing."))
       .toBeInTheDocument();
@@ -101,7 +101,7 @@ describe("AdminMemberships cancellation attention", () => {
       .toBeInTheDocument();
     expect(screen.getByText(/Receipt cancel_review_receipt/))
       .toBeInTheDocument();
-    expect(screen.queryByRole("button", {name: "Repair AlphaWOD access"}))
+    expect(screen.queryByRole("button", {name: "Repair Zero Alpha App access"}))
       .not.toBeInTheDocument();
   });
 
@@ -164,7 +164,7 @@ describe("AdminMemberships cancellation attention", () => {
     expect(screen.getByText("Scheduled — starts 1 September")).toBeInTheDocument();
     expect(screen.getByText("Pre-opening membership")).toBeInTheDocument();
     expect(screen.getByText("Existing-member discount applied")).toBeInTheDocument();
-    expect(screen.queryByText("AlphaWOD access has not been applied"))
+    expect(screen.queryByText("Zero Alpha App access has not been applied"))
       .not.toBeInTheDocument();
   });
 
@@ -205,7 +205,7 @@ describe("AdminMemberships cancellation attention", () => {
     render(<AdminMemberships />);
 
     fireEvent.click(await screen.findByRole("button", {
-      name: "Repair AlphaWOD access",
+      name: "Repair Zero Alpha App access",
     }));
 
     await waitFor(() => {
@@ -257,12 +257,12 @@ describe("AdminMemberships cancellation attention", () => {
 
     render(<AdminMemberships />);
     fireEvent.click(await screen.findByRole("button", {
-      name: "Repair AlphaWOD access",
+      name: "Repair Zero Alpha App access",
     }));
 
     expect(await screen.findByText("Stripe state is temporarily unavailable."))
       .toBeInTheDocument();
-    expect(screen.getByRole("button", {name: "Repair AlphaWOD access"}))
+    expect(screen.getByRole("button", {name: "Repair Zero Alpha App access"}))
       .toBeEnabled();
   });
 });

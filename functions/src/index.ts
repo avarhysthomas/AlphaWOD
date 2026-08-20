@@ -1235,7 +1235,7 @@ function assertApprovedMember(user: UserDoc | undefined): UserDoc {
   if (!access.alphaWodAccess) {
     throw new HttpsError(
       "permission-denied",
-      "This account does not currently have AlphaWOD access."
+      "This account does not currently have Zero Alpha App access."
     );
   }
 

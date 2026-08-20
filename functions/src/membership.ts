@@ -6349,7 +6349,7 @@ export function buildLinkMembershipParticipant(
       if (!membership.grantsAlphaWodAccess) {
         throw new HttpsError(
           "failed-precondition",
-          "This plan does not include AlphaWOD access."
+          "This plan does not include Zero Alpha App access."
         );
       }
       const target = userSnap.data() as Record<string, unknown>;
@@ -6381,7 +6381,7 @@ export function buildLinkMembershipParticipant(
       if (!alreadyLinked && !membershipBlocks) {
         throw new HttpsError(
           "failed-precondition",
-          "This membership is no longer eligible to grant AlphaWOD access."
+          "This membership is no longer eligible to grant Zero Alpha App access."
         );
       }
       if (!alreadyLinked && membership.participant?.isPayer !== false) {

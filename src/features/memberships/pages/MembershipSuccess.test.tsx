@@ -117,12 +117,12 @@ describe("MembershipSuccess claim persistence", () => {
     render(<MembershipSuccess />);
 
     expect(screen.getByText(/Nothing was charged today/i)).toBeInTheDocument();
-    expect(screen.getByText(/AlphaWOD access will not be unlocked before/i))
+    expect(screen.getByText(/Zero Alpha App access will not be unlocked before/i))
       .toBeInTheDocument();
     expect(
-      screen.getByRole("link", {name: "Create AlphaWOD account"})
+      screen.getByRole("link", {name: "Create Zero Alpha App account"})
     ).toHaveAttribute("href", "/signup");
-    expect(screen.getByRole("link", {name: "Log in to AlphaWOD"}))
+    expect(screen.getByRole("link", {name: "Log in to Zero Alpha App"}))
       .toHaveAttribute("href", "/");
   });
 
@@ -136,9 +136,9 @@ describe("MembershipSuccess claim persistence", () => {
     );
     render(<MembershipSuccess />);
 
-    expect(screen.getByRole("link", {name: "Create AlphaWOD account"}))
+    expect(screen.getByRole("link", {name: "Create Zero Alpha App account"}))
       .toBeInTheDocument();
-    expect(screen.getByRole("link", {name: "Log in to AlphaWOD"}))
+    expect(screen.getByRole("link", {name: "Log in to Zero Alpha App"}))
       .toBeInTheDocument();
     expect(mockRememberPendingClaim).toHaveBeenCalledWith(
       "cs_remembered",
@@ -159,11 +159,11 @@ describe("MembershipSuccess claim persistence", () => {
     expect(screen.getByRole("heading", {name: "Thank you"})).toBeInTheDocument();
     expect(screen.getByText(/There’s nothing else you need to do on this page/i))
       .toBeInTheDocument();
-    expect(screen.queryByText("Use AlphaWOD with your membership"))
+    expect(screen.queryByText("Use Zero Alpha App with your membership"))
       .not.toBeInTheDocument();
-    expect(screen.queryByRole("link", {name: "Create AlphaWOD account"}))
+    expect(screen.queryByRole("link", {name: "Create Zero Alpha App account"}))
       .not.toBeInTheDocument();
-    expect(screen.queryByRole("link", {name: "Log in to AlphaWOD"}))
+    expect(screen.queryByRole("link", {name: "Log in to Zero Alpha App"}))
       .not.toBeInTheDocument();
   });
 
@@ -173,7 +173,7 @@ describe("MembershipSuccess claim persistence", () => {
     render(<MembershipSuccess />);
 
     expect(screen.getByRole("heading", {name: "Thank you"})).toBeInTheDocument();
-    expect(screen.queryByRole("link", {name: /AlphaWOD account/i}))
+    expect(screen.queryByRole("link", {name: /Zero Alpha App account/i}))
       .not.toBeInTheDocument();
   });
 
@@ -204,7 +204,7 @@ describe("MembershipSuccess claim persistence", () => {
     expect(screen.getByText("Checkout received")).toBeInTheDocument();
     expect(screen.queryByText("Payment confirmed")).not.toBeInTheDocument();
     expect(mockGetMyMemberships).not.toHaveBeenCalled();
-    expect(screen.queryByText("Go to AlphaWOD")).not.toBeInTheDocument();
+    expect(screen.queryByText("Go to Zero Alpha App")).not.toBeInTheDocument();
   });
 
   it("does not show AlphaWOD account actions for a signed-in non-access plan", async () => {
@@ -223,7 +223,7 @@ describe("MembershipSuccess claim persistence", () => {
 
     expect(await screen.findByText("Payment confirmed")).toBeInTheDocument();
     expect(screen.queryByText("View my membership")).not.toBeInTheDocument();
-    expect(screen.queryByText("Go to AlphaWOD")).not.toBeInTheDocument();
+    expect(screen.queryByText("Go to Zero Alpha App")).not.toBeInTheDocument();
   });
 
   it("shows the exact membership's current revoked state instead of active-access copy", async () => {
@@ -237,7 +237,7 @@ describe("MembershipSuccess claim persistence", () => {
     expect(await screen.findByText("Membership needs attention")).toBeInTheDocument();
     expect(screen.queryByText("Payment confirmed")).not.toBeInTheDocument();
     expect(screen.queryByText(/access has been unlocked/i)).not.toBeInTheDocument();
-    expect(screen.queryByText("Go to AlphaWOD")).not.toBeInTheDocument();
+    expect(screen.queryByText("Go to Zero Alpha App")).not.toBeInTheDocument();
   });
 
   it("does not call AlphaWOD unlocked while entitlement projection needs review", async () => {
@@ -286,13 +286,13 @@ describe("MembershipSuccess claim persistence", () => {
 
     expect(await screen.findByText("Membership scheduled")).toBeInTheDocument();
     expect(screen.getByText(/nothing was charged today/i)).toBeInTheDocument();
-    expect(screen.getByText(/will not unlock AlphaWOD access until/i))
+    expect(screen.getByText(/will not unlock Zero Alpha App access until/i))
       .toBeInTheDocument();
     expect(screen.getByText("Existing-member discount applied")).toBeInTheDocument();
     expect(screen.getByText(/The standard price resumes on 1 December 2026/i))
       .toBeInTheDocument();
     expect(screen.queryByText("Payment confirmed")).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", {name: "Go to AlphaWOD"}))
+    expect(screen.queryByRole("link", {name: "Go to Zero Alpha App"}))
       .not.toBeInTheDocument();
   });
 });

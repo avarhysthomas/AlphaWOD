@@ -768,7 +768,7 @@ const ScheduleClassCard = React.memo(function ScheduleClassCard({
             {meta.label}
           </h3>
           <p className="mt-3 truncate text-[15px] font-medium text-white/44">
-            {[data.coachName, data.location].filter(Boolean).join(" · ") || "AlphaFIT"}
+            {[data.coachName, data.location].filter(Boolean).join(" · ") || "Zero Alpha Fitness"}
           </p>
         </div>
         <div className={`grid h-11 w-11 shrink-0 place-items-center rounded-xl border ${meta.iconWrap}`}>

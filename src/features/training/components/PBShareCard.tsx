@@ -179,7 +179,7 @@ export default function PBShareCard({
           <MetaBlock
             icon={<UserRound className="h-3.5 w-3.5" />}
             label="Athlete"
-            value={athleteName || "AlphaFIT Athlete"}
+            value={athleteName || "Zero Alpha Athlete"}
           />
           <MetaBlock
             icon={<CalendarDays className="h-3.5 w-3.5" />}

@@ -1,6 +1,7 @@
 import {
   EXISTING_MEMBER_OFFER,
   MEMBERSHIP_PLANS,
+  POLICY_TEXT,
   PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
   PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
   formatPlanPrice,
@@ -87,5 +88,19 @@ describe("formatPlanPrice", () => {
   it("renders whole pound amounts without decimals", () => {
     expect(formatPlanPrice(MEMBERSHIP_PLANS.adult_unlimited)).toBe("£60");
     expect(formatPlanPrice(MEMBERSHIP_PLANS.youth_teenstars)).toBe("£35");
+  });
+});
+
+describe("customer-facing app name", () => {
+  it("uses Zero Alpha App in membership catalogue and status copy", () => {
+    const displayCopy = [
+      ...Object.values(MEMBERSHIP_PLANS).map((plan) => plan.summary),
+      POLICY_TEXT.pastDue,
+      POLICY_TEXT.scheduledAdultUnlimitedSuccess,
+      POLICY_TEXT.adultUnlimitedSuccess,
+    ];
+
+    expect(displayCopy.join(" ")).toContain("Zero Alpha App");
+    expect(displayCopy.join(" ")).not.toContain("AlphaWOD");
   });
 });

@@ -418,7 +418,7 @@ export default function MembershipManage() {
                   </div>
                   {membership.grantsAlphaWodAccess && (
                     <span className="rounded-full border border-amber-500/25 bg-amber-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-200">
-                      {isScheduled ? "AlphaWOD after first payment" : "AlphaWOD"}
+                      {isScheduled ? "Zero Alpha App after first payment" : "Zero Alpha App"}
                     </span>
                   )}
                 </div>
@@ -477,7 +477,7 @@ export default function MembershipManage() {
                       Your payment method is saved. The membership remains inactive until
                       the first payment succeeds on {formatUnixDate(firstPaymentAt)}.
                       {membership.grantsAlphaWodAccess && (
-                        <> This membership does not unlock AlphaWOD access before then.</>
+                        <> This membership does not unlock Zero Alpha App access before then.</>
                       )}
                     </p>
                   </div>
@@ -511,8 +511,8 @@ export default function MembershipManage() {
                   <div className="mt-5 rounded-2xl border border-red-500/25 bg-red-500/10 p-5 text-sm leading-7 text-red-100">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-red-200/70">
                       {membership.entitlementProjectionStatus === "manual_review"
-                        ? "AlphaWOD access needs support"
-                        : "AlphaWOD access is still pending"}
+                        ? "Zero Alpha App access needs support"
+                        : "Zero Alpha App access is still pending"}
                     </p>
                     <p className="mt-3">
                       Payment may be confirmed, but access could not be safely linked to

@@ -268,8 +268,8 @@ export default function MembershipCheckout() {
           <div className="mt-7 rounded-[28px] border border-white/10 bg-[#151311] p-6">
             <p className="text-sm leading-7 text-white/70">
               {plan.grantsAlphaWodAccess
-                ? "Complete registration and Stripe checkout first. Afterwards, you can create a new AlphaWOD account or log in to an existing one, and we’ll securely link this membership."
-                : "You do not need an AlphaWOD account to buy this membership. Complete registration and Stripe checkout below, then you’ll return to a simple confirmation page."}
+                ? "Complete registration and Stripe checkout first. Afterwards, you can create a new Zero Alpha App account or log in to an existing one, and we’ll securely link this membership."
+                : "You do not need a Zero Alpha App account to buy this membership. Complete registration and Stripe checkout below, then you’ll return to a simple confirmation page."}
             </p>
           </div>
         )}
@@ -279,7 +279,7 @@ export default function MembershipCheckout() {
             <p className="text-sm leading-7 text-white/70">
               You&rsquo;re signed in{payerName ? ` as ${payerName}` : ""}. Complete the
               same registration and Stripe checkout journey below; afterwards, this
-              membership will be linked to your existing AlphaWOD account automatically.
+              membership will be linked to your existing Zero Alpha App account automatically.
             </p>
           </div>
         )}

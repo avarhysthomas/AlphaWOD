@@ -149,7 +149,7 @@ export default function AdminMemberships() {
       setError(
         repairError instanceof Error ?
           repairError.message :
-          "Could not repair AlphaWOD access."
+          "Could not repair Zero Alpha App access."
       );
     } finally {
       setBusy("");
@@ -168,7 +168,7 @@ export default function AdminMemberships() {
           { label: "Total", value: counts.total },
           { label: "Need attention", value: counts.attention },
           { label: "Scheduled", value: counts.scheduled },
-          { label: "AlphaWOD active", value: counts.alphaWod },
+          { label: "Zero Alpha App active", value: counts.alphaWod },
         ].map((stat) => (
           <div key={stat.label} className="rounded-[28px] border border-white/10 bg-[#151311] p-6">
             <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-white/45">
@@ -377,8 +377,8 @@ export default function AdminMemberships() {
               <div className="mt-5 rounded-2xl border border-red-500/25 bg-red-500/10 p-4 text-sm leading-6 text-red-100">
                 <p className="font-semibold">
                   {membership.entitlementProjectionStatus === "manual_review"
-                    ? "AlphaWOD access needs manual review"
-                    : "AlphaWOD access has not been applied"}
+                    ? "Zero Alpha App access needs manual review"
+                    : "Zero Alpha App access has not been applied"}
                 </p>
                 <p className="mt-1 text-xs text-red-100/70">
                   {membership.entitlementProjectionError ??
@@ -397,7 +397,7 @@ export default function AdminMemberships() {
                     >
                       {busy === membership.subscriptionId ?
                         "Rechecking Stripe…" :
-                        "Repair AlphaWOD access"}
+                        "Repair Zero Alpha App access"}
                     </button>
                     <p className="mt-2 text-xs leading-5 text-red-100/60">
                       Rechecks this subscription in Stripe, then reapplies access only to
@@ -413,7 +413,7 @@ export default function AdminMemberships() {
               membership.entitlementTargetUid === null && (
               <div className="mt-5 rounded-2xl border border-amber-500/25 bg-amber-500/10 p-5">
                 <p className="text-sm leading-6 text-amber-50/90">
-                  This membership includes AlphaWOD access but was bought for someone other
+                  This membership includes Zero Alpha App access but was bought for someone other
                   than the payer, so no account has been granted access. Link the
                   participant&rsquo;s account to grant it.
                 </p>
@@ -459,7 +459,7 @@ export default function AdminMemberships() {
 
             {membership.entitlementTargetUid && (
               <p className="mt-5 text-xs text-white/40">
-                AlphaWOD access target: {membership.entitlementTargetUid}
+                Zero Alpha App access target: {membership.entitlementTargetUid}
               </p>
             )}
           </div>

@@ -46,14 +46,14 @@ function InstallHint() {
   if (isIosBrowser()) {
     return (
       <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm leading-6 text-neutral-300">
-        Add AlphaFIT to your Home Screen from Safari for a faster app launch.
+        Add Zero Alpha App to your Home Screen from Safari for a faster app launch.
       </div>
     );
   }
 
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm leading-6 text-neutral-300">
-      Install AlphaFIT to your Home Screen for one-tap access and a cleaner full-screen experience.
+      Install Zero Alpha App to your Home Screen for one-tap access and a cleaner full-screen experience.
     </div>
   );
 }

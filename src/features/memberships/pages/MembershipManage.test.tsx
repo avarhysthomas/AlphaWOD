@@ -240,12 +240,12 @@ describe("MembershipManage cancellation confirmation", () => {
     expect(await screen.findByText("Scheduled — starts 1 September"))
       .toBeInTheDocument();
     expect(screen.getByText("Nothing charged today")).toBeInTheDocument();
-    expect(screen.getByText(/This membership does not unlock AlphaWOD access/i))
+    expect(screen.getByText(/This membership does not unlock Zero Alpha App access/i))
       .toBeInTheDocument();
     expect(screen.getByText("Existing-member discount applied")).toBeInTheDocument();
     expect(screen.getByText(/£5 off each of your first 3 monthly payments/i))
       .toBeInTheDocument();
-    expect(screen.queryByText("AlphaWOD access is still pending"))
+    expect(screen.queryByText("Zero Alpha App access is still pending"))
       .not.toBeInTheDocument();
     expect(screen.queryByText("Cooling-off cancellation needs staff"))
       .not.toBeInTheDocument();

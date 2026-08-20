@@ -82,7 +82,7 @@ export const MEMBERSHIP_PLANS: Record<PlanKey, MembershipPlan> = {
     grantsAlphaWodAccess: true,
     stripePriceEnvKey: "STRIPE_PRICE_ADULT_UNLIMITED",
     cardGroup: "adult",
-    summary: "Full access to sessions and the gym floor. The only membership that automatically includes eligible AlphaWOD access.",
+    summary: "Full access to sessions and the gym floor. The only membership that automatically includes eligible Zero Alpha App access.",
   },
   adult_ladies: {
     key: "adult_ladies",
@@ -95,7 +95,7 @@ export const MEMBERSHIP_PLANS: Record<PlanKey, MembershipPlan> = {
     grantsAlphaWodAccess: false,
     stripePriceEnvKey: "STRIPE_PRICE_ADULT_LADIES",
     cardGroup: "adult",
-    summary: "Ladies only sessions and gym access. Does not include AlphaWOD access.",
+    summary: "Ladies only sessions and gym access. Does not include Zero Alpha App access.",
   },
   adult_gym: {
     key: "adult_gym",
@@ -108,7 +108,7 @@ export const MEMBERSHIP_PLANS: Record<PlanKey, MembershipPlan> = {
     grantsAlphaWodAccess: false,
     stripePriceEnvKey: "STRIPE_PRICE_ADULT_GYM",
     cardGroup: "adult",
-    summary: "Gym floor access only. Does not include coached sessions or AlphaWOD access.",
+    summary: "Gym floor access only. Does not include coached sessions or Zero Alpha App access.",
   },
   youth_youngstars: {
     key: "youth_youngstars",
@@ -121,7 +121,7 @@ export const MEMBERSHIP_PLANS: Record<PlanKey, MembershipPlan> = {
     grantsAlphaWodAccess: false,
     stripePriceEnvKey: "STRIPE_PRICE_YOUTH_YOUNGSTARS",
     cardGroup: "youth",
-    summary: "Coached HYROX training for ages 4 to 11. Does not include AlphaWOD access.",
+    summary: "Coached HYROX training for ages 4 to 11. Does not include Zero Alpha App access.",
   },
   youth_teenstars: {
     key: "youth_teenstars",
@@ -134,7 +134,7 @@ export const MEMBERSHIP_PLANS: Record<PlanKey, MembershipPlan> = {
     grantsAlphaWodAccess: false,
     stripePriceEnvKey: "STRIPE_PRICE_YOUTH_TEENSTARS",
     cardGroup: "youth",
-    summary: "Coached HYROX training for ages 12 to 16. Does not include AlphaWOD access.",
+    summary: "Coached HYROX training for ages 12 to 16. Does not include Zero Alpha App access.",
   },
 };
 
@@ -166,15 +166,15 @@ export const POLICY_TEXT = {
   existingMemberOffer: "Eligible existing members can use the discount code for £5 off each of the first three monthly payments on Adult Unlimited Membership. The standard £60 monthly price applies after that.",
   prorationRule: "After opening, all memberships bill on the first of each calendar month. If your membership starts after the first, Stripe calculates and displays an initial prorated charge for the period until the next first of the month, payable immediately.",
   prorationAuthority: "The amount Stripe displays before confirmation is authoritative for that checkout. A presale checkout must show £0 due today and a first payment date of 1 September 2026. We do not calculate a separate charge in the browser. If the displayed amount or billing date appears wrong, do not confirm; contact us first.",
-  pastDue: "After a membership has started, a failed payment enters a three-calendar-day past-due grace period and existing access continues temporarily. If the first scheduled payment fails, the membership and AlphaWOD access do not start.",
+  pastDue: "After a membership has started, a failed payment enters a three-calendar-day past-due grace period and existing access continues temporarily. If the first scheduled payment fails, the membership and Zero Alpha App access do not start.",
   dispute: "An open payment dispute suspends related access. A dispute resolved in our favour restores eligible access promptly. A lost dispute or full refund revokes related access.",
   noPause: "Membership cannot be paused, frozen or placed on holiday hold.",
   coolingOffConsent: "I expressly request that the membership and any eligible AlphaWOD access begin on the service start date shown, even if that is before the 14-day cooling-off period ends. I understand that, if I cancel during that period, Zero Alpha Fitness may retain or charge only the proportionate amount permitted by law for services supplied before cancellation.",
   scheduledYouthSuccess: "You're signed up. Nothing has been charged today. This membership starts and the first monthly payment is taken on 1 September 2026. Zero Alpha Fitness will contact you by email to arrange onboarding and the first session.",
-  scheduledAdultUnlimitedSuccess: "You're signed up. Nothing has been charged today. Your Adult Unlimited membership starts, the first monthly payment is taken, and eligible AlphaWOD access can begin on 1 September 2026.",
+  scheduledAdultUnlimitedSuccess: "You're signed up. Nothing has been charged today. Your Adult Unlimited membership starts, the first monthly payment is taken, and eligible Zero Alpha App access can begin on 1 September 2026.",
   scheduledAdultOtherSuccess: "You're signed up. Nothing has been charged today. This membership starts and the first monthly payment is taken on 1 September 2026. Zero Alpha Fitness will contact you by email to arrange onboarding and the first session.",
   youthSuccess: "Payment confirmed. Zero Alpha Fitness will contact you by email to arrange onboarding and your first session. Questions: support@zeroalphafitness.co.uk.",
-  adultUnlimitedSuccess: "Payment confirmed. Your Adult Unlimited membership is active and eligible AlphaWOD access has been unlocked.",
+  adultUnlimitedSuccess: "Payment confirmed. Your Adult Unlimited membership is active and eligible Zero Alpha App access has been unlocked.",
   adultOtherSuccess: "Payment confirmed. Zero Alpha Fitness will contact you by email to arrange onboarding and your first session. Questions: support@zeroalphafitness.co.uk.",
   duplicateBlocked: "This account already has an active or scheduled membership. Manage or cancel the existing membership before buying another one.",
   portalScope: "The secure Customer Portal is for updating your payment method and viewing invoices. Cancellation is handled by the request flow on this page.",

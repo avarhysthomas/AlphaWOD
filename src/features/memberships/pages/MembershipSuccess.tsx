@@ -56,7 +56,7 @@ function membershipPresentation(membership: MyMembership): {
     membership.entitlementProjectionStatus !== "applied") {
     return {
       eyebrow: "Payment confirmed — access pending",
-      message: `Payment is confirmed, but AlphaWOD access has not been safely applied yet. Contact ${COMPANY.supportEmail} if it does not appear shortly.`,
+      message: `Payment is confirmed, but Zero Alpha App access has not been safely applied yet. Contact ${COMPANY.supportEmail} if it does not appear shortly.`,
       appAccessAvailable: false,
     };
   }
@@ -66,7 +66,7 @@ function membershipPresentation(membership: MyMembership): {
       membership.firstPaymentAt ?? membership.billingCycleAnchor ?? null;
     const serviceStart = serviceStartsAt ? formatUnixDate(serviceStartsAt) : "1 September 2026";
     const accessMessage = membership.grantsAlphaWodAccess && membership.participantIsPayer
-      ? " This membership will not unlock AlphaWOD access until that first payment succeeds."
+      ? " This membership will not unlock Zero Alpha App access until that first payment succeeds."
       : " We’ll email you with the details you need before your first session.";
     return {
       eyebrow: "Membership scheduled",
@@ -249,7 +249,7 @@ export default function MembershipSuccess() {
               : sessionId
                 ? presale
                   ? isAlphaWodAccountJourney
-                    ? "Thanks for registering. Nothing was charged today. Your payment method is saved and the membership is scheduled to start with its first payment on 1 September 2026. AlphaWOD access will not be unlocked before that payment succeeds."
+                    ? "Thanks for registering. Nothing was charged today. Your payment method is saved and the membership is scheduled to start with its first payment on 1 September 2026. Zero Alpha App access will not be unlocked before that payment succeeds."
                     : "Thanks for registering. Nothing was charged today. Your payment method is saved and the membership is scheduled to start with its first payment on 1 September 2026. We’ll send the details by email; there’s nothing else you need to do on this page."
                   : isAlphaWodAccountJourney
                     ? "We’re confirming the exact membership from this checkout. No access or payment status is shown as confirmed until that finishes."
@@ -271,10 +271,10 @@ export default function MembershipSuccess() {
             <>
               <div className="mt-7 rounded-2xl border border-amber-500/25 bg-amber-500/10 p-5">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-amber-200">
-                  Use AlphaWOD with your membership
+                  Use Zero Alpha App with your membership
                 </p>
                 <p className="mt-3 text-sm leading-7 text-amber-50/85">
-                  New to AlphaWOD? Create an account with the same email address you just
+                  New to Zero Alpha App? Create an account with the same email address you just
                   used at Stripe checkout. Already have an account? Log in and we&rsquo;ll link this
                   membership to it automatically.
                 </p>
@@ -285,13 +285,13 @@ export default function MembershipSuccess() {
                   to="/signup"
                   className="block rounded-2xl bg-white px-5 py-3 text-center text-sm font-bold uppercase tracking-[0.14em] text-black"
                 >
-                  Create AlphaWOD account
+                  Create Zero Alpha App account
                 </Link>
                 <Link
                   to="/"
                   className="block text-center text-sm text-white/50 underline underline-offset-4"
                 >
-                  Log in to AlphaWOD
+                  Log in to Zero Alpha App
                 </Link>
               </div>
             </>
@@ -329,7 +329,7 @@ export default function MembershipSuccess() {
                   to="/dashboard"
                   className="block text-center text-sm text-white/50 underline underline-offset-4"
                 >
-                  Go to AlphaWOD
+                  Go to Zero Alpha App
                 </Link>
               )}
             </div>

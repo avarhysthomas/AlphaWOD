@@ -54,7 +54,7 @@ describe("Memberships presale presentation", () => {
 
     expect(screen.getByText("£0 charged")).toBeInTheDocument();
     expect(screen.getAllByText("1 September 2026")).toHaveLength(2);
-    expect(screen.getByText("AlphaWOD after first payment")).toBeInTheDocument();
+    expect(screen.getByText("Zero Alpha App after first payment")).toBeInTheDocument();
     expect(screen.getByText(/discount code during signup for £5 off/i)).toBeInTheDocument();
     expect(screen.getAllByText(/£0 today · first payment 1 September 2026/i))
       .toHaveLength(4);
@@ -101,8 +101,8 @@ describe("Memberships presale presentation", () => {
     render(<Memberships />);
 
     expect(screen.queryByText("£0 charged")).not.toBeInTheDocument();
-    expect(screen.queryByText("AlphaWOD after first payment")).not.toBeInTheDocument();
-    expect(screen.getByText("Includes AlphaWOD access")).toBeInTheDocument();
+    expect(screen.queryByText("Zero Alpha App after first payment")).not.toBeInTheDocument();
+    expect(screen.getByText("Includes Zero Alpha App access")).toBeInTheDocument();
     expect(screen.queryByText(/discount code during signup for £5 off/i))
       .not.toBeInTheDocument();
     expect(screen.getAllByText(/After opening, all memberships bill on the first/i).length)

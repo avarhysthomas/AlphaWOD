@@ -668,7 +668,7 @@ export default function Dashboard() {
                 {nextUpMeta.label}
               </div>
               <p className="mt-6 text-[15px] text-white/48">
-                {[nextUp.data.coachName, nextUp.data.location].filter(Boolean).join(" · ") || "AlphaFIT"}
+                {[nextUp.data.coachName, nextUp.data.location].filter(Boolean).join(" · ") || "Zero Alpha Fitness"}
               </p>
 
               <div className="mt-8">

@@ -868,7 +868,7 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
         <PBShareModal
           open={shareOpen && !!sharePayload}
           onClose={() => setShareOpen(false)}
-          athleteName={appUser?.name || user?.displayName || "AlphaFIT Athlete"}
+          athleteName={appUser?.name || user?.displayName || "Zero Alpha Athlete"}
           movement={sharePayload?.movement || movement.name}
           metricType={sharePayload?.metricType || metricType}
           value={sharePayload?.value || value}

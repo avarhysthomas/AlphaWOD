@@ -276,7 +276,7 @@ describe("MembershipCheckout", () => {
 
     expect(screen.getByText(/Complete registration and Stripe checkout first/i))
       .toBeInTheDocument();
-    expect(screen.getByText(/create a new AlphaWOD account or log in to an existing one/i))
+    expect(screen.getByText(/create a new Zero Alpha App account or log in to an existing one/i))
       .toBeInTheDocument();
     expect(screen.queryByRole("link", {name: /sign in first/i})).not.toBeInTheDocument();
   });
@@ -293,9 +293,9 @@ describe("MembershipCheckout", () => {
     mockSignedIn = false;
     renderCheckout("adult_gym");
 
-    expect(screen.getByText(/You do not need an AlphaWOD account/i)).toBeInTheDocument();
+    expect(screen.getByText(/You do not need a Zero Alpha App account/i)).toBeInTheDocument();
     expect(screen.getByText(/return to a simple confirmation page/i)).toBeInTheDocument();
-    expect(screen.queryByText(/create a new AlphaWOD account/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/create a new Zero Alpha App account/i)).not.toBeInTheDocument();
   });
 
   it("submits the paying adult and child as distinct youth records", async () => {

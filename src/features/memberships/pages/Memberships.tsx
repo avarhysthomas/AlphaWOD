@@ -54,7 +54,7 @@ function PlanCard({
 
       {plan.grantsAlphaWodAccess && (
         <p className="mt-4 inline-flex rounded-full border border-amber-500/25 bg-amber-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-200">
-          {presale ? "AlphaWOD after first payment" : "Includes AlphaWOD access"}
+          {presale ? "Zero Alpha App after first payment" : "Includes Zero Alpha App access"}
         </p>
       )}
 
@@ -260,7 +260,7 @@ export default function Memberships() {
             <li>{POLICY_TEXT.noPause}</li>
             <li>{POLICY_TEXT.pastDue}</li>
             <li>
-              Only the Adult Unlimited Membership automatically includes eligible AlphaWOD
+              Only the Adult Unlimited Membership automatically includes eligible Zero Alpha App
               access. Youth, Ladies Only and Gym Only memberships do not.
             </li>
           </ul>

@@ -510,7 +510,7 @@ const WODDisplay = () => {
       />
 
       {!selectedDate ? null : loading ? (
-        <BoardMessage title="Loading session" detail="Pulling the latest board from AlphaFIT." />
+        <BoardMessage title="Loading session" detail="Pulling the latest board from Zero Alpha App." />
       ) : !wod ? (
         <BoardMessage
           title="No session found"

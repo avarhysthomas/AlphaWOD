@@ -15,11 +15,11 @@ export default function AccessRestricted() {
           </div>
 
           <h1 className="mt-5 text-3xl font-heading uppercase tracking-wide text-white sm:text-4xl">
-            {isRestricted ? "Your AlphaWOD access is paused" : "AlphaWOD access is required"}
+            {isRestricted ? "Your Zero Alpha App access is paused" : "Zero Alpha App access is required"}
           </h1>
 
           <p className="mt-4 text-sm leading-7 text-neutral-300 sm:text-base">
-            This account does not currently have access to AlphaWOD. If you believe this is a
+            This account does not currently have access to Zero Alpha App. If you believe this is a
             mistake, contact Zero Alpha Fitness and we’ll check it for you.
           </p>
 

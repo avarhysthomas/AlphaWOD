@@ -88,7 +88,7 @@ export default function PendingApproval() {
           ) : profileUnavailable ? (
             <div className="mt-5">
               <p className="text-sm leading-7 text-neutral-300 sm:text-base">
-                For security, AlphaWOD opens only after the server confirms your current access.
+                For security, Zero Alpha App opens only after the server confirms your current access.
                 Reconnect to the internet and try again.
               </p>
               <button
