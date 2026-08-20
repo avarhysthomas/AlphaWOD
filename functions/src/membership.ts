@@ -804,7 +804,8 @@ async function resolveApprovedCheckoutDiscount(
     stripeExistingMemberPromotionCodeId.value().trim();
   const couponId = idOf(applied[0].coupon);
   const promotionCodeId = idOf(applied[0].promotion_code);
-  if (!configuredPromotionCodeId || couponId !== configuredCouponId ||
+  if (!configuredPromotionCodeId ||
+    (couponId !== null && couponId !== configuredCouponId) ||
     promotionCodeId !== configuredPromotionCodeId ||
     promotionCodeId !== intent.promotionCodeId) {
     throw new Error(`Checkout Session ${session.id} used an unapproved promotion.`);
@@ -831,7 +832,9 @@ async function resolveApprovedCheckoutDiscount(
     billingStripe.promotionCodes.retrieve(promotionCodeId),
   ]);
   assertStripeObjectMode("Promotion Code", promotionCode.id, promotionCode.livemode);
-  if (promotionCode.id !== configuredPromotionCodeId || coupon.id !== couponId ||
+  if (promotionCode.id !== configuredPromotionCodeId ||
+    coupon.id !== configuredCouponId ||
+    (couponId !== null && coupon.id !== couponId) ||
     !promotionCodeMatchesApprovedOffer(promotionCode, coupon.id) ||
     !promotionCodeRedemptionCountIsCredible(promotionCode)) {
     throw new Error(
@@ -840,9 +843,18 @@ async function resolveApprovedCheckoutDiscount(
   }
 
   const subscriptionDiscounts = (subscription.discounts ?? []).filter(
-    (value): value is Stripe.Discount =>
-      typeof value !== "string" && idOf(value.source?.coupon) === coupon.id &&
-      idOf(value.promotion_code) === promotionCode.id
+    (value): value is Stripe.Discount => {
+      if (typeof value === "string") return false;
+      const compatibleDiscount = value as Stripe.Discount & {
+        coupon?: unknown;
+        promotion_code?: unknown;
+        source?: {coupon?: unknown; promotion_code?: unknown};
+      };
+      return (idOf(compatibleDiscount.coupon) ??
+        idOf(compatibleDiscount.source?.coupon)) === coupon.id &&
+        (idOf(compatibleDiscount.promotion_code) ??
+          idOf(compatibleDiscount.source?.promotion_code)) === promotionCode.id;
+    }
   );
   if (subscriptionDiscounts.length !== 1 || subscription.discounts.length !== 1) {
     throw new Error(
