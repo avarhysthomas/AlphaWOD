@@ -2300,6 +2300,78 @@ test("claiming by checkout session grants AlphaWOD access and approves the accou
   assert.equal(membership.get("claimedVia"), "checkout_session");
 });
 
+test("claiming a scheduled presale restores an approved historical member immediately", async () => {
+  const uid = "historicalpresalemember";
+  const email = "historicalpresalemember@example.test";
+  await admin.auth().createUser({uid, email, emailVerified: true});
+  // Historical approved profiles predate the entitlement schema. Explicitly
+  // pending or restricted profiles are not eligible for this restoration.
+  await db.collection("users").doc(uid).set({
+    role: "user",
+    approvalStatus: "approved",
+    alphaWodAccess: false,
+    email,
+  });
+  await seedMembership("sub_historical_presale_claim", {
+    payerEmail: email,
+    state: "scheduled",
+    stripeStatus: "active",
+    billingMode: "presale_deferred",
+    serviceStartsAt: PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
+    firstPaymentAt: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+    billingCycleAnchor: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+    initialChargePence: 0,
+    firstPaymentReceivedAt: null,
+    nextReconcileAt: admin.firestore.Timestamp.fromMillis(
+      PRESALE_BILLING_ANCHOR_UNIX_SECONDS * 1000
+    ),
+  });
+
+  const result = await claimMembership(request({
+    sessionId: "cs_sub_historical_presale_claim",
+  }, uid));
+
+  assert.deepEqual(result.claimed, ["sub_historical_presale_claim"]);
+  assert.deepEqual(await accessOf(uid), {
+    approvalStatus: "approved",
+    entitlementStatus: "active",
+    entitlementSource: "legacy",
+    alphaWodAccess: true,
+  });
+  const membership = await db.collection("memberships")
+    .doc("sub_historical_presale_claim").get();
+  assert.equal(membership.get("state"), "scheduled");
+  assert.equal(membership.get("initialChargePence"), 0);
+  assert.equal(membership.get("firstPaymentReceivedAt"), null);
+  assert.ok(membership.get("existingMemberAccessRestoredAt"));
+});
+
+test("claiming a scheduled presale does not unlock a pending account", async () => {
+  const uid = "newpresalemember";
+  const email = "newpresalemember@example.test";
+  await createMember(uid, {email, emailVerified: true});
+  await seedMembership("sub_new_presale_claim", {
+    payerEmail: email,
+    state: "scheduled",
+    stripeStatus: "active",
+    billingMode: "presale_deferred",
+    serviceStartsAt: PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
+    firstPaymentAt: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+    billingCycleAnchor: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+    initialChargePence: 0,
+    firstPaymentReceivedAt: null,
+  });
+
+  await claimMembership(request({sessionId: "cs_sub_new_presale_claim"}, uid));
+
+  assert.deepEqual(await accessOf(uid), {
+    approvalStatus: "pending",
+    entitlementStatus: "none",
+    entitlementSource: "none",
+    alphaWodAccess: false,
+  });
+});
+
 test("a leaked Stripe session id cannot claim without the browser verifier", async () => {
   await createMember("linkattacker", {
     email: "attacker@example.test",

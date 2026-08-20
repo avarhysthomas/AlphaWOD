@@ -1989,14 +1989,69 @@ async function applyMembershipEntitlement(
     const membership = membershipSnap.data() as MembershipDoc;
     const uid = membership.entitlementTargetUid;
     if (!uid) return null;
-    // A blocking presale owns the duplicate lock but must not change an
-    // existing legacy/manual entitlement, approval, or Auth claims before first
-    // payment, including when its first invoice has failed and is suspended.
-    // Once that prepayment membership becomes terminal, release only its owner
-    // generation; the profile still must remain completely untouched.
+    // A blocking presale owns the duplicate lock but normally must not change
+    // entitlement before first payment. The one exception is an already-
+    // approved historical member whose profile predates the entitlement
+    // schema: completing and claiming checkout restores the same legacy grant
+    // the reviewed Phase 0 migration assigns. New/pending members and any
+    // explicit restriction remain gated until the first payment succeeds.
+    // Once a prepayment membership becomes terminal, release only its owner
+    // generation; any independent legacy/manual access remains untouched.
     if (membership.billingMode === "presale_deferred" &&
       membership.firstPaymentReceivedAt === null) {
-      if (isMembershipStateBlockingDuplicate(membership.state)) return null;
+      if (isMembershipStateBlockingDuplicate(membership.state)) {
+        if (membership.state !== "scheduled" ||
+          !membership.grantsAlphaWodAccess ||
+          membership.providerContractStatus !== "verified" ||
+          membership.participant?.isPayer !== true) return null;
+
+        const userRef = db().collection("users").doc(uid);
+        const userSnap = await tx.get(userRef);
+        if (!userSnap.exists) return null;
+        const user = userSnap.data() as Record<string, unknown>;
+
+        if (user.role !== "user" || user.approvalStatus !== "approved") {
+          return null;
+        }
+
+        const alreadyGrandfathered = user.entitlementStatus === "active" &&
+          (user.entitlementSource === "legacy" ||
+            user.entitlementSource === "manual");
+        if (alreadyGrandfathered) {
+          return {convergeUid: uid, reviewReason: null, reviewUidHash: null};
+        }
+
+        const hasHistoricalUnprojectedEntitlement =
+          (user.entitlementStatus === undefined ||
+            user.entitlementStatus === null ||
+            user.entitlementStatus === "") &&
+          (user.entitlementSource === undefined ||
+            user.entitlementSource === null ||
+            user.entitlementSource === "");
+        if (!hasHistoricalUnprojectedEntitlement) return null;
+
+        const restored = resolveUserAuthorisation({
+          role: "user",
+          approvalStatus: "approved",
+          entitlementStatus: "active",
+          entitlementSource: "legacy",
+        });
+        tx.set(userRef, {
+          entitlementStatus: "active",
+          entitlementSource: "legacy",
+          alphaWodAccess: restored.alphaWodAccess,
+          accessSchemaVersion: ACCESS_SCHEMA_VERSION,
+          entitlementReason: "presale_existing_member_grandfathered",
+          entitlementUpdatedAt: serverTimestamp(),
+          entitlementUpdatedBy: "stripe_membership_claim",
+          updatedAt: serverTimestamp(),
+        }, {merge: true});
+        tx.set(membershipRef, {
+          existingMemberAccessRestoredAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        }, {merge: true});
+        return {convergeUid: uid, reviewReason: null, reviewUidHash: null};
+      }
       const owner = await readEntitlementOwner(tx, uid, membershipRef.id);
       if (owner.ownerSubscriptionId === membershipRef.id &&
         owner.ownerState === "active") {

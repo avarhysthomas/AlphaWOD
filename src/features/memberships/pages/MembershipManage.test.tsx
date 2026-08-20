@@ -10,14 +10,20 @@ const mockClearPendingClaim = jest.fn();
 const mockRequestMembershipCancellation = jest.fn();
 const mockNavigate = jest.fn();
 const mockSendEmailVerification = jest.fn();
+const mockRefreshAppUser = jest.fn();
 let mockAuthUser = { uid: "buyer-1", emailVerified: false };
+let mockAppUser: Record<string, unknown> | null = null;
 let mockSearch = "";
 
 jest.mock("firebase/auth", () => ({
   sendEmailVerification: (...args: unknown[]) => mockSendEmailVerification(...args),
 }));
 jest.mock("../../../context/AuthContext", () => ({
-  useAuth: () => ({user: mockAuthUser}),
+  useAuth: () => ({
+    user: mockAuthUser,
+    appUser: mockAppUser,
+    refreshAppUser: mockRefreshAppUser,
+  }),
 }));
 
 jest.mock("../services/membership", () => ({
@@ -90,6 +96,8 @@ describe("MembershipManage pending-claim recovery", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockAuthUser = { uid: "buyer-1", emailVerified: false };
+    mockAppUser = null;
+    mockRefreshAppUser.mockResolvedValue(undefined);
     mockSendEmailVerification.mockResolvedValue(undefined);
     mockSearch = "";
     mockReadPendingClaim.mockReturnValue("cs_waiting_for_webhook");
@@ -255,6 +263,41 @@ describe("MembershipManage cancellation confirmation", () => {
       .toBeInTheDocument();
     expect(screen.getByRole("button", {name: "Cancel scheduled membership"}))
       .toBeInTheDocument();
+  });
+
+  it("returns an existing member to the app immediately after scheduled checkout", async () => {
+    mockAppUser = {
+      role: "user",
+      approvalStatus: "approved",
+      entitlementStatus: "active",
+      entitlementSource: "legacy",
+      alphaWodAccess: true,
+    };
+    mockGetMyMemberships.mockResolvedValue({
+      ok: true,
+      memberships: [{
+        ...activeMembership,
+        state: "scheduled",
+        billingMode: "presale_deferred",
+        serviceStartsAt: 1788220800,
+        firstPaymentAt: 1788220800,
+        billingCycleAnchor: 1788220800,
+        initialChargePence: 0,
+        cancellationMode: "cancel_before_start",
+        cancellationPreview,
+        entitlementProjectionStatus: null,
+      }],
+      cancellationPreview,
+    });
+
+    render(<MembershipManage />);
+
+    expect(await screen.findByText(/existing Zero Alpha App access is available now/i))
+      .toBeInTheDocument();
+    expect(screen.getByRole("link", {name: "Continue to Zero Alpha App"}))
+      .toHaveAttribute("href", "/dashboard");
+    expect(screen.queryByText(/does not unlock Zero Alpha App access before then/i))
+      .not.toBeInTheDocument();
   });
 
   it("keeps a cooling-off cancellation action available and marks its request kind", async () => {
