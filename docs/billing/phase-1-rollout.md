@@ -476,7 +476,7 @@ objects. It does not change the production publication or runtime gates.
    `STRIPE_EXISTING_MEMBER_COUPON_ID`. The checked-in test configuration uses
    Coupon `zaf_existing_member_5off_3mo_2026_test_v2`, restricted to test Product
    `prod_V5ad9hrrvMkdhw`, and shared Promotion Code id
-   `promo_1U6AJYFzNDZoGGA0ybHPTeU6` (customer code `EXISTING5-TEST`). The
+   `promo_1U6ThDFzNDZoGGA0OT0EaV8Z` (customer code `EXISTING5-TEST`). The
    read-only preflight retrieves that exact Code, verifies its campaign
    restrictions and requires it to be the Coupon's only active Code. It accepts
    any non-negative `times_redeemed` count so repeated tests do not need a new

@@ -105,22 +105,20 @@ test("rejects open gates, test mode, local origins and provider overrides", () =
 });
 
 test("rejects every checked-in Stripe test object ID", () => {
-  const assignments = [
-    "STRIPE_PORTAL_CONFIGURATION_ID",
-    "STRIPE_PRICE_ADULT_UNLIMITED",
-    "STRIPE_PRICE_ADULT_LADIES",
-    "STRIPE_PRICE_ADULT_GYM",
-    "STRIPE_PRICE_YOUTH_YOUNGSTARS",
-    "STRIPE_PRICE_YOUTH_TEENSTARS",
-    "STRIPE_EXISTING_MEMBER_COUPON_ID",
-    "STRIPE_EXISTING_MEMBER_PROMOTION_CODE_ID",
-  ];
-  [...KNOWN_TEST_PROVIDER_IDS].forEach((testId, index) => {
+  const assignmentByPrefix = {
+    bpc: "STRIPE_PORTAL_CONFIGURATION_ID",
+    price: "STRIPE_PRICE_ADULT_UNLIMITED",
+    zaf: "STRIPE_EXISTING_MEMBER_COUPON_ID",
+    promo: "STRIPE_EXISTING_MEMBER_PROMOTION_CODE_ID",
+  };
+  for (const testId of KNOWN_TEST_PROVIDER_IDS) {
+    const assignment = assignmentByPrefix[testId.split("_", 1)[0]];
+    assert.ok(assignment, `No production parameter covers ${testId}.`);
     assert.throws(() => assertValid({
       ...validEnvironment(),
-      [assignments[index]]: testId,
+      [assignment]: testId,
     }));
-  });
+  }
 });
 
 test("rejects an unapproved or swapped live Price ID", () => {

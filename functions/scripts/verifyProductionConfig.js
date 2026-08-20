@@ -34,6 +34,7 @@ const KNOWN_TEST_PROVIDER_IDS = new Set([
   "price_1U5PEwFzNDZoGGA0d24UJaZd",
   "zaf_existing_member_5off_3mo_2026_test_v2",
   "promo_1U6AJYFzNDZoGGA0ybHPTeU6",
+  "promo_1U6ThDFzNDZoGGA0OT0EaV8Z",
 ]);
 
 function required(environment, name) {

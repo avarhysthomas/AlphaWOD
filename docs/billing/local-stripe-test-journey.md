@@ -75,7 +75,7 @@ schedule of £55 on 1 September, 1 October and 1 November, followed by the base
 £60 price from 1 December.
 
 `STRIPE_EXISTING_MEMBER_PROMOTION_CODE_ID` is the exact provider-side allowlist;
-the test value is `promo_1U6AJYFzNDZoGGA0ybHPTeU6`, and the preflight requires
+the test value is `promo_1U6ThDFzNDZoGGA0OT0EaV8Z`, and the preflight requires
 it to be the Coupon's only active Promotion Code. The shared Code and Coupon
 have no redemption cap. The verifier accepts any non-negative current redemption
 count, so repeat test journeys do not require a fresh Code. Live use is manually

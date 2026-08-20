@@ -15,12 +15,13 @@ from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
 
-OUTPUT_DIR = Path("docs/legal-review/2026-08-17")
-REVIEW_DATE = "17 August 2026"
+OUTPUT_DIR = Path("docs/legal-review/2026-08-20")
+VERSION_DATE = "20 August 2026"
 ENTITY = "ZERO ALPHA FITNESS LTD"
 COMPANY_NUMBER = "15978998"
 TRADING_NAME = "Zero Alpha Fitness"
 ADDRESS = "Unit 3, Felinfoel Business Hub, Llanelli, SA14 8BE"
+REGISTERED_OFFICE = "18 Bryngwyn Bach, Llanelli, United Kingdom, SA14 8SH"
 SUPPORT_EMAIL = "support@zeroalphafitness.co.uk"
 SITE_URL = "https://alpha-wod.vercel.app/"
 
@@ -55,36 +56,36 @@ SPECS = {
         "01-membership-terms-draft.docx",
         "Membership Terms",
         "Public membership purchase and ongoing membership",
-        "ZAF-TERMS-DRAFT-2026-08-17-01",
-        "Draft membership terms for public membership purchase",
+        "ZAF-TERMS-DRAFT-2026-08-20-01",
+        "Membership terms for public membership purchase",
     ),
     "privacy": DocSpec(
         "02-privacy-notice-draft.docx",
         "Privacy Notice",
         "Membership, payment, AlphaWOD and participant information",
-        "ZAF-PRIVACY-DRAFT-2026-08-17-01",
-        "Draft privacy notice for membership and AlphaWOD data",
+        "ZAF-PRIVACY-DRAFT-2026-08-20-01",
+        "Privacy notice for membership and AlphaWOD data",
     ),
     "cancel": DocSpec(
         "03-cancellation-refund-cooling-off-policy-draft.docx",
         "Cancellation, Refund and Cooling-off Policy",
         "Plain-English rules for rolling monthly memberships",
-        "ZAF-CANCEL-DRAFT-2026-08-17-01",
-        "Draft cancellation, refund and cooling-off policy",
+        "ZAF-CANCEL-DRAFT-2026-08-20-01",
+        "Cancellation, refund and cooling-off policy",
     ),
     "adult": DocSpec(
         "04-adult-participant-waiver-draft.docx",
         "Adult Participant Waiver and Risk Acknowledgement",
         "For every participant aged 18 or over",
-        "ZAF-ADULT-WAIVER-DRAFT-2026-08-17-01",
-        "Draft adult participant waiver and risk acknowledgement",
+        "ZAF-ADULT-WAIVER-DRAFT-2026-08-20-01",
+        "Adult participant waiver and risk acknowledgement",
     ),
     "guardian": DocSpec(
         "05-parent-guardian-addendum-draft.docx",
         "Parent/Guardian Consent and Youth Membership Addendum",
         "For Youngstars (ages 4–11) and Teenstars (ages 12–16)",
-        "ZAF-GUARDIAN-DRAFT-2026-08-17-01",
-        "Draft parent and guardian consent and youth membership addendum",
+        "ZAF-GUARDIAN-DRAFT-2026-08-20-01",
+        "Parent and guardian consent and youth membership addendum",
     ),
 }
 
@@ -156,7 +157,7 @@ def add_field(paragraph, instruction: str) -> None:
     run._r.extend([begin, instr, separate, text, end])
 
 
-def add_hyperlink(paragraph, text: str, url: str) -> None:
+def add_hyperlink(paragraph, text: str, url: str, *, font_size: float | None = None) -> None:
     part = paragraph.part
     rel_id = part.relate_to(
         url,
@@ -172,6 +173,12 @@ def add_hyperlink(paragraph, text: str, url: str) -> None:
     underline = OxmlElement("w:u")
     underline.set(qn("w:val"), "single")
     run_pr.extend([color, underline])
+    if font_size is not None:
+        size = OxmlElement("w:sz")
+        size.set(qn("w:val"), str(int(font_size * 2)))
+        size_cs = OxmlElement("w:szCs")
+        size_cs.set(qn("w:val"), str(int(font_size * 2)))
+        run_pr.extend([size, size_cs])
     run.append(run_pr)
     node = OxmlElement("w:t")
     node.text = text
@@ -260,9 +267,9 @@ def configure_document(doc: Document, spec: DocSpec) -> None:
     props.subject = spec.subject
     props.author = ENTITY
     props.keywords = "draft, legal review, membership, Zero Alpha Fitness"
-    props.comments = "Working draft for legal-owner and solicitor review; not approved for publication."
-    props.created = datetime(2026, 8, 17, 9, 0, tzinfo=timezone.utc)
-    props.modified = datetime(2026, 8, 17, 9, 0, tzinfo=timezone.utc)
+    props.comments = "Working draft for owner, legal and operational review; not approved for publication."
+    props.created = datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)
+    props.modified = datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)
 
     def format_header(header) -> None:
         header.is_linked_to_previous = False
@@ -307,12 +314,12 @@ def add_document_title(doc: Document, spec: DocSpec) -> None:
     table.autofit = False
     widths = [Inches(2.05), Inches(2.05), Inches(2.05)]
     labels = [
-        ("STATUS", "Working draft"),
-        ("VERSION DATE", REVIEW_DATE),
+        ("VERSION DATE", VERSION_DATE),
         ("DOCUMENT ID", spec.doc_id),
         ("CONTRACTING ENTITY", f"{ENTITY} · {COMPANY_NUMBER}"),
         ("TRADING NAME", TRADING_NAME),
         ("PUBLIC CONTACT", SUPPORT_EMAIL),
+        ("WEBSITE", SITE_URL),
     ]
     for idx, cell in enumerate(table._cells):
         cell.width = widths[idx % 3]
@@ -338,11 +345,13 @@ def add_document_title(doc: Document, spec: DocSpec) -> None:
     for row in table.rows:
         prevent_row_split(row)
 
+
+def add_draft_banner(doc: Document) -> None:
     add_callout(
         doc,
-        "DRAFT FOR LEGAL REVIEW — NOT APPROVED FOR PUBLICATION",
-        "This working draft records the currently approved commercial and operational position. It must be reviewed by the business owner and a suitably qualified UK legal adviser before it is shown to customers or wired into checkout.",
-        kind="danger",
+        "Draft for owner, legal and operational review",
+        "This working copy is not approved for publication or customer acceptance. The checkout publication and purchase gates must remain closed until the review appendix has been resolved and the final customer text is expressly approved.",
+        kind="warning",
     )
 
 
@@ -421,11 +430,34 @@ def add_quote(doc: Document, text: str) -> None:
     spacer.paragraph_format.space_after = Pt(0)
 
 
-def add_source_list(doc: Document, sources: Sequence[tuple[str, str]]) -> None:
-    for label, url in sources:
-        p = doc.add_paragraph(style="List Bullet")
+def add_source_list(
+    doc: Document,
+    sources: Sequence[tuple[str, str]],
+    *,
+    compact_columns: bool = False,
+) -> None:
+    if not compact_columns:
+        for label, url in sources:
+            p = doc.add_paragraph(style="List Bullet")
+            p.paragraph_format.keep_together = True
+            p.paragraph_format.space_after = Pt(1)
+            p.paragraph_format.line_spacing = 1.0
+            add_hyperlink(p, label, url, font_size=8.5)
+        return
+
+    table = doc.add_table(rows=(len(sources) + 1) // 2, cols=2)
+    table.alignment = WD_TABLE_ALIGNMENT.LEFT
+    for index, (label, url) in enumerate(sources):
+        cell = table.cell(index // 2, index % 2)
+        set_cell_margins(cell, 15, 80, 15, 80)
+        p = cell.paragraphs[0]
+        p.style = doc.styles["List Bullet"]
         p.paragraph_format.keep_together = True
-        add_hyperlink(p, label, url)
+        p.paragraph_format.space_after = Pt(0)
+        p.paragraph_format.line_spacing = 1.0
+        add_hyperlink(p, label, url, font_size=7.5)
+    for row in table.rows:
+        prevent_row_split(row)
 
 
 def add_review_appendix(
@@ -434,8 +466,8 @@ def add_review_appendix(
     sources: Sequence[tuple[str, str]],
     *,
     high_priority: str | None = None,
+    compact: bool = False,
 ) -> None:
-    doc.add_page_break()
     doc.add_heading("Legal review appendix", level=1)
     add_callout(
         doc,
@@ -446,9 +478,16 @@ def add_review_appendix(
     if high_priority:
         add_callout(doc, "High-priority review point", high_priority, kind="danger")
     doc.add_heading("Items to confirm", level=2)
+    first_review_paragraph = len(doc.paragraphs)
     add_bullets(doc, review_points)
+    if compact:
+        for paragraph in doc.paragraphs[first_review_paragraph:]:
+            paragraph.paragraph_format.space_after = Pt(0)
+            paragraph.paragraph_format.line_spacing = 1.0
+            for run in paragraph.runs:
+                run.font.size = Pt(8.5)
     doc.add_heading("Primary legal and regulatory sources", level=2)
-    add_source_list(doc, sources)
+    add_source_list(doc, sources, compact_columns=compact)
 
 
 def add_acceptance_block(doc: Document, heading: str, statements: Sequence[str], signer: str) -> None:
@@ -470,15 +509,16 @@ def build_terms() -> Path:
     doc = Document()
     configure_document(doc, spec)
     add_document_title(doc, spec)
+    add_draft_banner(doc)
 
     doc.add_heading("1. About these Terms", level=1)
     add_para(
         doc,
-        f"These Membership Terms form the contract for a Zero Alpha Fitness membership purchased online from {ENTITY}, company number {COMPANY_NUMBER}, trading as {TRADING_NAME} (we, us or our). Our public trading and contact address is {ADDRESS}. Contact us at {SUPPORT_EMAIL}.",
+        f"These Membership Terms form the contract for a Zero Alpha Fitness membership purchased online from {ENTITY}, a company registered in England and Wales under company number {COMPANY_NUMBER}, trading as {TRADING_NAME} (we, us or our). Our registered office is {REGISTERED_OFFICE}. Our public trading and contact address is {ADDRESS}. Contact us at {SUPPORT_EMAIL}.",
     )
     add_para(
         doc,
-        "The person who agrees to these Terms and pays for the membership is the payer. The person who takes part in training is the participant. They may be different adults. For a participant under 18, the payer must be their parent or legal guardian, or another adult with lawful authority to enter the arrangement for them.",
+        "For an adult membership, the named participant must buy the membership for themselves and is also the payer and signer. For a participant under 18, the payer and signer must be the child’s parent or legal guardian, or another adult with lawful authority to enrol them.",
     )
     add_para(
         doc,
@@ -492,7 +532,7 @@ def build_terms() -> Path:
             "An adult participant must be aged 18 or over and must personally accept the Adult Participant Waiver and Risk Acknowledgement before taking part.",
             "A Youngstars participant must be aged 4 to 11 inclusive. A Teenstars participant must be aged 12 to 16 inclusive.",
             "A youth participant’s guardian must be the payer, confirm their relationship and authority, and accept the Parent/Guardian Consent and Youth Membership Addendum.",
-            "Where the payer and adult participant differ, the payer accepts these Terms and the recurring-payment obligation; the participant separately accepts the waiver and receives the Privacy Notice.",
+            "An adult participant accepts these Terms, the payment obligation and the Adult Participant Waiver for their own membership. Third-party purchase of an adult membership is not supported.",
             "You must give accurate, complete and current information. You must not buy a youth membership for a child outside the stated age range or misrepresent authority to act for another person.",
         ],
     )
@@ -502,7 +542,7 @@ def build_terms() -> Path:
     add_bullets(
         doc,
         [
-            "Adult Unlimited Membership — £60 per month. This is the only paid membership that automatically includes eligible AlphaWOD access.",
+            "Adult Unlimited Membership — £60 per month. This is the only paid membership that grants eligible AlphaWOD access after the first required payment succeeds.",
             "Adult Ladies Only Membership — £50 per month.",
             "Adult Gym Only — £45 per month.",
             "Youth Membership — one catalogue card with Youngstars (ages 4–11) or Teenstars (ages 12–16), each £35 per month.",
@@ -523,32 +563,32 @@ def build_terms() -> Path:
         [
             "Choose the membership and, for youth membership, the correct age option.",
             "Provide the required participant and payer or guardian details, review the documents, and complete each required acceptance or signature.",
-            "Review the initial prorated charge, the full monthly price and the first full billing date shown by Stripe before submitting payment.",
-            "Submit payment through Stripe Checkout. Available payment methods are those Stripe displays for that transaction and may vary by device, location, currency and eligibility.",
-            "The contract is formed when payment is confirmed and we issue an on-screen or email confirmation, unless we promptly tell you that a clear pricing, eligibility or technical error prevented acceptance and refund any amount taken.",
+            "Review the amount due today, the full monthly price and the first payment or billing date shown by Stripe. During the founding presale, Checkout must show £0 due today and the first monthly payment on 1 September 2026; after opening, Stripe may show an immediate prorated charge to the next first of the month.",
+            "Complete Stripe Checkout. Available payment methods are those Stripe displays for that transaction and may vary by device, location, currency and eligibility.",
+            "The contract is formed when Stripe confirms completion of Checkout and we issue an on-screen or email confirmation, unless we promptly tell you that a clear pricing, eligibility or technical error prevented acceptance and refund any amount taken.",
         ],
     )
     add_para(
         doc,
-        "The final payment control will use unambiguous wording such as ‘Subscribe and pay’. Before service begins, we will email a durable confirmation containing the agreed plan, amounts, next payment date, accepted document versions, cancellation information and signed acceptance evidence; a changeable website link alone is not the durable copy. For a youth membership, payment confirmation does not itself book a first session. We will contact the guardian by email to arrange onboarding and the first session.",
+        "Stripe will present an unambiguous final confirmation control and summary. Before service begins, we will email a durable confirmation containing the agreed plan, amounts, next payment date, accepted document versions, cancellation information and signed acceptance evidence; a changeable website link alone is not the durable copy. During the founding presale, nothing is charged today; membership starts and the first monthly payment is taken on 1 September 2026. For a youth membership, Checkout completion does not itself book a first session. We will contact the guardian by email to arrange onboarding and the first session.",
     )
     add_quote(
         doc,
-        f"Payment confirmed. Zero Alpha Fitness will contact you by email to arrange onboarding and your first session. Questions: {SUPPORT_EMAIL}.",
+        "Founding presale youth confirmation: You’re signed up. Nothing has been charged today. This membership starts and the first monthly payment is taken on 1 September 2026. Zero Alpha Fitness will contact you by email to arrange onboarding and the first session.",
     )
 
-    doc.add_heading("5. Billing date, initial proration and recurring authority", level=1)
+    doc.add_heading("5. Presale, billing date, proration and recurring authority", level=1)
     add_para(
         doc,
-        "All memberships use the first day of each calendar month as the regular billing date, interpreted in Europe/London time. If a membership starts after the first, Stripe calculates and displays an initial prorated charge for the period from the immediate start time until the next first of the month. That charge is payable immediately. The full monthly price is then charged on the next first and on each following first while the membership continues.",
+        "All memberships use the first day of each calendar month as the regular billing date, interpreted in Europe/London time. During the founding presale, nothing is charged today. Stripe securely saves the payment method; membership starts and the first monthly payment is taken on 1 September 2026. After opening, memberships start immediately and, if Checkout occurs after the first, Stripe calculates and displays an immediate prorated charge until the next first. The full monthly price is then charged on each first while membership continues.",
     )
     add_para(
         doc,
-        "The amount Stripe displays before payment is authoritative for that checkout. We do not calculate or round a separate proration in the browser. If the displayed initial charge or billing date appears wrong, do not pay; contact us first.",
+        "The amount Stripe displays before confirmation is authoritative for that Checkout. A presale Checkout must show £0 due today and a first payment date of 1 September 2026. We do not calculate a separate charge in the browser. If the displayed amount or billing date appears wrong, do not confirm; contact us first.",
     )
     add_para(
         doc,
-        "By completing checkout, the payer authorises Stripe and us to store the selected payment method as permitted by that payment method and to collect the initial amount and future recurring amounts without the payer being present. The payer must keep the payment method valid and may update it through the secure Customer Portal.",
+        "By completing Checkout, the payer authorises Stripe and us to store the selected payment method as permitted by that payment method and to collect the amount shown today, which is £0 during the founding presale, and future recurring amounts without the payer being present. The payer must keep the payment method valid and may update it through the secure Customer Portal.",
     )
 
     doc.add_heading("6. Price changes", level=1)
@@ -571,7 +611,7 @@ def build_terms() -> Path:
     add_bullets(
         doc,
         [
-            "Paid Adult Unlimited Membership automatically qualifies the participant for AlphaWOD access while the subscription and payment status remain eligible.",
+            "Adult Unlimited Membership qualifies the participant for AlphaWOD access only after the first required payment succeeds and while the subscription and payment status remain eligible.",
             "An existing AlphaWOD account holder should sign in and claim the purchase. Creating or paying for a duplicate active subscription may be blocked.",
             "Existing users whose AlphaWOD access was already approved before this purchase flow launches remain grandfathered unless their independent eligibility is later removed under a lawful policy.",
             "Administrators and SGPT staff may retain access through their role independently of a consumer membership.",
@@ -592,7 +632,7 @@ def build_terms() -> Path:
     )
     add_para(
         doc,
-        "A payer may request cancellation through the signed-in cancellation-request flow, or by emailing support@zeroalphafitness.co.uk if the flow is unavailable. The request should identify the payer, participant and membership. We will record the received date and time in Europe/London and send an acknowledgement showing the effective end date and any remaining scheduled charge.",
+        "A payer may request cancellation through the signed-in cancellation-request flow or by emailing support@zeroalphafitness.co.uk. The online flow records and acknowledges the outcome automatically. Email requests are handled manually using the time the message reaches the support inbox. The request should identify the payer, participant and membership. We will send an acknowledgement showing the effective end date and any remaining scheduled charge.",
     )
     add_bullets(
         doc,
@@ -611,7 +651,7 @@ def build_terms() -> Path:
     doc.add_heading("10. Cooling-off and refunds", level=1)
     add_para(
         doc,
-        "Where the Consumer Contracts (Information, Cancellation and Additional Charges) Regulations 2013 apply, a consumer generally may cancel until the end of 14 days after the day the online service contract is made. If the payer expressly requests immediate performance during that period and then cancels within it, we may deduct only a proportionate amount for services actually supplied, where the law allows. If immediate performance was not expressly requested, different refund consequences may apply. Any statutory refund will be made within 14 days where that is the legal deadline, to the original payment method unless the consumer expressly agrees otherwise, and without a refund fee.",
+        "Where the Consumer Contracts (Information, Cancellation and Additional Charges) Regulations 2013 apply, a consumer generally may cancel until the end of 14 days after the day the online service contract is made. If the payer expressly requests that service begin on the service start date shown, even if that is before the cooling-off period ends, and then cancels within that period, we may deduct only a proportionate amount for services actually supplied, where the law allows. If that express request was not made, different refund consequences may apply. Any statutory refund will be made within 14 days where that is the legal deadline, to the original payment method unless the consumer expressly agrees otherwise, and without a refund fee.",
     )
     add_para(
         doc,
@@ -621,7 +661,7 @@ def build_terms() -> Path:
     doc.add_heading("11. Failed payments, grace period and disputes", level=1)
     add_para(
         doc,
-        "If a recurring payment fails, Stripe may retry it and we may ask the payer to update the payment method. We allow a three-calendar-day past-due grace period from the failed due date, during which related access continues while payment is recovered. If the subscription remains past due after the grace period, access may be suspended until payment succeeds or the membership ends. We do not add an undisclosed late fee or accelerate future monthly payments.",
+        "After a membership has started, if a recurring payment fails, Stripe may retry it and we may ask the payer to update the payment method. We allow a three-calendar-day past-due grace period from the failed due date, during which existing related access continues while payment is recovered. If the subscription remains past due after the grace period, access may be suspended until payment succeeds or the membership ends. If the first scheduled payment fails, the membership and AlphaWOD access do not start. We do not add an undisclosed late fee or accelerate future monthly payments.",
     )
     add_para(
         doc,
@@ -663,7 +703,7 @@ def build_terms() -> Path:
     doc.add_heading("15. Customer Portal and account security", level=1)
     add_para(
         doc,
-        "The Stripe Customer Portal may allow the payer to update a payment method and view invoices. Pause and Stripe’s standard cancellation control are disabled because cancellation uses the notice process in section 9. An AlphaWOD member may open the portal from a signed-in account. A non-app payer may receive a short-lived verified-email link. The recipient must keep links and account credentials secure and tell us promptly about suspected unauthorised use.",
+        "The Stripe Customer Portal may allow the payer to update a payment method and view invoices. Pause and Stripe’s standard cancellation control are disabled because cancellation uses the notice process in section 9. The payer may open the Customer Portal only from the signed-in account that owns the membership. A purchaser who checked out while signed out must first claim the purchase from the Checkout return flow or from a signed-in account whose verified email matches the payer email. The recipient must keep account credentials secure and tell us promptly about suspected unauthorised use.",
     )
 
     doc.add_heading("16. Ending or restricting a membership by us", level=1)
@@ -692,9 +732,10 @@ def build_terms() -> Path:
         doc,
         "Checkout acceptance text",
         [
-            "I have read and agree to the Membership Terms and the Cancellation, Refund and Cooling-off Policy, and I acknowledge the Privacy Notice. I confirm that the participant and payer/guardian details I supplied are accurate.",
-            "I authorise the initial amount shown and recurring monthly payments through Stripe on the billing schedule shown at checkout, subject to my cancellation and statutory rights.",
-            "I expressly request that the membership and any eligible AlphaWOD access begin immediately, before the 14-day cooling-off period ends. I understand that, if I cancel during that period, Zero Alpha Fitness may retain or charge only the proportionate amount permitted by law for services supplied before cancellation.",
+            "I have read and agree to the Membership Terms and the Cancellation, Refund and Cooling-off Policy. I confirm that the participant and payer or guardian details I supplied are accurate.",
+            "I acknowledge that I have received and read the Privacy Notice explaining how personal information is used.",
+            "I authorise the amount Stripe shows today and future recurring monthly payments for the selected membership on the billing schedule shown at Checkout. Stripe will show the standard monthly price, any verified promotion and when the standard price resumes. This authority is subject to my cancellation and statutory rights.",
+            "I expressly request that the membership and any eligible AlphaWOD access begin on the service start date shown, even if that is before the 14-day cooling-off period ends. I understand that, if I cancel during that period, Zero Alpha Fitness may retain or charge only the proportionate amount permitted by law for services supplied before cancellation.",
         ],
         "payer name and verified payer email",
     )
@@ -706,9 +747,9 @@ def build_terms() -> Path:
             "Confirm the operational definition of receipt, deadline timestamps, timezone and what happens if the cancellation service or email system is unavailable.",
             "Confirm each membership’s facilities, class access, capacity rules and any required booking/no-show terms before publication.",
             "Set the advance-notice period and customer remedy for future price or material service changes.",
-            "Confirm whether an adult participant who is not the payer also becomes a party to any part of the Membership Terms, and reflect that consistently in the signing flow.",
+            "Confirm that adult self-purchase is enforced consistently across Checkout, account claim, support and any assisted route.",
             "Set an explicit rule for a participant aged 17. The approved youth bands end at 16 and this draft requires an adult participant to be 18, so age 17 is intentionally not offered until the owner and counsel approve a route.",
-            "Verify the registered office and place of registration disclosures required on the website and commercial documents. The Unit 3 address is recorded here only as the approved public trading/contact address.",
+            "Confirm that the registered office, place of registration and public trading/contact address remain current on the website and commercial documents immediately before publication.",
             "Review the suspension/termination and liability clauses against current insurance, house rules, safeguarding policy and complaint procedure.",
             "Verify Welsh/English language, accessibility and durable-medium requirements for the intended customer base and checkout design.",
             "Review these Terms again against any commenced subscription-contract provisions of the Digital Markets, Competition and Consumers Act 2024 before launch and on each material update.",
@@ -723,10 +764,9 @@ def build_terms() -> Path:
             ("Government response on the subscription-contract regime", "https://www.gov.uk/government/consultations/consultation-on-the-implementation-of-the-new-subscription-contracts-regime/outcome/government-response-to-consultation-on-the-implementation-of-the-new-subscription-contracts-regime-web-accessible-version"),
             ("GOV.UK online-selling requirements", "https://www.gov.uk/online-and-distance-selling-for-businesses/online-selling"),
             ("Stripe subscription billing-cycle documentation", "https://docs.stripe.com/billing/subscriptions/billing-cycle"),
-            ("Stripe Customer Portal documentation", "https://docs.stripe.com/customer-management"),
         ],
         high_priority=(
-            "The approved policy is a 14-day deadline before the next first-of-month renewal, not cancellation that always takes effect exactly 14 days after request. A late request can therefore keep the contract running for one extra full billing month. The customer-facing wording makes that effect prominent, but counsel must assess fairness and current/forthcoming subscription-contract rules before it is used."
+            "The owner-proposed policy is a 14-day deadline before the next first-of-month renewal, not cancellation that always takes effect exactly 14 days after request. A late request can therefore keep the contract running for one extra full billing month. The customer-facing wording makes that effect prominent, but counsel must assess fairness and current or forthcoming subscription-contract rules before it is used."
         ),
     )
     path = OUTPUT_DIR / spec.filename
@@ -751,11 +791,12 @@ def build_privacy() -> Path:
         style.paragraph_format.space_after = Pt(3.5)
         style.paragraph_format.line_spacing = 1.05
     add_document_title(doc, spec)
+    add_draft_banner(doc)
 
     doc.add_heading("1. Who we are", level=1)
     add_para(
         doc,
-        f"{ENTITY}, company number {COMPANY_NUMBER}, trading as {TRADING_NAME}, is the controller of the personal information described in this Notice. Our public trading and contact address is {ADDRESS}. For privacy questions or requests, email {SUPPORT_EMAIL}.",
+        f"{ENTITY}, a company registered in England and Wales under company number {COMPANY_NUMBER}, trading as {TRADING_NAME}, is the controller of the personal information described in this Notice. Our registered office is {REGISTERED_OFFICE}. Our public trading and contact address is {ADDRESS}. For privacy questions or requests, email {SUPPORT_EMAIL}.",
     )
     add_para(
         doc,
@@ -773,8 +814,8 @@ def build_privacy() -> Path:
     add_bullets(
         doc,
         [
-            "Participant, payer and guardian names and email addresses.",
-            "For youth membership, the child’s date of birth, age band, the guardian’s relationship to the child and declaration of authority.",
+            "Participant name and date of birth, and the payer email collected through Stripe or the account-claim flow.",
+            "For youth membership, the child’s age band, guardian name, the guardian’s relationship to the child and declaration of authority.",
             "The Zero Alpha purchase form does not request a phone number or billing address. Stripe may ask the payer directly for information required by a selected payment method or its legal and fraud-prevention checks.",
         ],
     )
@@ -808,8 +849,7 @@ def build_privacy() -> Path:
     add_bullets(
         doc,
         [
-            "Directly from the payer, participant or guardian during purchase, onboarding, account use or support contact.",
-            "From a payer about a different adult participant, or from a guardian about a child.",
+            "Directly from an adult participant buying for themselves, or from a guardian buying for a child, during purchase, onboarding, account use or support contact.",
             "From Stripe about checkout, billing, payment, refund and dispute events.",
             "Automatically from the site, AlphaWOD, authentication service and security or operational logs.",
             "From authorised staff recording membership, onboarding, attendance, booking or training administration.",
@@ -817,7 +857,7 @@ def build_privacy() -> Path:
     )
     add_para(
         doc,
-        "When another person gives us an adult participant’s information, we will provide this Notice to that participant at the first direct communication and no later than required by law. For a child, the guardian receives the full Notice and we will provide age-appropriate information to the child during onboarding.",
+        "Adult participants receive this Notice during their own Checkout. For a child, the guardian receives the full Notice and we will provide age-appropriate information to the child during onboarding.",
     )
 
     doc.add_heading("4. Why we use information and our lawful bases", level=1)
@@ -826,7 +866,7 @@ def build_privacy() -> Path:
         doc,
         [
             "Contract — to take the payer’s payment, create and administer their subscription, send essential billing/service messages, process cancellation and deliver services that are objectively necessary under a contract with that person.",
-            "Legitimate interests — to deliver membership to a different adult participant, administer a youth membership, confirm guardian authority and age eligibility, prevent duplicate subscriptions and fraud, secure the service, keep proportionate audit evidence, administer ordinary bookings/training, manage claims and improve reliable operations. Our interests are providing the agreed service, protecting users and the business, and demonstrating what was agreed. We must balance those interests against each person’s rights, with extra weight for children.",
+            "Legitimate interests — to administer a youth membership, confirm guardian authority and age eligibility, prevent duplicate subscriptions and fraud, secure the service, keep proportionate audit evidence, administer ordinary bookings and training, manage claims and improve reliable operations. Our interests are providing the agreed service, protecting users and the business, and demonstrating what was agreed. We must balance those interests against each person’s rights, with extra weight for children.",
             "Legal obligation — to keep company, accounting and transaction records and make disclosures where a specific law requires it.",
             "Consent — only where a genuinely optional activity requires it, such as optional marketing, promotional media, or a separately designed optional feature using health information. Consent can be withdrawn without affecting earlier lawful use.",
             "Vital interests — exceptionally, where processing is necessary to protect someone’s life and they cannot consent, for example in a genuine emergency.",
@@ -880,33 +920,27 @@ def build_privacy() -> Path:
     )
     add_para(
         doc,
-        "A supplier is not automatically our processor for every activity. We will verify each role, contract and subprocessor before publication and keep access limited to the relevant purpose.",
+        "A supplier is not automatically our processor for every activity. We verify each role, contract and subprocessor and keep access limited to the relevant purpose.",
     )
 
     doc.add_heading("9. International transfers", level=1)
     add_para(
         doc,
-        "Some verified suppliers or their subprocessors may process information outside the UK. Before publication, we will complete and record the supplier, destination and transfer-mechanism audit. For any restricted transfer, we will use an applicable UK adequacy regulation (including the UK Extension to the EU–US Data Privacy Framework only where the recipient and processing are covered) or an approved UK International Data Transfer Agreement or UK Addendum, together with the required risk assessment and supplementary protections. A person may ask us for information about the relevant safeguard.",
-    )
-    add_callout(
-        doc,
-        "Publication blocker",
-        "Replace or supplement this section with verified supplier entities, material destinations and safeguards after the data-transfer audit. A generic assurance alone is not sufficiently transparent.",
-        kind="danger",
+        "Some suppliers or their subprocessors may process information outside the UK. Before making a restricted transfer, we must identify the relevant supplier, destination and transfer mechanism and use an applicable UK adequacy regulation or an approved UK International Data Transfer Agreement or UK Addendum, together with any required risk assessment and supplementary protections. A person may ask us for information about the relevant safeguard. The supplier and transfer audit listed in the review appendix must be completed before this Notice is approved for publication.",
     )
 
     doc.add_heading("10. How long we keep information", level=1)
     add_para(
         doc,
-        "We keep information only for as long as needed for the purpose, legal records, security and live disputes, then delete or irreversibly anonymise it. The proposed schedule below is a review draft and must be implemented consistently in production systems and backups:",
+        "We keep information only for as long as needed for the purpose, legal records, security and live disputes, then delete or irreversibly anonymise it. The periods below are the proposed retention schedule and must not be published as implemented until they are approved and technically enforced across production systems and backups:",
     )
     add_bullets(
         doc,
         [
             "Company, accounting, invoice and transaction records — normally six years from the end of the company financial year to which they relate, subject to any longer lawful requirement or live enquiry.",
             "Membership account, subscription, cancellation and essential support records — while active and normally up to six years after the membership or account relationship ends where needed for contract, complaint or claim records; unnecessary live-profile data should be removed sooner.",
-            "Adult waiver, guardian authority, acceptance version and signature evidence — a legally reviewed period based on limitation, insurance and safeguarding needs. Proposed starting point: six years after adult membership ends; for a child, until at least the 21st birthday or resolution of a live claim, whichever is later. This proposal requires counsel and insurer approval.",
-            "Bookings, attendance and ordinary workout/performance entries — for the operational period communicated in AlphaWOD settings and then deleted or anonymised; final periods must be set before launch.",
+            "Adult waiver, guardian authority, acceptance version and signature evidence — six years after adult membership ends; for a child, until at least the 21st birthday or resolution of a live claim, whichever is later, subject to any longer lawful, insurance or safeguarding requirement.",
+            "Bookings, attendance and ordinary workout/performance entries — for the operational period communicated in AlphaWOD settings and then deleted or anonymised.",
             "Authentication, security and technical logs — a short, documented period appropriate to the risk, normally no more than 12 months unless needed for an incident, fraud or claim.",
             "Optional marketing — until consent is withdrawn or the purpose ends, while retaining only a minimal suppression record where needed to honour an opt-out.",
         ],
@@ -919,13 +953,13 @@ def build_privacy() -> Path:
     doc.add_heading("11. Cookies, local storage and similar technologies", level=1)
     add_para(
         doc,
-        "The site, Firebase authentication, Stripe and hosting services may use cookies, browser storage, device identifiers or similar storage/access technologies for requested sessions, security, payment authentication, fraud prevention and reliable delivery. Strictly necessary technologies do not require consent but still require clear information. Any non-exempt analytics, advertising or cross-service tracking will be disabled until valid consent is obtained. Before launch, we will publish a verified inventory showing provider, purpose, data, duration and whether consent or an exception applies.",
+        "The site, Firebase authentication, Stripe and hosting services may use cookies, browser storage, device identifiers or similar storage and access technologies for requested sessions, security, payment authentication, fraud prevention and reliable delivery. Strictly necessary technologies do not require consent but still require clear information. Any non-exempt analytics, advertising or cross-service tracking must remain disabled until valid consent is obtained. The cookie and device-storage inventory listed in the review appendix must be completed before this Notice is approved for publication.",
     )
 
     doc.add_heading("12. Security", level=1)
     add_para(
         doc,
-        "We use proportionate technical and organisational measures designed to protect information, including access controls, verified sign-in or short-lived links, separation of payment credentials from the app, audit logging and supplier security terms. No online service is risk-free. If a personal-data breach creates a legally reportable risk, we will notify the ICO and affected people as required.",
+        "We use proportionate technical and organisational measures designed to protect information, including access controls, verified sign-in and one-time purchase-claim verification, separation of payment credentials from the app, audit logging and supplier security terms. No online service is risk-free. If a personal-data breach creates a legally reportable risk, we will notify the ICO and affected people as required.",
     )
 
     doc.add_heading("13. Your rights", level=1)
@@ -1011,13 +1045,14 @@ def build_cancellation() -> Path:
     doc = Document()
     configure_document(doc, spec)
     add_document_title(doc, spec)
+    add_draft_banner(doc)
 
     doc.add_heading("At a glance", level=1)
     add_bullets(
         doc,
         [
             "Memberships are rolling monthly, with no joining fee, free trial, minimum term or pause option.",
-            "The first regular monthly billing date is the next first of the month. A person joining after the first pays the Stripe-displayed prorated amount immediately.",
+            "During the founding presale, £0 is charged today; membership starts and the first monthly payment is taken on 1 September 2026. After opening, a person joining after the first pays the Stripe-displayed prorated amount immediately.",
             "To avoid the next first-of-month payment, the cancellation request must reach us at least 14 calendar days before that billing date.",
             "If the request arrives later, the next first-of-month payment remains due and membership continues through that additional paid month.",
             "Payments are non-refundable except where required by law.",
@@ -1025,10 +1060,10 @@ def build_cancellation() -> Path:
         ],
     )
 
-    doc.add_heading("1. Start date, proration and monthly renewal", level=1)
+    doc.add_heading("1. Presale, start date, proration and monthly renewal", level=1)
     add_para(
         doc,
-        "The membership begins when the contract is confirmed. If that is after the first day of the month, Stripe calculates an immediate prorated charge for the period through the start of the next first. The full monthly price is then collected on the next first and every following first while the membership continues. Times and deadlines use Europe/London.",
+        "During the founding presale, membership and service start on 1 September 2026 and the first monthly payment is taken then. A cancellation request received before that service-start date withdraws the presale: no first payment is taken and service does not begin. After opening, membership begins when Checkout is confirmed; Stripe calculates any immediate proration until the next first. The full monthly price is then collected on each following first while the membership continues. Times and deadlines use Europe/London.",
     )
 
     doc.add_heading("2. How to request ordinary cancellation", level=1)
@@ -1037,8 +1072,8 @@ def build_cancellation() -> Path:
         [
             "Use the signed-in cancellation-request flow. If you cannot access it, email support@zeroalphafitness.co.uk from the payer’s recorded email.",
             "Identify the payer, participant and membership. Do not send card or bank details.",
-            "We record when the request reaches the cancellation system or support inbox, not when it was drafted or sent from a device.",
-            "We send an acknowledgement showing the recorded receipt time, the final scheduled payment (if any) and the membership end date. Contact us promptly if it is wrong.",
+            "The signed-in flow records the server receipt time and freezes the displayed outcome. For email, staff record the time the message reaches the support inbox, not when it was written or sent from a device.",
+            "The online flow sends an acknowledgement automatically. Staff send the email-channel acknowledgement after intake. It shows the recorded receipt time, the final scheduled payment (if any) and the membership end date. Contact us promptly if it is wrong.",
         ],
     )
     add_para(
@@ -1081,7 +1116,7 @@ def build_cancellation() -> Path:
     )
     add_para(
         doc,
-        "Checkout asks the payer separately to request that membership and eligible AlphaWOD access begin immediately. If the payer makes that express request and cancels during the cooling-off period, we may keep or charge only the proportionate amount the law permits for services actually supplied before cancellation. The balance will be refunded within 14 days, to the original payment method unless the consumer expressly agrees otherwise, and without a refund fee. If immediate performance was not expressly requested, we will not make a deduction that the Regulations prohibit.",
+        "Checkout asks the payer separately to request that membership and eligible AlphaWOD access begin on the service start date shown, even if that is before the cooling-off period ends. If the payer makes that express request and cancels during the cooling-off period, we may keep or charge only the proportionate amount the law permits for services actually supplied before cancellation. A cooling-off request records an immediate cancellation outcome, but any refund or deduction is reviewed manually. The balance will be refunded within 14 days, to the original payment method unless the consumer expressly agrees otherwise, and without a refund fee. If the express service-start request was not made, we will not make a deduction that the Regulations prohibit.",
     )
     add_para(
         doc,
@@ -1089,7 +1124,7 @@ def build_cancellation() -> Path:
     )
     add_quote(
         doc,
-        "☐ I expressly request that the membership and any eligible AlphaWOD access begin immediately, before the 14-day cooling-off period ends. I understand that, if I cancel during that period, Zero Alpha Fitness may retain or charge only the proportionate amount permitted by law for services supplied before cancellation.",
+        "☐ I expressly request that the membership and any eligible AlphaWOD access begin on the service start date shown, even if that is before the 14-day cooling-off period ends. I understand that, if I cancel during that period, Zero Alpha Fitness may retain or charge only the proportionate amount permitted by law for services supplied before cancellation.",
     )
 
     doc.add_heading("5. How to use the cooling-off right", level=1)
@@ -1105,7 +1140,7 @@ def build_cancellation() -> Path:
     doc.add_heading("6. Refunds", level=1)
     add_para(
         doc,
-        "Payments are non-refundable except where required by law. This means we do not ordinarily refund a correctly calculated proration, a used or unused part of a paid month, a promotion difference, or a payment that remained due because a cancellation request missed the 14-day renewal deadline.",
+        "Payments are non-refundable except where required by law. This means we do not ordinarily refund a correctly calculated after-opening proration, a used or unused part of a paid month, a promotion difference, or a payment that remained due because a cancellation request missed the 14-day renewal deadline. A valid pre-start presale withdrawal has no first payment to refund.",
     )
     add_para(
         doc,
@@ -1121,7 +1156,7 @@ def build_cancellation() -> Path:
     doc.add_heading("8. Failed payments and disputes", level=1)
     add_para(
         doc,
-        "A failed payment enters a three-calendar-day past-due grace period, during which related access continues. Stripe may retry payment and we may ask the payer to update the method. If payment is still past due after the grace period, access may be suspended. An open payment dispute suspends related access; a dispute won by Zero Alpha Fitness restores eligible access promptly and we will fairly assess any credit or extension needed for paid time that was unavailable; a lost dispute or full refund revokes related access. These access rules do not prevent a genuine complaint, statutory cancellation or lawful chargeback.",
+        "After a membership has started, a failed recurring payment enters a three-calendar-day past-due grace period, during which existing related access continues. Stripe may retry payment and we may ask the payer to update the method. If payment is still past due after the grace period, access may be suspended. If the first scheduled payment fails, the membership and AlphaWOD access do not start. An open payment dispute suspends related access; a dispute won by Zero Alpha Fitness restores eligible access promptly and we will fairly assess any credit or extension needed for paid time that was unavailable; a lost dispute or full refund revokes related access. These access rules do not prevent a genuine complaint, statutory cancellation or lawful chargeback.",
     )
 
     doc.add_heading("9. Confirmation and contact", level=1)
@@ -1152,7 +1187,7 @@ def build_cancellation() -> Path:
             ("Stripe cancellation documentation", "https://docs.stripe.com/billing/subscriptions/cancel"),
         ],
         high_priority=(
-            "The approved late-notice outcome is materially different from cancellation taking effect exactly 14 days after a request: it can continue the contract through the following monthly cycle. The draft uses the approved billing outcome and makes it prominent, but it should not be published without a current UK consumer-law fairness review."
+            "The owner-proposed late-notice outcome is materially different from cancellation taking effect exactly 14 days after a request: it can continue the contract through the following monthly cycle. The draft uses that billing outcome and makes it prominent, but it should not be published without a current UK consumer-law fairness review."
         ),
     )
     path = OUTPUT_DIR / spec.filename
@@ -1165,11 +1200,12 @@ def build_adult_waiver() -> Path:
     doc = Document()
     configure_document(doc, spec)
     add_document_title(doc, spec)
+    add_draft_banner(doc)
 
     add_callout(
         doc,
         "Participant must accept personally",
-        "Every adult participant signs this document in their own name, even where somebody else pays. The payer separately accepts the Membership Terms and payment obligation.",
+        "Every adult membership must be bought and signed by the named adult participant for themselves. Third-party purchase of an adult membership is not supported.",
         kind="info",
     )
 
@@ -1269,12 +1305,10 @@ def build_adult_waiver() -> Path:
     )
 
     doc.add_heading("Electronic signing arrangement", level=1)
-    add_quote(doc, "☐ I confirm that I am the named participant, I am aged 18 or over, and I have read and understood this Adult Participant Waiver and Risk Acknowledgement.")
-    add_quote(doc, "☐ I understand the nature of the activities and the inherent risks described above, and I choose to participate subject to my statutory rights and Zero Alpha Fitness’s duty to take reasonable care.")
-    add_quote(doc, "☐ I agree to follow safety instructions, stop if I experience warning signs, and use the separate secure onboarding route for relevant safety information rather than entering health details at checkout.")
+    add_quote(doc, "☐ I confirm that I am the named participant, I am aged 18 or over, and I have read and understood the Adult Participant Waiver and Risk Acknowledgement. I understand the activities and inherent risks and choose to participate, subject to my statutory rights and Zero Alpha Fitness’s duty to take reasonable care.")
     add_para(
         doc,
-        "Required signature fields: participant full legal name; participant email; typed signature name; signature date/time; membership/order reference; waiver document ID and version. Where payer and participant differ, the participant receives a verified-email signing link and access remains pending until signing is complete.",
+        "Required fields: participant full legal name and date of birth; typed signature name; the exact acceptance statement; signature date/time; membership/order reference; waiver document ID and version. The adult participant is also the payer.",
     )
 
     add_review_appendix(
@@ -1283,7 +1317,7 @@ def build_adult_waiver() -> Path:
             "Have counsel and the insurer review the activity scope, risk description, emergency wording and liability allocation against actual services and cover.",
             "Confirm the secure pre-participation/onboarding process for relevant medical or accessibility information, including Article 9 basis, access, retention and staff response.",
             "Confirm staff qualifications, first-aid arrangements, emergency action plan, equipment inspection and incident reporting; the document cannot substitute for operational controls.",
-            "Confirm how an adult participant who is not the payer receives the Privacy Notice and signs from a verified identity before access begins.",
+            "Confirm that checkout and support operations continue to reject third-party purchase of an adult membership.",
             "Implement immutable or append-only acceptance evidence: exact version, statements, typed name, verified context and timestamp; do not rely on browser localStorage or a mutable profile field.",
             "Keep optional media consent outside this document and outside membership eligibility.",
             "Review accessibility, Welsh-language needs and a paper/assisted alternative for anyone unable to use the electronic flow.",
@@ -1310,6 +1344,7 @@ def build_guardian() -> Path:
     doc = Document()
     configure_document(doc, spec)
     add_document_title(doc, spec)
+    add_draft_banner(doc)
 
     add_callout(
         doc,
@@ -1325,7 +1360,7 @@ def build_guardian() -> Path:
     )
     add_para(
         doc,
-        "The initial youth membership does not provide the child with AlphaWOD access. Payment confirmation starts the membership contract but does not itself reserve a first session. Zero Alpha Fitness will email the guardian to arrange onboarding and the first session.",
+        "The initial youth membership does not provide the child with AlphaWOD access. Completing Stripe Checkout forms the membership contract but does not reserve a first session. During the founding presale, nothing is charged today; membership starts and the first monthly payment is taken on 1 September 2026. Zero Alpha Fitness will contact the guardian by email to arrange onboarding and the first session.",
     )
 
     doc.add_heading("2. Guardian authority and information", level=1)
@@ -1386,7 +1421,7 @@ def build_guardian() -> Path:
     doc.add_heading("7. Membership, payment and cancellation", level=1)
     add_para(
         doc,
-        "As payer, I accept the Membership Terms, including the £35 monthly price, first-of-month billing anchor, any Stripe-displayed initial proration, recurring authority, three-day past-due grace period, no-pause rule, and the ordinary 14-day pre-renewal cancellation deadline. I understand that statutory cooling-off and refund rights remain separate and cannot be removed. The Cancellation, Refund and Cooling-off Policy explains the details.",
+        "As payer, I accept the £35 standard monthly price and recurring authority. During the founding presale, Stripe shows £0 due today and the first payment on 1 September 2026; after opening, Stripe may show immediate proration to the next first. I also accept the three-day past-due rule after service has started, the rule that a failed first scheduled payment means membership and access do not start, the no-pause rule, and the ordinary 14-day pre-renewal cancellation deadline. I understand that statutory cooling-off and refund rights remain separate and cannot be removed. The Membership Terms and Cancellation, Refund and Cooling-off Policy explain the details.",
     )
 
     doc.add_heading("8. Conduct and proportionate restriction", level=1)
@@ -1427,12 +1462,11 @@ def build_guardian() -> Path:
 
     doc.add_page_break()
     doc.add_heading("Guardian electronic signing arrangement", level=1)
-    add_quote(doc, "☐ I confirm that I am aged 18 or over, I am the named child’s parent/legal guardian or otherwise have lawful authority, and I am authorised to enrol the child and act as payer.")
-    add_quote(doc, "☐ I have read and agree to this Parent/Guardian Consent and Youth Membership Addendum. I understand the activities and inherent risks, and I consent to the child’s participation subject to their statutory rights and Zero Alpha Fitness’s duty to take reasonable care.")
-    add_quote(doc, "☐ I agree to follow the onboarding, safety, safeguarding, handover and collection arrangements and to use the secure onboarding route for relevant safety information.")
+    add_quote(doc, "☐ I confirm that I am aged 18 or over, I am the named child’s parent or legal guardian or otherwise have lawful authority to enrol them, and I am the payer.")
+    add_quote(doc, "☐ I have read and agree to the Parent/Guardian Consent and Youth Membership Addendum. I understand the activities and inherent risks and consent to the child’s participation, subject to their statutory rights and Zero Alpha Fitness’s duty to take reasonable care.")
     add_para(
         doc,
-        "Required fields: child full name and date of birth; selected Youngstars/Teenstars option; guardian full legal name and verified email; relationship; authority declaration; typed signature; signature date/time; membership/order reference; addendum document ID and version.",
+        "Required fields: child full name and date of birth; selected Youngstars or Teenstars option; guardian full legal name; relationship; payer email collected by Stripe or the account-claim flow; authority declaration; typed signature; the exact acceptance statements; signature date/time; membership/order reference; addendum document ID and version.",
     )
 
     add_review_appendix(
@@ -1460,6 +1494,7 @@ def build_guardian() -> Path:
         high_priority=(
             "The youth checkout cannot safely launch on contract text alone. The real safeguarding, age-transition, handover/collection, emergency-contact and special-category-data processes must be defined, reviewed and matched to this addendum."
         ),
+        compact=True,
     )
     path = OUTPUT_DIR / spec.filename
     doc.save(path)

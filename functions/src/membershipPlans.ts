@@ -56,8 +56,8 @@ export const COMPANY = {
   tradingName: "Zero Alpha Fitness",
   companyNumber: "15978998",
   address: "Unit 3, Felinfoel Business Hub, Llanelli, SA14 8BE",
-  registeredOffice: "PENDING_VERIFICATION",
-  registrationJurisdiction: "PENDING_VERIFICATION",
+  registeredOffice: "18 Bryngwyn Bach, Llanelli, United Kingdom, SA14 8SH",
+  registrationJurisdiction: "England and Wales",
   supportEmail: "support@zeroalphafitness.co.uk",
   confirmationSender: "hello@zeroalphafitness.co.uk",
 } as const;
