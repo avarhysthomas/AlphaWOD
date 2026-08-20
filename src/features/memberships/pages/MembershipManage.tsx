@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { sendEmailVerification } from "firebase/auth";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../../../context/AuthContext";
+import { hasAlphaWodAccess } from "../../../context/authUser";
 import { COMPANY, POLICY_TEXT } from "../../../lib/membershipPlans";
 import {
   MEMBERSHIP_STATE_LABEL,
@@ -85,7 +86,8 @@ function cancellationKindLabel(kind: CancellationRequestKind): string {
 }
 
 export default function MembershipManage() {
-  const { user } = useAuth();
+  const { user, appUser, refreshAppUser } = useAuth();
+  const appAccessAvailable = hasAlphaWodAccess(appUser);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const emailClaimRequested = searchParams.get("claim") === "email";
@@ -130,7 +132,7 @@ export default function MembershipManage() {
       clearPendingClaim();
       setPendingSessionId(null);
       setPendingCheckoutAttemptId(null);
-      await load();
+      await Promise.all([load(), refreshAppUser()]);
       return "claimed";
     } catch (claimError: unknown) {
       const code = (claimError as {code?: string} | null)?.code ?? "";
@@ -158,7 +160,7 @@ export default function MembershipManage() {
     } finally {
       setClaiming(false);
     }
-  }, [load]);
+  }, [load, refreshAppUser]);
 
   const resendVerification = async () => {
     if (!user) return;
@@ -293,6 +295,15 @@ export default function MembershipManage() {
           My membership
         </h1>
 
+        {appAccessAvailable && (
+          <Link
+            to="/dashboard"
+            className="mt-6 inline-flex rounded-2xl bg-white px-5 py-3 text-sm font-bold uppercase tracking-[0.14em] text-black"
+          >
+            Continue to Zero Alpha App
+          </Link>
+        )}
+
         {error && (
           <div className="mt-6 rounded-2xl border border-red-500/25 bg-red-500/10 p-4 text-sm leading-6 text-red-100">
             {error}
@@ -418,7 +429,9 @@ export default function MembershipManage() {
                   </div>
                   {membership.grantsAlphaWodAccess && (
                     <span className="rounded-full border border-amber-500/25 bg-amber-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-200">
-                      {isScheduled ? "Zero Alpha App after first payment" : "Zero Alpha App"}
+                      {isScheduled && !appAccessAvailable
+                        ? "Zero Alpha App after first payment"
+                        : "Zero Alpha App"}
                     </span>
                   )}
                 </div>
@@ -477,7 +490,9 @@ export default function MembershipManage() {
                       Your payment method is saved. The membership remains inactive until
                       the first payment succeeds on {formatUnixDate(firstPaymentAt)}.
                       {membership.grantsAlphaWodAccess && (
-                        <> This membership does not unlock Zero Alpha App access before then.</>
+                        appAccessAvailable
+                          ? <> Your existing Zero Alpha App access is available now.</>
+                          : <> This membership does not unlock Zero Alpha App access before then.</>
                       )}
                     </p>
                   </div>

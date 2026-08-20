@@ -12,12 +12,14 @@ const mockClaimMembership = jest.fn();
 const mockGetMyMemberships = jest.fn();
 const mockRefreshAppUser = jest.fn();
 let mockUser: { uid: string } | null = { uid: "buyer-1" };
+let mockAppUser: Record<string, unknown> | null = null;
 let mockLoading = false;
 let mockSearchParams = "plan=adult_unlimited&session_id=cs_signed_in";
 
 jest.mock("../../../context/AuthContext", () => ({
   useAuth: () => ({
     user: mockUser,
+    appUser: mockAppUser,
     loading: mockLoading,
     refreshAppUser: mockRefreshAppUser,
   }),
@@ -75,6 +77,7 @@ describe("MembershipSuccess claim persistence", () => {
     jest.clearAllMocks();
     jest.spyOn(Date, "now").mockReturnValue(Date.parse("2026-08-19T09:00:00.000Z"));
     mockUser = { uid: "buyer-1" };
+    mockAppUser = null;
     mockLoading = false;
     mockSearchParams = "plan=adult_unlimited&session_id=cs_signed_in";
     mockReadCheckoutAttemptId.mockReturnValue("12345678-1234-4123-8123-123456789abc");
@@ -294,5 +297,36 @@ describe("MembershipSuccess claim persistence", () => {
     expect(screen.queryByText("Payment confirmed")).not.toBeInTheDocument();
     expect(screen.queryByRole("link", {name: "Go to Zero Alpha App"}))
       .not.toBeInTheDocument();
+  });
+
+  it("keeps an existing member's app access available after presale checkout", async () => {
+    mockAppUser = {
+      role: "user",
+      approvalStatus: "approved",
+      entitlementStatus: "active",
+      entitlementSource: "legacy",
+      alphaWodAccess: true,
+    };
+    mockGetMyMemberships.mockResolvedValue({
+      ok: true,
+      memberships: [{
+        ...activeMembership,
+        state: "scheduled",
+        billingMode: "presale_deferred",
+        serviceStartsAt: 1788217200,
+        firstPaymentAt: 1788220800,
+        billingCycleAnchor: 1788220800,
+        initialChargePence: 0,
+        entitlementProjectionStatus: null,
+      }],
+      cancellationPreview: null,
+    });
+
+    render(<MembershipSuccess />);
+
+    expect(await screen.findByText(/existing Zero Alpha App access is available now/i))
+      .toBeInTheDocument();
+    expect(screen.getByRole("link", {name: "Go to Zero Alpha App"}))
+      .toHaveAttribute("href", "/dashboard");
   });
 });

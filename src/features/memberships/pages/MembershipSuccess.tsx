@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useAuth } from "../../../context/AuthContext";
+import { hasAlphaWodAccess } from "../../../context/authUser";
 import {
   COMPANY,
   MEMBERSHIP_PLANS,
@@ -39,7 +40,10 @@ function activeSuccessMessageFor(membership: MyMembership): string {
 }
 
 /** Never let an old payment receipt imply that suspended or ended access is live. */
-function membershipPresentation(membership: MyMembership): {
+function membershipPresentation(
+  membership: MyMembership,
+  existingAppAccess: boolean
+): {
   eyebrow: string;
   message: string;
   appAccessAvailable: boolean;
@@ -66,12 +70,14 @@ function membershipPresentation(membership: MyMembership): {
       membership.firstPaymentAt ?? membership.billingCycleAnchor ?? null;
     const serviceStart = serviceStartsAt ? formatUnixDate(serviceStartsAt) : "1 September 2026";
     const accessMessage = membership.grantsAlphaWodAccess && membership.participantIsPayer
-      ? " This membership will not unlock Zero Alpha App access until that first payment succeeds."
+      ? existingAppAccess
+        ? " Your existing Zero Alpha App access is available now and continues independently of this scheduled membership."
+        : " This membership will not unlock Zero Alpha App access until that first payment succeeds."
       : " We’ll email you with the details you need before your first session.";
     return {
       eyebrow: "Membership scheduled",
       message: `Your payment method is saved and nothing was charged today. Your membership starts on ${serviceStart}, when your first monthly payment is due.${accessMessage}`,
-      appAccessAvailable: false,
+      appAccessAvailable: existingAppAccess,
     };
   }
   case "active":
@@ -120,7 +126,7 @@ function membershipPresentation(membership: MyMembership): {
 }
 
 export default function MembershipSuccess() {
-  const { user, loading, refreshAppUser } = useAuth();
+  const { user, appUser, loading, refreshAppUser } = useAuth();
   const [params] = useSearchParams();
   const returnedSessionId = params.get("session_id");
   const [rememberedSessionId] = useState(() => readPendingClaim());
@@ -135,7 +141,10 @@ export default function MembershipSuccess() {
   const [settled, setSettled] = useState(false);
   const [claimError, setClaimError] = useState("");
   const cancelled = useRef(false);
-  const presentation = membership ? membershipPresentation(membership) : null;
+  const presentation = membership ? membershipPresentation(
+    membership,
+    hasAlphaWodAccess(appUser)
+  ) : null;
   const presale = isFoundingPresale();
   const isAlphaWodAccountJourney = membership
     ? membership.planKey === "adult_unlimited" &&
