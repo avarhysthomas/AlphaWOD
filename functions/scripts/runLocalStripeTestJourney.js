@@ -15,6 +15,7 @@ const {redactProviderSecrets, stripeCliTestKey} = require("./stripeCliTestKey");
 const PROJECT_ID = "demo-alphawod-stripe";
 const APP_PORT = 3002;
 const APP_ORIGIN = `http://localhost:${APP_PORT}`;
+const APP_ID = "1:000000000000:web:localstripetest000000";
 const FUNCTIONS_DIR = path.resolve(__dirname, "..");
 const REPO_ROOT = path.resolve(FUNCTIONS_DIR, "..");
 
@@ -476,6 +477,7 @@ async function main() {
   const functionsEnvironment = safeEnvironment({
     APP_PUBLIC_ORIGIN: APP_ORIGIN,
     FIREBASE_CLI_DISABLE_UPDATE_CHECK: "true",
+    MEMBERSHIP_CHECKOUT_APP_ID: APP_ID,
     RESEND_API_KEY: "re_test_local_email_disabled",
     RESEND_FROM_EMAIL: "local-stripe-test@example.invalid",
     STRIPE_SECRET_KEY: stripeKey,
@@ -509,7 +511,7 @@ async function main() {
         HOST: "127.0.0.1",
         PORT: String(APP_PORT),
         REACT_APP_FIREBASE_API_KEY: "demo-api-key",
-        REACT_APP_FIREBASE_APP_ID: "1:000000000000:web:localstripetest000000",
+        REACT_APP_FIREBASE_APP_ID: APP_ID,
         REACT_APP_FIREBASE_AUTH_DOMAIN: `${PROJECT_ID}.firebaseapp.com`,
         REACT_APP_FIREBASE_MEASUREMENT_ID: "G-LOCALTEST00",
         REACT_APP_FIREBASE_MESSAGING_SENDER_ID: "000000000000",

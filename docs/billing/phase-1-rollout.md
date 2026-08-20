@@ -1,10 +1,15 @@
 # Phase 1: public membership purchase and Stripe Billing
 
-Status: implemented locally on 18 August 2026. The final verification results
-and test counts are not frozen in this document. **Nothing has been deployed,
-no live Stripe or membership-email configuration has been created or verified,
-and neither provider has been exercised end to end.** The purchase flow is
-closed by two independent gates and cannot be opened by configuration alone.
+Status: implemented locally on 18 August 2026 and live-provider status updated
+20 August 2026. Final release results and test counts are not frozen here. The
+only new production service deployed is the public `stripeWebhook` receiver;
+the seven callables, four scheduled workers and customer frontend remain
+undeployed. The five live Price/Product pairs, Product-scoped no-expiry Coupon
+and Promotion Code, locked-down Portal, 14-event webhook destination and the
+existence of the three billing secrets have been verified as described in
+section 7. No signed live webhook delivery or live payment journey has passed.
+The legal, backend and frontend purchase gates remain closed and cannot be
+opened by provider configuration alone.
 
 ## 1. What was built
 
@@ -21,12 +26,13 @@ closed by two independent gates and cannot be opened by configuration alone.
 | Membership reconciliation query index | `firestore.indexes.json` |
 | Runtime configuration template | `functions/.env.example` |
 
-New function definitions, none deployed: seven callables —
+New function definitions: seven currently undeployed callables —
 `createMembershipCheckoutSession`, `createCustomerPortalSession`,
 `getMyMemberships`, `requestMembershipCancellation`, `claimMembership`,
-`listMemberships`, and `linkMembershipParticipant` — plus the `stripeWebhook`
-HTTP endpoint and four scheduled functions: `recoverStripeEvents`,
-`recoverMembershipCancellations`, `reconcilePastDueMemberships`, and
+`listMemberships`, and `linkMembershipParticipant` — plus the deployed public
+`stripeWebhook` HTTP endpoint and four currently undeployed scheduled functions:
+`recoverStripeEvents`, `recoverMembershipCancellations`,
+`reconcilePastDueMemberships`, and
 `retryMembershipConfirmations`.
 
 New Firestore collections, all denied to every client: `memberships`,
@@ -82,10 +88,10 @@ exactly one plan carries that flag.
   promotion-code box stays disabled. Fulfilment revalidates the exact Coupon and
   requires £5 GBP off, repeating three months, restriction to the Adult
   Unlimited Product and no Coupon `redeem_by`, plus the shared reusable
-  Promotion Code with expiry at the fixed Stripe billing anchor and no customer,
-  minimum, first-time-transaction or currency-options restrictions. The app
-  still stops accepting the code at the earlier local opening cutoff. The base
-  Price remains £60:
+  Promotion Code with no automatic expiry and no customer, minimum,
+  first-time-transaction or currency-options restrictions. The app still stops
+  accepting the code at the local opening cutoff; staff deactivate the Code
+  when the campaign is finished. The base Price remains £60:
   discounted members pay £55 on the September, October and November invoices,
   then £60 from 1 December. Unknown or malformed discounts fail closed.
 - **Checkout session expiry** never outlives the anchor it was created against,
@@ -310,9 +316,21 @@ The in-app waiver gate is unchanged and still applies after access is granted.
    two copies asserts that.
 2. `MEMBERSHIP_PURCHASE_ENABLED=true` in the Functions environment.
 
-Every legal document in `CHECKOUT_DOCUMENTS` is still a version stamped
-"DRAFT FOR LEGAL REVIEW — NOT APPROVED FOR PUBLICATION". The public pages show a
-"not open yet" notice and point at support while the first gate is closed.
+The browser adds a separately deployed customer-visible control:
+`REACT_APP_MEMBERSHIP_PURCHASE_ENABLED=true`. Catalogue links and form submission
+stay closed unless the approved source gate and this frontend gate are both
+true. It is a rollout/kill-switch control, not a security boundary; the two
+server checks above remain authoritative for creating a Stripe Session.
+
+The business owner confirmed the intended commercial position on 19 August
+2026. The source documents nevertheless label themselves as unapproved legal
+drafts, contain unresolved publication appendices and still describe the former
+immediate-proration journey rather than the £0 founding presale. Their own
+review instructions require the outstanding owner, counsel, insurer, privacy
+and safeguarding decisions to be resolved before publication.
+`CHECKOUT_DOCUMENTS` and the public `.txt` files also contain placeholder bytes.
+The public pages therefore continue to show a "not open yet" notice and point at
+support while the first gate is closed.
 
 **Do not flip gate 1 by replacing labels or version strings alone.** The code now
 resolves an exact plan/signer-specific immutable document set, renders its
@@ -321,17 +339,22 @@ contract/privacy/waiver/payment/performance statement separately, and freezes
 the server-owned contents, statements, signer role and commercial plan snapshot
 on the intent, membership and confirmation outbox. The publication preflight
 still rejects any `DRAFT`/`PENDING` identifier, a non-matching SHA-256 content
-digest, a mutable URL or an incomplete registered-office disclosure. Counsel's
-approved text, effective dates, hashes and verified company disclosures must
-replace every placeholder before the gate can be opened. Phase 0's legacy
-waiver identifier `2026-30-05` remains a separate unapproved legacy value.
+digest, a mutable URL or an incomplete registered-office disclosure. Final
+approved customer-facing text must first be reconciled with the implemented
+presale and every open review item, then exported without internal draft
+covers/review appendices and paired with effective dates, hashes and verified
+company disclosures. Phase 0's legacy waiver identifier `2026-30-05` remains a
+separate unapproved legacy value.
 
 ## 6. Local verification
 
 Run from the repository root:
 
 ```sh
-CI=true npm test -- --watchAll=false
+npm run lint
+npm run test:ci
+npm run test:infrastructure
+npm run verify:monitoring
 npm run build
 npm test --prefix functions
 npm run lint --prefix functions
@@ -354,8 +377,9 @@ delivery.
 ## 7. Provider configuration required before release
 
 The emulator-bound Stripe provider exercise described below was completed on
-19 August 2026. The live/staging deployment and Resend items remain undone and
-require the applicable provider owner.
+19 August 2026. On 20 August the live Stripe objects and deployed webhook
+receiver described below were verified while every purchase gate stayed closed.
+Deployed staging, Resend and a signed live delivery/payment smoke remain undone.
 
 For the isolated, non-deployed provider exercise, follow
 [`local-stripe-test-journey.md`](./local-stripe-test-journey.md). Its test-only
@@ -384,22 +408,37 @@ objects. It does not change the production publication or runtime gates.
    present and pending. Resend, anonymous account claim and deployed staging
    were not exercised. Treat it as a historical seam baseline; the £0 presale
    and discount journeys must be rerun and recorded before release.
-2. **Verify the live catalogue.** A real provider lookup on 18 August 2026
-   proved the earlier `price_1U5K...` mapping is live-mode, not test-mode as the
-   handover had claimed. The corrected `price_1U5P...` mapping in
+2. **Verify the live catalogue.** The business supplied Dashboard Product and
+   Price exports dated 17 August 2026. All five pairs were independently re-read
+   from Stripe's live API on 19 August 2026 and were active, live, monthly GBP
+   objects with the approved amounts, `per_unit`/`licensed` billing,
+   `tax_behavior=unspecified` and Product tax code `txcd_50021001`:
+
+   | Plan | LIVE Product | LIVE Price | Monthly amount |
+   | --- | --- | --- | ---: |
+   | Adult Unlimited | `prod_V5VhTEmyekcpY4` | `price_1U5KgYFzNDZoGGA0jGftxyZH` | £60 |
+   | Adult Ladies Only | `prod_V5VkRs10lzG989` | `price_1U5KjOFzNDZoGGA0j3qcds5p` | £50 |
+   | Adult Gym Only | `prod_V5VlQAfdAYSb0G` | `price_1U5Kk9FzNDZoGGA0dQ61G49d` | £45 |
+   | HYROX Youngstars (`HYROX Youngstars U11` in Stripe) | `prod_V5Vq0l9VAaPox9` | `price_1U5KoQFzNDZoGGA0s4t806bH` | £35 |
+   | HYROX Teenstars (`HYROX Teenstars 12+` in Stripe) | `prod_V5VumrjZl1bWV1` | `price_1U5Kt8FzNDZoGGA0ogq41DEw` | £35 |
+
+   The `price_1U5K...` mapping is live; the `price_1U5P...` mapping in
    `functions/.env.example` is the verified sandbox catalogue. Products,
    prices, the portal configuration, and the webhook endpoint/signing secret
-   remain mode-specific and never carry across.
+   remain mode-specific and never carry across. The two live youth Products use
+   longer provider labels than the customer-facing app catalogue; their exact
+   expected names and IDs are deliberately bound in the live source manifest.
 
    The corrected test IDs in `functions/.env.example` are correct for the dry
    run and a test-mode deployment. The checkout preflight retrieves the configured Price
-   and expanded Product and verifies mode, active state, name, GBP amount and
-   monthly recurrence before taking an identity lock. `resolvePriceId` also
-   refuses the known test IDs alongside an `sk_live_` key.
+   and expanded Product and verifies mode, active state, exact frozen live IDs
+   and provider names, GBP amount, monthly recurrence and tax shape before
+   taking an identity lock. `resolvePriceId` also refuses the known test IDs and
+   any unreviewed live Price alongside a live key.
 
-   Check the live prices against the approved catalogue: £60, £50, £45, £35,
-   £35, all GBP, monthly, and confirm the tax behaviour matches the test
-   products.
+   The source manifest is `functions/src/stripeLiveCatalog.ts`; update it only
+   after a deliberate Price/Product rotation and another read-only live API
+   verification.
 3. **Confirm tax presentation.** The exported prices have
    `tax_behavior: unspecified` and the business is not VAT registered. Automatic
    tax is disabled in code. Confirm this matches the Stripe Dashboard so the
@@ -414,8 +453,8 @@ objects. It does not change the production publication or runtime gates.
    presale signup cutoff (`1788217200`).
 
    Create one privately distributed shared Promotion Code backed by that
-   Coupon. It must also have maximum redemptions unset, expiry `1788220800` (the
-   fixed Stripe billing anchor), no minimum amount, no first-time-transaction
+   Coupon. It must also have maximum redemptions unset, no `expires_at`
+   timestamp, no minimum amount, no first-time-transaction
    restriction, no currency-options
    restriction and no Stripe Customer restriction (Checkout creates the
    Customer in this pay-first journey). Put its `promo_...` id in
@@ -428,6 +467,10 @@ objects. It does not change the production publication or runtime gates.
    Staff must compare redemptions with the eligible signup list during the
    presale and deactivate the Code immediately if unexpected use appears. Do
    not rely on the application or Stripe to prove existing-member eligibility.
+   When the campaign is finished, staff deactivate the exact Promotion Code;
+   the Coupon remains available for validation of purchases already in flight.
+   Leaving the provider objects open does not extend the application's fixed
+   presale cutoff (`1788217200`).
 
    Put the resulting Coupon id—not the customer-facing code—in
    `STRIPE_EXISTING_MEMBER_COUPON_ID`. The checked-in test configuration uses
@@ -437,11 +480,22 @@ objects. It does not change the production publication or runtime gates.
    read-only preflight retrieves that exact Code, verifies its campaign
    restrictions and requires it to be the Coupon's only active Code. It accepts
    any non-negative `times_redeemed` count so repeated tests do not need a new
-   Code. At live cutover, switch the Dashboard to live mode and recreate both
-   objects; test objects do not copy into live mode. Record both live ids in
-   Functions configuration while purchase remains closed.
+   Code. Test objects do not copy into live mode.
+
+   **Verified live status, 20 August 2026:** Coupon
+   `zaf_existing_member_5off_3mo_2026` is restricted to the Adult Unlimited
+   Product `prod_V5VhTEmyekcpY4`, is £5 GBP off for three months and has no
+   `redeem_by`. Active Promotion Code
+   `promo_1U6EsgFzNDZoGGA0DjPqkz08` (`ZALOYALTY`) is backed by that Coupon and
+   has no `expires_at`. Record those exact ids in the git-ignored production
+   Functions configuration while purchases remain closed.
 5. **Create the Customer Portal configuration** (one per mode) and put its
    `bpc_...` ID in `STRIPE_PORTAL_CONFIGURATION_ID`.
+
+   **Verified live status, 20 August 2026:** configuration
+   `bpc_1U6SIkFzNDZoGGA0mSE5EepR` is active and locked down. Invoice history and
+   payment-method update are enabled; customer update, subscription cancellation
+   and subscription update are disabled, and its hosted login page is disabled.
 
    `subscription_cancel` and `subscription_update` must both be disabled.
    Cancellation runs through the in-app
@@ -454,7 +508,7 @@ objects. It does not change the production publication or runtime gates.
    no-pause rule needs nothing configured.
 
    Passing no configuration would make Stripe fall back to the account's default
-   portal configuration, which has cancellation enabled. That is why
+   portal configuration, whose settings can change independently. That is why
    `createCustomerPortalSession` refuses to open a portal when this is unset or
    when the retrieved configuration enables cancellation/subscription changes,
    rather than quietly using the default.
@@ -467,8 +521,25 @@ objects. It does not change the production publication or runtime gates.
 7. **Set the Stripe API and email secrets.**
 
    ```sh
-   firebase functions:secrets:set STRIPE_SECRET_KEY
+   firebase functions:secrets:get STRIPE_SECRET_KEY --project alphawod-d1f2f
+   firebase functions:secrets:get STRIPE_WEBHOOK_SECRET --project alphawod-d1f2f
+   firebase functions:secrets:get RESEND_API_KEY --project alphawod-d1f2f
+   firebase functions:secrets:get MEMBERSHIP_CHECKOUT_RATE_LIMIT_SECRET --project alphawod-d1f2f
+
+   firebase functions:secrets:set STRIPE_SECRET_KEY --project alphawod-d1f2f
+   firebase functions:secrets:set RESEND_API_KEY --project alphawod-d1f2f
+   firebase functions:secrets:set MEMBERSHIP_CHECKOUT_RATE_LIMIT_SECRET --project alphawod-d1f2f
    ```
+
+   The `get` commands inspect metadata, not secret values. Set or rotate a
+   secret only under the release change authorisation; do not paste values into
+   dotenv files, command arguments, tickets or logs.
+
+   **Verified live status, 20 August 2026:** Secret Manager metadata confirms an
+   enabled version exists for `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` and
+   `MEMBERSHIP_CHECKOUT_RATE_LIMIT_SECRET`. This proves existence, not the secret
+   values or a successful signed delivery. Resend configuration and delivery
+   remain unverified.
 
    The code reuses the `RESEND_API_KEY` secret definition used by member invites,
    but no membership-email live configuration or delivery has been verified.
@@ -479,7 +550,8 @@ objects. It does not change the production publication or runtime gates.
    deterministic final `stripeWebhook` Functions URL while purchasing is still
    closed, subscribe it to the events below, copy the endpoint's newly issued
    `whsec_...` value, and only then run
-   `firebase functions:secrets:set STRIPE_WEBHOOK_SECRET`. This avoids the
+   `firebase functions:secrets:set STRIPE_WEBHOOK_SECRET --project alphawod-d1f2f`.
+   This avoids the
    impossible ordering of trying to configure a signing secret before Stripe
    has created the endpoint that issues it. Deploy the webhook only after the
    real secret exists. Subscribe to: `checkout.session.completed`,
@@ -489,6 +561,16 @@ objects. It does not change the production publication or runtime gates.
    `customer.subscription.deleted`, `customer.subscription.paused`,
    `customer.subscription.resumed`, `invoice.paid`, `invoice.payment_failed`,
    `charge.dispute.created`, `charge.dispute.closed`, `charge.refunded`.
+
+   **Verified live status, 20 August 2026:** endpoint
+   `we_1U6SObFzNDZoGGA0cw5Yyqth` is active at
+   `https://europe-west1-alphawod-d1f2f.cloudfunctions.net/stripeWebhook` with
+   exactly those 14 events. The receiver is an active Node.js 24 function in
+   `europe-west1`. A public GET returned the expected `405`, and an unsigned POST
+   returned the expected `400`. Those checks prove routing and unsigned-request
+   rejection only; no signed Stripe delivery, durable event processing or live
+   payment has been smoke-tested. All other membership functions and workers
+   remain undeployed.
 9. **Configure Firebase Auth recovery email routing.** Add the staging and final
    app origins to Firebase Auth's authorised domains/action settings, then prove
    that a buyer can close the Checkout tab, follow the confirmation's sign-up or
@@ -497,8 +579,9 @@ objects. It does not change the production publication or runtime gates.
 
 ## 8. Deployment notes that inherit Phase 0 constraints
 
-**Deployment remains closed.** The items below are pre-deployment requirements,
-not authorisation to deploy.
+**Launch deployment remains closed.** The public `stripeWebhook` prerequisite is
+the only new live service; the items below are not authorisation to deploy or
+open any other membership surface.
 
 The Phase 0 runbook's callable-freeze and identity-admin-freeze rules still
 apply to any deployment that touches the existing functions.
@@ -521,37 +604,113 @@ apply to any deployment that touches the existing functions.
 - The `functions` package's old blanket `npm run deploy` command is deliberately
   blocked. Use the selective manifest in this runbook with the Phase 0-pinned
   Firebase CLI 15.5.1; the workstation's older global CLI is not release proof.
-- Rules changes are additive: seven new deny-all collection blocks. No existing
+- Rules changes are additive: ten new deny-all collection blocks. No existing
   rule was modified.
 - Deploy the `memberships` composite index on `state` and
   `nextReconcileAt` before the grace-reconciliation worker is enabled.
-- Schema version 1 is acceptable for this first rollout only because none of
-  the billing surface has been deployed and the rollout assumes all ten
-  billing collections are empty. Preflight must prove they are clean. If any
+- Schema version 1 is acceptable for this first rollout only if all ten billing
+  collections are empty. The receiver deployment and unsigned probes do not
+  prove that assumption; preflight must prove they are clean. If any
   billing documents exist, stop and design a version bump/migration/backfill;
   this code is not a dual-read migration for unknown data.
-- After final rules and backend contracts are ready, deploy the frontend through
-  the confirmed Vercel production workflow and verify SPA rewrites. Only then
-  restore the exact reviewed service-level client-callable transport for these
-  seven callables, following the Phase 0 restoration manifest; never use a
-  project-level invoker grant. Keep the webhook's public HTTP IAM and scheduler
-  identities separate.
+- After final rules and backend contracts are ready and the approved documents
+  are in the release commit, confirm the external Vercel project, Production
+  branch, domain and complete Production environment. Deploy that exact commit
+  with `REACT_APP_MEMBERSHIP_PURCHASE_ENABLED=false`, then verify the published
+  document bytes and SPA rewrites before deploying the membership Functions.
+  Repository configuration cannot prove the external Vercel linkage. Only after
+  the closed frontend and callable batch are live may the exact reviewed
+  service-level client-callable transport be restored, following the Phase 0
+  restoration manifest; never use a project-level invoker grant. Keep the
+  webhook's public HTTP IAM and scheduler identities separate.
 - Before maintenance ends, inspect IAM and smoke-test each callable through the
   real Firebase client transport. The public checkout callable must reach its
-  handler and fail at the still-closed legal/runtime gate, not at Cloud Run IAM
-  or CORS; signed-in, owner-only and admin callables must reach their handlers
-  and enforce their respective authentication/authorisation boundaries.
+  handler and fail at the still-closed runtime gate, not at Cloud Run IAM or
+  CORS; signed-in, owner-only and admin callables must reach their handlers and
+  enforce their respective authentication/authorisation boundaries.
+
+### Exact selective deployment commands
+
+These commands are subordinate to the Phase 0 maintenance, backup and IAM
+sequence above. They are exact targets, not authorisation to run them. Deploy
+the index before enabling scheduled workers:
+
+```sh
+firebase deploy --only firestore:indexes --project alphawod-d1f2f
+```
+
+At the Phase 0 final-policy step, deploy only the reviewed rules targets:
+
+```sh
+firebase deploy --only firestore:rules,storage --project alphawod-d1f2f
+```
+
+Publish the final document registry and byte-identical `.txt` files in the exact
+reviewed frontend commit while both deploy-time purchase controls remain closed:
+`MEMBERSHIP_PURCHASE_ENABLED=false` in
+`functions/.env.alphawod-d1f2f` and
+`REACT_APP_MEMBERSHIP_PURCHASE_ENABLED=false` in Vercel Production. Before
+triggering Vercel, run the closed-frontend check with the exact reviewed
+Production environment:
+
+```sh
+npm run verify:frontend-production-closed
+```
+
+There is deliberately no guessed Vercel CLI command in this repository. Confirm
+the connected Vercel project, Production branch, canonical domain and environment
+outside the repository, deploy this exact commit through that confirmed workflow,
+and record the deployed commit SHA. Stop if any of those bindings is unknown.
+After the deployment is live, prove its legal bytes and the still-closed backend
+configuration:
+
+```sh
+npm run verify:published-legal
+npm run verify:production-armed-config --prefix functions
+```
+
+Only after those checks pass and every required secret exists, deploy exactly
+the twelve membership services in two batches. Keeping each batch at ten or
+fewer follows Firebase's deployment quota guidance. Deploy the signed public
+webhook and four non-callable workers first:
+
+```sh
+firebase deploy --only functions:stripeWebhook,functions:recoverStripeEvents,functions:recoverMembershipCancellations,functions:reconcilePastDueMemberships,functions:retryMembershipConfirmations --project alphawod-d1f2f
+```
+
+Verify that the webhook is public, each worker has only its expected scheduler
+invocation path and all five schedules/triggers are correct. Then deploy the
+seven client callables as the second batch:
+
+```sh
+firebase deploy --only functions:createMembershipCheckoutSession,functions:createCustomerPortalSession,functions:getMyMemberships,functions:requestMembershipCancellation,functions:claimMembership,functions:listMemberships,functions:linkMembershipParticipant --project alphawod-d1f2f
+```
+
+Immediately inventory and re-block those seven callable services using the
+Phase 0 service-level IAM procedure before any other rollout step. Do not apply
+that callable IAM block to `stripeWebhook` or the scheduled workers. Once the
+closed frontend is confirmed, restore only the reviewed service-level callable
+transport and smoke-test every handler. Checkout must reach its handler but fail
+at the still-closed runtime gate; it must not create a Stripe Session. The final
+backend-then-frontend opening and backend-first rollback are in
+`production-operations.md`.
+
+Do not replace any of these with a blanket Functions deployment. Opening and
+rollback each redeploy only `createMembershipCheckoutSession`; the exact
+commands and required config preflights are in `production-operations.md`.
 
 ## 9. Launch blockers still open
 
 These are release blockers, not optional future enhancements:
 
-- Obtain counsel approval for the immutable legal documents and replace every
-  deliberate `DRAFT`/`PENDING` content, effective-date and SHA-256 placeholder,
-  plus the registered-office/jurisdiction placeholders. Role-specific rendering,
-  exact separate acceptance evidence, byte-identical stable links, commercial
-  snapshots and full inline/attached durable copies are implemented and tested;
-  the code gate remains closed until the supplied legal/company facts are final.
+- Resolve the explicit legal-review appendices, align every customer-facing
+  document with the £0 presale and implemented operations, obtain the approvals
+  required by those drafts, then publish final text in the runtime registry and
+  byte-identical stable files. Replace every `DRAFT`/`PENDING` content,
+  effective-date and SHA-256 placeholder plus the registered-office and
+  jurisdiction placeholders. Role-specific rendering, exact separate
+  acceptance evidence, commercial snapshots and durable copies are implemented
+  and tested; the code gate remains closed until publication checks pass.
 - Obtain counsel approval for the implemented statutory cooling-off outcome
   and establish the human refund operation before purchase opens. The member
   callable now freezes an immutable receipt before Stripe, immediately stops
@@ -565,7 +724,7 @@ These are release blockers, not optional future enhancements:
   throttles plus stable-attempt admission before Stripe, and emits monitored
   abuse markers. Operators must still create the production reCAPTCHA
   Enterprise/App Check registration and IAM grant, install the 32-byte-or-longer
-  rate-limit secret, attach real alert channels/budgets and record an approved
+  rate-limit secret access, attach real alert channels/budgets and record an approved
   human-challenge/incident response. App Check alone is not proof of a human.
 - Build and verify the isolated deployed staging Firebase/Stripe test-mode
   boundary described in section 7. The explicit project/key/object-mode guard
@@ -577,9 +736,6 @@ These are release blockers, not optional future enhancements:
   audit evidence, and enter the same durable recovery state machine as the
   member callable. Until that exists, customer copy requires written staff
   confirmation and does not claim that inbound email is automatically applied.
-- Disable and verify every Stripe-hosted Customer Portal login page that could
-  expose an unsafe default configuration. Runtime checks cover the selected
-  in-app configuration only.
 - Configure and test Firebase Auth's authorised verification-action route,
   including the closed-tab/cross-device verified-email recovery journey. The
   implemented browser-held checkout verifier deliberately does not survive on a
@@ -613,9 +769,9 @@ the cooling-off end date and service-start performance choice, every exact
 separately accepted statement, document title/version/hash/content, signer role,
 and typed signature. The complete canonical document text appears inline and is
 also attached as one base64-encoded UTF-8 plain-text file per accepted document.
-Those copies are mechanically complete, but remain legal-review placeholders;
-they must not be described as an approved contract until counsel supplies final
-content and the publication gate passes.
+Those copies are mechanically complete, but remain placeholder bytes; they must
+not be described as the published contract until final approved customer-facing
+content is exported and the publication gate passes.
 
 For an unclaimed purchase it also carries the claim link, which is the only
 thing that brings back a buyer who completed Checkout and closed the tab.
@@ -662,7 +818,8 @@ Requires `RESEND_API_KEY` (already used for invites) and the
 - **Automated Test Clock journey.** The local hosted Checkout verifier proves
   the frozen September-to-December schedule but does not yet advance a Stripe
   Test Clock through all four invoices. Run and record that separately in
-  isolated staging before treating the discount expiry as provider-proven.
+  isolated staging before treating the three-payment discount schedule as
+  provider-proven.
 - **Price-change notice flow.** Terms 6 requires advance notice; not built.
 - **Youth onboarding workflow.** Payment deliberately does not book a first
   session; the approved message tells the guardian they will be contacted.
@@ -671,7 +828,8 @@ Requires `RESEND_API_KEY` (already used for invites) and the
 
 1. The Cancellation Policy's own legal appendix flags the late-notice rule
    (collecting one further month) as needing a UK consumer-law fairness review
-   before publication. The code implements the approved rule as written.
+   before publication. The code implements the owner-supplied rule as written;
+   that implementation is not evidence of legal approval.
 2. Youth product naming differs between the catalogue and the policy: Stripe
    calls the junior product "HYROX Youngstars U11" while the approved age band
    is 4–11 inclusive. The code follows the approved band. Consider renaming the

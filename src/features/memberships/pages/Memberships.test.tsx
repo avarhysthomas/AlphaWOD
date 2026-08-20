@@ -3,9 +3,26 @@ import {render, screen} from "@testing-library/react";
 import Memberships from "./Memberships";
 
 let mockSearchParams = "";
+let mockDocumentsApproved = false;
+let mockFrontendPurchaseEnabled = false;
+let mockLocalJourneyEnabled = true;
 
 jest.mock("../../../context/AuthContext", () => ({
   useAuth: () => ({user: null}),
+}));
+
+jest.mock("../purchaseAvailability", () => ({
+  get MEMBERSHIP_PURCHASE_AVAILABILITY() {
+    const publicPurchaseEnabled =
+      mockDocumentsApproved && mockFrontendPurchaseEnabled;
+    return {
+      documentsApproved: mockDocumentsApproved,
+      frontendPurchaseEnabled: mockFrontendPurchaseEnabled,
+      localTestJourneyEnabled: mockLocalJourneyEnabled,
+      publicPurchaseEnabled,
+      checkoutEnabled: publicPurchaseEnabled || mockLocalJourneyEnabled,
+    };
+  },
 }));
 
 jest.mock(
@@ -23,6 +40,9 @@ describe("Memberships presale presentation", () => {
   beforeEach(() => {
     jest.spyOn(Date, "now").mockReturnValue(Date.parse("2026-08-19T09:00:00.000Z"));
     mockSearchParams = "";
+    mockDocumentsApproved = false;
+    mockFrontendPurchaseEnabled = false;
+    mockLocalJourneyEnabled = true;
   });
 
   afterEach(() => {
@@ -38,6 +58,42 @@ describe("Memberships presale presentation", () => {
     expect(screen.getByText(/discount code during signup for £5 off/i)).toBeInTheDocument();
     expect(screen.getAllByText(/£0 today · first payment 1 September 2026/i))
       .toHaveLength(4);
+  });
+
+  it("keeps the rolling contract disclosure and labels the local test mode", () => {
+    render(<Memberships />);
+
+    expect(screen.getByText(/There is no joining fee/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Join before opening and nothing is charged today/i))
+      .not.toBeInTheDocument();
+    expect(screen.getByText(/Local Stripe test mode · no real payments/i))
+      .toBeInTheDocument();
+  });
+
+  it("keeps an armed production catalogue visibly closed without checkout links", () => {
+    mockDocumentsApproved = true;
+    mockLocalJourneyEnabled = false;
+    render(<Memberships />);
+
+    expect(screen.getByText(/Online membership purchase is currently closed/i))
+      .toBeInTheDocument();
+    expect(screen.getAllByRole("button", {name: /online purchase closed/i}))
+      .toHaveLength(5);
+    expect(screen.queryAllByRole("link").filter((link) =>
+      link.getAttribute("href")?.startsWith("/memberships/checkout/")
+    )).toHaveLength(0);
+  });
+
+  it("renders checkout links only when legal and production frontend gates are open", () => {
+    mockDocumentsApproved = true;
+    mockFrontendPurchaseEnabled = true;
+    mockLocalJourneyEnabled = false;
+    render(<Memberships />);
+
+    expect(screen.queryByText(/Not open yet/i)).not.toBeInTheDocument();
+    expect(screen.queryAllByRole("link").filter((link) =>
+      link.getAttribute("href")?.startsWith("/memberships/checkout/")
+    )).toHaveLength(5);
   });
 
   it("returns to the standard proration journey after presale closes", () => {

@@ -2,6 +2,9 @@
   "name": "wod-board",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": "24.x"
+  },
   "dependencies": {
     "@testing-library/dom": "^10.4.0",
     "@testing-library/jest-dom": "^6.6.3",
@@ -29,7 +32,10 @@
     "test": "react-scripts test",
     "test:ci": "react-scripts test --watchAll=false --runInBand",
     "test:infrastructure": "node --test scripts/*.test.js",
+    "verify:frontend-production-closed": "node scripts/verifyFrontendProductionEnv.js --expect-purchase-closed",
+    "verify:frontend-production-open": "node scripts/verifyFrontendProductionEnv.js --expect-purchase-open",
     "verify:monitoring": "node scripts/verifyBillingMonitoring.js",
+    "verify:published-legal": "npm run build --prefix functions && node --env-file-if-exists=functions/.env.alphawod-d1f2f scripts/verifyPublishedLegalDocuments.js",
     "eject": "react-scripts eject"
   },
   "eslintConfig": {

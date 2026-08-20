@@ -1,14 +1,12 @@
 /* eslint-disable no-console, max-len, require-jsdoc */
 
 const PRODUCTION_FIREBASE_PROJECT_ID = "alphawod-d1f2f";
+const {
+  APPROVED_LIVE_STRIPE_CATALOGUE,
+} = require("../lib/stripeLiveCatalog");
 
-const PRICE_ENV_KEYS = [
-  "STRIPE_PRICE_ADULT_UNLIMITED",
-  "STRIPE_PRICE_ADULT_LADIES",
-  "STRIPE_PRICE_ADULT_GYM",
-  "STRIPE_PRICE_YOUTH_YOUNGSTARS",
-  "STRIPE_PRICE_YOUTH_TEENSTARS",
-];
+const PRICE_ENV_KEYS = Object.values(APPROVED_LIVE_STRIPE_CATALOGUE)
+  .map(({priceEnvKey}) => priceEnvKey);
 
 const REQUIRED_PARAMETER_KEYS = [
   "APP_PUBLIC_ORIGIN",
@@ -99,7 +97,10 @@ function assertOptionalSecrets(environment) {
   }
 }
 
-function assertProductionPreparationConfig(environment, {documentsApproved}) {
+function assertProductionConfig(
+  environment,
+  {documentsApproved, expectedDocumentsApproved, purchaseEnabled, phase}
+) {
   const values = Object.fromEntries(
     REQUIRED_PARAMETER_KEYS.map((name) => [name, required(environment, name)])
   );
@@ -110,11 +111,17 @@ function assertProductionPreparationConfig(environment, {documentsApproved}) {
     PRODUCTION_FIREBASE_PROJECT_ID
   );
   assertExact(environment, "STRIPE_EXPECTED_MODE", "live");
-  assertExact(environment, "MEMBERSHIP_PURCHASE_ENABLED", "false");
+  assertExact(
+    environment,
+    "MEMBERSHIP_PURCHASE_ENABLED",
+    purchaseEnabled ? "true" : "false"
+  );
   assertExact(environment, "MEMBERSHIP_TEST_JOURNEY_ENABLED", "false");
-  if (documentsApproved !== false) {
+  if (expectedDocumentsApproved !== null &&
+    documentsApproved !== expectedDocumentsApproved) {
     throw new Error(
-      "CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION must remain false during production preparation."
+      `CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION must be ` +
+      `${expectedDocumentsApproved} during production ${phase}.`
     );
   }
 
@@ -147,9 +154,53 @@ function assertProductionPreparationConfig(environment, {documentsApproved}) {
   if (new Set(priceIds).size !== priceIds.length) {
     throw new Error("Every membership plan must use its own Stripe Price ID.");
   }
+  for (const [planKey, approved] of
+    Object.entries(APPROVED_LIVE_STRIPE_CATALOGUE)) {
+    if (values[approved.priceEnvKey] !== approved.priceId) {
+      throw new Error(
+        `${approved.priceEnvKey} must use the approved LIVE Price for ${planKey}.`
+      );
+    }
+  }
 
   assertOptionalSecrets(environment);
   return values;
+}
+
+function assertProductionPreparationConfig(environment, {documentsApproved}) {
+  return assertProductionConfig(environment, {
+    documentsApproved,
+    expectedDocumentsApproved: false,
+    purchaseEnabled: false,
+    phase: "preparation",
+  });
+}
+
+function assertProductionArmedConfig(environment, {documentsApproved}) {
+  return assertProductionConfig(environment, {
+    documentsApproved,
+    expectedDocumentsApproved: true,
+    purchaseEnabled: false,
+    phase: "armed rollout or rollback",
+  });
+}
+
+function assertProductionClosedConfig(environment, {documentsApproved}) {
+  return assertProductionConfig(environment, {
+    documentsApproved,
+    expectedDocumentsApproved: null,
+    purchaseEnabled: false,
+    phase: "closed provider verification",
+  });
+}
+
+function assertProductionOpeningConfig(environment, {documentsApproved}) {
+  return assertProductionConfig(environment, {
+    documentsApproved,
+    expectedDocumentsApproved: true,
+    purchaseEnabled: true,
+    phase: "opening",
+  });
 }
 
 if (require.main === module) {
@@ -157,11 +208,22 @@ if (require.main === module) {
     const {
       CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION,
     } = require("../lib/membershipPlans");
-    assertProductionPreparationConfig(process.env, {
+    const opening = process.argv.includes("--opening");
+    const armed = process.argv.includes("--armed");
+    if (opening && armed) {
+      throw new Error("Choose only one production configuration phase.");
+    }
+    const assertConfig = opening ? assertProductionOpeningConfig :
+      armed ? assertProductionArmedConfig : assertProductionPreparationConfig;
+    assertConfig(process.env, {
       documentsApproved: CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION,
     });
     console.log(
-      "Production parameter preflight passed with both membership purchase gates closed."
+      opening ?
+        "Production opening preflight passed with both membership purchase gates open." :
+        armed ?
+          "Production armed preflight passed with published documents and purchasing closed." :
+          "Production preparation preflight passed with both membership purchase gates closed."
     );
   } catch (error) {
     console.error(`Production parameter preflight failed: ${error.message}`);
@@ -174,5 +236,8 @@ module.exports = {
   PRICE_ENV_KEYS,
   PRODUCTION_FIREBASE_PROJECT_ID,
   REQUIRED_PARAMETER_KEYS,
+  assertProductionArmedConfig,
+  assertProductionClosedConfig,
+  assertProductionOpeningConfig,
   assertProductionPreparationConfig,
 };

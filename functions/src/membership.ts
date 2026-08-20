@@ -106,6 +106,10 @@ import {
   cancellationAcknowledgementIdempotencyKey,
   cancellationAcknowledgementOutboxId,
 } from "./membershipCancellation";
+import {
+  APPROVED_LIVE_STRIPE_CATALOGUE,
+  matchesApprovedLiveStripeCatalogueEntry,
+} from "./stripeLiveCatalog";
 
 const REGION = "europe-west1";
 
@@ -735,8 +739,7 @@ function promotionCodeRedemptionCountIsCredible(
 
 async function resolveApprovedPromotionCodeForCheckout(
   billingStripe: Stripe,
-  normalizedCode: string,
-  nowMillis: number
+  normalizedCode: string
 ): Promise<string> {
   const configuredCouponId = stripeExistingMemberCouponId.value().trim();
   const configuredPromotionCodeId =
@@ -766,8 +769,7 @@ async function resolveApprovedPromotionCodeForCheckout(
   if (promotionCode.id !== configuredPromotionCodeId ||
     !promotionCodeMatchesApprovedOffer(promotionCode, configuredCouponId) ||
     promotionCode.active !== true ||
-    !promotionCodeRedemptionCountIsCredible(promotionCode) ||
-    promotionCode.expires_at === null || promotionCode.expires_at * 1000 <= nowMillis) {
+    !promotionCodeRedemptionCountIsCredible(promotionCode)) {
     throw new HttpsError(
       "failed-precondition",
       "This promotion code is not valid for the founding-member offer."
@@ -1096,12 +1098,19 @@ function resolvePriceId(planKey: PlanKey): string {
   // Stripe would reject this anyway, but only once a real customer was part
   // way through checkout. Failing here makes the misconfiguration obvious
   // before anyone is asked to pay.
-  if (assertBillingEnvironment().stripeMode === "live" &&
-    KNOWN_TEST_PRICE_IDS.has(priceId)) {
+  const stripeMode = assertBillingEnvironment().stripeMode;
+  if (stripeMode === "live" && KNOWN_TEST_PRICE_IDS.has(priceId)) {
     throw new HttpsError(
       "failed-precondition",
       `${planKey} is still pointing at a Stripe test-mode price. Create the live ` +
       "catalogue and set the live price IDs before taking payments."
+    );
+  }
+  if (stripeMode === "live" &&
+    priceId !== APPROVED_LIVE_STRIPE_CATALOGUE[planKey].priceId) {
+    throw new HttpsError(
+      "failed-precondition",
+      `${planKey} is not pointing at the approved live Stripe Price.`
     );
   }
 
@@ -1136,6 +1145,9 @@ async function assertStripePriceMatchesPlan(
 
   const product = typeof price.product === "object" && price.product &&
       !("deleted" in price.product) ? price.product : null;
+  const stripeMode = assertBillingEnvironment().stripeMode;
+  const approvedLive = stripeMode === "live" ?
+    APPROVED_LIVE_STRIPE_CATALOGUE[plan.key] : null;
   assertStripeObjectMode("Price", price.id, price.livemode);
   if (product) {
     assertStripeObjectMode("Product", product.id, product.livemode);
@@ -1147,7 +1159,12 @@ async function assertStripePriceMatchesPlan(
     price.recurring?.interval === "month" &&
     price.recurring.interval_count === 1 &&
     product?.active === true &&
-    product.name === plan.name;
+    product.name === (approvedLive?.productName ?? plan.name) &&
+    (!approvedLive || matchesApprovedLiveStripeCatalogueEntry(
+      price,
+      product,
+      approvedLive
+    ));
   if (!valid) {
     console.error("CRITICAL_BILLING_PRICE_MISMATCH", {
       planKey: plan.key,
@@ -1161,6 +1178,8 @@ async function assertStripePriceMatchesPlan(
       intervalCount: price.recurring?.interval_count,
       productName: product?.name ?? null,
       productActive: product?.active ?? null,
+      expectedLiveProductId: approvedLive?.productId ?? null,
+      expectedLiveProductName: approvedLive?.productName ?? null,
     });
     throw new HttpsError(
       "failed-precondition",
@@ -2154,7 +2173,27 @@ function resolveCurrentPeriodEnd(subscription: Stripe.Subscription): number | nu
 }
 
 const MEMBERSHIP_CONVERGENCE_LEASE_MS = 2 * 60 * 1000;
+// One Stripe request may use the configured 20-second timeout three times
+// (the initial request plus two network retries). Leave headroom for retry
+// backoff while staying below the two-minute Firestore lease.
+const ELIGIBILITY_CONVERGENCE_CONTENTION_WAIT_MS = 75 * 1000;
+const ELIGIBILITY_CONVERGENCE_CONTENTION_MAX_BACKOFF_MS = 250;
+// Eligibility-aware callables may wait behind that lease and then still need
+// further provider reads or a Checkout create. Override Firebase's 60-second
+// default so the platform cannot terminate the intended bounded path first.
+const MEMBERSHIP_INTERACTIVE_TIMEOUT_SECONDS = 540;
 const SUSPENDED_RECONCILE_INTERVAL_MS = 15 * 60 * 1000;
+
+class MembershipConvergenceInProgressError extends Error {
+  constructor(
+    subscriptionId: string,
+    readonly leaseToken: string,
+    readonly leaseExpiresAtMillis: number
+  ) {
+    super(`Membership ${subscriptionId} is already converging.`);
+    this.name = "MembershipConvergenceInProgressError";
+  }
+}
 
 type MembershipConvergenceOverrides = {
   pastDueSince?: number | null;
@@ -2206,9 +2245,9 @@ function isOpenDisputeStatus(status: Stripe.Dispute.Status): boolean {
 }
 
 type MembershipConvergenceLease =
-  | {state: "acquired"; token: string}
+  | {state: "acquired"; token: string; expiresAtMillis: number}
   | {state: "missing"}
-  | {state: "in_progress"};
+  | {state: "in_progress"; token: string; expiresAtMillis: number};
 
 async function acquireMembershipConvergenceLease(
   membershipRef: DocumentReference,
@@ -2219,18 +2258,24 @@ async function acquireMembershipConvergenceLease(
     const snap = await tx.get(membershipRef);
     if (!snap.exists) return {state: "missing"} as const;
     const leaseExpiresAt = timestampMillis(snap.get("convergenceLeaseExpiresAt"));
-    if (typeof snap.get("convergenceLeaseToken") === "string" &&
+    const activeToken = snap.get("convergenceLeaseToken");
+    if (typeof activeToken === "string" &&
       leaseExpiresAt !== null && leaseExpiresAt > nowMillis) {
-      return {state: "in_progress"} as const;
+      return {
+        state: "in_progress",
+        token: activeToken,
+        expiresAtMillis: leaseExpiresAt,
+      } as const;
     }
+    const expiresAtMillis = nowMillis + MEMBERSHIP_CONVERGENCE_LEASE_MS;
     tx.set(membershipRef, {
       convergenceLeaseToken: token,
       convergenceLeaseExpiresAt: Timestamp.fromMillis(
-        nowMillis + MEMBERSHIP_CONVERGENCE_LEASE_MS
+        expiresAtMillis
       ),
       updatedAt: serverTimestamp(),
     }, {merge: true});
-    return {state: "acquired", token} as const;
+    return {state: "acquired", token, expiresAtMillis} as const;
   });
 }
 
@@ -2268,7 +2313,11 @@ async function convergeMembershipFromStripe(
   const membershipRef = db().collection("memberships").doc(subscriptionId);
   const lease = await acquireMembershipConvergenceLease(membershipRef);
   if (lease.state === "in_progress") {
-    throw new Error(`Membership ${subscriptionId} is already converging.`);
+    throw new MembershipConvergenceInProgressError(
+      subscriptionId,
+      lease.token,
+      lease.expiresAtMillis
+    );
   }
 
   let subscription: Stripe.Subscription;
@@ -2761,6 +2810,12 @@ async function convergeMembershipFromStripe(
         pastDueGraceEndsAt,
         nextReconcileAt,
         ...cancellationUpdate,
+        // This marker and the authoritative membership projection commit in
+        // the same transaction. A waiter can therefore accept this exact
+        // lease's result without issuing a second Stripe read. A failed lease
+        // is merely released and never writes a completion token.
+        convergenceCompletedLeaseToken: lease.token,
+        convergenceCompletedAt: serverTimestamp(),
         convergenceLeaseToken: FieldValue.delete(),
         convergenceLeaseExpiresAt: FieldValue.delete(),
         updatedAt: serverTimestamp(),
@@ -2832,6 +2887,94 @@ type AuthoritativeEligibilityContext =
 const AUTHORITATIVE_ELIGIBILITY_UNAVAILABLE =
   "Current membership status could not be verified with Stripe. No new purchase, claim or link was made. Try again later.";
 
+type EligibilityConvergenceContentionOptions = {
+  waitMs?: number;
+  initialBackoffMs?: number;
+  maxBackoffMs?: number;
+};
+
+async function waitForMembershipConvergenceCompletion(
+  subscriptionId: string,
+  collision: MembershipConvergenceInProgressError,
+  options: EligibilityConvergenceContentionOptions = {}
+): Promise<void> {
+  const membershipRef = db().collection("memberships").doc(subscriptionId);
+  const waitMs = options.waitMs ??
+    ELIGIBILITY_CONVERGENCE_CONTENTION_WAIT_MS;
+  const deadlineMillis = Math.min(
+    Date.now() + Math.max(0, waitMs),
+    collision.leaseExpiresAtMillis
+  );
+  let backoffMs = Math.max(1, options.initialBackoffMs ?? 25);
+  const maxBackoffMs = Math.max(
+    backoffMs,
+    options.maxBackoffMs ??
+      ELIGIBILITY_CONVERGENCE_CONTENTION_MAX_BACKOFF_MS
+  );
+
+  for (;;) {
+    const snapshot = await membershipRef.get();
+    if (!snapshot.exists) {
+      throw new Error(
+        `Membership ${subscriptionId} disappeared during convergence contention.`
+      );
+    }
+    if (snapshot.get("convergenceCompletedLeaseToken") ===
+      collision.leaseToken) {
+      return;
+    }
+
+    const activeToken = snapshot.get("convergenceLeaseToken");
+    const activeExpiresAtMillis = timestampMillis(
+      snapshot.get("convergenceLeaseExpiresAt")
+    );
+    if (activeToken !== collision.leaseToken ||
+      activeExpiresAtMillis !== collision.leaseExpiresAtMillis) {
+      throw new Error(
+        `Membership ${subscriptionId} released its convergence lease ` +
+        "without completing it."
+      );
+    }
+
+    const nowMillis = Date.now();
+    if (nowMillis >= deadlineMillis || nowMillis >= activeExpiresAtMillis) {
+      throw new Error(
+        `Membership ${subscriptionId} convergence did not complete before ` +
+        "its contention deadline."
+      );
+    }
+    await new Promise((resolve) => setTimeout(
+      resolve,
+      Math.min(backoffMs, deadlineMillis - nowMillis)
+    ));
+    backoffMs = Math.min(backoffMs * 2, maxBackoffMs);
+  }
+}
+
+/**
+ * Serialises eligibility reads behind a concurrent authoritative convergence.
+ * A lease collision is local contention, not evidence that Stripe is
+ * unavailable. The waiter accepts only the exact colliding lease's committed
+ * completion marker, so it does not amplify Stripe traffic and cannot mistake
+ * a failed, expired or replacement lease for authoritative success.
+ */
+async function convergeEligibilityMembershipFromStripe(
+  subscriptionId: string,
+  converge: (userId: string) => Promise<void>,
+  contentionOptions: EligibilityConvergenceContentionOptions = {}
+): Promise<void> {
+  try {
+    await convergeMembershipFromStripe(subscriptionId, converge);
+  } catch (error) {
+    if (!(error instanceof MembershipConvergenceInProgressError)) throw error;
+    await waitForMembershipConvergenceCompletion(
+      subscriptionId,
+      error,
+      contentionOptions
+    );
+  }
+}
+
 /**
  * Converges every stored subscription that can affect a state-sensitive
  * eligibility decision. A local terminal state is not proof that Stripe has
@@ -2875,7 +3018,7 @@ async function convergeEligibilityMemberships(
     }
 
     try {
-      await convergeMembershipFromStripe(snapshot.id, converge);
+      await convergeEligibilityMembershipFromStripe(snapshot.id, converge);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error("CRITICAL_BILLING_ELIGIBILITY_STATE_UNCERTAIN", {
@@ -3426,8 +3569,7 @@ function buildCreateMembershipCheckoutHandler(
       const promotionCodeId = promotionCode ?
         await resolveApprovedPromotionCodeForCheckout(
           validatedConfig.client,
-          promotionCode,
-          now
+          promotionCode
         ) : null;
       let checkoutExpiresAt: number;
       try {
@@ -3580,6 +3722,10 @@ function buildCreateMembershipCheckoutHandler(
     try {
       session = await checkoutStripe.checkout.sessions.create({
         mode: "subscription",
+        // The public catalogue and frozen contract are denominated in GBP.
+        // Override Stripe's mutable Dashboard default so Adaptive Pricing
+        // cannot localise this or future subscription payments.
+        adaptive_pricing: {enabled: false},
         ...(customerId ? {customer: customerId} : {}),
         ...(payerUid ? {client_reference_id: payerUid} : {}),
         line_items: [{price: priceId, quantity: 1}],
@@ -3758,6 +3904,7 @@ export function buildCreateMembershipCheckoutSession(
       secrets: MEMBERSHIP_CHECKOUT_SECRETS,
       enforceAppCheck: !isFirebaseFunctionsEmulatorProcess(),
       consumeAppCheckToken: !isFirebaseFunctionsEmulatorProcess(),
+      timeoutSeconds: MEMBERSHIP_INTERACTIVE_TIMEOUT_SECONDS,
     },
     buildCreateMembershipCheckoutHandler(
       requirePurchaseFlowOpen,
@@ -4855,7 +5002,11 @@ function toMillis(
  * unclaimed, so two accounts racing on the same purchase cannot both win.
  */
 export function buildClaimMembership(converge: (userId: string) => Promise<void>) {
-  return onCall({region: REGION, secrets: MEMBERSHIP_SECRETS}, async (request) => {
+  return onCall({
+    region: REGION,
+    secrets: MEMBERSHIP_SECRETS,
+    timeoutSeconds: MEMBERSHIP_INTERACTIVE_TIMEOUT_SECONDS,
+  }, async (request) => {
     const userId = requireAuthUid(request);
     const sessionId = optionalBoundedText(request.data?.sessionId, 3, 255);
     const checkoutAttemptId = sessionId && request.data?.checkoutAttemptId !== undefined ?
@@ -6146,7 +6297,11 @@ export function buildLinkMembershipParticipant(
   requireAdmin: (request: any) => Promise<void>,
   converge: (userId: string) => Promise<void>
 ) {
-  return onCall({region: REGION, secrets: MEMBERSHIP_SECRETS}, async (request) => {
+  return onCall({
+    region: REGION,
+    secrets: MEMBERSHIP_SECRETS,
+    timeoutSeconds: MEMBERSHIP_INTERACTIVE_TIMEOUT_SECONDS,
+  }, async (request) => {
     const callerUid = requireAuthUid(request);
     await requireAdmin(request);
 
@@ -6349,6 +6504,7 @@ export const __testing = {
   stripeEventRetryAtMillis,
   reconcilePastDueMembershipsOnce,
   convergeMembershipFromStripe,
+  convergeEligibilityMembershipFromStripe,
   handleStripeEvent,
   buildConfirmationPayload,
   ensureMembershipAndConfirmationOutbox,

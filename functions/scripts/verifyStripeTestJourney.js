@@ -271,7 +271,7 @@ async function assertAppliedDiscount(stripe, fulfilment, required) {
     promotionCode.id !== configuredPromotionCodeId ||
     promotionCode.max_redemptions !== null ||
     !isValidRedemptionCount(promotionCode.times_redeemed) ||
-    promotionCode.expires_at !== PRESALE_BILLING_ANCHOR_UNIX_SECONDS ||
+    promotionCode.expires_at !== null ||
     promotionCode.customer !== null || promotionCode.customer_account !== null ||
     promotionCode.restrictions?.first_time_transaction !== false ||
     promotionCode.restrictions?.minimum_amount !== null ||

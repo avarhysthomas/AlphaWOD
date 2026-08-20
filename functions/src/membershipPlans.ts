@@ -38,12 +38,11 @@ export const EXISTING_MEMBER_OFFER = {
   amountOffPence: 500,
   currency: BILLING_CURRENCY,
   durationMonths: 3,
-  // The app stops creating presale attempts at local midnight. A Checkout
-  // Session opened just before then may remain valid until five minutes before
-  // the 01:00 BST Stripe anchor, so the provider-side Promotion Code must stay
-  // redeemable through that frozen completion window.
+  // The app, rather than a provider timestamp, closes new redemptions at local
+  // midnight. Staff deactivate the shared Promotion Code when the campaign is
+  // finished; keeping provider expiry unset also preserves frozen Sessions.
   redemptionClosesAtUnixSeconds: PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
-  promotionCodeExpiresAtUnixSeconds: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+  promotionCodeExpiresAtUnixSeconds: null,
 } as const;
 
 /** Catalogue schema version stored on every membership document. */

@@ -3,7 +3,6 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useAuth } from "../../../context/AuthContext";
 import {
   BILLING_POLICY,
-  CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION,
   COMPANY,
   EXISTING_MEMBER_OFFER,
   MEMBERSHIP_PLANS,
@@ -13,13 +12,21 @@ import {
   isFoundingPresale,
   type MembershipPlan,
 } from "../../../lib/membershipPlans";
-import { LOCAL_MEMBERSHIP_TEST_JOURNEY_ENABLED } from "../localTestJourney";
+import {MEMBERSHIP_PURCHASE_AVAILABILITY} from "../purchaseAvailability";
 
 const CARD =
   "rounded-[28px] border border-white/10 bg-[#151311] p-7 shadow-[0_26px_80px_rgba(0,0,0,0.42)]";
 const EYEBROW = "text-[12px] font-bold uppercase tracking-[0.28em] text-white/34";
 
-function PlanCard({ plan, presale }: { plan: MembershipPlan; presale: boolean }) {
+function PlanCard({
+  plan,
+  presale,
+  checkoutEnabled,
+}: {
+  plan: MembershipPlan;
+  presale: boolean;
+  checkoutEnabled: boolean;
+}) {
   const promotionCodeAvailable = presale && plan.key === EXISTING_MEMBER_OFFER.planKey;
 
   return (
@@ -58,12 +65,22 @@ function PlanCard({ plan, presale }: { plan: MembershipPlan; presale: boolean })
         </p>
       )}
 
-      <Link
-        to={`/memberships/checkout/${plan.key}`}
-        className="mt-6 block rounded-2xl bg-white px-5 py-3 text-center text-sm font-bold uppercase tracking-[0.14em] text-black transition hover:bg-white/85"
-      >
-        Choose {plan.name.replace("Membership", "").trim()}
-      </Link>
+      {checkoutEnabled ? (
+        <Link
+          to={`/memberships/checkout/${plan.key}`}
+          className="mt-6 block rounded-2xl bg-white px-5 py-3 text-center text-sm font-bold uppercase tracking-[0.14em] text-black transition hover:bg-white/85"
+        >
+          Choose {plan.name.replace("Membership", "").trim()}
+        </Link>
+      ) : (
+        <button
+          type="button"
+          disabled
+          className="mt-6 block w-full cursor-not-allowed rounded-2xl bg-white/20 px-5 py-3 text-center text-sm font-bold uppercase tracking-[0.14em] text-white/50"
+        >
+          Online purchase closed
+        </button>
+      )}
     </div>
   );
 }
@@ -73,7 +90,13 @@ function PlanCard({ plan, presale }: { plan: MembershipPlan; presale: boolean })
  * so a guardian picks the right option before reaching the checkout form,
  * which re-derives the band from the participant's date of birth.
  */
-function YouthCard({presale}: {presale: boolean}) {
+function YouthCard({
+  presale,
+  checkoutEnabled,
+}: {
+  presale: boolean;
+  checkoutEnabled: boolean;
+}) {
   const youngstars = MEMBERSHIP_PLANS.youth_youngstars;
   const teenstars = MEMBERSHIP_PLANS.youth_teenstars;
 
@@ -94,12 +117,9 @@ function YouthCard({presale}: {presale: boolean}) {
       )}
 
       <div className="mt-6 space-y-3">
-        {[youngstars, teenstars].map((plan) => (
-          <Link
-            key={plan.key}
-            to={`/memberships/checkout/${plan.key}`}
-            className="flex items-center justify-between rounded-2xl border border-white/10 bg-black/30 px-5 py-4 transition hover:border-white/25"
-          >
+        {[youngstars, teenstars].map((plan) => {
+          const content = (
+            <>
             <span>
               <span className="block text-sm font-bold uppercase tracking-[0.12em] text-white">
                 {plan.name}
@@ -112,8 +132,29 @@ function YouthCard({presale}: {presale: boolean}) {
               {formatPlanPrice(plan)}
               <span className="ml-1 text-xs font-normal text-white/45">/mo</span>
             </span>
-          </Link>
-        ))}
+            </>
+          );
+
+          return checkoutEnabled ? (
+            <Link
+              key={plan.key}
+              to={`/memberships/checkout/${plan.key}`}
+              className="flex items-center justify-between rounded-2xl border border-white/10 bg-black/30 px-5 py-4 transition hover:border-white/25"
+            >
+              {content}
+            </Link>
+          ) : (
+            <button
+              key={plan.key}
+              type="button"
+              disabled
+              aria-label={`${plan.name} — online purchase closed`}
+              className="flex w-full cursor-not-allowed items-center justify-between rounded-2xl border border-white/10 bg-black/20 px-5 py-4 text-left opacity-50"
+            >
+              {content}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -124,6 +165,11 @@ export default function Memberships() {
   const [params] = useSearchParams();
   const checkoutCancelled = params.get("checkout") === "cancelled";
   const presale = isFoundingPresale();
+  const {
+    checkoutEnabled,
+    documentsApproved,
+    localTestJourneyEnabled,
+  } = MEMBERSHIP_PURCHASE_AVAILABILITY;
 
   const adultPlans = useMemo(
     () => PLAN_LIST.filter((plan) => plan.cardGroup === "adult"),
@@ -137,9 +183,6 @@ export default function Memberships() {
         <h1 className="mt-4 font-heading text-[3rem] uppercase leading-[0.98] tracking-[0.01em] text-white sm:text-[4rem]">
           Memberships
         </h1>
-        <p className="mt-5 max-w-2xl text-sm leading-7 text-white/70 sm:text-base">
-          {POLICY_TEXT.rollingTerm} {presale ? POLICY_TEXT.presaleRule : POLICY_TEXT.prorationRule}
-        </p>
 
         {presale && (
           <dl className="mt-7 grid gap-5 border-y border-white/10 py-5 text-sm sm:grid-cols-3">
@@ -158,28 +201,22 @@ export default function Memberships() {
           </dl>
         )}
 
-        {!CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION &&
-          LOCAL_MEMBERSHIP_TEST_JOURNEY_ENABLED && (
-          <div className="mt-7 rounded-[28px] border border-sky-400/30 bg-sky-400/10 p-6">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-sky-200">
-              Local Stripe test journey
-            </p>
-            <p className="mt-3 text-sm leading-7 text-sky-50/85">
-              Checkout is available only for the local Stripe test journey. Use Stripe test
-              cards; no real payment or live membership is created.
-            </p>
-          </div>
+        {localTestJourneyEnabled && (
+          <p className="mt-7 inline-flex rounded-full border border-sky-400/30 bg-sky-400/10 px-4 py-2 text-xs font-semibold text-sky-100">
+            Local Stripe test mode · no real payments or memberships
+          </p>
         )}
 
-        {!CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION &&
-          !LOCAL_MEMBERSHIP_TEST_JOURNEY_ENABLED && (
+        {!checkoutEnabled && (
           <div className="mt-7 rounded-[28px] border border-amber-500/25 bg-amber-500/10 p-6">
             <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-amber-200">
               Not open yet
             </p>
             <p className="mt-3 text-sm leading-7 text-amber-50/85">
-              Online membership purchase is not open. The membership terms, cancellation
-              policy and waiver documents are still in legal review. To join now, contact{" "}
+              {documentsApproved
+                ? "Online membership purchase is currently closed. "
+                : "Online membership purchase is not open. The membership terms, cancellation policy and waiver documents are still in legal review. "}
+              To join now, contact{" "}
               <a
                 className="underline decoration-amber-400/40 underline-offset-4"
                 href={`mailto:${COMPANY.supportEmail}`}
@@ -202,14 +239,20 @@ export default function Memberships() {
 
         <div className="mt-10 grid gap-5 sm:grid-cols-2">
           {adultPlans.map((plan) => (
-            <PlanCard key={plan.key} plan={plan} presale={presale} />
+            <PlanCard
+              key={plan.key}
+              plan={plan}
+              presale={presale}
+              checkoutEnabled={checkoutEnabled}
+            />
           ))}
-          <YouthCard presale={presale} />
+          <YouthCard presale={presale} checkoutEnabled={checkoutEnabled} />
         </div>
 
         <div className={`mt-10 ${CARD}`}>
           <p className={EYEBROW}>Before you join</p>
           <ul className="mt-4 space-y-3 text-sm leading-7 text-white/70">
+            <li>{POLICY_TEXT.rollingTerm}</li>
             <li>{presale ? POLICY_TEXT.prorationAuthority : POLICY_TEXT.prorationRule}</li>
             {presale && <li>{POLICY_TEXT.existingMemberOffer}</li>}
             <li>{POLICY_TEXT.cancellationRule}</li>

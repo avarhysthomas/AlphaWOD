@@ -7,11 +7,21 @@ const mockCreateCheckout = jest.fn();
 const mockResolveCheckoutAttempt = jest.fn();
 const mockClearCheckoutAttempt = jest.fn();
 let mockPlanKey = "adult_unlimited";
+let mockDocumentsApproved = false;
+let mockFrontendPurchaseEnabled = false;
 let mockLocalJourneyEnabled = false;
 
-jest.mock("../localTestJourney", () => ({
-  get LOCAL_MEMBERSHIP_TEST_JOURNEY_ENABLED() {
-    return mockLocalJourneyEnabled;
+jest.mock("../purchaseAvailability", () => ({
+  get MEMBERSHIP_PURCHASE_AVAILABILITY() {
+    const publicPurchaseEnabled =
+      mockDocumentsApproved && mockFrontendPurchaseEnabled;
+    return {
+      documentsApproved: mockDocumentsApproved,
+      frontendPurchaseEnabled: mockFrontendPurchaseEnabled,
+      localTestJourneyEnabled: mockLocalJourneyEnabled,
+      publicPurchaseEnabled,
+      checkoutEnabled: publicPurchaseEnabled || mockLocalJourneyEnabled,
+    };
   },
 }));
 
@@ -71,6 +81,8 @@ beforeEach(() => {
   });
   mockSignedIn = true;
   mockAuthLoading = false;
+  mockDocumentsApproved = false;
+  mockFrontendPurchaseEnabled = false;
   mockLocalJourneyEnabled = false;
 });
 
@@ -80,7 +92,7 @@ afterEach(() => {
 
 function getCheckoutButton() {
   return screen.getByRole("button", {
-    name: /Continue to Stripe|Subscribe and pay/i,
+    name: /Continue to Stripe|Subscribe and pay|Online purchase closed/i,
   });
 }
 
@@ -120,7 +132,29 @@ describe("MembershipCheckout", () => {
     expect(mockCreateCheckout).not.toHaveBeenCalled();
   });
 
+  it("keeps an armed production checkout closed after legal publication", () => {
+    mockDocumentsApproved = true;
+    renderCheckout("adult_unlimited");
+
+    expect(screen.getByText(/Online membership purchase is currently closed/i))
+      .toBeInTheDocument();
+    expect(getCheckoutButton()).toHaveAccessibleName("Online purchase closed");
+    expect(getCheckoutButton()).toBeDisabled();
+    expect(screen.getByText(/No payment can be started from this page/i))
+      .toBeInTheDocument();
+  });
+
+  it("opens production presentation only when both public gates are open", () => {
+    mockDocumentsApproved = true;
+    mockFrontendPurchaseEnabled = true;
+    renderCheckout("adult_unlimited");
+
+    expect(screen.queryByText(/Checkout closed/i)).not.toBeInTheDocument();
+    expect(getCheckoutButton()).toHaveAccessibleName("Continue to Stripe — £0 today");
+  });
+
   it("waits for Auth to resolve before fixing the checkout identity", () => {
+    mockLocalJourneyEnabled = true;
     mockAuthLoading = true;
     renderCheckout("adult_unlimited");
 
@@ -317,6 +351,7 @@ describe("MembershipCheckout", () => {
   });
 
   it("makes the presale charge and service date explicit before Stripe", () => {
+    mockLocalJourneyEnabled = true;
     renderCheckout("adult_unlimited");
 
     expect(screen.getByText("£0 charged")).toBeInTheDocument();
@@ -338,6 +373,7 @@ describe("MembershipCheckout", () => {
 
   it("returns to standard prorated checkout after the presale boundary", () => {
     jest.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-02T09:00:00.000Z"));
+    mockLocalJourneyEnabled = true;
     renderCheckout("adult_unlimited");
 
     expect(screen.queryByText("£0 charged")).not.toBeInTheDocument();

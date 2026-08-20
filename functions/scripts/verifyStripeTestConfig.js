@@ -12,7 +12,6 @@ const {
   EXISTING_MEMBER_OFFER,
   MEMBERSHIP_PLANS,
   PLAN_KEYS,
-  PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
   PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
 } = require("../lib/membershipPlans");
 const {redactProviderSecrets, stripeCliTestKey} = require("./stripeCliTestKey");
@@ -145,7 +144,7 @@ async function main() {
       couponIdForPromotionCode(promotionCode) === coupon.id &&
       promotionCode.max_redemptions === null &&
       isValidRedemptionCount(promotionCode.times_redeemed) &&
-      promotionCode.expires_at === PRESALE_BILLING_ANCHOR_UNIX_SECONDS &&
+      promotionCode.expires_at === null &&
       promotionCode.customer === null &&
       promotionCode.customer_account === null &&
       restrictions.first_time_transaction === false &&

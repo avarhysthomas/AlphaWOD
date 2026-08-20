@@ -28,7 +28,7 @@ export const EXISTING_MEMBER_OFFER = {
   currency: BILLING_CURRENCY,
   durationMonths: 3,
   redemptionClosesAtUnixSeconds: PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
-  promotionCodeExpiresAtUnixSeconds: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+  promotionCodeExpiresAtUnixSeconds: null,
 } as const;
 
 /** Catalogue schema version frozen into every checkout commercial snapshot. */

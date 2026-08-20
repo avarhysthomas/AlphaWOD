@@ -1,10 +1,24 @@
 # Production billing operations
 
 This is a preparation runbook, not deployment authorisation. The checked-in
-production examples keep `MEMBERSHIP_PURCHASE_ENABLED=false`, the legal source
-gate remains closed, and `ops/monitoring/billing-alerts.json` is deliberately a
-template. No alert, notification channel, budget, Stripe object, Firebase
-resource or Vercel deployment is created by this repository change.
+production examples keep both `MEMBERSHIP_PURCHASE_ENABLED=false` and
+`REACT_APP_MEMBERSHIP_PURCHASE_ENABLED=false`, the legal source gate remains
+closed, and `ops/monitoring/billing-alerts.json` is deliberately a template. No
+alert, notification channel, budget, Stripe object, Firebase resource or Vercel
+deployment is created by this repository change.
+
+Verified live prerequisite state as of 20 August 2026: Coupon
+`zaf_existing_member_5off_3mo_2026` and Promotion Code
+`promo_1U6EsgFzNDZoGGA0DjPqkz08` (`ZALOYALTY`) are active, restricted through
+the Adult Unlimited Product and have no automatic expiry; Portal configuration
+`bpc_1U6SIkFzNDZoGGA0mSE5EepR` is locked down; and webhook endpoint
+`we_1U6SObFzNDZoGGA0cw5Yyqth` is active with the exact 14-event allowlist.
+Enabled Secret Manager versions exist for the Stripe API, webhook-signing and
+checkout-rate-limit secrets. The public `stripeWebhook` receiver is active on
+Node.js 24 in `europe-west1`; GET `405` and unsigned POST `400` probes passed.
+These probes do not prove a signed delivery or payment journey. The legal and
+purchase gates remain closed, and all membership callables and workers remain
+undeployed.
 
 ## Release preflights
 
@@ -16,7 +30,8 @@ npm run lint
 npm run test:ci
 npm run test:infrastructure
 npm run verify:monitoring
-npm run build
+npm run build:production
+npm run verify:frontend-production-closed
 
 npm ci --prefix functions
 npm run lint --prefix functions
@@ -24,12 +39,21 @@ npm test --prefix functions
 npm run verify:production-config --prefix functions
 ```
 
-`verify:production-config` reads `functions/.env.production` when it exists. It
-requires the exact production Firebase project, live Stripe mode, a bare HTTPS
-origin, distinct non-placeholder Price IDs, the Portal/Coupon/Promotion Code
-IDs, a real sender, no provider host override and both purchase gates closed.
-It rejects every checked-in sandbox Stripe object. Keep the populated file out
-of Git and prefer the deployed Functions environment/secret store.
+Run the frontend production build with the exact reviewed Vercel Production
+environment. For Functions, create the project-specific, git-ignored deployment
+parameter file once and fill only its non-secret values:
+
+```sh
+cp functions/.env.production.example functions/.env.alphawod-d1f2f
+```
+
+Firebase CLI 15.5.1 loads `.env.alphawod-d1f2f` for project
+`alphawod-d1f2f`; it does not treat `.env.production` as that project's deploy
+environment. `verify:production-config` reads the same file and requires the
+exact production project, live Stripe mode, a bare HTTPS origin, exact approved
+Price IDs, the Portal/Coupon/Promotion Code IDs, a real sender, no provider host
+override and both purchase gates closed. It rejects every checked-in sandbox
+Stripe object. Keep secrets in Secret Manager, not this file.
 
 After an authorised operator has created the live Stripe catalogue, expose a
 live restricted/read key to one process (not a file or shell history) and run:
@@ -38,22 +62,37 @@ live restricted/read key to one process (not a file or shell history) and run:
 npm run verify:stripe-live-config --prefix functions
 ```
 
-That command is read-only. It retrieves every live Price and Product, the
+That command is read-only. It requires the exact reviewed mapping frozen in
+`functions/src/stripeLiveCatalog.ts`, retrieves every live Price and Product, the
 product-scoped three-month Coupon, the one active shared Promotion Code and the
 locked-down Customer Portal configuration. It exits before reporting success
 if any object is inactive, in test mode, has the wrong commercial terms or
-enables subscription changes. The purchase gates must still be closed.
+enables subscription changes. Both campaign objects must have no automatic
+expiry; the application cutoff remains fixed and staff deactivate the exact
+Promotion Code when the campaign is finished. The purchase gates must still be
+closed.
 
 Vercel uses `npm run build:production`. That build refuses placeholders,
-emulator flags, the local membership test journey, the wrong Firebase project,
+emulator flags, the local membership test journey, the wrong Firebase boundary,
 and any Vercel Preview wired to production Firebase. Configure the variables in
-`.env.production.example` only for Vercel's Production environment. Configure a
-separate Firebase project before enabling preview deployments.
+`.env.production.example` only for Vercel's Production environment. A Preview
+build is accepted only when it has its own complete non-production Firebase web
+configuration and both local/test switches remain closed.
+
+The repository does not contain the Vercel project link or control its external
+Production-branch and environment settings. Before any production deployment,
+record and independently verify the connected project, Production branch,
+canonical domain, complete Production variables and commit SHA being deployed.
+Treat any unknown binding as a blocker. The staging publication uses
+`REACT_APP_MEMBERSHIP_PURCHASE_ENABLED=false`; use
+`npm run verify:frontend-production-closed` in that exact environment before the
+deployment.
 
 Before deploying checkout, register the production web app with Firebase App
 Check using a reCAPTCHA Enterprise key restricted to the production domain.
-Set `MEMBERSHIP_CHECKOUT_APP_ID` to that exact Firebase web app ID and create a
-32-byte-or-longer `MEMBERSHIP_CHECKOUT_RATE_LIMIT_SECRET` in Secret Manager.
+Set `MEMBERSHIP_CHECKOUT_APP_ID` to that exact Firebase web app ID. An enabled
+`MEMBERSHIP_CHECKOUT_RATE_LIMIT_SECRET` version exists; verify the deployed
+checkout identity can access it without reading or logging its value.
 Grant the deployed checkout service account the Firebase App Check token
 verifier role. Do not register localhost on the production key; local emulator
 testing bypasses enforcement.
@@ -124,9 +163,65 @@ while a scheduled worker is unhealthy.
 Monitoring, live-object verification and a deployed staging run are necessary
 but not sufficient. Legal publication, the staffed cooling-off refund and
 inbound-email cancellation operations, and every open launch blocker in
-`phase-1-rollout.md` remain mandatory. Open the source document gate and runtime
-purchase gate only in the final ordered rollout after explicit approval.
+`phase-1-rollout.md` remain mandatory. Publish and deploy the approved document
+registry and compatible frontend first while
+`MEMBERSHIP_PURCHASE_ENABLED=false` and
+`REACT_APP_MEMBERSHIP_PURCHASE_ENABLED=false`, then run:
 
-Rollback means closing the runtime purchase gate and, if discount abuse is in
-scope, deactivating the shared live Promotion Code. Keep webhooks, scheduled
-recovery and confirmation delivery active for purchases already in flight.
+```sh
+npm run verify:published-legal
+npm run verify:production-armed-config --prefix functions
+```
+
+Deploy the webhook, workers and callables in the rollout guide's closed-state
+batches, re-block then deliberately restore only the reviewed callable services,
+and complete the closed-state smoke tests. Only after every blocker and explicit
+approval, set
+`MEMBERSHIP_PURCHASE_ENABLED=true` in the git-ignored
+`functions/.env.alphawod-d1f2f`, run the final configuration check and deploy
+only the intake function:
+
+```sh
+npm run verify:production-open-config --prefix functions
+firebase deploy --only functions:createMembershipCheckoutSession --project alphawod-d1f2f
+```
+
+Editing the dotenv file alone changes nothing. Firebase applies the parameter
+only when the function is redeployed. Verify the backend opening before exposing
+the public purchase controls. Then set
+`REACT_APP_MEMBERSHIP_PURCHASE_ENABLED=true` in the confirmed Vercel Production
+environment, run the open-frontend check there and deploy the same reviewed
+commit through the confirmed Production workflow:
+
+```sh
+npm run verify:frontend-production-open
+```
+
+Record the resulting production deployment and smoke-test the public catalogue,
+checkout transport and one deliberately controlled live purchase. Changing a
+Vercel environment variable without a new production deployment does not change
+the already-built frontend.
+
+To rollback, close the backend first: set `MEMBERSHIP_PURCHASE_ENABLED=false`,
+verify the armed state and redeploy that same intake function:
+
+```sh
+npm run verify:production-armed-config --prefix functions
+firebase deploy --only functions:createMembershipCheckoutSession --project alphawod-d1f2f
+```
+
+Confirm that new checkout intake now fails closed. Then set
+`REACT_APP_MEMBERSHIP_PURCHASE_ENABLED=false` in Vercel Production, run the
+closed-frontend check and redeploy the same reviewed commit so the public UI also
+closes:
+
+```sh
+npm run verify:frontend-production-closed
+```
+
+If discount abuse is in scope, deactivate the shared live Promotion Code too.
+At the planned campaign end, deactivate that exact Code manually even if no
+abuse occurred. Do not delete the Coupon while an already-created Checkout or
+delayed webhook may still require its immutable terms for validation.
+Keep webhooks, scheduled recovery and confirmation delivery active for
+purchases already in flight.

@@ -66,11 +66,11 @@ For Adult Unlimited, enter the explicitly test-only shared code
 The hosted Stripe promotion-code box is deliberately disabled because it
 cannot be restricted to this campaign. The app stops accepting the shared code
 for new registrations at the local opening cutoff. The provider-side Promotion
-Code expires one hour later at the fixed Stripe billing anchor, and its
-underlying Coupon deliberately has no `redeem_by` timestamp. This keeps an
-already-open presale Session valid and prevents the Coupon expiring before the
-deferred subscription's first invoice. The test code must never be presented as
-a live customer code. A successful application freezes a
+Code has no `expires_at`, and its underlying Coupon deliberately has no
+`redeem_by` timestamp. Staff deactivate the shared Code manually when the
+campaign is finished; this does not alter the application's fixed cutoff and
+keeps an already-open presale Session valid. The test code must never be
+presented as a live customer code. A successful application freezes a
 schedule of £55 on 1 September, 1 October and 1 November, followed by the base
 £60 price from 1 December.
 
@@ -140,9 +140,10 @@ a deployed staging environment, or change either normal purchase gate.
 - Presale signup and the app's acceptance of the shared code close at **1
   September 2026 00:00 Europe/London** (`2026-08-31T23:00:00Z`, Unix
   `1788217200`).
-- The Coupon has no Stripe `redeem_by`. Its only active shared Promotion Code
-  expires at the fixed billing anchor (`1788220800`), one hour after the app
-  cutoff. The application cutoff remains the customer-facing policy boundary.
+- The Coupon has no Stripe `redeem_by`, and its only active shared Promotion
+  Code has no `expires_at`. Staff deactivate the Code manually when the
+  campaign finishes. The application cutoff remains the customer-facing policy
+  boundary regardless of provider object lifetime.
 - A buyer who creates their presale intent before that cutoff may finish the
   already-open Stripe Session until five minutes before the billing anchor
   (`1788220500`, 00:55 BST). New intents at or after the cutoff use standard
@@ -171,5 +172,6 @@ changing the Product/Price mapping:
 - completion of every remaining launch blocker in the Phase 1 rollout.
 
 Never reuse the CLI listener secret, test Portal configuration, test Prices or
-test customers/subscriptions in live mode. Product IDs are not entered in the
-app: each configured Price is expanded to its Product and both are validated.
+test customers/subscriptions in live mode. Operators configure the five live
+Price IDs; the corresponding approved live Product IDs are frozen server-side.
+Each Price is expanded to its Product and both exact objects are validated.

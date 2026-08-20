@@ -4,7 +4,12 @@ const assert = require("node:assert/strict");
 const {createHash} = require("node:crypto");
 const test = require("node:test");
 
-const {__testing: membershipTesting} = require("../lib/membership");
+const {
+  __testing: membershipTesting,
+  buildClaimMembership,
+  buildCreateMembershipCheckoutSession,
+  buildLinkMembershipParticipant,
+} = require("../lib/membership");
 const {
   CHECKOUT_DOCUMENT_CONTENT_BUDGET_BYTES,
   CHECKOUT_DOCUMENTS,
@@ -207,6 +212,22 @@ test("secrets are omitted only for the exact isolated demo emulator", () => {
     restoreEnvironment(original);
   }
 });
+
+test(
+  "eligibility-aware callables reserve timeout headroom after contention",
+  () => {
+    const converge = async () => undefined;
+    const callables = [
+      buildCreateMembershipCheckoutSession(converge),
+      buildClaimMembership(converge),
+      buildLinkMembershipParticipant(async () => undefined, converge),
+    ];
+
+    for (const callable of callables) {
+      assert.equal(callable.__endpoint.timeoutSeconds, 540);
+    }
+  }
+);
 
 test(
   "checkout App Check accepts only a fresh token from the configured web app",

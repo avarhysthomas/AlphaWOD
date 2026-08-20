@@ -1,46 +1,43 @@
-# Getting Started with Create React App
+# AlphaWOD
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+React and Firebase application for Zero Alpha Fitness, including the public
+membership catalogue, Stripe Billing checkout, account management and staff
+tools. Use Node 24.
 
-## Available Scripts
+## Local development
 
-In the project directory, you can run:
+```sh
+npm install
+npm start
+```
 
-### `npm start`
+For the isolated real Stripe test-mode membership journey, follow
+[`docs/billing/local-stripe-test-journey.md`](docs/billing/local-stripe-test-journey.md)
+and run `npm run stripe:test`.
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
+## Verification
 
-The page will reload if you make edits.\
-You will also see any lint errors in the console.
+```sh
+npm run lint
+npm run test:ci
+npm run test:infrastructure
+npm run verify:monitoring
+npm run build
+npm run lint --prefix functions
+npm test --prefix functions
+```
 
-### `npm test`
+`npm run build` is a local build only. Production builds must use
+`npm run build:production` with the reviewed Vercel Production environment.
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+## Release safety
 
-### `npm run build`
-
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
-
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
-
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
-
-### `npm run eject`
-
-**Note: this is a one-way operation. Once you `eject`, you can’t go back!**
-
-If you aren’t satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
-
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you’re on your own.
-
-You don’t have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn’t feel obligated to use this feature. However we understand that this tool wouldn’t be useful if you couldn’t customize it when you are ready for it.
-
-## Learn More
-
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
+Start with [`docs/billing/production-operations.md`](docs/billing/production-operations.md)
+and [`docs/billing/phase-1-rollout.md`](docs/billing/phase-1-rollout.md). Billing
+uses independent legal-publication, frontend-visibility and backend-runtime
+purchase gates. A Git commit, push or merge
+does not deploy Firebase Functions, rules, indexes or secrets; those require the
+explicit selective operator steps in the runbook. A merge to the Vercel
+production branch may deploy the frontend according to the connected Vercel
+project, so keep its Production environment reviewed and its billing gates
+closed until launch approval.

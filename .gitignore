@@ -10,6 +10,11 @@
 
 # production
 /build
+/.vercel
+/.firebase
+/.runtimeconfig.json
+/.firebase-emulator-data
+/firebase-export
 
 # misc
 .DS_Store
@@ -29,6 +34,8 @@ firebase-debug.log*
 **/firebase-debug.log*
 firestore-debug.log
 **/firestore-debug.log
+**/firebase-export
+**/.firebase-emulator-data
 
 # Stripe and Functions runtime configuration.
 # Secrets themselves live in Secret Manager (firebase functions:secrets:set),

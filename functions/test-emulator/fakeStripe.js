@@ -53,6 +53,9 @@ function createFakeStripe() {
     disputes: new Map(),
     portalSessions: [],
     events: new Map(),
+    delayedSubscriptionRetrieves: new Map(),
+    failedSubscriptionRetrieves: new Map(),
+    subscriptionRetrieveCounts: new Map(),
     prices,
     coupons: new Map([["coupon_existing_member_5x3", {
       id: "coupon_existing_member_5x3",
@@ -76,7 +79,7 @@ function createFakeStripe() {
       active: true,
       code: "EXISTING-FAKE",
       max_redemptions: null,
-      expires_at: 1788220800,
+      expires_at: null,
       times_redeemed: 0,
       promotion: {type: "coupon", coupon: "coupon_existing_member_5x3"},
       restrictions: {
@@ -311,6 +314,31 @@ function createFakeStripe() {
         const subscription = state.subscriptions.get(id);
         if (!subscription) return notFound(`No such subscription: ${id}`);
 
+        if (req.method === "GET") {
+          state.subscriptionRetrieveCounts.set(
+            id,
+            (state.subscriptionRetrieveCounts.get(id) || 0) + 1
+          );
+          const retrieveFailure = state.failedSubscriptionRetrieves.get(id);
+          if (retrieveFailure) {
+            state.failedSubscriptionRetrieves.delete(id);
+            const fail = () => send(retrieveFailure.status, {
+              error: {
+                type: "invalid_request_error",
+                message: retrieveFailure.message,
+              },
+            });
+            return retrieveFailure.delayMs > 0 ?
+              setTimeout(fail, retrieveFailure.delayMs) : fail();
+          }
+
+          const retrieveDelayMs = state.delayedSubscriptionRetrieves.get(id);
+          if (retrieveDelayMs > 0) {
+            state.delayedSubscriptionRetrieves.delete(id);
+            return setTimeout(() => send(200, subscription), retrieveDelayMs);
+          }
+        }
+
         if (req.method === "POST") {
           state.updates.push({path, payload});
           if (payload.cancel_at) subscription.cancel_at = Number(payload.cancel_at);
@@ -409,6 +437,18 @@ function createFakeStripe() {
       };
       state.subscriptions.set(id, subscription);
       return subscription;
+    },
+    /** Delays one authoritative GET so concurrency tests hold the lease. */
+    delayNextSubscriptionRetrieve(id, delayMs) {
+      state.delayedSubscriptionRetrieves.set(id, delayMs);
+    },
+    /** Fails one authoritative GET, optionally after holding the lease. */
+    failNextSubscriptionRetrieve(id, {
+      delayMs = 0,
+      status = 400,
+      message = "Injected subscription retrieval failure",
+    } = {}) {
+      state.failedSubscriptionRetrieves.set(id, {delayMs, status, message});
     },
     setEvent(event) {
       state.events.set(event.id, event);

@@ -2,7 +2,6 @@ import React, { useMemo, useRef, useState } from "react";
 import { Link, Navigate, useParams } from "react-router-dom";
 import { useAuth } from "../../../context/AuthContext";
 import {
-  CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION,
   COMPANY,
   EXISTING_MEMBER_OFFER,
   MEMBERSHIP_PLANS,
@@ -24,7 +23,7 @@ import {
   type CheckoutAttempt,
   type CheckoutDetails,
 } from "../services/membership";
-import { LOCAL_MEMBERSHIP_TEST_JOURNEY_ENABLED } from "../localTestJourney";
+import {MEMBERSHIP_PURCHASE_AVAILABILITY} from "../purchaseAvailability";
 
 const CARD =
   "rounded-[28px] border border-white/10 bg-[#151311] p-7 shadow-[0_26px_80px_rgba(0,0,0,0.42)]";
@@ -63,6 +62,11 @@ export default function MembershipCheckout() {
   const checkoutAttempt = useRef<CheckoutAttempt | null>(null);
 
   const plan = isPlanKey(planKey) ? MEMBERSHIP_PLANS[planKey] : null;
+  const {
+    checkoutEnabled,
+    documentsApproved,
+    localTestJourneyEnabled,
+  } = MEMBERSHIP_PURCHASE_AVAILABILITY;
   const isYouth = plan?.audience === "youth";
   const presale = isFoundingPresale();
   const promotionCodeAvailable =
@@ -108,8 +112,7 @@ export default function MembershipCheckout() {
     acceptedStatements[id] === true
   );
   const canSubmit =
-    (CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION ||
-      LOCAL_MEMBERSHIP_TEST_JOURNEY_ENABLED) &&
+    checkoutEnabled &&
     participantFullName.trim().length >= 2 &&
     age !== null &&
     !ageMismatch &&
@@ -227,28 +230,29 @@ export default function MembershipCheckout() {
           </dl>
         )}
 
-        {!CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION &&
-          LOCAL_MEMBERSHIP_TEST_JOURNEY_ENABLED && (
+        {localTestJourneyEnabled && (
           <div className="mt-7 rounded-[28px] border border-sky-400/30 bg-sky-400/10 p-6">
             <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-sky-200">
               Local Stripe test journey
             </p>
             <p className="mt-3 text-sm leading-7 text-sky-50/85">
               Test mode only: use a Stripe test card. No real payment or live membership
-              will be created. The documents shown below are still drafts.
+              will be created. {!documentsApproved &&
+                "The documents shown below are still drafts."}
             </p>
           </div>
         )}
 
-        {!CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION &&
-          !LOCAL_MEMBERSHIP_TEST_JOURNEY_ENABLED && (
+        {!checkoutEnabled && (
           <div className="mt-7 rounded-[28px] border border-amber-500/25 bg-amber-500/10 p-6">
             <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-amber-200">
               Checkout closed
             </p>
             <p className="mt-3 text-sm leading-7 text-amber-50/85">
-              The membership documents are still in legal review, so online purchase is not
-              open. Contact{" "}
+              {documentsApproved
+                ? "Online membership purchase is currently closed. "
+                : "The membership documents are still in legal review, so online purchase is not open. "}
+              Contact{" "}
               <a
                 className="underline decoration-amber-400/40 underline-offset-4"
                 href={`mailto:${COMPANY.supportEmail}`}
@@ -547,14 +551,17 @@ export default function MembershipCheckout() {
             disabled={!canSubmit}
             className="w-full rounded-2xl bg-white px-5 py-4 text-sm font-bold uppercase tracking-[0.14em] text-black transition disabled:cursor-not-allowed disabled:bg-white/25 disabled:text-white/45"
           >
-            {authLoading ?
+            {!checkoutEnabled ?
+              "Online purchase closed" : authLoading ?
               "Checking account…" : submitting ?
                 "Starting Stripe checkout…" : presale ?
                   "Continue to Stripe — £0 today" : "Subscribe and pay"}
           </button>
 
           <p className="text-center text-xs leading-6 text-white/40">
-            {presale
+            {!checkoutEnabled
+              ? "Online checkout is closed. No payment can be started from this page."
+              : presale
               ? "Stripe will show £0 due today, save your payment method and show 1 September 2026 as the first monthly payment date. Do not confirm if those details are different."
               : "You will review the exact initial charge, monthly price and first full billing date on Stripe’s secure checkout before paying."}
           </p>

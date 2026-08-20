@@ -13,17 +13,15 @@ const {
   EXISTING_MEMBER_OFFER,
   MEMBERSHIP_PLANS,
   PLAN_KEYS,
-  PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
 } = require("../lib/membershipPlans");
 const {
-  PRICE_ENV_KEYS,
-  assertProductionPreparationConfig,
+  assertProductionClosedConfig,
 } = require("./verifyProductionConfig");
+const {
+  APPROVED_LIVE_STRIPE_CATALOGUE,
+  matchesApprovedLiveStripeCatalogueEntry,
+} = require("../lib/stripeLiveCatalog");
 const {redactProviderSecrets} = require("./stripeCliTestKey");
-
-const PRICE_ENV_BY_PLAN = Object.fromEntries(
-  PLAN_KEYS.map((planKey, index) => [planKey, PRICE_ENV_KEYS[index]])
-);
 
 function couponIdForPromotionCode(promotionCode) {
   return typeof promotionCode.promotion?.coupon === "string" ?
@@ -35,7 +33,7 @@ function isValidRedemptionCount(value) {
 }
 
 async function main() {
-  const environment = assertProductionPreparationConfig(process.env, {
+  const environment = assertProductionClosedConfig(process.env, {
     documentsApproved: CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION,
   });
   const key = process.env.STRIPE_SECRET_KEY?.trim();
@@ -51,7 +49,8 @@ async function main() {
 
   for (const planKey of PLAN_KEYS) {
     const plan = MEMBERSHIP_PLANS[planKey];
-    const priceId = environment[PRICE_ENV_BY_PLAN[planKey]];
+    const approved = APPROVED_LIVE_STRIPE_CATALOGUE[planKey];
+    const priceId = environment[approved.priceEnvKey];
     const price = await stripe.prices.retrieve(priceId, {expand: ["product"]});
     const product = typeof price.product === "object" && price.product &&
       !price.product.deleted ? price.product : null;
@@ -64,7 +63,7 @@ async function main() {
       price.recurring?.interval_count === 1 &&
       product?.livemode === true &&
       product.active === true &&
-      product.name === plan.name;
+      matchesApprovedLiveStripeCatalogueEntry(price, product, approved);
     if (!valid) {
       throw new Error(`${planKey} does not match the approved LIVE catalogue.`);
     }
@@ -94,7 +93,7 @@ async function main() {
     couponIdForPromotionCode(promotionCode) !== coupon.id ||
     promotionCode.max_redemptions !== null ||
     !isValidRedemptionCount(promotionCode.times_redeemed) ||
-    promotionCode.expires_at !== PRESALE_BILLING_ANCHOR_UNIX_SECONDS ||
+    promotionCode.expires_at !== null ||
     promotionCode.customer !== null || promotionCode.customer_account !== null ||
     restrictions.first_time_transaction !== false ||
     restrictions.minimum_amount !== null ||

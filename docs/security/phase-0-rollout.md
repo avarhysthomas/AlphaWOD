@@ -330,9 +330,10 @@ firebase deploy \
 ```
 
 Deploy the frontend through the existing Vercel production workflow only after
-the final rules are live. This repository currently has no checked-in Vercel
-configuration, so confirm the production project, environment, and SPA rewrite
-behaviour in Vercel before that deployment.
+the final rules are live. The checked-in `vercel.json` selects the guarded
+production build and SPA rewrite, but the operator must still confirm the
+connected production project, branch and environment in Vercel before that
+deployment.
 
 Do not redeploy the maintenance-lockdown rules as a general rollback after final
 cutover; they intentionally make protected app data unavailable.

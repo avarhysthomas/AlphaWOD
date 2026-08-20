@@ -343,6 +343,20 @@ async function accessOf(uid) {
   };
 }
 
+async function waitForConvergenceLease(subscriptionId, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const snapshot = await db.collection("memberships").doc(subscriptionId).get();
+    const token = snapshot.get("convergenceLeaseToken");
+    const expiresAt = snapshot.get("convergenceLeaseExpiresAt");
+    if (typeof token === "string" && expiresAt) return {token, expiresAt};
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for ${subscriptionId} convergence lease.`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 test.before(async () => {
   fakeStripe = createFakeStripe();
   await fakeStripe.listen(STRIPE_PORT);
@@ -520,6 +534,7 @@ test("the checkout core creates one Stripe session and reuses it on retry", asyn
         "session_id={CHECKOUT_SESSION_ID}&plan=adult_unlimited"
     );
     assert.equal(sent.payload.payment_method_collection, "always");
+    assert.equal(sent.payload["adaptive_pricing[enabled]"], "false");
     assert.equal(sent.payload.allow_promotion_codes, undefined);
     assert.equal(sent.payload["discounts[0][promotion_code]"], undefined);
     assert.equal(sent.payload["subscription_data[proration_behavior]"], "none");
@@ -781,7 +796,7 @@ test("capped and malformed shared campaign counters fail closed", async () => {
   }
 });
 
-test("shared campaign provider expiry cannot precede the deferred anchor", async () => {
+test("shared campaign objects reject automatic provider expiry", async () => {
   const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
     () => undefined
   );
@@ -805,10 +820,10 @@ test("shared campaign provider expiry cannot precede the deferred anchor", async
     );
 
     Object.assign(coupon, originalCoupon);
-    promotion.expires_at = PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS;
+    promotion.expires_at = PRESALE_BILLING_ANCHOR_UNIX_SECONDS;
     await assert.rejects(
       () => handler(request({
-        ...validCheckoutData("attempt_promotion_expiry_before_anchor_123456"),
+        ...validCheckoutData("attempt_promotion_automatic_expiry_123456"),
         promotionCode: "EXISTING-FAKE",
       })),
       /not valid for the founding-member offer/i
@@ -895,7 +910,7 @@ test("unknown and unrelated campaign codes fail before reservation or Stripe", a
     active: true,
     code: "UNRELATED-FAKE",
     max_redemptions: null,
-    expires_at: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+    expires_at: null,
     times_redeemed: 0,
     promotion: {type: "coupon", coupon: "coupon_unrelated_campaign"},
     restrictions: {
@@ -911,7 +926,7 @@ test("unknown and unrelated campaign codes fail before reservation or Stripe", a
     active: true,
     code: "CURRENCY-MINIMUM-FAKE",
     max_redemptions: null,
-    expires_at: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+    expires_at: null,
     times_redeemed: 0,
     promotion: {type: "coupon", coupon: "coupon_existing_member_5x3"},
     restrictions: {
@@ -928,7 +943,7 @@ test("unknown and unrelated campaign codes fail before reservation or Stripe", a
     active: true,
     code: "MATCHING-NOT-ALLOWLISTED",
     max_redemptions: null,
-    expires_at: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+    expires_at: null,
     times_redeemed: 0,
     promotion: {type: "coupon", coupon: "coupon_existing_member_5x3"},
     restrictions: {
@@ -2010,7 +2025,7 @@ test("an approved existing-member code freezes the three-payment £55 schedule",
   }
 });
 
-test("a discounted Session can complete after cutoff and fulfil after code expiry", async () => {
+test("a discounted Session can complete after cutoff and fulfil after manual code deactivation", async () => {
   const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
     () => undefined
   );
@@ -2048,8 +2063,8 @@ test("a discounted Session can complete after cutoff and fulfil after code expir
       }],
     });
 
-    // The Promotion Code has now expired. This is a delayed delivery of an
-    // already-applied redemption, not a new redemption.
+    // Staff have now deactivated the Promotion Code. This is a delayed
+    // delivery of an already-applied redemption, not a new redemption.
     promotion.active = false;
     promotion.times_redeemed = 1;
     Date.now = () => (PRESALE_BILLING_ANCHOR_UNIX_SECONDS + 60) * 1000;
@@ -2420,6 +2435,7 @@ test("concurrent same-session claims are both idempotent for one owner", async (
     emailVerified: false,
   });
   await seedMembership("sub_claim_concurrent");
+  fakeStripe.delayNextSubscriptionRetrieve("sub_claim_concurrent", 250);
 
   const claims = await Promise.all([
     claimMembership(
@@ -2440,6 +2456,170 @@ test("concurrent same-session claims are both idempotent for one owner", async (
   assert.equal(matching.docs[0].get("payerUid"), "concurrentbuyer");
   assert.equal(matching.docs[0].get("entitlementTargetUid"), "concurrentbuyer");
   assert.equal((await accessOf("concurrentbuyer")).alphaWodAccess, true);
+});
+
+test("eligibility contention accepts its exact completion near the wait deadline", async () => {
+  const subscriptionId = "sub_contention_completed";
+  await seedMembership(subscriptionId);
+  fakeStripe.delayNextSubscriptionRetrieve(subscriptionId, 300);
+
+  const owner = membershipTesting.convergeMembershipFromStripe(
+    subscriptionId,
+    async () => undefined
+  );
+  const collision = await waitForConvergenceLease(subscriptionId);
+  const waiter = membershipTesting.convergeEligibilityMembershipFromStripe(
+    subscriptionId,
+    async () => undefined,
+    {waitMs: 500, initialBackoffMs: 10, maxBackoffMs: 25}
+  );
+
+  await Promise.all([owner, waiter]);
+  const completed = await db.collection("memberships").doc(subscriptionId).get();
+  assert.equal(
+    completed.get("convergenceCompletedLeaseToken"),
+    collision.token
+  );
+  assert.equal(completed.get("convergenceLeaseToken"), undefined);
+  assert.equal(fakeStripe.state.subscriptionRetrieveCounts.get(subscriptionId), 1);
+});
+
+test("eligibility contention fails closed when its exact lease is released", async () => {
+  const subscriptionId = "sub_contention_failed";
+  await seedMembership(subscriptionId);
+  fakeStripe.failNextSubscriptionRetrieve(subscriptionId, {
+    delayMs: 150,
+    message: "Injected authoritative retrieval failure",
+  });
+
+  const owner = membershipTesting.convergeMembershipFromStripe(
+    subscriptionId,
+    async () => undefined
+  );
+  const collision = await waitForConvergenceLease(subscriptionId);
+  const waiterStartedAt = Date.now();
+  const waiter = membershipTesting.convergeEligibilityMembershipFromStripe(
+    subscriptionId,
+    async () => undefined,
+    {waitMs: 1000, initialBackoffMs: 10, maxBackoffMs: 25}
+  );
+  const [ownerResult, waiterResult] = await Promise.allSettled([owner, waiter]);
+
+  assert.equal(ownerResult.status, "rejected");
+  assert.match(ownerResult.reason.message, /Injected authoritative retrieval failure/);
+  assert.equal(waiterResult.status, "rejected");
+  assert.match(waiterResult.reason.message, /without completing/i);
+  assert.ok(Date.now() - waiterStartedAt < 1000);
+  const released = await db.collection("memberships").doc(subscriptionId).get();
+  assert.equal(released.get("convergenceLeaseToken"), undefined);
+  assert.notEqual(
+    released.get("convergenceCompletedLeaseToken"),
+    collision.token
+  );
+  assert.equal(fakeStripe.state.subscriptionRetrieveCounts.get(subscriptionId), 1);
+});
+
+test("eligibility contention rejects a stale completion marker", async () => {
+  const subscriptionId = "sub_contention_stale_completion";
+  const staleToken = "stale_completed_lease";
+  await seedMembership(subscriptionId, {
+    convergenceCompletedLeaseToken: staleToken,
+  });
+  fakeStripe.failNextSubscriptionRetrieve(subscriptionId, {
+    delayMs: 150,
+    message: "Injected authoritative retrieval failure after stale marker",
+  });
+
+  const owner = membershipTesting.convergeMembershipFromStripe(
+    subscriptionId,
+    async () => undefined
+  );
+  const collision = await waitForConvergenceLease(subscriptionId);
+  assert.notEqual(collision.token, staleToken);
+  const waiter = membershipTesting.convergeEligibilityMembershipFromStripe(
+    subscriptionId,
+    async () => undefined,
+    {waitMs: 1000, initialBackoffMs: 10, maxBackoffMs: 25}
+  );
+  const [ownerResult, waiterResult] = await Promise.allSettled([owner, waiter]);
+
+  assert.equal(ownerResult.status, "rejected");
+  assert.equal(waiterResult.status, "rejected");
+  assert.match(waiterResult.reason.message, /without completing/i);
+  const released = await db.collection("memberships").doc(subscriptionId).get();
+  assert.equal(released.get("convergenceCompletedLeaseToken"), staleToken);
+  assert.equal(released.get("convergenceLeaseToken"), undefined);
+  assert.equal(fakeStripe.state.subscriptionRetrieveCounts.get(subscriptionId), 1);
+});
+
+test("eligibility contention rejects a replacement lease", async () => {
+  const subscriptionId = "sub_contention_replacement";
+  const originalToken = "original_active_lease";
+  const originalExpiresAtMillis = Date.now() + 2000;
+  await seedMembership(subscriptionId, {
+    convergenceLeaseToken: originalToken,
+    convergenceLeaseExpiresAt: admin.firestore.Timestamp.fromMillis(
+      originalExpiresAtMillis
+    ),
+  });
+
+  const rejection = assert.rejects(
+    membershipTesting.convergeEligibilityMembershipFromStripe(
+      subscriptionId,
+      async () => undefined,
+      {waitMs: 1000, initialBackoffMs: 5, maxBackoffMs: 10}
+    ),
+    /without completing/i
+  );
+  await new Promise((resolve) => setTimeout(resolve, 75));
+  const replacementToken = "replacement_active_lease";
+  await db.collection("memberships").doc(subscriptionId).set({
+    convergenceLeaseToken: replacementToken,
+    convergenceLeaseExpiresAt: admin.firestore.Timestamp.fromMillis(
+      Date.now() + 2000
+    ),
+  }, {merge: true});
+
+  await rejection;
+  const replaced = await db.collection("memberships").doc(subscriptionId).get();
+  assert.equal(replaced.get("convergenceLeaseToken"), replacementToken);
+  assert.notEqual(replaced.get("convergenceCompletedLeaseToken"), originalToken);
+  assert.equal(
+    fakeStripe.state.subscriptionRetrieveCounts.get(subscriptionId),
+    undefined
+  );
+});
+
+test("eligibility contention stays bounded by the colliding lease expiry", async () => {
+  const subscriptionId = "sub_contention_expired";
+  await seedMembership(subscriptionId);
+  const leaseToken = "lease_that_never_completes";
+  const leaseExpiresAtMillis = Date.now() + 250;
+  await db.collection("memberships").doc(subscriptionId).set({
+    convergenceLeaseToken: leaseToken,
+    convergenceLeaseExpiresAt: admin.firestore.Timestamp.fromMillis(
+      leaseExpiresAtMillis
+    ),
+  }, {merge: true});
+
+  const startedAt = Date.now();
+  await assert.rejects(
+    () => membershipTesting.convergeEligibilityMembershipFromStripe(
+      subscriptionId,
+      async () => undefined,
+      {waitMs: 1000, initialBackoffMs: 10, maxBackoffMs: 25}
+    ),
+    /contention deadline/i
+  );
+
+  assert.ok(Date.now() - startedAt < 1000);
+  const expired = await db.collection("memberships").doc(subscriptionId).get();
+  assert.equal(expired.get("convergenceLeaseToken"), leaseToken);
+  assert.notEqual(expired.get("convergenceCompletedLeaseToken"), leaseToken);
+  assert.equal(
+    fakeStripe.state.subscriptionRetrieveCounts.get(subscriptionId),
+    undefined
+  );
 });
 
 test("an unverified email cannot claim a purchase without the session id", async () => {
