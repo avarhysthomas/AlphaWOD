@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useParams } from "react-router-dom";
 import { useAuth } from "../../../context/AuthContext";
 import {
@@ -31,6 +31,23 @@ const EYEBROW = "text-[12px] font-bold uppercase tracking-[0.28em] text-white/34
 const FIELD =
   "mt-2 w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none transition focus:border-white/30";
 const LABEL = "block text-[11px] font-semibold uppercase tracking-[0.2em] text-white/45";
+const PRIMARY_ACTION =
+  "inline-flex min-h-11 items-center justify-center rounded-xl bg-amber-100 px-4 py-3 text-sm font-bold text-amber-950 transition hover:bg-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-100";
+const SECONDARY_ACTION =
+  "inline-flex min-h-11 items-center justify-center rounded-xl border border-amber-100/25 px-4 py-3 text-sm font-semibold text-amber-50 transition hover:border-amber-100/50 hover:bg-amber-100/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-100";
+
+type CheckoutBlockReason =
+  | "checkout_in_progress"
+  | "checkout_processing"
+  | "membership_exists";
+
+function resolveCheckoutBlockReason(error: unknown): CheckoutBlockReason | null {
+  const candidate = error as {details?: {reason?: unknown} | null} | null;
+  const reason = candidate?.details?.reason;
+  return reason === "checkout_in_progress" ||
+    reason === "checkout_processing" ||
+    reason === "membership_exists" ? reason : null;
+}
 
 function isBillingPolicyChanged(error: unknown): boolean {
   const candidate = error as {
@@ -59,7 +76,14 @@ export default function MembershipCheckout() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [billingPolicyChanged, setBillingPolicyChanged] = useState(false);
+  const [checkoutBlockReason, setCheckoutBlockReason] =
+    useState<CheckoutBlockReason | null>(null);
   const checkoutAttempt = useRef<CheckoutAttempt | null>(null);
+  const checkoutBlockRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (checkoutBlockReason) checkoutBlockRef.current?.focus();
+  }, [checkoutBlockReason]);
 
   const plan = isPlanKey(planKey) ? MEMBERSHIP_PLANS[planKey] : null;
   const {
@@ -121,6 +145,7 @@ export default function MembershipCheckout() {
     signatureMatches &&
     !authLoading &&
     !billingPolicyChanged &&
+    !checkoutBlockReason &&
     !submitting;
 
   const handleSubmit = async (event: React.FormEvent) => {
@@ -175,6 +200,15 @@ export default function MembershipCheckout() {
     } catch (submitError: unknown) {
       const code = (submitError as {code?: unknown} | null)?.code;
       const policyChanged = isBillingPolicyChanged(submitError);
+      const blockReason = resolveCheckoutBlockReason(submitError);
+      if (blockReason) {
+        // These are authoritative, recoverable server states. Keep the browser's
+        // attempt verifier so the original Checkout can still be reconciled.
+        setCheckoutBlockReason(blockReason);
+        setError("");
+        setSubmitting(false);
+        return;
+      }
       if (typeof code === "string" &&
         !policyChanged &&
         (code.includes("deadline-exceeded") || code.includes("failed-precondition"))) {
@@ -540,6 +574,68 @@ export default function MembershipCheckout() {
             </div>
           )}
 
+          {checkoutBlockReason && (
+            <div
+              ref={checkoutBlockRef}
+              tabIndex={-1}
+              role={checkoutBlockReason === "checkout_processing" ? "status" : "alert"}
+              aria-labelledby="checkout-block-title"
+              aria-describedby="checkout-block-description"
+              className="rounded-2xl border border-amber-500/25 bg-amber-500/10 p-5 text-amber-50 outline-none focus-visible:ring-2 focus-visible:ring-amber-100"
+            >
+              <h2 id="checkout-block-title" className="font-semibold">
+                {checkoutBlockReason === "checkout_in_progress"
+                  ? "Checkout unavailable"
+                  : checkoutBlockReason === "checkout_processing"
+                    ? "Checkout submitted"
+                    : "Membership already set up"}
+              </h2>
+              <p id="checkout-block-description" className="mt-2 text-sm leading-6 text-amber-50/85">
+                {checkoutBlockReason === "checkout_in_progress"
+                  ? "A checkout or membership setup is already in progress for these details. If you just left Stripe, return to the original tab. Otherwise, wait a moment and check again, or contact us if you need help."
+                  : checkoutBlockReason === "checkout_processing"
+                    ? "Stripe has submitted your checkout and we’re waiting for confirmation. Do not start another checkout while it is being confirmed."
+                    : "This account or participant already has an active or scheduled membership. We haven’t opened another checkout."}
+              </p>
+              <div className="mt-4 flex flex-wrap gap-3">
+                {checkoutBlockReason === "checkout_in_progress" && (
+                  <button
+                    type="button"
+                    onClick={() => window.history.go(0)}
+                    className={PRIMARY_ACTION}
+                  >
+                    Check again
+                  </button>
+                )}
+                {checkoutBlockReason === "checkout_processing" && (
+                  <Link to="/account/membership" className={PRIMARY_ACTION}>
+                    Check membership status
+                  </Link>
+                )}
+                {checkoutBlockReason === "membership_exists" && user && (
+                  <Link to="/account/membership" className={PRIMARY_ACTION}>
+                    Manage membership
+                  </Link>
+                )}
+                {(checkoutBlockReason !== "membership_exists" || !user) && (
+                  <a
+                    href={`mailto:${COMPANY.supportEmail}`}
+                    className={checkoutBlockReason === "checkout_processing" ||
+                      checkoutBlockReason === "checkout_in_progress" ?
+                      SECONDARY_ACTION : PRIMARY_ACTION}
+                  >
+                    Contact support
+                  </a>
+                )}
+                {checkoutBlockReason === "membership_exists" && user && (
+                  <a href={`mailto:${COMPANY.supportEmail}`} className={SECONDARY_ACTION}>
+                    Contact support
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
+
           {error && (
             <div role="alert" className="rounded-2xl border border-red-500/25 bg-red-500/10 p-4 text-sm leading-6 text-red-100">
               {error}
@@ -554,8 +650,11 @@ export default function MembershipCheckout() {
             {!checkoutEnabled ?
               "Online purchase closed" : authLoading ?
               "Checking account…" : submitting ?
-                "Starting Stripe checkout…" : presale ?
-                  "Continue to Stripe — £0 today" : "Subscribe and pay"}
+                "Starting Stripe checkout…" : checkoutBlockReason === "checkout_in_progress" ?
+                  "Checkout unavailable" : checkoutBlockReason === "checkout_processing" ?
+                    "Checkout confirmation pending" : checkoutBlockReason === "membership_exists" ?
+                      "Membership already set up" : presale ?
+                        "Continue to Stripe — £0 today" : "Subscribe and pay"}
           </button>
 
           <p className="text-center text-xs leading-6 text-white/40">

@@ -231,11 +231,27 @@ export default function Memberships() {
         )}
 
         {checkoutCancelled && (
-          <div className="mt-7 rounded-[28px] border border-white/10 bg-[#151311] p-6">
-            <p className="text-sm leading-7 text-white/70">
-              Checkout was cancelled and you have not been charged. Pick a membership below
-              to try again; no payment method was saved.
+          <div
+            role="status"
+            aria-labelledby="checkout-return-title"
+            className="mt-7 rounded-[28px] border border-amber-500/25 bg-amber-500/10 p-6 text-amber-50"
+          >
+            <h2 id="checkout-return-title" className="font-semibold">
+              Checkout may still be open
+            </h2>
+            <p className="mt-2 text-sm leading-7 text-amber-50/85">
+              Using Back in Stripe returns you here, but it does not cancel or expire the
+              checkout. Use the original Stripe tab or your browser&rsquo;s Back control to
+              return to it, or contact us if you need help confirming its status.
             </p>
+            <div className="mt-4">
+              <a
+                href={`mailto:${COMPANY.supportEmail}`}
+                className="inline-flex min-h-11 items-center justify-center rounded-xl bg-amber-100 px-4 py-3 text-sm font-bold text-amber-950 transition hover:bg-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-100"
+              >
+                Contact support
+              </a>
+            </div>
           </div>
         )}
 

@@ -111,10 +111,21 @@ describe("Memberships presale presentation", () => {
       .toBeGreaterThan(0);
   });
 
-  it("says a cancelled Stripe checkout saved no payment method", () => {
+  it("explains that Stripe Back preserves checkout without navigating history", () => {
     mockSearchParams = "checkout=cancelled";
     render(<Memberships />);
 
-    expect(screen.getByText(/no payment method was saved/i)).toBeInTheDocument();
+    const panel = screen.getByRole("status", {name: "Checkout may still be open"});
+    expect(panel).toHaveTextContent(/does not cancel or expire the checkout/i);
+    expect(panel).toHaveTextContent(/original Stripe tab.*browser’s Back control/i);
+    expect(panel).toHaveTextContent(/help confirming its status/i);
+    expect(panel).not.toHaveTextContent(/No membership has been created/i);
+    expect(screen.queryByText(/Checkout was cancelled/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Pick a membership below to try again/i))
+      .not.toBeInTheDocument();
+    expect(screen.queryByRole("button", {name: /Return to Stripe/i}))
+      .not.toBeInTheDocument();
+    expect(screen.getByRole("link", {name: "Contact support"}))
+      .toHaveAttribute("href", "mailto:support@zeroalphafitness.co.uk");
   });
 });

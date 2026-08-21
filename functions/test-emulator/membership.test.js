@@ -536,6 +536,714 @@ test("the checkout core creates one Stripe session and reuses it on retry", asyn
   }
 });
 
+test("an anonymous same-attempt retry returns Stripe's current open Session URL", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  try {
+    const data = validCheckoutData("attempt_same_anonymous_current_url_123456");
+    const sessionsBefore = fakeStripe.state.checkoutSessions.size;
+    const first = await handler(request(data));
+    const providerSession = fakeStripe.state.checkoutSessions.get(first.sessionId);
+    providerSession.url = `${first.sessionUrl}?provider=current`;
+    // Stripe can assign a Customer after the visitor enters Checkout details;
+    // this does not turn an anonymous attempt into an authenticated one.
+    providerSession.customer = "cus_created_during_anonymous_checkout";
+    fakeStripe.state.checkoutSessions.set(first.sessionId, providerSession);
+
+    const retry = await handler(request(data));
+
+    assert.equal(retry.disposition, "created");
+    assert.equal(retry.sessionId, first.sessionId);
+    assert.equal(retry.sessionUrl, providerSession.url);
+    assert.notEqual(retry.sessionUrl, first.sessionUrl);
+    assert.equal(fakeStripe.state.checkoutSessions.size, sessionsBefore + 1);
+    assert.equal((await db.collection("membershipIntents").get()).size, 1);
+    const locks = await db.collection("membershipCheckoutLocks").get();
+    assert.equal(locks.size, 1);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("an anonymous same-attempt retry rejects authenticated Stripe bindings", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  try {
+    const data = validCheckoutData("attempt_same_anonymous_binding_123456");
+    const first = await handler(request(data));
+    const session = fakeStripe.state.checkoutSessions.get(first.sessionId);
+    session.metadata.firebaseUid = "unexpected-account";
+    fakeStripe.state.checkoutSessions.set(first.sessionId, session);
+
+    const assertReview = (error) => {
+      assert.equal(error.code, "failed-precondition");
+      assert.equal(error.details?.reason, "checkout_recovery_review");
+      return true;
+    };
+    await assert.rejects(() => handler(request(data)), assertReview);
+
+    delete session.metadata.firebaseUid;
+    session.client_reference_id = "unexpected-account";
+    fakeStripe.state.checkoutSessions.set(first.sessionId, session);
+    await assert.rejects(() => handler(request(data)), assertReview);
+
+    const intent = (await db.collection("membershipIntents").get()).docs[0];
+    assert.equal(intent.get("status"), "created");
+    const locks = await db.collection("membershipCheckoutLocks").get();
+    assert.equal(locks.size, 1);
+    assert.ok(locks.docs.every((lock) => lock.get("intentId") === intent.id));
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("a completed same-attempt retry reports processing and never reuses its URL", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  try {
+    await createMember("sameattemptprocessing");
+    const data = validCheckoutData("attempt_same_complete_processing_123456");
+    const first = await handler(request(data, "sameattemptprocessing"));
+    const session = fakeStripe.state.checkoutSessions.get(first.sessionId);
+    session.status = "complete";
+    session.payment_status = "paid";
+    fakeStripe.state.checkoutSessions.set(first.sessionId, session);
+
+    const assertProcessing = (error) => {
+      assert.equal(error.code, "failed-precondition");
+      assert.equal(error.details?.reason, "checkout_processing");
+      return true;
+    };
+    await assert.rejects(
+      () => handler(request(data, "sameattemptprocessing")),
+      assertProcessing
+    );
+
+    const intent = (await db.collection("membershipIntents").get()).docs[0];
+    assert.equal(intent.get("status"), "payment_pending");
+    const locks = await db.collection("membershipCheckoutLocks").get();
+    assert.equal(locks.size, 2);
+    assert.ok(locks.docs.every((lock) => lock.get("intentId") === intent.id));
+
+    // Once the webhook-facing state is already processing or fulfilled, the
+    // handler must not need a hosted Session URL to avoid redirecting back to
+    // a completed Checkout page.
+    fakeStripe.state.checkoutSessions.delete(first.sessionId);
+    await assert.rejects(
+      () => handler(request(data, "sameattemptprocessing")),
+      assertProcessing
+    );
+    await intent.ref.update({status: "fulfilled"});
+    await assert.rejects(
+      () => handler(request(data, "sameattemptprocessing")),
+      assertProcessing
+    );
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("an expired same-attempt Session is terminalized before its locks release", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  try {
+    const data = validCheckoutData("attempt_same_expired_terminal_123456");
+    const first = await handler(request(data));
+    const session = fakeStripe.state.checkoutSessions.get(first.sessionId);
+    session.status = "expired";
+    fakeStripe.state.checkoutSessions.set(first.sessionId, session);
+
+    await assert.rejects(
+      () => handler(request(data)),
+      (error) => {
+        assert.equal(error.code, "deadline-exceeded");
+        assert.equal(error.details?.reason, "checkout_expired");
+        return true;
+      }
+    );
+
+    const intent = (await db.collection("membershipIntents").get()).docs[0];
+    assert.equal(intent.get("status"), "expired");
+    assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 0);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("provider uncertainty on a same-attempt retry fails closed with locks retained", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  try {
+    const data = validCheckoutData("attempt_same_provider_uncertain_123456");
+    const first = await handler(request(data));
+    fakeStripe.state.checkoutSessions.delete(first.sessionId);
+
+    await assert.rejects(
+      () => handler(request(data)),
+      (error) => {
+        assert.equal(error.code, "unavailable");
+        assert.equal(error.details?.reason, "checkout_recovery_unavailable");
+        return true;
+      }
+    );
+
+    const intent = (await db.collection("membershipIntents").get()).docs[0];
+    assert.equal(intent.get("status"), "created");
+    const locks = await db.collection("membershipCheckoutLocks").get();
+    assert.equal(locks.size, 1);
+    assert.ok(locks.docs.every((lock) => lock.get("intentId") === intent.id));
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("a new checkout attempt resumes the exact signed-in owner's open Stripe Session", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  try {
+    await createMember("resumeowner");
+    const sessionsBefore = fakeStripe.state.checkoutSessions.size;
+    const first = await handler(request(
+      validCheckoutData("attempt_owned_resume_first_123456"),
+      "resumeowner"
+    ));
+    const providerSession = fakeStripe.state.checkoutSessions.get(first.sessionId);
+    providerSession.url = `${first.sessionUrl}?provider=current`;
+    fakeStripe.state.checkoutSessions.set(first.sessionId, providerSession);
+    const resumed = await handler(request(
+      validCheckoutData("attempt_owned_resume_second_123456"),
+      "resumeowner"
+    ));
+
+    assert.equal(resumed.disposition, "resumed");
+    assert.equal(resumed.sessionId, first.sessionId);
+    assert.equal(resumed.sessionUrl, providerSession.url);
+    assert.notEqual(resumed.sessionUrl, first.sessionUrl);
+    assert.equal(fakeStripe.state.checkoutSessions.size, sessionsBefore + 1);
+    const intents = await db.collection("membershipIntents").get();
+    assert.equal(intents.size, 1);
+    const locks = await db.collection("membershipCheckoutLocks").get();
+    assert.equal(locks.size, 2);
+    assert.ok(locks.docs.every((lock) => lock.get("intentId") === intents.docs[0].id));
+    assert.equal(
+      intents.docs[0].get("checkoutAttemptHash"),
+      createHash("sha256")
+        .update("membership-checkout:attempt_owned_resume_first_123456")
+        .digest("hex")
+    );
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("an anonymous new attempt cannot recover another anonymous checkout URL", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  try {
+    const sessionsBefore = fakeStripe.state.checkoutSessions.size;
+    await handler(request(validCheckoutData("attempt_anonymous_owner_first_123456")));
+
+    await assert.rejects(
+      () => handler(request(validCheckoutData("attempt_anonymous_owner_second_123456"))),
+      (error) => {
+        assert.equal(error.code, "already-exists");
+        assert.equal(error.details?.reason, "checkout_in_progress");
+        assert.match(error.message, /checkout or membership setup is already in progress/i);
+        return true;
+      }
+    );
+    assert.equal(fakeStripe.state.checkoutSessions.size, sessionsBefore + 1);
+    assert.equal((await db.collection("membershipIntents").get()).size, 1);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("signing in does not adopt an anonymous open checkout", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  try {
+    await createMember("anonymousadopter");
+    await handler(request(validCheckoutData("attempt_anonymous_adopt_first_123456")));
+
+    await assert.rejects(
+      () => handler(request(
+        validCheckoutData("attempt_anonymous_adopt_second_123456"),
+        "anonymousadopter"
+      )),
+      (error) => {
+        assert.equal(error.code, "already-exists");
+        assert.equal(error.details?.reason, "checkout_in_progress");
+        return true;
+      }
+    );
+    assert.equal((await db.collection("membershipIntents").get()).size, 1);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("a different signed-in account cannot recover an owner's checkout URL", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  try {
+    await createMember("checkoutowner");
+    await createMember("checkoutstranger");
+    const sessionsBefore = fakeStripe.state.checkoutSessions.size;
+    await handler(request(
+      validCheckoutData("attempt_different_uid_first_123456"),
+      "checkoutowner"
+    ));
+
+    await assert.rejects(
+      () => handler(request(
+        validCheckoutData("attempt_different_uid_second_123456"),
+        "checkoutstranger"
+      )),
+      (error) => {
+        assert.equal(error.code, "already-exists");
+        assert.equal(error.details?.reason, "checkout_in_progress");
+        return true;
+      }
+    );
+    assert.equal(fakeStripe.state.checkoutSessions.size, sessionsBefore + 1);
+    assert.equal((await db.collection("membershipIntents").get()).size, 1);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("anonymous callers cannot distinguish a membership from a checkout reservation", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  const captureRejection = async (operation) => {
+    try {
+      await operation();
+      assert.fail("Expected checkout admission to be rejected.");
+    } catch (error) {
+      return error;
+    }
+  };
+  const adultData = (checkoutAttemptId, participantFullName, participantDateOfBirth) => ({
+    ...validCheckoutData(checkoutAttemptId),
+    participantFullName,
+    participantDateOfBirth,
+    signedName: participantFullName,
+  });
+  try {
+    const memberData = adultData(
+      "attempt_private_anonymous_membership_123456",
+      "Private Existing Member",
+      "1990-02-03"
+    );
+    await seedMembership("sub_private_anonymous_membership", {
+      participant: {
+        fullName: memberData.participantFullName,
+        dateOfBirth: memberData.participantDateOfBirth,
+        age: 36,
+        isPayer: true,
+        participantKey: membershipTesting.participantKeyFor(
+          memberData.participantFullName,
+          memberData.participantDateOfBirth
+        ),
+      },
+    });
+    const membershipError = await captureRejection(
+      () => handler(request(memberData))
+    );
+
+    const reservationData = adultData(
+      "attempt_private_anonymous_reservation_first_123456",
+      "Private Pending Buyer",
+      "1991-03-04"
+    );
+    await handler(request(reservationData));
+    const reservationError = await captureRejection(() => handler(request({
+      ...reservationData,
+      checkoutAttemptId: "attempt_private_anonymous_reservation_second_123456",
+    })));
+
+    for (const error of [membershipError, reservationError]) {
+      assert.equal(error.code, "already-exists");
+      assert.equal(error.details?.reason, "checkout_in_progress");
+      assert.match(
+        error.message,
+        /checkout or membership setup is already in progress/i
+      );
+    }
+    assert.equal(membershipError.message, reservationError.message);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("a different UID cannot distinguish a membership from an owner's reservation", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  const captureRejection = async (operation) => {
+    try {
+      await operation();
+      assert.fail("Expected checkout admission to be rejected.");
+    } catch (error) {
+      return error;
+    }
+  };
+  const adultData = (checkoutAttemptId, participantFullName, participantDateOfBirth) => ({
+    ...validCheckoutData(checkoutAttemptId),
+    participantFullName,
+    participantDateOfBirth,
+    signedName: participantFullName,
+  });
+  try {
+    await createMember("privacyactualowner");
+    await createMember("privacyreservationowner");
+    await createMember("privacystranger");
+    const memberData = adultData(
+      "attempt_private_uid_membership_123456",
+      "UID Existing Member",
+      "1990-04-05"
+    );
+    await seedMembership("sub_private_uid_membership", {
+      payerUid: "privacyactualowner",
+      entitlementTargetUid: "privacyactualowner",
+      participant: {
+        fullName: memberData.participantFullName,
+        dateOfBirth: memberData.participantDateOfBirth,
+        age: 36,
+        isPayer: true,
+        participantKey: membershipTesting.participantKeyFor(
+          memberData.participantFullName,
+          memberData.participantDateOfBirth
+        ),
+      },
+    });
+    const membershipError = await captureRejection(
+      () => handler(request(memberData, "privacystranger"))
+    );
+
+    const reservationData = adultData(
+      "attempt_private_uid_reservation_first_123456",
+      "UID Pending Buyer",
+      "1991-05-06"
+    );
+    await handler(request(reservationData, "privacyreservationowner"));
+    const reservationError = await captureRejection(() => handler(request({
+      ...reservationData,
+      checkoutAttemptId: "attempt_private_uid_reservation_second_123456",
+    }, "privacystranger")));
+
+    for (const error of [membershipError, reservationError]) {
+      assert.equal(error.code, "already-exists");
+      assert.equal(error.details?.reason, "checkout_in_progress");
+    }
+    assert.equal(membershipError.message, reservationError.message);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("a signed payer or entitlement target receives membership_exists", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  const adultData = (checkoutAttemptId, participantFullName, participantDateOfBirth) => ({
+    ...validCheckoutData(checkoutAttemptId),
+    participantFullName,
+    participantDateOfBirth,
+    signedName: participantFullName,
+  });
+  try {
+    await createMember("privacyboundpayer");
+    await createMember("privacyboundtarget");
+    const payerData = adultData(
+      "attempt_private_bound_payer_123456",
+      "Bound Membership Payer",
+      "1990-06-07"
+    );
+    await seedMembership("sub_private_bound_payer", {
+      payerUid: "privacyboundpayer",
+      participant: {
+        fullName: payerData.participantFullName,
+        dateOfBirth: payerData.participantDateOfBirth,
+        age: 36,
+        isPayer: true,
+        participantKey: membershipTesting.participantKeyFor(
+          payerData.participantFullName,
+          payerData.participantDateOfBirth
+        ),
+      },
+    });
+    const targetData = adultData(
+      "attempt_private_bound_target_123456",
+      "Bound Entitlement Target",
+      "1991-07-08"
+    );
+    await seedMembership("sub_private_bound_target", {
+      payerUid: "another-payer",
+      entitlementTargetUid: "privacyboundtarget",
+      participant: {
+        fullName: targetData.participantFullName,
+        dateOfBirth: targetData.participantDateOfBirth,
+        age: 35,
+        isPayer: true,
+        participantKey: membershipTesting.participantKeyFor(
+          targetData.participantFullName,
+          targetData.participantDateOfBirth
+        ),
+      },
+    });
+
+    for (const [data, uid] of [
+      [payerData, "privacyboundpayer"],
+      [targetData, "privacyboundtarget"],
+    ]) {
+      await assert.rejects(
+        () => handler(request(data, uid)),
+        (error) => {
+          assert.equal(error.code, "already-exists");
+          assert.equal(error.details?.reason, "membership_exists");
+          assert.match(
+            error.message,
+            /already has an active or scheduled membership/i
+          );
+          return true;
+        }
+      );
+    }
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("an owner cannot resume a Session after changing frozen checkout details", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  try {
+    await createMember("youthresumeowner");
+    const youthData = {
+      ...validCheckoutData("attempt_changed_details_first_123456"),
+      planKey: "youth_teenstars",
+      participantFullName: "Same Young Athlete",
+      participantDateOfBirth: "2012-05-05",
+      participantIsPayer: false,
+      signedName: "Same Paying Adult",
+      guardianFullName: "Same Paying Adult",
+      guardianRelationship: "Parent",
+      acceptedStatementIds: resolveCheckoutAcceptanceStatements("youth_teenstars")
+        .map(({id}) => id),
+    };
+    const sessionsBefore = fakeStripe.state.checkoutSessions.size;
+    await handler(request(youthData, "youthresumeowner"));
+
+    await assert.rejects(
+      () => handler(request({
+        ...youthData,
+        checkoutAttemptId: "attempt_changed_details_second_123456",
+        guardianRelationship: "Legal guardian",
+      }, "youthresumeowner")),
+      (error) => {
+        assert.equal(error.code, "already-exists");
+        assert.equal(error.details?.reason, "checkout_in_progress");
+        return true;
+      }
+    );
+    assert.equal(fakeStripe.state.checkoutSessions.size, sessionsBefore + 1);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("a completed owned Session stays locked and reports checkout_processing", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  try {
+    await createMember("processingowner");
+    const first = await handler(request(
+      validCheckoutData("attempt_processing_first_123456"),
+      "processingowner"
+    ));
+    const session = fakeStripe.state.checkoutSessions.get(first.sessionId);
+    session.status = "complete";
+    session.payment_status = "paid";
+    fakeStripe.state.checkoutSessions.set(first.sessionId, session);
+
+    await assert.rejects(
+      () => handler(request(
+        validCheckoutData("attempt_processing_second_123456"),
+        "processingowner"
+      )),
+      (error) => {
+        assert.equal(error.code, "failed-precondition");
+        assert.equal(error.details?.reason, "checkout_processing");
+        return true;
+      }
+    );
+    const intent = (await db.collection("membershipIntents").get()).docs[0];
+    assert.equal(intent.get("status"), "payment_pending");
+    const locks = await db.collection("membershipCheckoutLocks").get();
+    assert.ok(locks.size > 0);
+    assert.ok(locks.docs.every((lock) => lock.get("intentId") === intent.id));
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("an expired owned Session releases only its locks and creates a fresh checkout", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  try {
+    await createMember("expiredresumeowner");
+    const sessionsBefore = fakeStripe.state.checkoutSessions.size;
+    const first = await handler(request(
+      validCheckoutData("attempt_expired_resume_first_123456"),
+      "expiredresumeowner"
+    ));
+    const oldSession = fakeStripe.state.checkoutSessions.get(first.sessionId);
+    oldSession.status = "expired";
+    fakeStripe.state.checkoutSessions.set(first.sessionId, oldSession);
+
+    const replacement = await handler(request(
+      validCheckoutData("attempt_expired_resume_second_123456"),
+      "expiredresumeowner"
+    ));
+
+    assert.equal(replacement.disposition, "created");
+    assert.notEqual(replacement.sessionId, first.sessionId);
+    assert.equal(fakeStripe.state.checkoutSessions.size, sessionsBefore + 2);
+    const intents = await db.collection("membershipIntents").get();
+    assert.equal(intents.size, 2);
+    assert.deepEqual(
+      intents.docs.map((intent) => intent.get("status")).sort(),
+      ["created", "expired"]
+    );
+    const replacementIntent = intents.docs.find((intent) =>
+      intent.get("checkoutSessionId") === replacement.sessionId
+    );
+    const locks = await db.collection("membershipCheckoutLocks").get();
+    assert.ok(replacementIntent);
+    assert.ok(locks.docs.every((lock) =>
+      lock.get("intentId") === replacementIntent.id
+    ));
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("provider uncertainty during owned resume fails closed and retains the locks", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  try {
+    await createMember("uncertainresumeowner");
+    const first = await handler(request(
+      validCheckoutData("attempt_uncertain_resume_first_123456"),
+      "uncertainresumeowner"
+    ));
+    fakeStripe.state.checkoutSessions.delete(first.sessionId);
+
+    await assert.rejects(
+      () => handler(request(
+        validCheckoutData("attempt_uncertain_resume_second_123456"),
+        "uncertainresumeowner"
+      )),
+      (error) => {
+        assert.equal(error.code, "unavailable");
+        assert.equal(error.details?.reason, "checkout_recovery_unavailable");
+        return true;
+      }
+    );
+    const intent = (await db.collection("membershipIntents").get()).docs[0];
+    assert.equal(intent.get("status"), "created");
+    const locks = await db.collection("membershipCheckoutLocks").get();
+    assert.ok(locks.size > 0);
+    assert.ok(locks.docs.every((lock) => lock.get("intentId") === intent.id));
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("an authenticated Stripe binding mismatch never returns the stored checkout URL", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  try {
+    await createMember("bindingresumeowner");
+    const first = await handler(request(
+      validCheckoutData("attempt_binding_resume_first_123456"),
+      "bindingresumeowner"
+    ));
+    const session = fakeStripe.state.checkoutSessions.get(first.sessionId);
+    session.metadata.firebaseUid = "another-account";
+    fakeStripe.state.checkoutSessions.set(first.sessionId, session);
+
+    await assert.rejects(
+      () => handler(request(
+        validCheckoutData("attempt_binding_resume_second_123456"),
+        "bindingresumeowner"
+      )),
+      (error) => {
+        assert.equal(error.code, "failed-precondition");
+        assert.equal(error.details?.reason, "checkout_recovery_review");
+        return true;
+      }
+    );
+    const intent = (await db.collection("membershipIntents").get()).docs[0];
+    assert.equal(intent.get("status"), "created");
+    const locks = await db.collection("membershipCheckoutLocks").get();
+    assert.ok(locks.docs.every((lock) => lock.get("intentId") === intent.id));
+  } finally {
+    Date.now = realNow;
+  }
+});
+
 test("checkout converges a stale terminal duplicate before admission", async () => {
   const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
     () => undefined
@@ -562,7 +1270,15 @@ test("checkout converges a stale terminal duplicate before admission", async () 
     // must be healed before the duplicate transaction is allowed to decide.
     await assert.rejects(
       () => handler(request(data)),
-      /already has an active or scheduled membership/i
+      (error) => {
+        assert.equal(error.code, "already-exists");
+        assert.equal(error.details?.reason, "checkout_in_progress");
+        assert.match(
+          error.message,
+          /checkout or membership setup is already in progress/i
+        );
+        return true;
+      }
     );
 
     assert.equal(
@@ -1314,7 +2030,7 @@ test("a mismatched Stripe price is rejected before checkout reserves identity", 
   }
 });
 
-test("an elapsed same-attempt retry keeps a completed Stripe session reserved", async () => {
+test("an elapsed same-attempt retry keeps a completed Stripe session processing", async () => {
   const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
     () => undefined
   );
@@ -1327,17 +2043,21 @@ test("an elapsed same-attempt retry keeps a completed Stripe session reserved", 
     const intentQuery = await db.collection("membershipIntents").get();
     assert.equal(intentQuery.size, 1);
     const intentRef = intentQuery.docs[0].ref;
-    await intentRef.set({
-      checkoutExpiresAt: Math.floor(fixedNow / 1000) - 1,
-    }, {merge: true});
     const session = fakeStripe.state.checkoutSessions.get(first.sessionId);
     session.status = "complete";
     session.payment_status = "paid";
     fakeStripe.state.checkoutSessions.set(first.sessionId, session);
+    Date.now = () => (session.expires_at + 1) * 1000;
 
-    const retry = await handler(request(data));
+    await assert.rejects(
+      () => handler(request(data)),
+      (error) => {
+        assert.equal(error.code, "failed-precondition");
+        assert.equal(error.details?.reason, "checkout_processing");
+        return true;
+      }
+    );
 
-    assert.equal(retry.sessionId, first.sessionId);
     assert.equal((await intentRef.get()).get("status"), "payment_pending");
     const locks = await db.collection("membershipCheckoutLocks").get();
     assert.equal(locks.size, 1);
@@ -4496,7 +5216,12 @@ test("an elapsed checkout lock is not reusable without terminal Stripe state", a
 
   await assert.rejects(
     () => membershipTesting.reserveCheckoutAttempt(replacementRef, replacement, now),
-    /already has an active or scheduled membership/i
+    (error) => {
+      assert.equal(error.code, "already-exists");
+      assert.equal(error.details?.reason, "checkout_in_progress");
+      assert.match(error.message, /checkout or membership setup is already in progress/i);
+      return true;
+    }
   );
 });
 
@@ -4525,7 +5250,15 @@ test("revoked access still blocks a replacement while Stripe billing is active",
       blockedIntent,
       Date.now()
     ),
-    /already has an active or scheduled membership/i
+    (error) => {
+      assert.equal(error.code, "already-exists");
+      assert.equal(error.details?.reason, "checkout_in_progress");
+      assert.match(
+        error.message,
+        /checkout or membership setup is already in progress/i
+      );
+      return true;
+    }
   );
 
   await db.collection("memberships").doc("sub_revoked_still_billing").set({

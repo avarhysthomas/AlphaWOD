@@ -245,10 +245,14 @@ function createFakeStripe() {
           metadata: {
             intentId: payload["metadata[intentId]"],
             planKey: payload["metadata[planKey]"],
+            ...(payload["metadata[firebaseUid]"] ? {
+              firebaseUid: payload["metadata[firebaseUid]"],
+            } : {}),
           },
+          client_reference_id: payload.client_reference_id || null,
           subscription_data_anchor: payload["subscription_data[billing_cycle_anchor]"],
           proration_behavior: payload["subscription_data[proration_behavior]"],
-          expires_at: payload.expires_at,
+          expires_at: Number(payload.expires_at),
           customer: payload.customer || null,
           status: "open",
           payment_status: "unpaid",

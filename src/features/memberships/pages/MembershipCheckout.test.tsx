@@ -115,6 +115,15 @@ async function acceptAllCheckoutStatements() {
   }
 }
 
+function structuredCheckoutFailure(
+  reason: "checkout_in_progress" | "checkout_processing" | "membership_exists"
+) {
+  return Object.assign(new Error(`RAW ${reason} server message`), {
+    code: "functions/failed-precondition",
+    details: {reason},
+  });
+}
+
 describe("MembershipCheckout", () => {
   it("keeps checkout closed when the legal publication source gate is disabled", () => {
     renderCheckout("adult_unlimited");
@@ -465,6 +474,95 @@ describe("MembershipCheckout", () => {
     expect(screen.getByRole("button", {name: "Refresh and review"})).toBeInTheDocument();
     expect(getCheckoutButton()).toBeDisabled();
     expect(mockClearCheckoutAttempt).not.toHaveBeenCalled();
+  });
+
+  it("shows a privacy-safe checkout conflict without retiring its verifier", async () => {
+    const reload = jest.spyOn(window.history, "go").mockImplementation(() => undefined);
+    mockLocalJourneyEnabled = true;
+    mockCreateCheckout.mockRejectedValue(
+      structuredCheckoutFailure("checkout_in_progress")
+    );
+    renderCheckout("adult_unlimited");
+
+    await submitAdultCheckout();
+
+    const panel = await screen.findByRole("alert", {name: "Checkout unavailable"});
+    expect(panel).toHaveFocus();
+    expect(panel).toHaveTextContent(/checkout or membership setup is already in progress/i);
+    expect(panel).toHaveTextContent(/return to the original tab/i);
+    expect(panel).not.toHaveTextContent(/No membership has been created/i);
+    expect(screen.queryByText(/RAW checkout_in_progress server message/i))
+      .not.toBeInTheDocument();
+    expect(screen.getByRole("link", {name: "Contact support"}))
+      .toHaveAttribute("href", "mailto:support@zeroalphafitness.co.uk");
+    await userEvent.click(screen.getByRole("button", {name: "Check again"}));
+    expect(reload).toHaveBeenCalledWith(0);
+    const blockedSubmit = screen.getByRole("button", {
+      name: "Checkout unavailable",
+    });
+    expect(blockedSubmit).toBeDisabled();
+    await userEvent.click(blockedSubmit);
+    expect(mockCreateCheckout).toHaveBeenCalledTimes(1);
+    expect(mockClearCheckoutAttempt).not.toHaveBeenCalled();
+  });
+
+  it("shows checkout processing as a non-retryable membership-status route", async () => {
+    mockLocalJourneyEnabled = true;
+    mockCreateCheckout.mockRejectedValue(
+      structuredCheckoutFailure("checkout_processing")
+    );
+    renderCheckout("adult_unlimited");
+
+    await submitAdultCheckout();
+
+    const panel = await screen.findByRole("status", {name: "Checkout submitted"});
+    expect(panel).toHaveFocus();
+    expect(panel).toHaveTextContent(/Do not start another checkout/i);
+    expect(screen.queryByText(/RAW checkout_processing server message/i))
+      .not.toBeInTheDocument();
+    expect(screen.getByRole("link", {name: "Check membership status"}))
+      .toHaveAttribute("href", "/account/membership");
+    expect(screen.getByRole("button", {name: "Checkout confirmation pending"}))
+      .toBeDisabled();
+    expect(mockClearCheckoutAttempt).not.toHaveBeenCalled();
+  });
+
+  it("routes a signed-in customer with an existing membership to management", async () => {
+    mockLocalJourneyEnabled = true;
+    mockCreateCheckout.mockRejectedValue(
+      structuredCheckoutFailure("membership_exists")
+    );
+    renderCheckout("adult_unlimited");
+
+    await submitAdultCheckout();
+
+    const panel = await screen.findByRole("alert", {name: "Membership already set up"});
+    expect(panel).toHaveTextContent(/active or scheduled membership/i);
+    expect(screen.queryByText(/RAW membership_exists server message/i))
+      .not.toBeInTheDocument();
+    expect(screen.getByRole("link", {name: "Manage membership"}))
+      .toHaveAttribute("href", "/account/membership");
+    expect(screen.getByRole("link", {name: "Contact support"}))
+      .toHaveAttribute("href", "mailto:support@zeroalphafitness.co.uk");
+    expect(screen.getByRole("button", {name: "Membership already set up"}))
+      .toBeDisabled();
+  });
+
+  it("offers support rather than account management to a signed-out existing member", async () => {
+    mockLocalJourneyEnabled = true;
+    mockSignedIn = false;
+    mockCreateCheckout.mockRejectedValue(
+      structuredCheckoutFailure("membership_exists")
+    );
+    renderCheckout("adult_unlimited");
+
+    await submitAdultCheckout();
+
+    await screen.findByRole("alert", {name: "Membership already set up"});
+    expect(screen.queryByRole("link", {name: "Manage membership"}))
+      .not.toBeInTheDocument();
+    expect(screen.getByRole("link", {name: "Contact support"}))
+      .toHaveAttribute("href", "mailto:support@zeroalphafitness.co.uk");
   });
 
   it("shows a no-charge billing setup error and retires the failed attempt", async () => {

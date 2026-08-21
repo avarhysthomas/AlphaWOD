@@ -1496,7 +1496,25 @@ type CheckoutLockSpec = {
 type CheckoutReservationResult = {
   created: boolean;
   intent: MembershipIntentDoc;
+  intentRef: DocumentReference;
+  disposition: "created" | "same_attempt" | "owned_resume_candidate";
 };
+
+function membershipExistsError(): HttpsError {
+  return new HttpsError(
+    "already-exists",
+    POLICY_TEXT.duplicateBlocked,
+    {reason: "membership_exists"}
+  );
+}
+
+function checkoutInProgressError(): HttpsError {
+  return new HttpsError(
+    "already-exists",
+    "A checkout or membership setup is already in progress for these details. Wait before trying again or contact support.",
+    {reason: "checkout_in_progress"}
+  );
+}
 
 /**
  * A purchase can be anonymous, so participant identity is always locked. A
@@ -1673,7 +1691,12 @@ async function reserveCheckoutAttempt(
           "This checkout attempt was already used with different membership details."
         );
       }
-      return {created: false, intent: stored};
+      return {
+        created: false,
+        intent: stored,
+        intentRef,
+        disposition: "same_attempt" as const,
+      };
     }
 
     // All reads precede every write, as Firestore transactions require.
@@ -1715,13 +1738,27 @@ async function reserveCheckoutAttempt(
       snap.exists ? snap.get("status") as MembershipIntentDoc["status"] : null,
     ]));
 
-    const sameParticipant = byParticipant.docs.some(isBlockingMembershipDoc);
-    const sameAlphaWodPayer = Boolean(byPayer?.docs.some((doc) =>
+    const blockingParticipantDocs = byParticipant.docs.filter(
+      isBlockingMembershipDoc
+    );
+    const blockingPayerDocs = (byPayer?.docs ?? []).filter((doc) =>
       isBlockingMembershipDoc(doc) && doc.get("grantsAlphaWodAccess") === true
-    )) || Boolean(byTarget?.docs.some((doc) =>
+    );
+    const blockingTargetDocs = (byTarget?.docs ?? []).filter((doc) =>
       isBlockingMembershipDoc(doc) && doc.get("grantsAlphaWodAccess") === true
-    )) || entitlementOwner?.ownerMembershipBlocks === true;
-    const unsafeReservation = lockSnaps.some((snap) => {
+    );
+    const membershipBlocks = blockingParticipantDocs.length > 0 ||
+      blockingPayerDocs.length > 0 || blockingTargetDocs.length > 0 ||
+      entitlementOwner?.ownerMembershipBlocks === true;
+    const membershipIsBoundToAuthenticatedPayer = Boolean(
+      proposedIntent.payerUid && (
+        [...blockingParticipantDocs, ...blockingPayerDocs, ...blockingTargetDocs]
+          .some((doc) => doc.get("payerUid") === proposedIntent.payerUid ||
+            doc.get("entitlementTargetUid") === proposedIntent.payerUid) ||
+        entitlementOwner?.ownerMembershipBlocks === true
+      )
+    );
+    const blockingLockSnaps = lockSnaps.filter((snap) => {
       if (!snap.exists) return false;
       const expiresAt = timestampMillis(snap.get("expiresAt"));
       if (expiresAt === null || expiresAt > nowMillis) return true;
@@ -1735,8 +1772,58 @@ async function reserveCheckoutAttempt(
       return ownerStatus !== "expired" && ownerStatus !== "failed";
     });
 
-    if (sameParticipant || sameAlphaWodPayer || unsafeReservation) {
-      throw new HttpsError("already-exists", POLICY_TEXT.duplicateBlocked);
+    if (membershipBlocks) {
+      throw membershipIsBoundToAuthenticatedPayer ?
+        membershipExistsError() : checkoutInProgressError();
+    }
+
+    if (blockingLockSnaps.length > 0) {
+      const blockingOwnerIds = [...new Set(blockingLockSnaps.flatMap((snap) =>
+        typeof snap.get("intentId") === "string" ?
+          [snap.get("intentId") as string] : []
+      ))];
+      const resumeOwnerId = blockingOwnerIds.length === 1 ?
+        blockingOwnerIds[0] : null;
+      const resumeOwner = resumeOwnerId ? priorIntentSnaps.find((snap) =>
+        snap.id === resumeOwnerId
+      ) : null;
+      const resumeIntent = resumeOwner?.exists ?
+        resumeOwner.data() as MembershipIntentDoc : null;
+      const expectedLockIds = lockRefs.map((ref) => ref.id).sort();
+      const storedLockIds = resumeIntent &&
+          Array.isArray(resumeIntent.reservationLockIds) ?
+        [...resumeIntent.reservationLockIds].sort() : [];
+      const ownsEveryExpectedLock = Boolean(resumeOwnerId) &&
+        lockSnaps.every((snap) =>
+          snap.exists && snap.get("intentId") === resumeOwnerId
+        );
+      const hasExactLockSet = expectedLockIds.length === storedLockIds.length &&
+        expectedLockIds.every((id, index) => id === storedLockIds[index]);
+      const resumableByOwner = Boolean(
+        proposedIntent.payerUid &&
+        resumeOwnerId &&
+        resumeIntent &&
+        ownsEveryExpectedLock &&
+        hasExactLockSet &&
+        resumeIntent.payerUid === proposedIntent.payerUid &&
+        resumeIntent.requestFingerprint === proposedIntent.requestFingerprint &&
+        resumeIntent.stripeMode === proposedIntent.stripeMode &&
+        resumeIntent.status === "created" &&
+        typeof resumeIntent.checkoutSessionId === "string" &&
+        resumeIntent.checkoutSessionId &&
+        typeof resumeIntent.checkoutSessionUrl === "string" &&
+        resumeIntent.checkoutSessionUrl
+      );
+
+      if (resumableByOwner && resumeOwner && resumeIntent) {
+        return {
+          created: false,
+          intent: resumeIntent,
+          intentRef: resumeOwner.ref,
+          disposition: "owned_resume_candidate" as const,
+        };
+      }
+      throw checkoutInProgressError();
     }
 
     tx.create(intentRef, proposedIntent);
@@ -1753,7 +1840,12 @@ async function reserveCheckoutAttempt(
       });
     });
 
-    return {created: true, intent: proposedIntent};
+    return {
+      created: true,
+      intent: proposedIntent,
+      intentRef,
+      disposition: "created" as const,
+    };
   });
 }
 
@@ -1956,6 +2048,271 @@ async function reconcileExpiredCheckoutReservations(
       console.error("Checkout reservation verification failed", ownerId, error);
     }
   }
+}
+
+type OwnedCheckoutResumeOutcome =
+  | {kind: "open"; session: Stripe.Checkout.Session}
+  | {kind: "expired"};
+
+function checkoutProcessingError(): HttpsError {
+  return new HttpsError(
+    "failed-precondition",
+    "This checkout has already been submitted and Stripe is processing it. Check your membership account before trying again.",
+    {reason: "checkout_processing"}
+  );
+}
+
+function checkoutRecoveryUnavailableError(): HttpsError {
+  return new HttpsError(
+    "unavailable",
+    "The existing Stripe checkout could not be verified safely. Try again shortly or contact support.",
+    {reason: "checkout_recovery_unavailable"}
+  );
+}
+
+function checkoutRecoveryReviewError(): HttpsError {
+  return new HttpsError(
+    "failed-precondition",
+    "The existing Stripe checkout no longer matches this membership request. Contact support before trying again.",
+    {reason: "checkout_recovery_review"}
+  );
+}
+
+function checkoutRecoveryProviderDiagnostic(error: unknown): Record<string, unknown> {
+  const candidate = error as {
+    name?: unknown;
+    type?: unknown;
+    code?: unknown;
+    statusCode?: unknown;
+    requestId?: unknown;
+  } | null;
+  const safeText = (value: unknown) =>
+    typeof value === "string" ? value.slice(0, 120) : null;
+  return {
+    name: safeText(candidate?.name),
+    type: safeText(candidate?.type),
+    code: safeText(candidate?.code),
+    statusCode: typeof candidate?.statusCode === "number" ?
+      candidate.statusCode : null,
+    requestId: safeText(candidate?.requestId),
+  };
+}
+
+function checkoutSessionCommonBindingMismatch(
+  session: Stripe.Checkout.Session,
+  intentRef: DocumentReference,
+  intent: MembershipIntentDoc
+): string | null {
+  if (session.id !== intent.checkoutSessionId) return "session_id";
+  if (session.mode !== "subscription") return "session_mode";
+  if (session.metadata?.intentId !== intentRef.id) return "intent_metadata";
+  if (session.metadata?.planKey !== intent.planKey) return "plan_metadata";
+  if (typeof session.expires_at !== "number" ||
+    session.expires_at !== intent.checkoutExpiresAt) return "session_expiry";
+  return null;
+}
+
+function checkoutAuthenticatedBindingMismatch(
+  session: Stripe.Checkout.Session,
+  payerUid: string,
+  expectedStripeCustomerId: string | null
+): string | null {
+  if (session.metadata?.firebaseUid !== payerUid) return "payer_metadata";
+  if (session.client_reference_id !== payerUid) return "client_reference";
+  if (!expectedStripeCustomerId ||
+    idOf(session.customer) !== expectedStripeCustomerId) return "stripe_customer";
+  return null;
+}
+
+function checkoutAnonymousBindingMismatch(
+  session: Stripe.Checkout.Session
+): string | null {
+  if (session.metadata?.firebaseUid != null) return "unexpected_payer_metadata";
+  if (session.client_reference_id !== null) return "unexpected_client_reference";
+  return null;
+}
+
+async function assertCheckoutSessionStillCurrent(
+  intentRef: DocumentReference,
+  expected: MembershipIntentDoc,
+  payerUid: string | null
+): Promise<boolean> {
+  const lockIds = Array.isArray(expected.reservationLockIds) ?
+    expected.reservationLockIds : [];
+  if (lockIds.length === 0) return false;
+  return db().runTransaction(async (tx) => {
+    const current = await tx.get(intentRef);
+    const lockRefs = lockIds.map((id) =>
+      db().collection(CHECKOUT_LOCK_COLLECTION).doc(id)
+    );
+    const locks = await Promise.all(lockRefs.map((ref) => tx.get(ref)));
+    const currentLockIds = current.exists &&
+        Array.isArray(current.get("reservationLockIds")) ?
+      [...current.get("reservationLockIds") as string[]] : [];
+    if (!current.exists ||
+      current.get("status") !== "created" ||
+      current.get("payerUid") !== payerUid ||
+      current.get("requestFingerprint") !== expected.requestFingerprint ||
+      current.get("stripeMode") !== expected.stripeMode ||
+      current.get("checkoutSessionId") !== expected.checkoutSessionId ||
+      current.get("checkoutSessionUrl") !== expected.checkoutSessionUrl ||
+      current.get("checkoutExpiresAt") !== expected.checkoutExpiresAt ||
+      currentLockIds.length !== lockIds.length ||
+      currentLockIds.some((id, index) => id !== lockIds[index])) {
+      return false;
+    }
+    return locks.every((lock) =>
+      lock.exists && lock.get("intentId") === intentRef.id
+    );
+  });
+}
+
+/**
+ * A recorded Session is recoverable only through its exact attempt verifier or
+ * by the authenticated owner of an identical request and full lock set. Stripe
+ * is re-read before the URL is returned; Firestore ownership alone never proves
+ * that a hosted Checkout remains open.
+ */
+async function verifyCheckoutSessionCandidate(
+  reservation: CheckoutReservationResult,
+  payerUid: string | null,
+  expectedStripeCustomerId: string | null,
+  expectedDisposition: "same_attempt" | "owned_resume_candidate",
+  nowMillis = Date.now()
+): Promise<OwnedCheckoutResumeOutcome> {
+  const intent = reservation.intent;
+  const sessionId = intent.checkoutSessionId;
+  if (reservation.disposition !== expectedDisposition ||
+    typeof sessionId !== "string" || !sessionId ||
+    (intent.payerUid ?? null) !== payerUid ||
+    (expectedDisposition === "owned_resume_candidate" && !payerUid)) {
+    throw checkoutRecoveryReviewError();
+  }
+
+  let session: Stripe.Checkout.Session;
+  try {
+    session = await stripe().checkout.sessions.retrieve(sessionId);
+  } catch (error) {
+    console.error("Checkout resume provider verification failed", {
+      checkoutSessionIdHash: sha256(sessionId),
+      intentIdHash: sha256(reservation.intentRef.id),
+      provider: checkoutRecoveryProviderDiagnostic(error),
+    });
+    throw checkoutRecoveryUnavailableError();
+  }
+
+  const validateBinding = (candidate: Stripe.Checkout.Session) => {
+    try {
+      assertStripeObjectMode("Checkout Session", candidate.id, candidate.livemode);
+    } catch (error) {
+      console.error("CRITICAL_BILLING_CHECKOUT_RESUME_MODE_MISMATCH", {
+        checkoutSessionIdHash: sha256(sessionId),
+        intentIdHash: sha256(reservation.intentRef.id),
+        provider: checkoutRecoveryProviderDiagnostic(error),
+      });
+      throw checkoutRecoveryReviewError();
+    }
+    const mismatch = checkoutSessionCommonBindingMismatch(
+      candidate,
+      reservation.intentRef,
+      intent
+    ) || (payerUid ? checkoutAuthenticatedBindingMismatch(
+      candidate,
+      payerUid,
+      expectedStripeCustomerId
+    ) : checkoutAnonymousBindingMismatch(candidate));
+    if (mismatch) {
+      console.error("CRITICAL_BILLING_CHECKOUT_RESUME_BINDING_MISMATCH", {
+        checkoutSessionIdHash: sha256(sessionId),
+        intentIdHash: sha256(reservation.intentRef.id),
+        mismatch,
+      });
+      throw checkoutRecoveryReviewError();
+    }
+  };
+  validateBinding(session);
+
+  if (session.status === "open" && session.expires_at <= Math.floor(nowMillis / 1000)) {
+    try {
+      session = await stripe().checkout.sessions.expire(sessionId);
+    } catch (error) {
+      console.error("Checkout resume expiry verification failed", {
+        checkoutSessionIdHash: sha256(sessionId),
+        intentIdHash: sha256(reservation.intentRef.id),
+        provider: checkoutRecoveryProviderDiagnostic(error),
+      });
+      throw checkoutRecoveryUnavailableError();
+    }
+    validateBinding(session);
+  }
+
+  if (session.status === "complete") {
+    await extendCheckoutReservationForAsyncPayment(reservation.intentRef);
+    throw checkoutProcessingError();
+  }
+  if (session.status === "expired") {
+    const transitioned = await transitionCheckoutReservation(
+      reservation.intentRef,
+      "expired",
+      {verifiedTerminalAt: serverTimestamp()},
+      true,
+      {
+        sessionId: session.id,
+        mode: session.mode,
+        planKey: session.metadata?.planKey ?? null,
+      }
+    );
+    if (!transitioned) throw checkoutProcessingError();
+    return {kind: "expired"};
+  }
+  if (session.status !== "open" || !session.url) {
+    console.error("CRITICAL_BILLING_CHECKOUT_RESUME_UNSAFE_STATUS", {
+      checkoutSessionIdHash: sha256(sessionId),
+      intentIdHash: sha256(reservation.intentRef.id),
+      status: session.status ?? null,
+      hasUrl: Boolean(session.url),
+    });
+    throw checkoutRecoveryReviewError();
+  }
+
+  if (!await assertCheckoutSessionStillCurrent(
+    reservation.intentRef,
+    intent,
+    payerUid
+  )) {
+    throw checkoutProcessingError();
+  }
+  return {kind: "open", session};
+}
+
+async function verifyOwnedCheckoutResumeCandidate(
+  reservation: CheckoutReservationResult,
+  payerUid: string,
+  expectedStripeCustomerId: string | null,
+  nowMillis = Date.now()
+): Promise<OwnedCheckoutResumeOutcome> {
+  return verifyCheckoutSessionCandidate(
+    reservation,
+    payerUid,
+    expectedStripeCustomerId,
+    "owned_resume_candidate",
+    nowMillis
+  );
+}
+
+async function verifySameAttemptCheckoutSession(
+  reservation: CheckoutReservationResult,
+  payerUid: string | null,
+  expectedStripeCustomerId: string | null,
+  nowMillis = Date.now()
+): Promise<OwnedCheckoutResumeOutcome> {
+  return verifyCheckoutSessionCandidate(
+    reservation,
+    payerUid,
+    expectedStripeCustomerId,
+    "same_attempt",
+    nowMillis
+  );
 }
 
 /** ---------------------------------------------------------------
@@ -3431,6 +3788,7 @@ function buildCreateMembershipCheckoutHandler(
     const checkoutAttemptHash = sha256(`membership-checkout:${checkoutAttemptId}`);
     const intentRef = db().collection("membershipIntents")
       .doc(`attempt_${checkoutAttemptHash}`);
+    let payerProfileStripeCustomerId: string | null = null;
     if (payerUid) {
       const profile = await db().collection("users").doc(payerUid).get();
       if (!profile.exists) {
@@ -3444,6 +3802,9 @@ function buildCreateMembershipCheckoutHandler(
         }
         throw new HttpsError("failed-precondition", "Create your profile before purchasing.");
       }
+      const storedStripeCustomerId = profile.get("stripeCustomerId");
+      payerProfileStripeCustomerId = typeof storedStripeCustomerId === "string" &&
+          storedStripeCustomerId ? storedStripeCustomerId : null;
     }
     const planKey = requirePlanKey(request.data?.planKey);
     const plan = getPlan(planKey);
@@ -3584,6 +3945,7 @@ function buildCreateMembershipCheckoutHandler(
     };
 
     let reservation: CheckoutReservationResult;
+    let proposedIntent: MembershipIntentDoc | null = null;
     const existingSnap = await intentRef.get();
     let convergedMembershipIds: ReadonlySet<string> | undefined;
     if (!existingSnap.exists) {
@@ -3627,7 +3989,12 @@ function buildCreateMembershipCheckoutHandler(
           "This checkout attempt was already used with different membership details."
         );
       }
-      reservation = {created: false, intent: existing};
+      reservation = {
+        created: false,
+        intent: existing,
+        intentRef,
+        disposition: "same_attempt",
+      };
     } else {
       // Validate provider configuration before taking a new reservation. An
       // existing recorded Session can still be returned during a later Stripe
@@ -3654,7 +4021,7 @@ function buildCreateMembershipCheckoutHandler(
         planKey,
         participantKey
       ).map((spec) => spec.id);
-      const proposedIntent: MembershipIntentDoc = {
+      proposedIntent = {
         schemaVersion: MEMBERSHIP_SCHEMA_VERSION,
         checkoutAttemptHash,
         requestFingerprint,
@@ -3691,15 +4058,54 @@ function buildCreateMembershipCheckoutHandler(
         createdAt: serverTimestamp(),
       };
       await reconcileExpiredCheckoutReservations(reservationLockIds, now);
-      reservation = await reserveCheckoutAttempt(
-        intentRef,
-        proposedIntent,
-        now,
-        convergedMembershipIds
-      );
+      let resolvedReservation: CheckoutReservationResult | null = null;
+      // An expired owner can race another exact retry that immediately acquires
+      // the released locks. Follow at most two such owners; every candidate is
+      // independently authenticated and verified with Stripe before use.
+      for (let recoveryAttempt = 0; recoveryAttempt < 3; recoveryAttempt += 1) {
+        const candidate = await reserveCheckoutAttempt(
+          intentRef,
+          proposedIntent,
+          now,
+          convergedMembershipIds
+        );
+        if (candidate.disposition !== "owned_resume_candidate") {
+          resolvedReservation = candidate;
+          break;
+        }
+        if (!payerUid) throw checkoutInProgressError();
+        const resume = await verifyOwnedCheckoutResumeCandidate(
+          candidate,
+          payerUid,
+          payerProfileStripeCustomerId
+        );
+        if (resume.kind === "open") {
+          return {
+            ok: true,
+            disposition: "resumed" as const,
+            sessionUrl: resume.session.url,
+            sessionId: resume.session.id,
+            firstFullChargeDate: candidate.intent.firstFullChargeDate,
+            billingMode: candidate.intent.billingMode ?? "standard",
+            serviceStartsAt: candidate.intent.serviceStartsAt ?? null,
+            firstPaymentAt: candidate.intent.firstPaymentAt ??
+              candidate.intent.billingCycleAnchor,
+            initialChargePence: candidate.intent.initialChargePence ?? null,
+            promotionCodesEnabled: isPresaleIntent(candidate.intent) &&
+              candidate.intent.planKey === EXISTING_MEMBER_OFFER.planKey,
+          };
+        }
+        // Stripe authoritatively reported the old Session expired and the bound
+        // transition released only that intent's locks. Retry this same new
+        // attempt inside the current invocation so the customer can continue.
+      }
+      if (!resolvedReservation) {
+        throw checkoutRecoveryUnavailableError();
+      }
+      reservation = resolvedReservation;
     }
 
-    let intent = reservation.intent;
+    const intent = reservation.intent;
     if (intent.requestFingerprint !== requestFingerprint) {
       throw new HttpsError(
         "failed-precondition",
@@ -3716,29 +4122,36 @@ function buildCreateMembershipCheckoutHandler(
       intent.checkoutExpiresAt <= Math.floor(Date.now() / 1000) ||
       intent.checkoutExpiresAt >= intent.billingCycleAnchor;
 
-    // A local clock can tell us to verify a Session, but it can never prove
-    // that payment did not complete. Re-read Stripe before deciding whether a
-    // recorded Session is terminal; this keeps a delayed paid webhook behind
-    // its original uniqueness lock.
-    if (intent.status === "created" && checkoutWindowEnded()) {
-      await reconcileExpiredCheckoutReservations(
-        intent.reservationLockIds,
-        Date.now(),
-        true
-      );
-      const refreshed = await intentRef.get();
-      if (!refreshed.exists) {
-        throw new HttpsError("internal", "The checkout reservation was lost.");
-      }
-      intent = refreshed.data() as MembershipIntentDoc;
+    // Once Checkout has been submitted, a hosted URL is no longer a safe retry
+    // target even if Firestore retained it for audit/reconciliation purposes.
+    if (intent.status === "payment_pending" || intent.status === "fulfilled") {
+      throw checkoutProcessingError();
     }
-    if ((intent.status === "created" || intent.status === "payment_pending" ||
-        intent.status === "fulfilled") && intent.checkoutSessionId &&
-      intent.checkoutSessionUrl) {
+
+    // The attempt id is the recovery verifier for an anonymous checkout. It
+    // proves access to this exact Firestore intent, but never that Stripe still
+    // considers the hosted page open. Re-read Stripe and validate its immutable
+    // binding before returning the provider's current URL to either an
+    // anonymous or authenticated exact-attempt retry.
+    if (intent.status === "created" && intent.checkoutSessionId &&
+      reservation.disposition === "same_attempt") {
+      const verified = await verifySameAttemptCheckoutSession(
+        reservation,
+        payerUid,
+        payerProfileStripeCustomerId
+      );
+      if (verified.kind === "expired") {
+        throw new HttpsError(
+          "deadline-exceeded",
+          "This checkout attempt has ended. Start again with a new checkout attempt.",
+          {reason: "checkout_expired"}
+        );
+      }
       return {
         ok: true,
-        sessionUrl: intent.checkoutSessionUrl,
-        sessionId: intent.checkoutSessionId,
+        disposition: "created" as const,
+        sessionUrl: verified.session.url,
+        sessionId: verified.session.id,
         firstFullChargeDate: intent.firstFullChargeDate,
         billingMode: intent.billingMode ?? "standard",
         serviceStartsAt: intent.serviceStartsAt ?? null,
@@ -3949,6 +4362,7 @@ function buildCreateMembershipCheckoutHandler(
 
     return {
       ok: true,
+      disposition: "created" as const,
       sessionUrl: session.url,
       sessionId: session.id,
       firstFullChargeDate: intent.firstFullChargeDate,
