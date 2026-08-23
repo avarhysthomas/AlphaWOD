@@ -20,43 +20,47 @@ const PUBLICATION_MANIFEST = [
   {
     key: "membershipTerms",
     title: "Membership Terms",
-    version: "ZAF-TERMS-2026-08-20-01",
-    approvedBytes: 19012,
-    approvedSha256: "436efc32dcf1914c94a7357cb8938e294e818dbeda50eba9600b00a16edd6c6e",
+    version: "ZAF-TERMS-2026-08-23-01",
+    approvedBytes: 21634,
+    approvedSha256: "2f540a5037cc9d6423e206c9bac324f764e8ad84ae1aacd5aacffa282c490a00",
   },
   {
     key: "cancellationPolicy",
     title: "Cancellation, Refund and Cooling-off Policy",
-    version: "ZAF-CANCEL-2026-08-20-01",
-    approvedBytes: 8380,
-    approvedSha256: "983c1e883887d5b44da3170a2df4a474c5e41e7df2a0988e3ee6606e29356402",
+    version: "ZAF-CANCEL-2026-08-23-01",
+    approvedBytes: 9255,
+    approvedSha256: "80030b930615839db1b5116e5cf9b4231acb4c3036df6ab9909642bc02efd413",
   },
   {
     key: "privacyNotice",
     title: "Privacy Notice",
-    version: "ZAF-PRIVACY-2026-08-20-01",
-    approvedBytes: 14570,
-    approvedSha256: "9ada73108301c20c87a5c9982f0dac258662260da7e5c3d78431287630f41b9b",
+    version: "ZAF-PRIVACY-2026-08-23-01",
+    approvedBytes: 15004,
+    approvedSha256: "34a614aea5d63191994bb85d053f926c047e2a1a1908897ba63796312a5ac6ee",
   },
   {
     key: "adultWaiver",
     title: "Adult Participant Waiver and Risk Acknowledgement",
-    version: "ZAF-ADULT-WAIVER-2026-08-20-01",
+    version: "ZAF-ADULT-WAIVER-2026-08-23-01",
     approvedBytes: 7144,
-    approvedSha256: "fff52601536b2cef1a63db3fb05f7101cee407e13eee70fab78f88c8e349ec72",
+    approvedSha256: "84a520cbd72ac416183788c000c6e869dd1fd2bb0461abd60088cc36b355635f",
   },
   {
     key: "guardianAddendum",
     title: "Parent/Guardian Consent and Youth Membership Addendum",
-    version: "ZAF-GUARDIAN-2026-08-20-01",
-    approvedBytes: 9047,
-    approvedSha256: "8118e51ceb7f66aa3dcf6ee658cc627d469db670e8f2a2a13110aeb4a605cdd7",
+    version: "ZAF-GUARDIAN-2026-08-23-01",
+    approvedBytes: 10593,
+    approvedSha256: "72d460bb827622c6ef98438b0c356275b1f4c67c60306078a4718578635f40f6",
   },
 ];
 
-const EFFECTIVE_DATE = "2026-08-20";
+const EFFECTIVE_DATE = "2026-08-23";
 const CONTENT_TYPE = "text/plain; charset=utf-8";
 const HASH_COVERS = "UTF-8 bytes of content";
+// The business owner explicitly approved the frozen 23 August 2026 bundle on
+// 23 August 2026. Runtime checkout remains separately controlled by the
+// Functions and frontend environment purchase gates.
+const PUBLICATION_APPROVED = true;
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
@@ -160,7 +164,7 @@ function synchronizeRegistrySource(source, renderedRegistry) {
   }
   return withRegistry.replace(
     gatePattern,
-    "export const CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION = true;"
+    `export const CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION = ${PUBLICATION_APPROVED};`
   );
 }
 
@@ -231,6 +235,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  PUBLICATION_APPROVED,
   PUBLICATION_MANIFEST,
   checkRegistrySync,
   expectedRegistrySources,

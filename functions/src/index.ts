@@ -45,6 +45,7 @@ import {
   buildRequestMembershipCancellation,
   buildRetryMembershipConfirmations,
   buildStripeWebhook,
+  MEMBERSHIP_CHECKOUT_SCHEMA_VERSION,
 } from "./membership";
 import {
   LEADERBOARD_CANDIDATE_MAX_ROWS,
@@ -2269,7 +2270,16 @@ export {
 } from "./membership";
 
 export const createMembershipCheckoutSession = buildCreateMembershipCheckoutSession(
-  convergeUserDerivedAccess
+  convergeUserDerivedAccess,
+  MEMBERSHIP_CHECKOUT_SCHEMA_VERSION
+);
+// Both names require the explicit current browser contract. A pre-v2 page
+// therefore cannot submit old checkbox ids and have the server silently store
+// the new legal/commercial statements. Already-created Sessions continue to
+// fulfil independently from their frozen membership intent.
+export const createMembershipCheckoutSessionV2 = buildCreateMembershipCheckoutSession(
+  convergeUserDerivedAccess,
+  MEMBERSHIP_CHECKOUT_SCHEMA_VERSION
 );
 export const stripeWebhook = buildStripeWebhook(convergeUserDerivedAccess);
 export const recoverStripeEvents = buildRecoverStripeEvents(convergeUserDerivedAccess);

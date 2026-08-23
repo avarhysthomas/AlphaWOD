@@ -4,10 +4,10 @@ import { useAuth } from "../../../context/AuthContext";
 import {
   BILLING_POLICY,
   COMPANY,
-  EXISTING_MEMBER_OFFER,
   MEMBERSHIP_PLANS,
   PLAN_LIST,
   POLICY_TEXT,
+  YOUTH_FAMILY_OFFER,
   formatPlanPrice,
   isFoundingPresale,
   type MembershipPlan,
@@ -27,8 +27,6 @@ function PlanCard({
   presale: boolean;
   checkoutEnabled: boolean;
 }) {
-  const promotionCodeAvailable = presale && plan.key === EXISTING_MEMBER_OFFER.planKey;
-
   return (
     <div className={CARD}>
       <div className="flex items-start justify-between gap-4">
@@ -52,16 +50,9 @@ function PlanCard({
         </p>
       )}
 
-      {plan.grantsAlphaWodAccess && (
+      {plan.grantsAlphaWodAccess && !presale && (
         <p className="mt-4 inline-flex rounded-full border border-amber-500/25 bg-amber-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-200">
-          {presale ? "Zero Alpha App after first payment" : "Includes Zero Alpha App access"}
-        </p>
-      )}
-
-      {promotionCodeAvailable && (
-        <p className="mt-3 text-xs leading-6 text-amber-100/80">
-          Existing member? Enter the discount code during signup for £5 off each
-          of your first three monthly payments.
+          Includes Zero Alpha App access
         </p>
       )}
 
@@ -110,6 +101,10 @@ function YouthCard({
         Coached HYROX training for young athletes. A parent or legal guardian must be the
         payer and complete checkout.
       </p>
+      <p className="mt-3 text-sm font-semibold leading-7 text-emerald-100">
+        Register 2 or more children in the same programme and receive an automatic
+        {` ${YOUTH_FAMILY_OFFER.percentOff}%`} discount on the full monthly total.
+      </p>
       {presale && (
         <p className="mt-4 text-sm font-semibold text-sky-100">
           £0 today · first payment 1 September 2026
@@ -118,8 +113,6 @@ function YouthCard({
 
       <div className="mt-6 space-y-3">
         {[youngstars, teenstars].map((plan) => {
-          const displayedMinAge = plan.key === "youth_youngstars" ? 6 : plan.minAge;
-          const displayedPrice = plan.key === "youth_youngstars" ? "£30" : formatPlanPrice(plan);
           const content = (
             <>
             <span>
@@ -127,12 +120,12 @@ function YouthCard({
                 {plan.name}
               </span>
               <span className="block text-xs text-white/50">
-                Ages {displayedMinAge} to {plan.maxAge}
+                Ages {plan.minAge} to {plan.maxAge}
               </span>
             </span>
             <span className="font-heading text-xl text-white">
-              {displayedPrice}
-              <span className="ml-1 text-xs font-normal text-white/45">/mo</span>
+              {formatPlanPrice(plan)}
+              <span className="ml-1 text-xs font-normal text-white/45">/child/mo</span>
             </span>
             </>
           );
@@ -181,7 +174,22 @@ export default function Memberships() {
   return (
     <div className="carbon-fiber-bg min-h-screen overflow-x-hidden text-[#f4f0ea]">
       <div className="mx-auto max-w-5xl px-5 pb-24 pt-10 sm:px-8">
-        <p className={EYEBROW}>{COMPANY.tradingName}</p>
+        <Link
+          to="/"
+          aria-label="Zero Alpha home"
+          className="inline-flex rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white"
+        >
+          <span aria-hidden="true" className="relative block h-20 w-48 overflow-hidden">
+            <img
+              src="/ZERO-ALPHA.png"
+              alt=""
+              width={5000}
+              height={4340}
+              draggable={false}
+              className="absolute left-1/2 top-1/2 w-56 max-w-none -translate-x-1/2 -translate-y-1/2 select-none"
+            />
+          </span>
+        </Link>
         <h1 className="mt-4 font-heading text-[3rem] uppercase leading-[0.98] tracking-[0.01em] text-white sm:text-[4rem]">
           Memberships
         </h1>

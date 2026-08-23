@@ -19,6 +19,7 @@ const REQUIRED_PARAMETER_KEYS = [
   "STRIPE_PORTAL_CONFIGURATION_ID",
   "STRIPE_EXISTING_MEMBER_COUPON_ID",
   "STRIPE_EXISTING_MEMBER_PROMOTION_CODE_ID",
+  "STRIPE_YOUTH_FAMILY_COUPON_ID",
   ...PRICE_ENV_KEYS,
 ];
 
@@ -31,8 +32,10 @@ const KNOWN_TEST_PROVIDER_IDS = new Set([
   "price_1U5PKZFzNDZoGGA0xsnNcV2m",
   "price_1U5PJHFzNDZoGGA0izMSvHP1",
   "price_1U5PFZFzNDZoGGA06T2ggw4M",
+  "price_1U7akwFzNDZoGGA0zOcCZthI",
   "price_1U5PEwFzNDZoGGA0d24UJaZd",
   "zaf_existing_member_5off_3mo_2026_test_v2",
+  "zaf_youth_family_15pct_2026_test",
   "promo_1U6AJYFzNDZoGGA0ybHPTeU6",
   "promo_1U6ThDFzNDZoGGA0OT0EaV8Z",
 ]);
@@ -148,6 +151,10 @@ function assertProductionConfig(
   if (KNOWN_TEST_PROVIDER_IDS.has(values.STRIPE_EXISTING_MEMBER_COUPON_ID) ||
     /(^|_)test($|_)/i.test(values.STRIPE_EXISTING_MEMBER_COUPON_ID)) {
     throw new Error("STRIPE_EXISTING_MEMBER_COUPON_ID must not be a test Coupon.");
+  }
+  if (KNOWN_TEST_PROVIDER_IDS.has(values.STRIPE_YOUTH_FAMILY_COUPON_ID) ||
+    /(^|_)test($|_)/i.test(values.STRIPE_YOUTH_FAMILY_COUPON_ID)) {
+    throw new Error("STRIPE_YOUTH_FAMILY_COUPON_ID must not be a test Coupon.");
   }
 
   const priceIds = PRICE_ENV_KEYS.map((name) => values[name]);

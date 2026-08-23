@@ -21,6 +21,7 @@ import {
   type MyMembership,
 } from "../services/membership";
 import MembershipDiscountSummary from "../components/MembershipDiscountSummary";
+import {resolveParticipantFullNames} from "../components/membershipPresentation";
 
 const CARD =
   "rounded-[28px] border border-white/10 bg-[#151311] p-7 shadow-[0_26px_80px_rgba(0,0,0,0.42)]";
@@ -29,9 +30,13 @@ const EYEBROW = "text-[12px] font-bold uppercase tracking-[0.28em] text-white/34
 function CancellationPreview({
   preview,
   mode = "standard",
+  planName,
+  participantFullNames,
 }: {
   preview: CancellationOutcome;
   mode?: "cancel_before_start" | "standard";
+  planName: string;
+  participantFullNames: string[];
 }) {
   return (
     <div className="mt-5 rounded-2xl border border-white/10 bg-black/30 p-5 text-sm leading-7 text-white/70">
@@ -65,7 +70,43 @@ function CancellationPreview({
           {formatIsoDate(preview.noticeDeadlineDate)}.
         </p>
       )}
+      <FamilyCancellationScope
+        planName={planName}
+        participantFullNames={participantFullNames}
+      />
     </div>
+  );
+}
+
+function formatParticipantList(participantFullNames: string[]): string {
+  if (participantFullNames.length < 2) return participantFullNames[0] ?? "";
+  if (participantFullNames.length === 2) {
+    return `${participantFullNames[0]} and ${participantFullNames[1]}`;
+  }
+  return `${participantFullNames.slice(0, -1).join(", ")}, and ${
+    participantFullNames[participantFullNames.length - 1]
+  }`;
+}
+
+function FamilyCancellationScope({
+  planName,
+  participantFullNames,
+  recorded = false,
+}: {
+  planName: string;
+  participantFullNames: string[];
+  recorded?: boolean;
+}) {
+  if (participantFullNames.length < 2) return null;
+
+  return (
+    <p className="mt-3 font-semibold">
+      {recorded ? "This cancellation applies to" : "Submitting this request cancels"}{" "}
+      the whole {planName} family subscription. The places for{" "}
+      {formatParticipantList(participantFullNames)} {recorded ? "all end" : "will all end"}{" "}
+      with it.
+      {!recorded && " Individual children cannot be removed online."}
+    </p>
   );
 }
 
@@ -414,6 +455,11 @@ export default function MembershipManage() {
             const firstPaymentAt = membership.firstPaymentAt ??
               membership.billingCycleAnchor ?? membership.currentPeriodEnd;
             const serviceStartsAt = membership.serviceStartsAt ?? firstPaymentAt;
+            const participantFullNames = resolveParticipantFullNames(
+              membership.participantFullName,
+              membership.participantFullNames,
+              membership.participantCount
+            );
 
             return (
               <div key={membership.subscriptionId} className={CARD}>
@@ -424,7 +470,8 @@ export default function MembershipManage() {
                       {membership.planName}
                     </h2>
                     <p className="mt-2 text-sm text-white/50">
-                      Participant: {membership.participantFullName}
+                      {participantFullNames.length === 1 ? "Participant" : "Participants"}:{" "}
+                      {participantFullNames.join(", ")}
                     </p>
                   </div>
                   {membership.grantsAlphaWodAccess && (
@@ -503,6 +550,7 @@ export default function MembershipManage() {
                   discount={membership.discount}
                   paymentSchedule={membership.paymentSchedule}
                   firstPaymentAt={firstPaymentAt}
+                  participantCount={membership.participantCount}
                   className="mt-5"
                 />
 
@@ -551,9 +599,11 @@ export default function MembershipManage() {
                       <div>
                         <dt className="text-xs text-sky-100/60">Received</dt>
                         <dd className="text-sky-50">
-                          {formatReceiptTimestamp(
-                            membership.cancellationReceipt.receivedAt
-                          )}
+                          <time dateTime={membership.cancellationReceipt.receivedAt}>
+                            {formatReceiptTimestamp(
+                              membership.cancellationReceipt.receivedAt
+                            )}
+                          </time>
                         </dd>
                       </div>
                     </dl>
@@ -563,7 +613,9 @@ export default function MembershipManage() {
                         ? " · Acknowledgement sent"
                         : membership.cancellationReceipt.acknowledgementStatus === "failed"
                           ? " · Email acknowledgement needs retry; this receipt remains valid"
-                          : " · Acknowledgement pending"}
+                          : membership.cancellationReceipt.acknowledgementStatus === "pending"
+                            ? " · Acknowledgement pending"
+                            : ""}
                     </p>
                   </div>
                 )}
@@ -587,6 +639,10 @@ export default function MembershipManage() {
                           Submit a clear request to cancel this membership during the
                           cooling-off period. We will record when it is received.
                         </p>
+                        <FamilyCancellationScope
+                          planName={membership.planName}
+                          participantFullNames={participantFullNames}
+                        />
                         <div className="mt-4 flex flex-wrap gap-3">
                           <button
                             type="button"
@@ -643,6 +699,11 @@ export default function MembershipManage() {
                           {formatIsoDate(cancellationOutcome.accessEndsOnDate)}.
                         </>}
                     </p>
+                    <FamilyCancellationScope
+                      planName={membership.planName}
+                      participantFullNames={participantFullNames}
+                      recorded
+                    />
                   </div>
                 )}
 
@@ -728,6 +789,8 @@ export default function MembershipManage() {
                     <CancellationPreview
                       preview={cancellationPreview}
                       mode={cancelBeforeStart ? "cancel_before_start" : "standard"}
+                      planName={membership.planName}
+                      participantFullNames={participantFullNames}
                     />
                     <div className="mt-5 flex flex-wrap gap-3">
                       <button
@@ -780,6 +843,11 @@ export default function MembershipManage() {
             <div className="mt-6 flex flex-wrap gap-3">
               {memberships.map((membership) => {
                 const portalBusy = busy === `portal:${membership.subscriptionId}`;
+                const participantFullNames = resolveParticipantFullNames(
+                  membership.participantFullName,
+                  membership.participantFullNames,
+                  membership.participantCount
+                );
                 return (
                   <button
                     key={membership.subscriptionId}
@@ -792,7 +860,7 @@ export default function MembershipManage() {
                       ? "Opening…"
                       : memberships.length === 1
                         ? "Open secure portal"
-                        : `Portal: ${membership.participantFullName}`}
+                        : `Portal: ${participantFullNames.join(", ")}`}
                   </button>
                 );
               })}

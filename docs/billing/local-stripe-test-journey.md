@@ -5,11 +5,15 @@ Firebase state stays inside local emulators under `demo-alphawod-stripe`. It
 does not deploy anything, touch production Firebase data, take real money or
 open the normal purchase gates.
 
-The canonical legal publication gate is now `true` for the five approved 20
-August documents. Both production environment purchase gates remain `false`.
-The narrow test-mode path works only when every frontend and backend local-test
-condition matches; production project `alphawod-d1f2f` is explicitly forbidden
-from using Stripe test mode.
+The five-document approval recorded on 20 August is historical. The business
+owner separately approved the revised youth-family bundle dated 23 August 2026.
+The local UI must render those exact approved bytes, but this journey does not
+prove production publication or provider configuration. Both production
+environment purchase gates remain `false` until the approved legal bytes and
+Stripe youth configuration are independently verified. The narrow test-mode
+path works only when every frontend and backend local-test condition matches;
+production project
+`alphawod-d1f2f` is explicitly forbidden from using Stripe test mode.
 
 ## One-time local setup
 
@@ -53,7 +57,9 @@ once to stop the whole stack.
 The preflight retrieves every configured Price and expanded Product from Stripe
 and checks test mode, active state, Product name, GBP amount and monthly
 recurrence. It also verifies the test Portal keeps cancellation and subscription
-updates disabled. It prints object IDs but makes no Stripe changes.
+updates disabled and the youth-family Coupon is exactly 15% off forever, has no
+redemption deadline or cap, and applies to exactly the Youngstars and Teenstars
+Products. It prints object IDs but makes no Stripe changes.
 
 Open `http://localhost:3002/memberships`, choose a plan and complete hosted
 Checkout with a Stripe test card such as `4242 4242 4242 4242`, any future
@@ -61,7 +67,22 @@ expiry and any CVC/postcode. During the founding presale Stripe saves the test
 payment method but charges **£0 today**. The subscription is scheduled for
 service from 1 September and its first payment anchor is 1 September. The app
 shows a prominent test-only notice and presents the same approved, versioned
-legal documents used by the release candidate.
+legal documents used by the release.
+
+The current frontend calls only `createMembershipCheckoutSessionV2` and sends
+`checkoutSchemaVersion: 2`. For Youngstars, each child must be 6–11 and costs
+£30 per month; for Teenstars, each child must be 12–16 and costs £35 per month.
+Use “Add another child” to register 1–10 children on the selected same plan.
+One child pays the standard price. From two children, the family Coupon applies
+15% off the whole monthly subtotal forever: two Youngstars are £60 less £9 =
+£51 per month, and two Teenstars are £70 less £10.50 = £59.50 per month. Hosted
+Checkout should show one subscription item whose quantity equals the number of
+children. A mixed Youngstars/Teenstars subscription is not supported.
+
+`STRIPE_YOUTH_FAMILY_COUPON_ID` is the exact provider-side allowlist. The test
+configuration uses `zaf_youth_family_15pct_2026_test`. It is applied
+automatically only at quantity 2–10; there is no family Promotion Code and no
+customer-entered code field for this offer.
 
 For Adult Unlimited, enter the explicitly test-only shared code
 `EXISTING5-TEST` in the AlphaWOD registration form before opening Stripe.
@@ -111,6 +132,17 @@ Code schedule. For a post-opening run it continues to require a paid
 standard subscription. It does not send the confirmation email or advance
 Stripe time through future invoices; real Resend delivery and Test Clock
 invoice simulation are separate controlled tests.
+
+The existing post-payment verifier's `--require-discount` option proves only
+the Adult Unlimited fixed/repeating Promotion Code. It does **not** yet prove
+the youth-family Coupon. For each youth plan, retain controlled one-child and
+two-child runs and record the exact Session id. Independently re-read the Stripe
+Session and Subscription and verify the selected Price, a single item whose
+quantity equals the child count, and—for two children—the allowlisted 15%-off
+forever family Coupon and expected recurring total. Also inspect the emulator
+intent, membership and confirmation outbox for every participant name, the
+matching count, frozen discount schedule and accepted statements. Do not cite
+the existing verifier alone as evidence of the family offer.
 
 ## Historical provider baseline — 19 August 2026
 
@@ -166,15 +198,21 @@ changing the Product/Price mapping:
 - the production app origin;
 - a live `sk_live_...` or restricted `rk_live_...` key;
 - five live Price ids (each is preflighted with its expanded Product);
+- the canonical Youngstars Price at £30 for ages 6–11 and Teenstars Price at £35
+  for ages 12–16;
 - a separate live £5/repeating-three-month Adult Unlimited Coupon and one
   allowlisted shared reusable live Promotion Code;
+- a separate live youth-family Coupon that is exactly 15% off forever, applies
+  to exactly both youth Products, has no redemption deadline or cap, and has no
+  Promotion Code;
 - a locked-down live Customer Portal configuration;
 - a live webhook endpoint and its own live signing secret;
-- a closed Vercel deployment of the approved immutable checkout documents,
-  followed by `npm run verify:published-legal`, and the normal purchase switch;
+- a closed Vercel deployment of the revised immutable checkout documents,
+  followed by `npm run verify:published-legal`, plus read-only live Stripe
+  verification while both normal purchase switches remain false;
 - completion of every remaining launch blocker in the Phase 1 rollout.
 
 Never reuse the CLI listener secret, test Portal configuration, test Prices or
 test customers/subscriptions in live mode. Operators configure the five live
-Price IDs; the corresponding approved live Product IDs are frozen server-side.
+Price IDs; the corresponding reviewed live Product IDs are frozen server-side.
 Each Price is expanded to its Product and both exact objects are validated.

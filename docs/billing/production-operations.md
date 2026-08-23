@@ -2,10 +2,12 @@
 
 This is a preparation runbook, not deployment authorisation. The checked-in
 production examples keep both `MEMBERSHIP_PURCHASE_ENABLED=false` and
-`REACT_APP_MEMBERSHIP_PURCHASE_ENABLED=false`. The five 20 August legal
-documents are approved, their final DOCX/public text/registries are synchronized,
-and the legal source gate is `true`; their production bytes still require a
-closed Vercel deployment and `npm run verify:published-legal`.
+`REACT_APP_MEMBERSHIP_PURCHASE_ENABLED=false`. The business owner explicitly
+approved the frozen five-document youth-family bundle on 23 August 2026, and
+both source registries are synchronized with their publication gate `true`.
+The exact production bytes must still pass their checks in a closed Vercel
+deployment, including `npm run verify:published-legal`, before either
+environment gate can open.
 `ops/monitoring/billing-alerts.json` is deliberately a template. No alert,
 notification channel, budget, Stripe object, Firebase resource or Vercel
 deployment is created by this repository change.
@@ -20,9 +22,24 @@ Enabled Secret Manager versions exist for the Stripe API, webhook-signing and
 checkout-rate-limit secrets. The public `stripeWebhook` receiver is active on
 Node.js 24 in `europe-west1`; GET `405` and unsigned POST `400` probes passed.
 These probes do not prove a signed delivery or payment journey. Both environment
-purchase gates remain closed, the approved legal bytes have not yet been
-verified on the production site, and all membership callables and workers remain
-undeployed.
+purchase gates remain closed and all eight membership callables and four workers
+remain undeployed. The live Youngstars £30 and Teenstars £35 Price/Product
+bindings were read back successfully on 23 August 2026. Live Coupon
+`zaf_youth_family_15pct_2026` was created and verified in Stripe Dashboard the
+same day as valid, 15% off forever, without an expiry, redemption cap or
+Promotion Code, and restricted exactly to those two youth Products. The closed
+API-backed live preflight and production legal-byte verification remain required.
+
+The operational commercial contract for this release is:
+
+| Plan | Eligibility | Per-child monthly price | Family offer |
+| --- | --- | ---: | --- |
+| Youngstars | Ages 6–11 | £30 | 15% off the whole subtotal forever at 2–10 children |
+| Teenstars | Ages 12–16 | £35 | 15% off the whole subtotal forever at 2–10 children |
+
+Each checkout is one selected youth plan with 1–10 children; mixed-plan bundles
+are not supported. One child pays full price. Two Youngstars recur at £51 and
+two Teenstars at £59.50.
 
 ## Release preflights
 
@@ -55,8 +72,8 @@ Firebase CLI 15.5.1 loads `.env.alphawod-d1f2f` for project
 `alphawod-d1f2f`; it does not treat `.env.production` as that project's deploy
 environment. `verify:production-armed-config` reads the same file and requires
 the exact production project, live Stripe mode, a bare HTTPS origin, exact
-approved Price IDs, the Portal/Coupon/Promotion Code IDs, a real sender, no
-provider host override, the approved document source gate `true`, and the
+reviewed Price IDs, the Portal/Coupon/Promotion Code IDs, a real sender, no
+provider host override, the revised document source gate `true`, and the
 backend runtime purchase gate `false`. It rejects every checked-in sandbox
 Stripe object. Keep secrets in Secret Manager, not this file.
 
@@ -69,8 +86,12 @@ npm run verify:stripe-live-config --prefix functions
 
 That command is read-only. It requires the exact reviewed mapping frozen in
 `functions/src/stripeLiveCatalog.ts`, retrieves every live Price and Product, the
+Youngstars Price at £30 and Teenstars Price at £35, the
 product-scoped three-month Coupon, the one active shared Promotion Code and the
-locked-down Customer Portal configuration. It exits before reporting success
+locked-down Customer Portal configuration. It also retrieves the youth-family
+Coupon and requires exactly 15% off forever, no amount/currency, redemption
+deadline or cap, and an `applies_to` set containing exactly the Youngstars and
+Teenstars Products. It exits before reporting success
 if any object is inactive, in test mode, has the wrong commercial terms or
 enables subscription changes. Both campaign objects must have no automatic
 expiry; the application cutoff remains fixed and staff deactivate the exact
@@ -166,10 +187,11 @@ while a scheduled worker is unhealthy.
 ## Opening and rollback boundary
 
 Monitoring, live-object verification and a deployed staging run are necessary
-but not sufficient. Production deployed-byte verification for the approved
-legal bundle, the staffed cooling-off refund and inbound-email cancellation
+but not sufficient. Production deployed-byte verification for the revised
+legal bundle, read-only verification of the corrected youth Prices and family
+Coupon, the staffed cooling-off refund and inbound-email cancellation
 operations, and every open launch blocker in `phase-1-rollout.md` remain
-mandatory. Publish and deploy the approved document registry and compatible
+mandatory. Publish and deploy the revised document registry and compatible
 frontend first while
 `MEMBERSHIP_PURCHASE_ENABLED=false` and
 `REACT_APP_MEMBERSHIP_PURCHASE_ENABLED=false`, then run:
@@ -177,19 +199,25 @@ frontend first while
 ```sh
 npm run verify:published-legal
 npm run verify:production-armed-config --prefix functions
+npm run verify:stripe-live-config --prefix functions
 ```
 
 Deploy the webhook, workers and callables in the rollout guide's closed-state
-batches, re-block then deliberately restore only the reviewed callable services,
-and complete the closed-state smoke tests. Only after every blocker and explicit
-approval, set
+batches, including both checkout exports. Immediately re-block all eight
+callables, then restore only `createMembershipCheckoutSessionV2` and the six
+non-checkout callables; keep legacy `createMembershipCheckoutSession` blocked.
+The compatible frontend calls V2 with `checkoutSchemaVersion: 2`, so a frontend
+deployed before V2 fails safely and a cached V1 client cannot cross the new
+schema boundary. Complete the closed-state smoke tests: V2 must reach its handler
+and fail at the runtime gate without creating a Stripe Session. Only after every
+remaining blocker passes and an authorised operator approves the release, set
 `MEMBERSHIP_PURCHASE_ENABLED=true` in the git-ignored
 `functions/.env.alphawod-d1f2f`, run the final configuration check and deploy
-only the intake function:
+only the V2 intake function:
 
 ```sh
 npm run verify:production-open-config --prefix functions
-firebase deploy --only functions:createMembershipCheckoutSession --project alphawod-d1f2f
+firebase deploy --only functions:createMembershipCheckoutSessionV2 --project alphawod-d1f2f
 ```
 
 Editing the dotenv file alone changes nothing. Firebase applies the parameter
@@ -213,7 +241,7 @@ verify the armed state and redeploy that same intake function:
 
 ```sh
 npm run verify:production-armed-config --prefix functions
-firebase deploy --only functions:createMembershipCheckoutSession --project alphawod-d1f2f
+firebase deploy --only functions:createMembershipCheckoutSessionV2 --project alphawod-d1f2f
 ```
 
 Confirm that new checkout intake now fails closed. Then set
@@ -229,5 +257,9 @@ If discount abuse is in scope, deactivate the shared live Promotion Code too.
 At the planned campaign end, deactivate that exact Code manually even if no
 abuse occurred. Do not delete the Coupon while an already-created Checkout or
 delayed webhook may still require its immutable terms for validation.
+The youth-family offer is automatic and forever, not a shareable campaign code.
+If its pricing or application is suspect, close V2 intake; do not deactivate or
+delete its Coupon while active subscriptions or delayed events still depend on
+those immutable terms.
 Keep webhooks, scheduled recovery and confirmation delivery active for
 purchases already in flight.

@@ -1,0 +1,109 @@
+Cancellation, Refund and Cooling-off Policy
+
+Plain-English rules for rolling monthly memberships
+
+VERSION DATE
+23 August 2026
+
+DOCUMENT ID
+ZAF-CANCEL-2026-08-23-01
+
+CONTRACTING ENTITY
+ZERO ALPHA FITNESS LTD · 15978998
+
+TRADING NAME
+Zero Alpha Fitness
+
+PUBLIC CONTACT
+support@zeroalphafitness.co.uk
+
+WEBSITE
+https://alpha-wod.vercel.app/
+
+At a glance
+
+• Memberships are rolling monthly, with no joining fee, free trial, minimum term or pause option.
+
+• During the founding presale, £0 is charged today; membership starts and the first monthly payment is taken on 1 September 2026. After opening, a person joining after the first pays the Stripe-displayed prorated amount immediately.
+
+• To avoid the next first-of-month payment, the cancellation request must reach us at least 14 calendar days before that billing date.
+
+• If the request arrives later, the next first-of-month payment remains due and membership continues through that additional paid month.
+
+• Payments are non-refundable except where required by law.
+
+• A statutory 14-day cooling-off right for a new online contract is separate from the ordinary renewal-notice rule.
+
+• A youth family Checkout is one subscription. Ordinary or cooling-off cancellation ends every listed child’s place; the online flow does not cancel one child separately.
+
+1. Presale, start date, proration and monthly renewal
+
+During the founding presale, membership and service start on 1 September 2026 and the first monthly payment is taken then. A cancellation request received before that service-start date withdraws the presale: no first payment is taken and service does not begin. After opening, membership begins when Checkout is confirmed; Stripe calculates any immediate proration until the next first. The full monthly price is then collected on each following first while the membership continues. Times and deadlines use Europe/London.
+
+2. How to request ordinary cancellation
+
+1. Use the signed-in cancellation-request flow. If you cannot access it, email support@zeroalphafitness.co.uk from the payer’s recorded email.
+
+2. Identify the payer, every participant and the membership. Do not send card or bank details.
+
+3. The signed-in flow records the server receipt time and freezes the displayed outcome. For email, staff record the time the message reaches the support inbox, not when it was written or sent from a device.
+
+4. The online flow sends an acknowledgement automatically. Staff send the email-channel acknowledgement after intake. It shows the recorded receipt time, the final scheduled payment (if any) and the membership end date. Contact us promptly if it is wrong.
+
+Stripe’s Customer Portal allows payment-method updates and invoice viewing. Its built-in pause and cancellation controls are disabled. Opening the portal or removing a payment method is not a cancellation request.
+
+A youth Checkout creates one subscription covering all children listed in that Checkout. An ordinary cancellation ends that whole subscription and all listed children’s places. The online flow does not cancel one child separately. Stopping one child’s attendance or asking us to remove one child does not itself change the contract, quantity, total or discount. Contact us about a requested roster change; it takes effect only when we confirm the effective date and resulting recurring total in writing, and we may require cancellation and a new Checkout.
+
+3. The 14-day renewal deadline
+
+IMPORTANT FINANCIAL COMMITMENT
+
+A request must reach us at least 14 calendar days before the next first of the month to stop that payment. If it reaches us less than 14 days before the next first, that payment remains due and cancellation takes effect after the additional paid month.
+
+• On-time request: no payment on the next first; access ends at 23:59 Europe/London on the day before it.
+
+• Late request: the next first-of-month payment is collected; access continues for that full paid month and ends at 23:59 Europe/London on the day before the following first.
+
+• After acknowledgement, no payment should be scheduled beyond the stated final payment. A billing error will be corrected, including any refund required by law or by our confirmation.
+
+Worked examples
+
+• Next billing date 1 June; request received 18 May: this is 14 calendar days before 1 June. No 1 June payment is due and access ends 31 May.
+
+• Next billing date 1 June; request received 19 May: this is less than 14 calendar days before 1 June. The 1 June payment remains due and access ends 30 June.
+
+The account flow should display the exact deadline and outcome before submission. If the service was unavailable, send the request by email and retain evidence of delivery; we will assess the circumstances fairly.
+
+4. Statutory cooling-off for a new online membership
+
+If the Consumer Contracts (Information, Cancellation and Additional Charges) Regulations 2013 apply, a consumer generally may cancel an online service contract during the 14-day period beginning after the contract is made. This is a separate right. The ordinary renewal deadline in section 3 does not shorten it.
+
+Checkout asks the payer separately to request that membership and eligible AlphaWOD access begin on the service start date shown, even if that is before the cooling-off period ends. If the payer makes that express request and cancels during the cooling-off period, we may keep or charge only the proportionate amount the law permits for services actually supplied before cancellation. For a youth family subscription, cooling-off cancellation ends the whole subscription and every listed child’s place. A cooling-off request records an immediate cancellation outcome, but any refund or deduction is reviewed manually. The balance will be refunded within 14 days, to the original payment method unless the consumer expressly agrees otherwise, and without a refund fee. If the express service-start request was not made, we will not make a deduction that the Regulations prohibit.
+
+A service consumer loses the cooling-off right because of full performance within the 14 days only where all legal conditions are met, including the required express request and acknowledgement. Nothing in this policy asks a customer to give up a right unlawfully.
+
+☐ I expressly request that the membership and any eligible AlphaWOD access begin on the service start date shown, even if that is before the 14-day cooling-off period ends. I understand that, if I cancel during that period, Zero Alpha Fitness may retain or charge only the proportionate amount permitted by law for services supplied before cancellation.
+
+5. How to use the cooling-off right
+
+Make a clear statement that you want to cancel during the cooling-off period through the cancellation flow or by emailing support@zeroalphafitness.co.uk. You may use the model wording below, but you do not have to use it:
+
+To ZERO ALPHA FITNESS LTD: I give notice that I cancel my membership contract. Payer name: [name]. Participant name(s): [all names]. Contract date: [date]. Payer email: [email]. Date of notice: [date].
+
+6. Refunds
+
+Payments are non-refundable except where required by law. This means we do not ordinarily refund a correctly calculated after-opening proration, a used or unused part of a paid month, a promotion difference, or a payment that remained due because a cancellation request missed the 14-day renewal deadline. A valid pre-start presale withdrawal has no first payment to refund.
+
+We will provide any remedy required for a valid cooling-off cancellation, duplicate or incorrect charge, failure to provide services with reasonable care and skill, material breach, or other statutory right. A contractual no-refund statement never overrides a mandatory remedy.
+
+7. No pauses
+
+Membership cannot be paused, frozen or placed on holiday hold. A request to pause does not stop billing and is not treated as a cancellation unless it clearly asks us to cancel. If disability, pregnancy, illness or another exceptional circumstance engages a legal duty or makes the standard policy unfair, contact us so we can consider a reasonable and lawful response.
+
+8. Failed payments and disputes
+
+After a membership has started, a failed recurring payment enters a three-calendar-day past-due grace period, during which existing related access continues. Stripe may retry payment and we may ask the payer to update the method. If payment is still past due after the grace period, access may be suspended. If the first scheduled payment fails, the membership and AlphaWOD access do not start. An open payment dispute suspends related access; a dispute won by Zero Alpha Fitness restores eligible access promptly and we will fairly assess any credit or extension needed for paid time that was unavailable; a lost dispute or full refund revokes related access. These access rules do not prevent a genuine complaint, statutory cancellation or lawful chargeback.
+
+9. Confirmation and contact
+
+Cancellation and refund communications will be sent to the payer’s recorded email. Questions or complaints: support@zeroalphafitness.co.uk. Post: ZERO ALPHA FITNESS LTD, Unit 3, Felinfoel Business Hub, Llanelli, SA14 8BE. Keep the acknowledgement and relevant Stripe receipt.

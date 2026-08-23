@@ -6,6 +6,7 @@ const path = require("node:path");
 const test = require("node:test");
 
 const {
+  PUBLICATION_APPROVED,
   PUBLICATION_MANIFEST,
   readPublicationDocuments,
   renderDocumentRegistry,
@@ -38,15 +39,15 @@ function withPublicationDirectory(run) {
   }
 }
 
-test("publication manifest fixes the five immutable 20 August document IDs", () => {
+test("publication manifest fixes the five immutable 23 August document IDs", () => {
   assert.deepEqual(
     PUBLICATION_MANIFEST.map(({key, version}) => [key, version]),
     [
-      ["membershipTerms", "ZAF-TERMS-2026-08-20-01"],
-      ["cancellationPolicy", "ZAF-CANCEL-2026-08-20-01"],
-      ["privacyNotice", "ZAF-PRIVACY-2026-08-20-01"],
-      ["adultWaiver", "ZAF-ADULT-WAIVER-2026-08-20-01"],
-      ["guardianAddendum", "ZAF-GUARDIAN-2026-08-20-01"],
+      ["membershipTerms", "ZAF-TERMS-2026-08-23-01"],
+      ["cancellationPolicy", "ZAF-CANCEL-2026-08-23-01"],
+      ["privacyNotice", "ZAF-PRIVACY-2026-08-23-01"],
+      ["adultWaiver", "ZAF-ADULT-WAIVER-2026-08-23-01"],
+      ["guardianAddendum", "ZAF-GUARDIAN-2026-08-23-01"],
     ]
   );
 });
@@ -59,7 +60,7 @@ test("registry rendering freezes the exact public UTF-8 bytes and digest", () =>
     assert.equal(documents.length, 5);
     for (const document of documents) {
       assert.match(document.sha256, /^[a-f0-9]{64}$/);
-      assert.equal(document.effectiveDate, "2026-08-20");
+      assert.equal(document.effectiveDate, "2026-08-23");
       assert.equal(
         document.publicUrl,
         `/legal/memberships/${document.version}.txt`
@@ -70,7 +71,7 @@ test("registry rendering freezes the exact public UTF-8 bytes and digest", () =>
   });
 });
 
-test("registry synchronization publishes the source gate with the registry", () => {
+test("registry synchronization applies the explicit owner approval state", () => {
   withPublicationDirectory((directory, publicationManifest) => {
     const registry = renderDocumentRegistry(
       readPublicationDocuments(directory, publicationManifest)
@@ -86,6 +87,7 @@ test("registry synchronization publishes the source gate with the registry", () 
     const synchronized = synchronizeRegistrySource(original, registry);
 
     assert.ok(synchronized.includes(registry));
+    assert.equal(PUBLICATION_APPROVED, true);
     assert.match(
       synchronized,
       /CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION = true;/

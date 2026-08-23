@@ -127,6 +127,7 @@ test("membership Functions deploy in complete selective batches of ten or fewer"
     "functions:claimMembership",
     "functions:createCustomerPortalSession",
     "functions:createMembershipCheckoutSession",
+    "functions:createMembershipCheckoutSessionV2",
     "functions:getMyMemberships",
     "functions:linkMembershipParticipant",
     "functions:listMemberships",

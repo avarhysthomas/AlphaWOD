@@ -9,6 +9,7 @@ import {
   type MembershipState,
 } from "../../memberships/services/membership";
 import MembershipDiscountSummary from "../../memberships/components/MembershipDiscountSummary";
+import {resolveParticipantFullNames} from "../../memberships/components/membershipPresentation";
 
 const CARD =
   "rounded-[28px] border border-white/10 bg-[#151311] p-7 shadow-[0_26px_80px_rgba(0,0,0,0.42)]";
@@ -218,6 +219,14 @@ export default function AdminMemberships() {
           const firstPaymentAt = membership.firstPaymentAt ??
             membership.billingCycleAnchor ?? membership.currentPeriodEnd;
           const serviceStartsAt = membership.serviceStartsAt ?? firstPaymentAt;
+          const participantFullNames = resolveParticipantFullNames(
+            membership.participantFullName,
+            membership.participantFullNames,
+            membership.participantCount
+          );
+          const participantAges = Array.isArray(membership.participantAges) &&
+            membership.participantAges.length === participantFullNames.length ?
+            membership.participantAges : [];
 
           return (
           <div key={membership.subscriptionId} className={CARD}>
@@ -227,8 +236,14 @@ export default function AdminMemberships() {
                   {membership.planName}
                 </h2>
                 <p className="mt-2 text-sm text-white/60">
-                  {membership.participantFullName}
-                  {membership.participantAge !== null && ` · age ${membership.participantAge}`}
+                  {participantFullNames.length > 1
+                    ? `Participants: ${participantFullNames.map((name, index) =>
+                        `${name}${participantAges[index] !== undefined ?
+                          ` · age ${participantAges[index]}` : ""}`
+                      ).join("; ")}`
+                    : membership.participantFullName}
+                  {participantFullNames.length <= 1 &&
+                    membership.participantAge !== null && ` · age ${membership.participantAge}`}
                   {membership.guardianFullName && ` · guardian ${membership.guardianFullName}`}
                 </p>
                 <p className="mt-1 text-xs text-white/40">
@@ -296,6 +311,7 @@ export default function AdminMemberships() {
               discount={membership.discount}
               paymentSchedule={membership.paymentSchedule}
               firstPaymentAt={firstPaymentAt}
+              participantCount={membership.participantCount}
               className="mt-5"
             />
 

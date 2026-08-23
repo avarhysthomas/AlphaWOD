@@ -1,0 +1,46 @@
+{
+  "effectiveDate": "2026-08-23",
+  "hashCovers": "UTF-8 bytes of content",
+  "documents": {
+    "membershipTerms": {
+      "title": "Membership Terms",
+      "version": "ZAF-TERMS-2026-08-23-01",
+      "effectiveDate": "2026-08-23",
+      "filename": "ZAF-TERMS-2026-08-23-01.txt",
+      "sha256": "2f540a5037cc9d6423e206c9bac324f764e8ad84ae1aacd5aacffa282c490a00",
+      "bytes": 21634
+    },
+    "privacyNotice": {
+      "title": "Privacy Notice",
+      "version": "ZAF-PRIVACY-2026-08-23-01",
+      "effectiveDate": "2026-08-23",
+      "filename": "ZAF-PRIVACY-2026-08-23-01.txt",
+      "sha256": "34a614aea5d63191994bb85d053f926c047e2a1a1908897ba63796312a5ac6ee",
+      "bytes": 15004
+    },
+    "cancellationPolicy": {
+      "title": "Cancellation, Refund and Cooling-off Policy",
+      "version": "ZAF-CANCEL-2026-08-23-01",
+      "effectiveDate": "2026-08-23",
+      "filename": "ZAF-CANCEL-2026-08-23-01.txt",
+      "sha256": "80030b930615839db1b5116e5cf9b4231acb4c3036df6ab9909642bc02efd413",
+      "bytes": 9255
+    },
+    "adultWaiver": {
+      "title": "Adult Participant Waiver and Risk Acknowledgement",
+      "version": "ZAF-ADULT-WAIVER-2026-08-23-01",
+      "effectiveDate": "2026-08-23",
+      "filename": "ZAF-ADULT-WAIVER-2026-08-23-01.txt",
+      "sha256": "84a520cbd72ac416183788c000c6e869dd1fd2bb0461abd60088cc36b355635f",
+      "bytes": 7144
+    },
+    "guardianAddendum": {
+      "title": "Parent/Guardian Consent and Youth Membership Addendum",
+      "version": "ZAF-GUARDIAN-2026-08-23-01",
+      "effectiveDate": "2026-08-23",
+      "filename": "ZAF-GUARDIAN-2026-08-23-01.txt",
+      "sha256": "72d460bb827622c6ef98438b0c356275b1f4c67c60306078a4718578635f40f6",
+      "bytes": 10593
+    }
+  }
+}

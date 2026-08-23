@@ -328,7 +328,8 @@ function freezeMembershipSnapshot(
     planName: requirePlainText(value.planName, "membership.planName"),
     participantFullName: requirePlainText(
       value.participantFullName,
-      "membership.participantFullName"
+      "membership.participantFullName",
+      2000
     ),
     contractMadeAtMillis: requireMillis(
       value.contractMadeAtMillis,
@@ -628,7 +629,8 @@ function validateAcknowledgementInput(
     ),
     participantFullName: requirePlainText(
       input.membership.participantFullName,
-      "membership.participantFullName"
+      "membership.participantFullName",
+      2000
     ),
   });
   if (membership.subscriptionId !== input.receipt.subscriptionId) {
@@ -679,7 +681,7 @@ export function buildCancellationAcknowledgementHtml(
   ${refundReview}
   <table style="border-collapse:collapse;margin:20px 0;">
     <tr><td style="padding:5px 16px 5px 0;color:#666;">Membership</td><td style="padding:5px 0;"><strong>${escapeHtml(membership.planName)}</strong></td></tr>
-    <tr><td style="padding:5px 16px 5px 0;color:#666;">Participant</td><td style="padding:5px 0;"><strong>${escapeHtml(membership.participantFullName)}</strong></td></tr>
+    <tr><td style="padding:5px 16px 5px 0;color:#666;">Participant(s)</td><td style="padding:5px 0;"><strong>${escapeHtml(membership.participantFullName)}</strong></td></tr>
     <tr><td style="padding:5px 16px 5px 0;color:#666;">Subscription reference</td><td style="padding:5px 0;"><code>${escapeHtml(membership.subscriptionId)}</code></td></tr>
     <tr><td style="padding:5px 16px 5px 0;color:#666;">Request type</td><td style="padding:5px 0;">Cooling-off cancellation</td></tr>
   </table>

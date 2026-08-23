@@ -50,6 +50,7 @@ import {
   CHECKOUT_DOCUMENTS,
   COMPANY,
   EXISTING_MEMBER_OFFER,
+  YOUTH_FAMILY_OFFER,
   formatBillingDate,
   formatPence,
   formatUnixBillingDate,
@@ -111,6 +112,13 @@ import {
   matchesApprovedLiveStripeCatalogueEntry,
 } from "./stripeLiveCatalog";
 
+/**
+ * Version of the browser/server checkout contract and the legal/commercial
+ * snapshot it accepts. Keep this independent from the stored document schema:
+ * a Firestore migration must not invalidate an otherwise exact Stripe retry.
+ */
+export const MEMBERSHIP_CHECKOUT_SCHEMA_VERSION = 2;
+
 const REGION = "europe-west1";
 
 /**
@@ -155,6 +163,10 @@ const stripeExistingMemberCouponId = defineString(
 );
 const stripeExistingMemberPromotionCodeId = defineString(
   "STRIPE_EXISTING_MEMBER_PROMOTION_CODE_ID",
+  {default: ""}
+);
+const stripeYouthFamilyCouponId = defineString(
+  "STRIPE_YOUTH_FAMILY_COUPON_ID",
   {default: ""}
 );
 
@@ -434,6 +446,12 @@ type MembershipIntentDoc = {
   /** Exact validated Price frozen for this attempt, even if config later rotates. */
   stripePriceId: string;
   participant: ParticipantRecord;
+  /** Complete ordered participant set; `participant` remains the legacy primary. */
+  participants: ParticipantRecord[];
+  /** Flat lookup keys support duplicate protection for every child. */
+  participantKeys: string[];
+  participantCount: number;
+  order: MembershipOrderSnapshot;
   guardian: GuardianRecord | null;
   acceptances: CheckoutAcceptanceRecord;
   checkoutSessionId: string | null;
@@ -448,6 +466,8 @@ type MembershipIntentDoc = {
   prorationBehavior: "none" | "create_prorations";
   /** Resolved Stripe id only; the customer-entered code is never persisted. */
   promotionCodeId: string | null;
+  /** Server-selected automatic youth-family Coupon; never supplied by a buyer. */
+  familyDiscountCouponId: string | null;
   firstFullChargeDate: string;
   checkoutExpiresAt: number;
   reservationExpiresAt: Timestamp;
@@ -457,12 +477,23 @@ type MembershipIntentDoc = {
 
 type MembershipDiscount = {
   couponId: string;
-  promotionCodeId: string;
-  amountOffPence: number;
-  currency: "gbp";
-  durationInMonths: number;
+  promotionCodeId: string | null;
+  amountOffPence: number | null;
+  currency: "gbp" | null;
+  durationInMonths: number | null;
   startsAt: number;
   endsAt: number | null;
+  kind?: "existing_member" | "youth_family";
+  percentOff?: number | null;
+  duration?: "repeating" | "forever";
+};
+
+type MembershipOrderSnapshot = {
+  participantCount: number;
+  unitAmountPence: number;
+  standardMonthlyPence: number;
+  familyDiscountPercent: number | null;
+  recurringMonthlyPence: number;
 };
 
 type MembershipPaymentSchedule = {
@@ -470,7 +501,7 @@ type MembershipPaymentSchedule = {
   firstPaymentAt: number;
   standardMonthlyPence: number;
   discountedMonthlyPence: number | null;
-  discountedPaymentCount: number;
+  discountedPaymentCount: number | null;
   fullPriceFrom: number | null;
 };
 
@@ -497,6 +528,10 @@ type MembershipDoc = {
   planName: string;
   grantsAlphaWodAccess: boolean;
   participant: ParticipantRecord;
+  participants: ParticipantRecord[];
+  participantKeys: string[];
+  participantCount: number;
+  order: MembershipOrderSnapshot;
   guardian: GuardianRecord | null;
   acceptances: MembershipAcceptanceRecord;
   state: MembershipState;
@@ -648,23 +683,115 @@ function resolvePresaleCancellationOutcome(
   };
 }
 
+type ParticipantContainer = {
+  participant?: ParticipantRecord | null;
+  participants?: ParticipantRecord[] | null;
+  participantKeys?: string[] | null;
+  participantCount?: number | null;
+};
+
+/** Normalises legacy singular records into the current ordered participant set. */
+function participantsFor(value: ParticipantContainer): ParticipantRecord[] {
+  if (Array.isArray(value.participants) && value.participants.length > 0) {
+    return value.participants;
+  }
+  return value.participant ? [value.participant] : [];
+}
+
+function participantKeysFor(value: ParticipantContainer): string[] {
+  const stored = Array.isArray(value.participantKeys) ?
+    value.participantKeys.filter((key) => typeof key === "string" && key) : [];
+  const derived = participantsFor(value).map(({participantKey}) => participantKey);
+  return [...new Set(stored.length > 0 ? stored : derived)];
+}
+
+function participantCountFor(value: ParticipantContainer): number {
+  const participants = participantsFor(value);
+  return Number.isSafeInteger(value.participantCount) &&
+      (value.participantCount as number) >= 1 ?
+    value.participantCount as number : Math.max(1, participants.length);
+}
+
+function participantNamesFor(value: ParticipantContainer): string {
+  return participantsFor(value).map(({fullName}) => fullName).join(", ");
+}
+
+function createOrderSnapshot(
+  commercialTerms: CommercialPlanSnapshot,
+  participantCount: number
+): MembershipOrderSnapshot {
+  const standardMonthlyPence = commercialTerms.amountPence * participantCount;
+  const familyDiscountApplies = youthFamilyDiscountApplies(
+    commercialTerms.planKey,
+    participantCount
+  );
+  const familyDiscountPercent = familyDiscountApplies ?
+    YOUTH_FAMILY_OFFER.percentOff : null;
+  return {
+    participantCount,
+    unitAmountPence: commercialTerms.amountPence,
+    standardMonthlyPence,
+    familyDiscountPercent,
+    recurringMonthlyPence: familyDiscountPercent === null ?
+      standardMonthlyPence : Math.round(
+        standardMonthlyPence * (100 - familyDiscountPercent) / 100
+      ),
+  };
+}
+
+function orderFor(
+  value: Pick<MembershipIntentDoc, "commercialTerms" | "planKey"> &
+    Partial<Pick<MembershipIntentDoc, "order" | "participant" | "participants" |
+      "participantKeys" | "participantCount">>
+): MembershipOrderSnapshot {
+  const participantCount = participantCountFor(value);
+  const commercialTerms = value.commercialTerms ??
+    createCommercialPlanSnapshot(value.planKey);
+  const stored = value.order;
+  if (stored && stored.participantCount === participantCount &&
+    stored.unitAmountPence === commercialTerms.amountPence &&
+    Number.isSafeInteger(stored.standardMonthlyPence) &&
+    Number.isSafeInteger(stored.recurringMonthlyPence)) {
+    return stored;
+  }
+  return createOrderSnapshot(commercialTerms, participantCount);
+}
+
+function discountedMonthlyPenceFor(
+  standardMonthlyPence: number,
+  discount: MembershipDiscount | null
+): number | null {
+  if (!discount) return null;
+  if (discount.kind === "youth_family" &&
+    discount.percentOff === YOUTH_FAMILY_OFFER.percentOff) {
+    return Math.round(
+      standardMonthlyPence * (100 - discount.percentOff) / 100
+    );
+  }
+  return typeof discount.amountOffPence === "number" ?
+    Math.max(0, standardMonthlyPence - discount.amountOffPence) : null;
+}
+
 function paymentScheduleFor(
   intent: MembershipIntentDoc,
   discount: MembershipDiscount | null,
   observedInitialChargePence: number | null
 ): MembershipPaymentSchedule {
-  const commercialTerms = intent.commercialTerms ??
-    createCommercialPlanSnapshot(intent.planKey);
+  const order = orderFor(intent);
   const firstPaymentAt = intent.firstPaymentAt ?? intent.billingCycleAnchor;
   return {
     amountDueTodayPence: intent.initialChargePence ?? observedInitialChargePence,
     firstPaymentAt,
-    standardMonthlyPence: commercialTerms.amountPence,
-    discountedMonthlyPence: discount ?
-      Math.max(0, commercialTerms.amountPence - discount.amountOffPence) : null,
-    discountedPaymentCount: discount?.durationInMonths ?? 0,
-    fullPriceFrom: discount ?
-      addUtcMonths(firstPaymentAt, discount.durationInMonths) : null,
+    standardMonthlyPence: order.standardMonthlyPence,
+    discountedMonthlyPence: discountedMonthlyPenceFor(
+      order.standardMonthlyPence,
+      discount
+    ),
+    discountedPaymentCount: discount?.duration === "forever" ?
+      null : discount?.durationInMonths ?? 0,
+    fullPriceFrom: discount?.duration === "forever" ? null :
+      typeof discount?.durationInMonths === "number" ?
+        addUtcMonths(firstPaymentAt, discount.durationInMonths) : null,
   };
 }
 
@@ -704,6 +831,60 @@ async function retrieveApprovedExistingMemberCoupon(
     throw new HttpsError(
       "failed-precondition",
       "The configured existing-member Coupon does not match the approved £5 offer."
+    );
+  }
+  return coupon;
+}
+
+function youthFamilyDiscountApplies(planKey: PlanKey, participantCount: number): boolean {
+  return (YOUTH_FAMILY_OFFER.eligiblePlanKeys as readonly string[]).includes(planKey) &&
+    participantCount >= YOUTH_FAMILY_OFFER.minimumParticipants;
+}
+
+async function resolveApprovedYouthProductIds(
+  billingStripe: Stripe
+): Promise<string[]> {
+  return Promise.all(YOUTH_FAMILY_OFFER.eligiblePlanKeys.map(async (planKey) => {
+    const typedPlanKey = planKey as PlanKey;
+    return assertStripePriceMatchesPlan(
+      billingStripe,
+      resolvePriceId(typedPlanKey),
+      getPlan(typedPlanKey)
+    );
+  }));
+}
+
+/** Validates the server-only 15%-forever Coupon against both youth Products. */
+async function retrieveApprovedYouthFamilyCoupon(
+  billingStripe: Stripe,
+  couponId: string,
+  expectedProductIds: readonly string[],
+  requireCurrentlyRedeemable = true
+): Promise<Stripe.Coupon> {
+  if (!couponId) {
+    throw new HttpsError(
+      "failed-precondition",
+      "The youth family-discount Coupon allowlist is not configured."
+    );
+  }
+  const coupon = await billingStripe.coupons.retrieve(couponId, {
+    expand: ["applies_to"],
+  });
+  assertStripeObjectMode("Coupon", coupon.id, coupon.livemode);
+  const applicableProducts = [...(coupon.applies_to?.products ?? [])].sort();
+  const expectedProducts = [...new Set(expectedProductIds)].sort();
+  const exactProducts = applicableProducts.length === expectedProducts.length &&
+    applicableProducts.every((id, index) => id === expectedProducts[index]);
+  if (coupon.id !== couponId || coupon.deleted ||
+    (requireCurrentlyRedeemable && coupon.valid !== true) ||
+    coupon.percent_off !== YOUTH_FAMILY_OFFER.percentOff ||
+    coupon.amount_off !== null || coupon.currency !== null ||
+    coupon.duration !== "forever" || coupon.duration_in_months !== null ||
+    coupon.redeem_by !== null || coupon.max_redemptions !== null ||
+    !exactProducts) {
+    throw new HttpsError(
+      "failed-precondition",
+      "The youth family Coupon does not match the approved 15% offer."
     );
   }
   return coupon;
@@ -785,11 +966,74 @@ async function resolveApprovedCheckoutDiscount(
   completionUnixSeconds: number
 ): Promise<MembershipDiscount | null> {
   const applied = session.discounts ?? [];
+  const participantCount = participantCountFor(intent);
+  const familyDiscountExpected = youthFamilyDiscountApplies(
+    intent.planKey,
+    participantCount
+  );
+  if (familyDiscountExpected !== Boolean(intent.familyDiscountCouponId)) {
+    throw new Error(`Checkout intent for ${session.id} has an invalid family-discount state.`);
+  }
   if (applied.length === 0) {
-    if (intent.promotionCodeId || (subscription.discounts ?? []).length > 0) {
+    if (intent.promotionCodeId || intent.familyDiscountCouponId ||
+      (subscription.discounts ?? []).length > 0) {
       throw new Error(`Subscription ${subscription.id} has an unapproved discount.`);
     }
     return null;
+  }
+  if (intent.familyDiscountCouponId) {
+    if (intent.promotionCodeId || applied.length !== 1) {
+      throw new Error(`Checkout Session ${session.id} has an invalid family discount.`);
+    }
+    const frozenCouponId = intent.familyDiscountCouponId;
+    const couponId = idOf(applied[0].coupon);
+    const promotionCodeId = idOf(applied[0].promotion_code);
+    if (couponId !== frozenCouponId || promotionCodeId !== null) {
+      throw new Error(`Checkout Session ${session.id} used an unapproved family discount.`);
+    }
+
+    const billingStripe = stripe();
+    const expectedProductIds = await resolveApprovedYouthProductIds(billingStripe);
+    const coupon = await retrieveApprovedYouthFamilyCoupon(
+      billingStripe,
+      frozenCouponId,
+      expectedProductIds,
+      false
+    );
+    const subscriptionDiscounts = (subscription.discounts ?? []).filter(
+      (value): value is Stripe.Discount => {
+        if (typeof value === "string") return false;
+        const compatibleDiscount = value as Stripe.Discount & {
+          coupon?: unknown;
+          promotion_code?: unknown;
+          source?: {coupon?: unknown; promotion_code?: unknown};
+        };
+        const subscriptionCouponId = idOf(compatibleDiscount.coupon) ??
+          idOf(compatibleDiscount.source?.coupon);
+        const subscriptionPromotionCodeId = idOf(compatibleDiscount.promotion_code) ??
+          idOf(compatibleDiscount.source?.promotion_code);
+        return subscriptionCouponId === coupon.id &&
+          subscriptionPromotionCodeId === null;
+      }
+    );
+    if (subscriptionDiscounts.length !== 1 || subscription.discounts.length !== 1) {
+      throw new Error(
+        `Subscription ${subscription.id} does not carry the approved family discount.`
+      );
+    }
+    const [subscriptionDiscount] = subscriptionDiscounts;
+    return {
+      kind: "youth_family",
+      couponId: coupon.id,
+      promotionCodeId: null,
+      amountOffPence: null,
+      percentOff: YOUTH_FAMILY_OFFER.percentOff,
+      currency: null,
+      duration: "forever",
+      durationInMonths: null,
+      startsAt: subscriptionDiscount.start ?? completionUnixSeconds,
+      endsAt: subscriptionDiscount.end ?? null,
+    };
   }
   if (!isPresaleIntent(intent) || intent.planKey !== EXISTING_MEMBER_OFFER.planKey ||
     !intent.promotionCodeId) {
@@ -927,6 +1171,27 @@ function requireBoundedString(value: unknown, field: string, min: number, max: n
   return text;
 }
 
+const UNSAFE_PERSON_NAME_CHARACTER =
+  /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/u;
+
+/**
+ * Names become durable contract and identity data. Reject characters that can
+ * be invisible, reorder text, or disappear between clients before normalising
+ * ordinary spacing. The identity normaliser below still strips them as a
+ * defence for historical stored rows that predate this input boundary.
+ */
+function requirePersonName(value: unknown, field: string): string {
+  const raw = typeof value === "string" ? value : "";
+  if (UNSAFE_PERSON_NAME_CHARACTER.test(raw) ||
+    UNSAFE_PERSON_NAME_CHARACTER.test(raw.normalize("NFKC"))) {
+    throw new HttpsError(
+      "invalid-argument",
+      `${field} contains unsupported invisible or control characters.`
+    );
+  }
+  return requireBoundedString(raw, field, 2, 160);
+}
+
 function normalizePromotionCode(value: unknown): string | null {
   if (value === undefined || value === null || value === "") return null;
   if (typeof value !== "string") {
@@ -960,9 +1225,18 @@ function requirePlanKey(value: unknown): PlanKey {
   return value;
 }
 
+function normalizeParticipantIdentityName(fullName: string): string {
+  return fullName.normalize("NFKC")
+    .replace(/\p{Default_Ignorable_Code_Point}/gu, "")
+    .replace(/\s+/gu, " ")
+    .replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/gu, "")
+    .trim()
+    .toLocaleLowerCase("en-GB");
+}
+
 function participantKeyFor(fullName: string, dateOfBirth: string): string {
   return createHash("sha256")
-    .update(`${fullName.trim().toLowerCase()}|${dateOfBirth}`)
+    .update(`${normalizeParticipantIdentityName(fullName)}|${dateOfBirth}`)
     .digest("hex");
 }
 
@@ -993,6 +1267,7 @@ type CheckoutFingerprintInput = {
   expectedBillingMode: "presale_deferred" | "standard";
   promotionCode: string | null;
   participant: ParticipantRecord;
+  participants?: ParticipantRecord[];
   guardian: GuardianRecord | null;
   signedName: string;
   commercialTerms: CommercialPlanSnapshot;
@@ -1003,18 +1278,20 @@ type CheckoutFingerprintInput = {
 
 /** Prevents a stable attempt id being replayed with materially different data. */
 function checkoutRequestFingerprint(input: CheckoutFingerprintInput): string {
+  const participants = input.participants?.length ?
+    input.participants : [input.participant];
   return sha256(JSON.stringify({
-    schemaVersion: MEMBERSHIP_SCHEMA_VERSION,
+    schemaVersion: MEMBERSHIP_CHECKOUT_SCHEMA_VERSION,
     payerUid: input.payerUid,
     planKey: input.planKey,
     expectedBillingMode: input.expectedBillingMode,
     promotionCode: input.promotionCode,
-    participant: {
-      fullName: input.participant.fullName,
-      dateOfBirth: input.participant.dateOfBirth,
-      isPayer: input.participant.isPayer,
-      participantKey: input.participant.participantKey,
-    },
+    participants: participants.map((participant) => ({
+      fullName: participant.fullName,
+      dateOfBirth: participant.dateOfBirth,
+      isPayer: participant.isPayer,
+      participantKey: participant.participantKey,
+    })),
     guardian: input.guardian,
     signedName: input.signedName,
     commercialTerms: input.commercialTerms,
@@ -1095,6 +1372,7 @@ const KNOWN_TEST_PRICE_IDS = new Set([
   "price_1U5PKZFzNDZoGGA0xsnNcV2m",
   "price_1U5PJHFzNDZoGGA0izMSvHP1",
   "price_1U5PFZFzNDZoGGA06T2ggw4M",
+  "price_1U7akwFzNDZoGGA0zOcCZthI",
   "price_1U5PEwFzNDZoGGA0d24UJaZd",
 ]);
 
@@ -1525,13 +1803,15 @@ function checkoutInProgressError(): HttpsError {
 function checkoutLockSpecs(
   payerUid: string | null,
   planKey: PlanKey,
-  participantKey: string
+  participantKeys: string | readonly string[]
 ): CheckoutLockSpec[] {
-  const specs: CheckoutLockSpec[] = [{
+  const keys = [...new Set(typeof participantKeys === "string" ?
+    [participantKeys] : participantKeys)];
+  const specs: CheckoutLockSpec[] = keys.map((participantKey) => ({
     id: `participant_${participantKey}`,
-    kind: "participant",
+    kind: "participant" as const,
     identityHash: participantKey,
-  }];
+  }));
 
   if (payerUid && getPlan(planKey).grantsAlphaWodAccess) {
     const payerHash = sha256(payerUid);
@@ -1652,6 +1932,82 @@ function acquireEntitlementOwner(
   }, {merge: true});
 }
 
+function participantMembershipQueries(participantKeys: readonly string[]) {
+  return participantKeys.flatMap((participantKey) => [
+    db().collection("memberships")
+      .where("participant.participantKey", "==", participantKey),
+    db().collection("memberships")
+      .where("participantKeys", "array-contains", participantKey),
+  ]);
+}
+
+type ParticipantIdentity = Pick<ParticipantRecord, "fullName" | "dateOfBirth">;
+
+/**
+ * Before plural youth checkout, memberships stored only the singular
+ * `participant` map and its key used the older trim/lower normalisation. DOB
+ * is the indexed candidate lookup; canonical name + DOB below is the actual
+ * identity comparison, so siblings sharing a birthday never collide.
+ */
+function legacySingularParticipantMembershipQueries(
+  participants: readonly ParticipantIdentity[]
+) {
+  return [...new Set(participants.map(({dateOfBirth}) => dateOfBirth))].map(
+    (dateOfBirth) => db().collection("memberships")
+      .where("participant.dateOfBirth", "==", dateOfBirth)
+  );
+}
+
+function canonicalParticipantIdentityToken(
+  participant: ParticipantIdentity
+): string {
+  return JSON.stringify([
+    participant.dateOfBirth,
+    normalizeParticipantIdentityName(participant.fullName),
+  ]);
+}
+
+function matchingLegacySingularParticipantDocs(
+  snapshots: readonly QuerySnapshot[],
+  participants: readonly ParticipantIdentity[]
+): QueryDocumentSnapshot[] {
+  const proposedIdentities = new Set(
+    participants.map(canonicalParticipantIdentityToken)
+  );
+  return uniqueMembershipDocs(snapshots).filter((doc) => {
+    const stored = doc.get("participant") as Partial<ParticipantRecord> | null;
+    return Boolean(stored && typeof stored.fullName === "string" &&
+      typeof stored.dateOfBirth === "string" &&
+      proposedIdentities.has(canonicalParticipantIdentityToken({
+        fullName: stored.fullName,
+        dateOfBirth: stored.dateOfBirth,
+      })));
+  });
+}
+
+function participantMembershipDocs(
+  keyedSnapshots: readonly QuerySnapshot[],
+  legacyDobSnapshots: readonly QuerySnapshot[],
+  participants: readonly ParticipantIdentity[]
+): QueryDocumentSnapshot[] {
+  const byId = new Map(
+    uniqueMembershipDocs(keyedSnapshots).map((doc) => [doc.id, doc])
+  );
+  matchingLegacySingularParticipantDocs(
+    legacyDobSnapshots,
+    participants
+  ).forEach((doc) => byId.set(doc.id, doc));
+  return [...byId.values()];
+}
+
+function uniqueMembershipDocs(
+  snapshots: readonly QuerySnapshot[]
+): QueryDocumentSnapshot[] {
+  const byId = new Map<string, QueryDocumentSnapshot>();
+  snapshots.forEach((snapshot) => snapshot.docs.forEach((doc) => byId.set(doc.id, doc)));
+  return [...byId.values()];
+}
+
 /**
  * Atomically reserves every uniqueness key and checks existing memberships.
  * Stripe is deliberately called only after this transaction has committed.
@@ -1662,16 +2018,19 @@ async function reserveCheckoutAttempt(
   nowMillis: number,
   convergedMembershipIds?: ReadonlySet<string>
 ): Promise<CheckoutReservationResult> {
+  const participants = participantsFor(proposedIntent);
+  const participantKeys = participantKeysFor(proposedIntent);
   const lockSpecs = checkoutLockSpecs(
     proposedIntent.payerUid,
     proposedIntent.planKey,
-    proposedIntent.participant.participantKey
+    participantKeys
   );
   const lockRefs = lockSpecs.map((spec) =>
     db().collection(CHECKOUT_LOCK_COLLECTION).doc(spec.id)
   );
-  const participantQuery = db().collection("memberships")
-    .where("participant.participantKey", "==", proposedIntent.participant.participantKey);
+  const participantQueries = participantMembershipQueries(participantKeys);
+  const legacyParticipantQueries =
+    legacySingularParticipantMembershipQueries(participants);
   const payerQuery = proposedIntent.payerUid &&
       proposedIntent.commercialTerms.grantsAlphaWodAccess ?
     db().collection("memberships").where("payerUid", "==", proposedIntent.payerUid) :
@@ -1701,14 +2060,24 @@ async function reserveCheckoutAttempt(
 
     // All reads precede every write, as Firestore transactions require.
     const lockSnaps = await Promise.all(lockRefs.map((ref) => tx.get(ref)));
-    const byParticipant = await tx.get(participantQuery);
+    const participantSnaps = await Promise.all(
+      participantQueries.map((query) => tx.get(query))
+    );
+    const legacyParticipantSnaps = await Promise.all(
+      legacyParticipantQueries.map((query) => tx.get(query))
+    );
+    const byParticipant = participantMembershipDocs(
+      participantSnaps,
+      legacyParticipantSnaps,
+      participants
+    );
     const byPayer = payerQuery ? await tx.get(payerQuery) : null;
     const byTarget = targetQuery ? await tx.get(targetQuery) : null;
     const entitlementOwner = proposedIntent.payerUid && payerQuery ?
       await readEntitlementOwner(tx, proposedIntent.payerUid, intentRef.id) : null;
     if (convergedMembershipIds) {
       assertEligibilityDocsWereConverged([
-        ...byParticipant.docs,
+        ...byParticipant,
         ...(byPayer?.docs ?? []).filter((doc) =>
           doc.get("grantsAlphaWodAccess") === true
         ),
@@ -1738,7 +2107,7 @@ async function reserveCheckoutAttempt(
       snap.exists ? snap.get("status") as MembershipIntentDoc["status"] : null,
     ]));
 
-    const blockingParticipantDocs = byParticipant.docs.filter(
+    const blockingParticipantDocs = byParticipant.filter(
       isBlockingMembershipDoc
     );
     const blockingPayerDocs = (byPayer?.docs ?? []).filter((doc) =>
@@ -2746,7 +3115,9 @@ async function convergeMembershipFromStripe(
 
   let subscription: Stripe.Subscription;
   try {
-    subscription = await stripe().subscriptions.retrieve(subscriptionId);
+    subscription = await stripe().subscriptions.retrieve(subscriptionId, {
+      expand: ["discounts"],
+    });
     assertStripeObjectMode("Subscription", subscription.id, subscription.livemode);
   } catch (error) {
     if (lease.state === "acquired") {
@@ -2831,6 +3202,12 @@ async function convergeMembershipFromStripe(
           stripePriceId: stored.stripePriceId,
           stripeCustomerId: stored.stripeCustomerId,
           billingCycleAnchor: stored.billingCycleAnchor,
+          ...(Number.isSafeInteger(stored.participantCount) ? {
+            participantCount: stored.participantCount,
+          } : {}),
+          ...(stored.schemaVersion >= 2 ? {
+            discountCouponId: stored.discount?.couponId ?? null,
+          } : {}),
         }
       );
       const providerNeedsManualReview = Boolean(currentContractMismatch);
@@ -2862,7 +3239,7 @@ async function convergeMembershipFromStripe(
         const matchingLines = activationPayment.lines.filter((line) =>
           line.subscriptionId === subscriptionId &&
           line.priceId === stored.stripePriceId &&
-          line.quantity === 1 && line.proration === false
+          line.quantity === participantCountFor(stored) && line.proration === false
         );
         if (matchingLines.length !== 1) {
           throw new Error(
@@ -2878,9 +3255,11 @@ async function convergeMembershipFromStripe(
             `Invoice ${activationPayment.invoiceId} is not an approved recurring payment.`
           );
         }
-        const discountedPeriod = Boolean(stored.discount) &&
-          typeof stored.paymentSchedule?.fullPriceFrom === "number" &&
-          membershipLine.periodStart < stored.paymentSchedule.fullPriceFrom;
+        const discountedPeriod = Boolean(stored.discount) && (
+          stored.discount?.duration === "forever" ||
+          (typeof stored.paymentSchedule?.fullPriceFrom === "number" &&
+            membershipLine.periodStart < stored.paymentSchedule.fullPriceFrom)
+        );
         const expectedAmount = discountedPeriod ?
           stored.paymentSchedule?.discountedMonthlyPence :
           (stored.paymentSchedule?.standardMonthlyPence ??
@@ -3545,17 +3924,28 @@ function assertEligibilityDocsWereConverged(
  * concurrent local claims/links/checkouts still contend atomically.
  */
 async function convergeCheckoutDuplicateScope(
-  participantKey: string,
+  participants: readonly ParticipantRecord[],
+  participantKeys: readonly string[],
   payerUid: string | null,
   grantsAlphaWodAccess: boolean,
   converge: (userId: string) => Promise<void>
 ): Promise<Set<string>> {
-  const byParticipant = await db().collection("memberships")
-    .where("participant.participantKey", "==", participantKey).get();
+  const participantSnaps = await Promise.all(
+    participantMembershipQueries(participantKeys).map((query) => query.get())
+  );
+  const legacyParticipantSnaps = await Promise.all(
+    legacySingularParticipantMembershipQueries(participants)
+      .map((query) => query.get())
+  );
+  const byParticipant = participantMembershipDocs(
+    participantSnaps,
+    legacyParticipantSnaps,
+    participants
+  );
   const accountMemberships = payerUid && grantsAlphaWodAccess ?
     await alphaWodMembershipsForAccount(payerUid) : [];
   return convergeEligibilityMemberships(
-    [...byParticipant.docs, ...accountMemberships],
+    [...byParticipant, ...accountMemberships],
     converge,
     "checkout_duplicate_admission"
   );
@@ -3771,10 +4161,18 @@ async function admitCheckoutRequest(input: {
 function buildCreateMembershipCheckoutHandler(
   assertPurchaseOpen: () => void,
   enforceAppCheck = !isFirebaseFunctionsEmulatorProcess(),
-  converge: (userId: string) => Promise<void> = async () => undefined
+  converge: (userId: string) => Promise<void> = async () => undefined,
+  requiredCheckoutSchemaVersion?: number
 ) {
   return async (request: any) => {
     assertCheckoutAppCheck(request, enforceAppCheck);
+    if (requiredCheckoutSchemaVersion !== undefined &&
+      request.data?.checkoutSchemaVersion !== requiredCheckoutSchemaVersion) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Refresh the membership page before starting checkout."
+      );
+    }
     if (!isFirebaseFunctionsEmulatorProcess()) {
       await admitEarlyCheckoutRequest(request);
     }
@@ -3808,11 +4206,11 @@ function buildCreateMembershipCheckoutHandler(
     }
     const planKey = requirePlanKey(request.data?.planKey);
     const plan = getPlan(planKey);
-    const participantName = requireBoundedString(
-      request.data?.participantFullName, "participantFullName", 2, 160
+    const participantName = requirePersonName(
+      request.data?.participantFullName, "participantFullName"
     );
     const dateOfBirth = requireBoundedString(request.data?.participantDateOfBirth, "participantDateOfBirth", 10, 10);
-    const signedName = requireBoundedString(request.data?.signedName, "signedName", 2, 160);
+    const signedName = requirePersonName(request.data?.signedName, "signedName");
     const participantIsPayer = request.data?.participantIsPayer === true;
 
     const now = Date.now();
@@ -3842,6 +4240,73 @@ function buildCreateMembershipCheckoutHandler(
       );
     }
 
+    const rawAdditionalParticipants = request.data?.additionalParticipants;
+    if (plan.audience === "adult" && rawAdditionalParticipants !== undefined) {
+      if (!Array.isArray(rawAdditionalParticipants) || rawAdditionalParticipants.length > 0) {
+        throw new HttpsError(
+          "invalid-argument",
+          "Additional participants are available only for youth memberships."
+        );
+      }
+    }
+    if (plan.audience === "youth" && rawAdditionalParticipants !== undefined &&
+      !Array.isArray(rawAdditionalParticipants)) {
+      throw new HttpsError(
+        "invalid-argument",
+        "additionalParticipants must be a list of children."
+      );
+    }
+    const additionalInputs = plan.audience === "youth" &&
+        Array.isArray(rawAdditionalParticipants) ? rawAdditionalParticipants : [];
+    if (additionalInputs.length + 1 > YOUTH_FAMILY_OFFER.maximumParticipants) {
+      throw new HttpsError(
+        "invalid-argument",
+        `A youth checkout can include at most ${YOUTH_FAMILY_OFFER.maximumParticipants} children.`
+      );
+    }
+    const additionalParticipants: ParticipantRecord[] = additionalInputs.map(
+      (rawParticipant: unknown, index: number) => {
+        if (!rawParticipant || typeof rawParticipant !== "object" ||
+          Array.isArray(rawParticipant)) {
+          throw new HttpsError(
+            "invalid-argument",
+            `Child ${index + 2} details are invalid.`
+          );
+        }
+        const input = rawParticipant as Record<string, unknown>;
+        const fullName = requirePersonName(
+          input.fullName,
+          `additionalParticipants[${index}].fullName`
+        );
+        const childDateOfBirth = requireBoundedString(
+          input.dateOfBirth,
+          `additionalParticipants[${index}].dateOfBirth`,
+          10,
+          10
+        );
+        const childAge = resolveAgeFromDateOfBirth(childDateOfBirth, now);
+        if (childAge === null) {
+          throw new HttpsError(
+            "invalid-argument",
+            `Enter a valid date of birth for child ${index + 2}.`
+          );
+        }
+        if (!isAgeEligibleForPlan(plan, childAge)) {
+          throw new HttpsError(
+            "failed-precondition",
+            `Child ${index + 2}'s age (${childAge}) is not eligible for ${plan.name}.`
+          );
+        }
+        return {
+          fullName,
+          dateOfBirth: childDateOfBirth,
+          age: childAge,
+          isPayer: false,
+          participantKey: participantKeyFor(fullName, childDateOfBirth),
+        };
+      }
+    );
+
     // Guardian rules: for a youth plan the payer must be the guardian and can
     // never be the participant.
     let guardian: GuardianRecord | null = null;
@@ -3850,16 +4315,15 @@ function buildCreateMembershipCheckoutHandler(
         throw new HttpsError("failed-precondition", POLICY_TEXT.guardianRequirement);
       }
       guardian = {
-        fullName: requireBoundedString(request.data?.guardianFullName, "guardianFullName", 2, 160),
+        fullName: requirePersonName(request.data?.guardianFullName, "guardianFullName"),
         relationship: requireBoundedString(request.data?.guardianRelationship, "guardianRelationship", 2, 80),
         confirmedAuthority: true,
       };
     }
 
     const expectedSignedName = guardian?.fullName ?? participantName;
-    const comparableName = (value: string) => value.normalize("NFKC")
-      .trim().replace(/\s+/g, " ").toLocaleLowerCase("en-GB");
-    if (comparableName(signedName) !== comparableName(expectedSignedName)) {
+    if (normalizeParticipantIdentityName(signedName) !==
+      normalizeParticipantIdentityName(expectedSignedName)) {
       throw new HttpsError(
         "failed-precondition",
         `Type ${plan.audience === "youth" ? "the paying adult's" : "your"} full name exactly to sign.`
@@ -3868,7 +4332,8 @@ function buildCreateMembershipCheckoutHandler(
 
     const commercialTerms = createCommercialPlanSnapshot(planKey);
     const documents = resolveCheckoutDocuments(planKey);
-    const statements = resolveCheckoutAcceptanceStatements(planKey);
+    const participantCount = 1 + additionalParticipants.length;
+    const statements = resolveCheckoutAcceptanceStatements(planKey, participantCount);
     const acceptedStatementIds = requireExactCheckoutAcceptanceIds(
       request.data?.acceptedStatementIds,
       statements
@@ -3889,6 +4354,15 @@ function buildCreateMembershipCheckoutHandler(
       isPayer: participantIsPayer,
       participantKey,
     };
+    const participants = [participant, ...additionalParticipants];
+    const participantKeys = participants.map(({participantKey: key}) => key);
+    if (new Set(participantKeys).size !== participantKeys.length) {
+      throw new HttpsError(
+        "invalid-argument",
+        "Each child can be included only once in the same checkout."
+      );
+    }
+    const order = createOrderSnapshot(commercialTerms, participantCount);
 
     const requestFingerprint = checkoutRequestFingerprint({
       payerUid,
@@ -3896,6 +4370,7 @@ function buildCreateMembershipCheckoutHandler(
       expectedBillingMode,
       promotionCode,
       participant,
+      participants,
       guardian,
       signedName,
       commercialTerms,
@@ -3924,6 +4399,7 @@ function buildCreateMembershipCheckoutHandler(
       priceId: string;
       productId: string;
       origin: string;
+      familyDiscountCouponId: string | null;
     } | null = null;
     const ensureCheckoutConfig = async (frozenPriceId?: string) => {
       if (checkoutConfig) {
@@ -3940,7 +4416,24 @@ function buildCreateMembershipCheckoutHandler(
         planKey === EXISTING_MEMBER_OFFER.planKey) {
         await retrieveApprovedExistingMemberCoupon(client, productId);
       }
-      checkoutConfig = {client, priceId, productId, origin};
+      let familyDiscountCouponId: string | null = null;
+      if (youthFamilyDiscountApplies(planKey, participantCount)) {
+        const youthProductIds = await resolveApprovedYouthProductIds(client);
+        const configuredCouponId = stripeYouthFamilyCouponId.value().trim();
+        const coupon = await retrieveApprovedYouthFamilyCoupon(
+          client,
+          configuredCouponId,
+          youthProductIds
+        );
+        familyDiscountCouponId = coupon.id;
+      }
+      checkoutConfig = {
+        client,
+        priceId,
+        productId,
+        origin,
+        familyDiscountCouponId,
+      };
       return checkoutConfig;
     };
 
@@ -3953,7 +4446,8 @@ function buildCreateMembershipCheckoutHandler(
       // whether an older subscription is terminal. The reservation
       // transaction below re-runs every duplicate query after convergence.
       convergedMembershipIds = await convergeCheckoutDuplicateScope(
-        participantKey,
+        participants,
+        participantKeys,
         payerUid,
         commercialTerms.grantsAlphaWodAccess,
         converge
@@ -4019,7 +4513,7 @@ function buildCreateMembershipCheckoutHandler(
       const reservationLockIds = checkoutLockSpecs(
         payerUid,
         planKey,
-        participantKey
+        participantKeys
       ).map((spec) => spec.id);
       proposedIntent = {
         schemaVersion: MEMBERSHIP_SCHEMA_VERSION,
@@ -4032,6 +4526,10 @@ function buildCreateMembershipCheckoutHandler(
         stripeMode: assertBillingEnvironment().stripeMode,
         stripePriceId: validatedConfig.priceId,
         participant,
+        participants,
+        participantKeys,
+        participantCount,
+        order,
         guardian,
         acceptances: {
           signedName,
@@ -4049,6 +4547,7 @@ function buildCreateMembershipCheckoutHandler(
         initialChargePence: billingPolicy.paymentDueToday ? null : 0,
         prorationBehavior: billingPolicy.prorationBehavior,
         promotionCodeId,
+        familyDiscountCouponId: validatedConfig.familyDiscountCouponId,
         firstFullChargeDate: billingPolicy.firstFullChargeDate,
         checkoutExpiresAt,
         reservationExpiresAt: Timestamp.fromMillis(
@@ -4208,9 +4707,11 @@ function buildCreateMembershipCheckoutHandler(
         adaptive_pricing: {enabled: false},
         ...(customerId ? {customer: customerId} : {}),
         ...(payerUid ? {client_reference_id: payerUid} : {}),
-        line_items: [{price: priceId, quantity: 1}],
+        line_items: [{price: priceId, quantity: participantCountFor(intent)}],
         payment_method_collection: "always",
-        ...(intent.promotionCodeId ? {
+        ...(intent.familyDiscountCouponId ? {
+          discounts: [{coupon: intent.familyDiscountCouponId}],
+        } : intent.promotionCodeId ? {
           discounts: [{promotion_code: intent.promotionCodeId}],
         } : {}),
         // Dynamic payment methods are managed from the Stripe Dashboard, so
@@ -4235,12 +4736,14 @@ function buildCreateMembershipCheckoutHandler(
             ...(payerUid ? {firebaseUid: payerUid} : {}),
             planKey,
             intentId: intentRef.id,
+            participantCount: String(participantCountFor(intent)),
           },
         },
         metadata: {
           ...(payerUid ? {firebaseUid: payerUid} : {}),
           planKey,
           intentId: intentRef.id,
+          participantCount: String(participantCountFor(intent)),
         },
       }, {idempotencyKey: `checkout:${checkoutAttemptHash}`});
       assertStripeObjectMode("Checkout Session", session.id, session.livemode);
@@ -4377,7 +4880,8 @@ function buildCreateMembershipCheckoutHandler(
 }
 
 export function buildCreateMembershipCheckoutSession(
-  converge: (userId: string) => Promise<void>
+  converge: (userId: string) => Promise<void>,
+  requiredCheckoutSchemaVersion?: number
 ) {
   return onCall(
     {
@@ -4390,7 +4894,8 @@ export function buildCreateMembershipCheckoutSession(
     buildCreateMembershipCheckoutHandler(
       requirePurchaseFlowOpen,
       !isFirebaseFunctionsEmulatorProcess(),
-      converge
+      converge,
+      requiredCheckoutSchemaVersion
     )
   );
 }
@@ -4461,9 +4966,19 @@ export const getMyMemberships = onCall({region: REGION}, async (request) => {
 
   const memberships = snap.docs.map((doc) => {
     const membership = doc.data() as MembershipDoc;
+    const participants = participantsFor(membership);
     const cancellationRequest = membership.cancellationRequest;
     const cancellationKind = cancellationRequest?.kind ??
       (cancellationRequest ? "contractual" : null);
+    const requestReceipt = cancellationKind !== "cooling_off" &&
+      cancellationRequest &&
+      typeof cancellationRequest.id === "string" &&
+      cancellationRequest.id &&
+      cancellationRequest.receivedAt instanceof Timestamp ? {
+        reference: cancellationRequest.id,
+        receivedAt: cancellationRequest.receivedAt.toDate().toISOString(),
+        kind: cancellationKind,
+      } : null;
     let coolingOffReceipt: MembershipCancellationReceipt | null = null;
     let coolingOffProjection: ReturnType<
       typeof buildMembershipCancellationProjection
@@ -4504,6 +5019,8 @@ export const getMyMemberships = onCall({region: REGION}, async (request) => {
       state: membership.state,
       grantsAlphaWodAccess: membership.grantsAlphaWodAccess,
       participantFullName: membership.participant?.fullName ?? "",
+      participantFullNames: participants.map(({fullName}) => fullName),
+      participantCount: participantCountFor(membership),
       participantIsPayer: membership.participant?.isPayer ?? false,
       billingMode: membership.billingMode ?? "standard",
       serviceStartsAt: membership.serviceStartsAt ?? null,
@@ -4528,7 +5045,7 @@ export const getMyMemberships = onCall({region: REGION}, async (request) => {
           membership.cancellationAcknowledgementStatus
         ) ?? "pending",
         refundReviewRequired: coolingOffReceipt.outcome.refundReviewRequired,
-      } : null,
+      } : requestReceipt,
       cancellationPending: cancellationRequest?.status === "pending",
       cancellationManualReview: cancellationRequest?.status === "manual_review" ||
         coolingOffProjectionError !== null,
@@ -5145,13 +5662,13 @@ export function buildRequestMembershipCancellation(
             payer: {
               uid: userId,
               fullName: membership.guardian?.fullName ??
-                membership.participant.fullName,
+                participantNamesFor(membership),
               email: membership.payerEmail,
             },
             sender: {
               uid: userId,
               fullName: membership.guardian?.fullName ??
-                membership.participant.fullName,
+                participantNamesFor(membership),
               email: membership.payerEmail,
             },
             sourceEvidence: {
@@ -5161,7 +5678,7 @@ export function buildRequestMembershipCancellation(
             membership: {
               planKey: membership.planKey,
               planName: membership.planName,
-              participantFullName: membership.participant.fullName,
+              participantFullName: participantNamesFor(membership),
               contractMadeAtMillis: contractMadeAt.toMillis(),
               coolingOffEndsAtMillis: coolingOffEndMillis,
               serviceStartsAtMillis: membership.serviceStartsAt * 1000,
@@ -5197,11 +5714,11 @@ export function buildRequestMembershipCancellation(
                 membership: {
                   subscriptionId,
                   planName: membership.planName,
-                  participantFullName: membership.participant.fullName,
+                  participantFullName: participantNamesFor(membership),
                 },
                 recipient: {
                   fullName: membership.guardian?.fullName ??
-                    membership.participant.fullName,
+                    participantNamesFor(membership),
                   email: membership.payerEmail,
                 },
               });
@@ -5403,6 +5920,11 @@ export function buildRequestMembershipCancellation(
         return {
           ok: true,
           outcome: settled.outcome,
+          receipt: {
+            reference: prepared.requestId,
+            receivedAt: prepared.receivedAt.toDate().toISOString(),
+            kind: prepared.kind,
+          },
           alreadyCancelled: prepared.alreadyFinalized || !settled.newlyFinalized,
         };
       } catch (error) {
@@ -5916,6 +6438,9 @@ async function fulfilCheckoutSession(
     stripeCustomerId: sessionCustomerId,
     billingCycleAnchor: intent.billingCycleAnchor,
     intentId: intentRef.id,
+    ...(Number.isSafeInteger(intent.participantCount) ? {
+      participantCount: intent.participantCount,
+    } : {}),
   });
   if (contractMismatch) throw new Error(contractMismatch);
   const discount = await resolveApprovedCheckoutDiscount(
@@ -5968,6 +6493,10 @@ async function fulfilCheckoutSession(
     planName: commercialTerms.planName,
     grantsAlphaWodAccess: commercialTerms.grantsAlphaWodAccess,
     participant: intent.participant,
+    participants: participantsFor(intent),
+    participantKeys: participantKeysFor(intent),
+    participantCount: participantCountFor(intent),
+    order: orderFor(intent),
     guardian: intent.guardian,
     acceptances: {
       ...intent.acceptances,
@@ -6107,6 +6636,9 @@ type SubscriptionContractExpectation = {
   stripeCustomerId: string;
   billingCycleAnchor: number;
   intentId?: string;
+  participantCount?: number;
+  /** Undefined skips legacy validation; null requires no provider discount. */
+  discountCouponId?: string | null;
 };
 
 /** Returns the first immutable provider-contract mismatch, or null when safe. */
@@ -6143,8 +6675,29 @@ function stripeSubscriptionContractMismatch(
   if (idOf(items[0].price) !== expected.stripePriceId) {
     return `Subscription ${subscription.id} has a different membership Price.`;
   }
-  if (items[0].quantity !== 1) {
-    return `Subscription ${subscription.id} does not have quantity one.`;
+  const expectedQuantity = expected.participantCount ?? 1;
+  if (items[0].quantity !== expectedQuantity) {
+    return `Subscription ${subscription.id} does not have quantity ${expectedQuantity}.`;
+  }
+  if (expected.discountCouponId !== undefined) {
+    const discounts = subscription.discounts ?? [];
+    if (expected.discountCouponId === null && discounts.length !== 0) {
+      return `Subscription ${subscription.id} carries an unexpected discount.`;
+    }
+    if (expected.discountCouponId !== null) {
+      if (discounts.length !== 1 || typeof discounts[0] === "string") {
+        return `Subscription ${subscription.id} does not carry its approved discount.`;
+      }
+      const compatibleDiscount = discounts[0] as Stripe.Discount & {
+        coupon?: unknown;
+        source?: {coupon?: unknown};
+      };
+      const couponId = idOf(compatibleDiscount.coupon) ??
+        idOf(compatibleDiscount.source?.coupon);
+      if (couponId !== expected.discountCouponId) {
+        return `Subscription ${subscription.id} carries a different discount.`;
+      }
+    }
   }
   return null;
 }
@@ -6697,6 +7250,7 @@ export function buildListMemberships(requireAdmin: (request: any) => Promise<voi
       .map((receipt) => [receipt.id, receipt.data()]));
     const memberships = snap.docs.map((doc) => {
       const membership = doc.data() as MembershipDoc;
+      const participants = participantsFor(membership);
       const requestReceiptId = membership.cancellationRequest?.receiptId;
       let receipt: MembershipCancellationReceipt | null = null;
       if (requestReceiptId) {
@@ -6719,7 +7273,10 @@ export function buildListMemberships(requireAdmin: (request: any) => Promise<voi
         grantsAlphaWodAccess: membership.grantsAlphaWodAccess,
         entitlementTargetUid: membership.entitlementTargetUid,
         participantFullName: membership.participant?.fullName ?? "",
+        participantFullNames: participants.map(({fullName}) => fullName),
+        participantCount: participantCountFor(membership),
         participantAge: membership.participant?.age ?? null,
+        participantAges: participants.map(({age}) => age),
         participantIsPayer: membership.participant?.isPayer ?? false,
         guardianFullName: membership.guardian?.fullName ?? null,
         billingMode: membership.billingMode ?? "standard",
@@ -6988,6 +7545,7 @@ export const __testing = {
   convergeEligibilityMembershipFromStripe,
   handleStripeEvent,
   buildConfirmationPayload,
+  buildWelcomePayload,
   ensureMembershipAndConfirmationOutbox,
   acquireConfirmationEmailLease,
   processMembershipConfirmationOutbox,
@@ -7024,11 +7582,91 @@ type ConfirmationDetails = {
   claimUrl: string | null;
 };
 
+type WelcomeEmailVariant = {
+  eyebrow: string;
+  headline: string;
+  summary: string;
+  inclusions: string[];
+  accessNote: string;
+  appCta?: {
+    title: string;
+    buttonLabel: string;
+  };
+};
+
+const ZERO_ALPHA_APP_LOGIN_URL = "https://alpha-wod.vercel.app/login";
+const ZERO_ALPHA_EMAIL_LOGO_URL = "https://alpha-wod.vercel.app/ZERO-ALPHA.png";
+
+const WELCOME_EMAIL_VARIANTS: Record<PlanKey, WelcomeEmailVariant> = {
+  adult_unlimited: {
+    eyebrow: "ADULT UNLIMITED",
+    headline: "You’re in. Let’s get to work.",
+    summary: "Full access to coached sessions, the gym floor and eligible Zero Alpha App access.",
+    inclusions: [
+      "Coached sessions and gym-floor access",
+      "Eligible Zero Alpha App access included",
+      "A rolling monthly membership with no minimum term",
+    ],
+    accessNote: "Zero Alpha App access becomes available to an eligible, linked account while the membership is active.",
+    appCta: {
+      title: "Sign up or log into the Zero Alpha app!",
+      buttonLabel: "Open the Zero Alpha app",
+    },
+  },
+  adult_ladies: {
+    eyebrow: "LADIES ONLY",
+    headline: "Welcome to Ladies Only.",
+    summary: "Your space for ladies-only coached sessions and gym access.",
+    inclusions: [
+      "Ladies-only coached sessions",
+      "Gym-floor access",
+      "A rolling monthly membership with no minimum term",
+    ],
+    accessNote: "This membership does not include Zero Alpha App access.",
+  },
+  adult_gym: {
+    eyebrow: "GYM ONLY",
+    headline: "Your gym membership is ready.",
+    summary: "Straightforward access to the gym floor, built around your own training.",
+    inclusions: [
+      "Gym-floor access",
+      "Independent gym-floor training",
+      "A rolling monthly membership with no minimum term",
+    ],
+    accessNote: "This membership does not include coached sessions or Zero Alpha App access.",
+  },
+  youth_youngstars: {
+    eyebrow: "HYROX YOUNGSTARS",
+    headline: "A strong start begins here.",
+    summary: "Age-appropriate coached HYROX training for children aged 6 to 11.",
+    inclusions: [
+      "Coached, age-appropriate HYROX sessions",
+      "A supportive introduction to movement and fitness",
+      "15% family discount while this subscription covers two or more children",
+    ],
+    accessNote: "Youth memberships do not include Zero Alpha App access.",
+  },
+  youth_teenstars: {
+    eyebrow: "HYROX TEENSTARS",
+    headline: "Their next level starts here.",
+    summary: "Coached HYROX training for young athletes aged 12 to 16.",
+    inclusions: [
+      "Coached, age-appropriate HYROX sessions",
+      "Training that develops fitness, confidence and movement skills",
+      "15% family discount while this subscription covers two or more children",
+    ],
+    accessNote: "Youth memberships do not include Zero Alpha App access.",
+  },
+};
+
 function buildConfirmationHtml(details: ConfirmationDetails): string {
   const {membership, initialChargePence, claimUrl} = details;
   const commercialTerms = membership.commercialTerms ??
     createCommercialPlanSnapshot(membership.planKey);
   const isYouthPlan = commercialTerms.audience === "youth";
+  const participants = participantsFor(membership);
+  const participantCount = participantCountFor(membership);
+  const order = orderFor(membership);
   const isPresale = membership.billingMode === "presale_deferred";
   const firstFullCharge = formatUnixBillingDate(membership.billingCycleAnchor);
   const documents = membership.acceptances.documents
@@ -7053,8 +7691,27 @@ function buildConfirmationHtml(details: ConfirmationDetails): string {
 
   const rows: Array<[string, string]> = [
     ["Plan", commercialTerms.planName],
-    [isYouthPlan ? "Child" : "Participant", membership.participant.fullName],
-    ["Monthly price", `${formatPence(commercialTerms.amountPence)} per month`],
+    [isYouthPlan && participantCount > 1 ? "Children" :
+      isYouthPlan ? "Child" : "Participant",
+    participants.map(({fullName}) => fullName).join(", ")],
+    ...(isYouthPlan ? [
+      [
+        "Contracted quantity",
+        `${participantCount} ${participantCount === 1 ? "child" : "children"}`,
+      ] as [string, string],
+      [
+        "Price per child",
+        `${formatPence(order.unitAmountPence)} per month`,
+      ] as [string, string],
+      [
+        "Undiscounted monthly subtotal",
+        `${formatPence(order.standardMonthlyPence)} per month`,
+      ] as [string, string],
+    ] : []),
+    [isYouthPlan ? "Recurring monthly total" : "Monthly price", `${formatPence(
+      membership.discount?.kind === "youth_family" ?
+        order.recurringMonthlyPence : order.standardMonthlyPence
+    )} per month`],
     [
       "Paid today",
       isPresale && initialChargePence === 0 ?
@@ -7066,7 +7723,22 @@ function buildConfirmationHtml(details: ConfirmationDetails): string {
     ["Then", "The first of each month"],
   ];
 
-  if (membership.discount) {
+  if (membership.discount?.kind === "youth_family") {
+    const recurringTotalIndex = rows.findIndex(([label]) =>
+      label === "Recurring monthly total"
+    );
+    rows.splice(recurringTotalIndex, 0, [
+      "Family discount",
+      `${YOUTH_FAMILY_OFFER.percentOff}% (−${formatPence(
+        order.standardMonthlyPence - order.recurringMonthlyPence
+      )}) off the ${formatPence(order.standardMonthlyPence)} subtotal; ` +
+      `${formatPence(order.recurringMonthlyPence)} per month while ` +
+      "this subscription covers at least two children",
+    ]);
+  } else if (membership.discount &&
+    typeof membership.discount.amountOffPence === "number" &&
+    typeof membership.discount.durationInMonths === "number" &&
+    typeof membership.paymentSchedule.fullPriceFrom === "number") {
     rows.splice(3, 0, [
       "Existing-member offer",
       `${formatPence(commercialTerms.amountPence - membership.discount.amountOffPence)} for the ` +
@@ -7099,7 +7771,16 @@ function buildConfirmationHtml(details: ConfirmationDetails): string {
     "";
 
   return `<!doctype html>
-<html><body style="font-family:Arial,Helvetica,sans-serif;color:#111;line-height:1.6;">
+<html lang="en"><head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>${escapeHtml(`Your ${commercialTerms.planName} is confirmed`)}</title>
+</head><body style="font-family:Arial,Helvetica,sans-serif;color:#111;line-height:1.6;">
+  <div style="margin:0 0 28px;padding:10px 24px;background:#000;">
+    <img src="${escapeHtml(ZERO_ALPHA_EMAIL_LOGO_URL)}" width="180"
+      alt="Zero Alpha Fitness"
+      style="display:block;width:180px;max-width:100%;height:auto;border:0;">
+  </div>
   <h1 style="font-size:20px;margin:0 0 6px;">Your ${escapeHtml(commercialTerms.planName)} is confirmed</h1>
   <p style="margin:0 0 20px;color:#555;">Keep this email. It is your durable copy of this
   agreement.</p>
@@ -7162,6 +7843,136 @@ function buildConfirmationHtml(details: ConfirmationDetails): string {
     We are not VAT registered; the price shown is the total price.
   </p>
 </body></html>`;
+}
+
+function buildWelcomeHtml(membership: MembershipDoc): string {
+  const commercialTerms = membership.commercialTerms ??
+    createCommercialPlanSnapshot(membership.planKey);
+  const variant = WELCOME_EMAIL_VARIANTS[membership.planKey];
+  const participants = participantsFor(membership);
+  const participantNames = participants.map(({fullName}) => fullName).join(", ");
+  const participantCount = participantCountFor(membership);
+  const isYouthPlan = commercialTerms.audience === "youth";
+  const recipientName = isYouthPlan && membership.guardian?.fullName ?
+    membership.guardian.fullName : participants[0]?.fullName ?? "there";
+  const order = orderFor(membership);
+  const recurringMonthlyPence = membership.discount?.kind === "youth_family" ?
+    order.recurringMonthlyPence : order.standardMonthlyPence;
+  const inclusions = variant.inclusions
+    .filter((item) => !item.startsWith("15% family discount") ||
+      membership.discount?.kind === "youth_family")
+    .map((item) =>
+      "<tr><td style=\"width:28px;padding:0 0 12px;vertical-align:top;" +
+      "color:#8b6748;font-size:18px;line-height:20px;\">&#10003;</td>" +
+      "<td style=\"padding:0 0 12px;color:#25221f;font-size:15px;" +
+      `line-height:22px;">${escapeHtml(item)}</td></tr>`)
+    .join("");
+  const startCopy = membership.billingMode === "presale_deferred" ?
+    `Starts ${formatUnixBillingDate(membership.serviceStartsAt)}` : "Membership active";
+  const youthParticipantLabel = participantCount === 1 ? "Child" : "Children";
+  const participantLabel = isYouthPlan ? youthParticipantLabel : "Member";
+  const preheader = `Welcome to ${commercialTerms.planName}. Here’s what happens next.`;
+  const actionBlock = variant.appCta ? `
+        <tr><td style="padding:12px 34px 40px;font-family:Arial,Helvetica,sans-serif;">
+          <div style="padding:24px;background:#201d1a;border-radius:16px;color:#f4f0ea;">
+            <h2 style="margin:0 0 20px;font-size:19px;line-height:25px;color:#f4f0ea;">
+              ${escapeHtml(variant.appCta.title)}
+            </h2>
+            <a href="${escapeHtml(ZERO_ALPHA_APP_LOGIN_URL)}"
+              style="display:inline-block;padding:13px 20px;background:#f4f0ea;border-radius:999px;
+              color:#171513;font-size:14px;font-weight:800;text-decoration:none;">
+              ${escapeHtml(variant.appCta.buttonLabel)}
+            </a>
+          </div>
+        </td></tr>` : "";
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light only">
+  <title>${escapeHtml(`Welcome to ${commercialTerms.planName}`)}</title>
+</head>
+<body style="margin:0;padding:0;background:#0b0a09;color:#171513;">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">
+    ${escapeHtml(preheader)}
+  </div>
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"
+    style="width:100%;background:#0b0a09;">
+    <tr><td align="center" style="padding:32px 14px;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"
+        style="width:100%;max-width:620px;background:#f4f0ea;border-radius:24px;overflow:hidden;">
+        <tr><td style="padding:10px 34px;background:#000;border-bottom:1px solid #302b27;">
+          <img src="${escapeHtml(ZERO_ALPHA_EMAIL_LOGO_URL)}" width="180"
+            alt="Zero Alpha Fitness"
+            style="display:block;width:180px;max-width:100%;height:auto;border:0;">
+        </td></tr>
+        <tr><td style="padding:42px 34px 20px;font-family:Arial,Helvetica,sans-serif;">
+          <div style="margin-bottom:16px;font-size:11px;font-weight:800;letter-spacing:2px;
+            color:#8b6748;">${escapeHtml(variant.eyebrow)}</div>
+          <p style="margin:0 0 12px;font-size:16px;line-height:24px;color:#5c554f;">
+            Hi ${escapeHtml(recipientName)},
+          </p>
+          <h1 style="margin:0 0 16px;font-size:34px;line-height:39px;letter-spacing:-1px;
+            color:#171513;">${escapeHtml(variant.headline)}</h1>
+          <p style="margin:0;font-size:17px;line-height:27px;color:#514b45;">
+            ${escapeHtml(variant.summary)}
+          </p>
+        </td></tr>
+        <tr><td style="padding:12px 34px 28px;font-family:Arial,Helvetica,sans-serif;">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"
+            style="width:100%;background:#e9e2da;border-radius:16px;">
+            <tr>
+              <td style="padding:18px 20px;border-bottom:1px solid #d7cdc4;">
+                <div style="font-size:10px;font-weight:800;letter-spacing:1.5px;color:#766c64;">
+                  ${escapeHtml(participantLabel.toUpperCase())}
+                </div>
+                <div style="margin-top:5px;font-size:15px;font-weight:700;line-height:21px;
+                  color:#171513;">${escapeHtml(participantNames)}</div>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:18px 20px;">
+                <div style="font-size:10px;font-weight:800;letter-spacing:1.5px;color:#766c64;">
+                  MEMBERSHIP
+                </div>
+                <div style="margin-top:5px;font-size:15px;font-weight:700;line-height:21px;
+                  color:#171513;">${escapeHtml(commercialTerms.planName)} ·
+                  ${escapeHtml(formatPence(recurringMonthlyPence))}/month ·
+                  ${escapeHtml(startCopy)}</div>
+              </td>
+            </tr>
+          </table>
+        </td></tr>
+        <tr><td style="padding:0 34px 22px;font-family:Arial,Helvetica,sans-serif;">
+          <h2 style="margin:0 0 18px;font-size:18px;line-height:24px;color:#171513;">
+            What your membership includes
+          </h2>
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+            ${inclusions}
+          </table>
+          <p style="margin:4px 0 0;padding:14px 16px;background:#eee8e1;border-radius:12px;
+            font-size:13px;line-height:20px;color:#625a53;">${escapeHtml(variant.accessNote)}</p>
+        </td></tr>
+        ${actionBlock}
+        <tr><td style="padding:24px 34px;background:#e7dfd7;
+          font-family:Arial,Helvetica,sans-serif;">
+          <p style="margin:0 0 8px;font-size:12px;line-height:19px;color:#625a53;">
+            Your signed membership record, cancellation information and the exact legal documents
+            accepted at checkout are attached to this email. Please keep them for your records.
+          </p>
+          <p style="margin:0;font-size:12px;line-height:19px;color:#625a53;">
+            Questions? Reply to this email or contact
+            <a href="mailto:${escapeHtml(COMPANY.supportEmail)}"
+              style="color:#51463c;">${escapeHtml(COMPANY.supportEmail)}</a>.
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
 }
 
 const CONFIRMATION_OUTBOX_COLLECTION = "membershipEmailOutbox";
@@ -7242,32 +8053,44 @@ function buildConfirmationPayload(
   membership: MembershipDoc,
   initialChargePence: number | null
 ): ConfirmationEmailPayload | null {
-  if (!membership.payerEmail || initialChargePence === null) return null;
-  const fromEmail = membershipFromEmail.value().trim() || COMPANY.confirmationSender;
-  const commercialTerms = membership.commercialTerms ??
-    createCommercialPlanSnapshot(membership.planKey);
-  // The Stripe Session id is not an ownership credential and must never be
-  // copied into email. The recipient can claim through verified-email matching;
-  // same-browser post-checkout claiming additionally uses a one-time verifier.
-  const claimUrl = membership.payerUid ?
-    null : `${resolveReturnOrigin()}/account/membership?claim=email`;
+  if (initialChargePence === null) return null;
+  const welcomePayload = buildWelcomePayload(membership);
+  if (!welcomePayload) return null;
+  const agreementHtml = buildConfirmationHtml({
+    membership,
+    initialChargePence,
+    claimUrl: null,
+  });
   return {
-    from: `${COMPANY.tradingName} <${fromEmail}>`,
-    to: [membership.payerEmail],
-    subject: `Your ${commercialTerms.planName} is confirmed`,
-    html: buildConfirmationHtml({
-      membership,
-      initialChargePence,
-      claimUrl,
-    }),
-    attachments: membership.acceptances.documents.map((document) => ({
-      filename: `${document.version}.txt`,
-      content: Buffer.from(document.content, "utf8").toString("base64"),
-    })),
+    ...welcomePayload,
+    attachments: [
+      {
+        filename: "membership-agreement.html",
+        content: Buffer.from(agreementHtml, "utf8").toString("base64"),
+      },
+      ...membership.acceptances.documents.map((document) => ({
+        filename: `${document.version}.txt`,
+        content: Buffer.from(document.content, "utf8").toString("base64"),
+      })),
+    ],
   };
 }
 
-/** Atomically creates a first membership and its immutable email outbox row. */
+function buildWelcomePayload(membership: MembershipDoc): ConfirmationEmailPayload | null {
+  if (!membership.payerEmail) return null;
+  const fromEmail = membershipFromEmail.value().trim() || COMPANY.confirmationSender;
+  const commercialTerms = membership.commercialTerms ??
+    createCommercialPlanSnapshot(membership.planKey);
+  return {
+    from: `${COMPANY.tradingName} <${fromEmail}>`,
+    to: [membership.payerEmail],
+    reply_to: COMPANY.supportEmail,
+    subject: `Welcome to Zero Alpha — ${commercialTerms.planName}`,
+    html: buildWelcomeHtml(membership),
+  };
+}
+
+/** Atomically creates a membership and its immutable confirmation/welcome outbox rows. */
 async function ensureMembershipAndConfirmationOutbox(
   membershipRef: DocumentReference,
   proposedMembership: MembershipDoc,
@@ -7280,12 +8103,10 @@ async function ensureMembershipAndConfirmationOutbox(
   const lockRefs = intent.reservationLockIds.map((id) =>
     db().collection(CHECKOUT_LOCK_COLLECTION).doc(id)
   );
-  const participantQuery = db().collection("memberships")
-    .where(
-      "participant.participantKey",
-      "==",
-      intent.participant.participantKey
-    );
+  const participants = participantsFor(intent);
+  const participantQueries = participantMembershipQueries(participantKeysFor(intent));
+  const legacyParticipantQueries =
+    legacySingularParticipantMembershipQueries(participants);
   const frozenGrantsAlphaWodAccess = intent.commercialTerms?.grantsAlphaWodAccess ??
     getPlan(intent.planKey).grantsAlphaWodAccess;
   const payerQuery = intent.payerUid && frozenGrantsAlphaWodAccess ?
@@ -7303,7 +8124,17 @@ async function ensureMembershipAndConfirmationOutbox(
     const membershipSnap = await tx.get(membershipRef);
     const outboxSnap = await tx.get(outboxRef);
     const lockSnaps = await Promise.all(lockRefs.map((ref) => tx.get(ref)));
-    const byParticipant = await tx.get(participantQuery);
+    const participantSnaps = await Promise.all(
+      participantQueries.map((query) => tx.get(query))
+    );
+    const legacyParticipantSnaps = await Promise.all(
+      legacyParticipantQueries.map((query) => tx.get(query))
+    );
+    const byParticipant = participantMembershipDocs(
+      participantSnaps,
+      legacyParticipantSnaps,
+      participants
+    );
     const byPayer = payerQuery ? await tx.get(payerQuery) : null;
     const byTarget = targetQuery ? await tx.get(targetQuery) : null;
     const effectiveTargetUid = membershipSnap.exists ?
@@ -7343,7 +8174,7 @@ async function ensureMembershipAndConfirmationOutbox(
       const ownsEveryLock = lockRefs.length > 0 && lockSnaps.every((lock) =>
         lock.exists && lock.get("intentId") === intentRef.id
       );
-      const duplicateParticipant = byParticipant.docs.some((doc) =>
+      const duplicateParticipant = byParticipant.some((doc) =>
         doc.id !== membershipRef.id && isBlockingMembershipDoc(doc)
       );
       const duplicatePayer = Boolean(byPayer?.docs.some((doc) =>
@@ -7421,6 +8252,8 @@ async function ensureMembershipAndConfirmationOutbox(
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+    }
+    if (payload && !outboxSnap.exists) {
       return {manualReviewCreated: false, manualReviewReason: null};
     }
     if (manualReviewReason && !outboxSnap.exists) {
@@ -7581,7 +8414,6 @@ async function acquireConfirmationEmailLease(
         subscriptionId,
       };
     }
-
     const leaseExpiresAt = timestampMillis(snap.get("leaseExpiresAt"));
     if (status === "sending" && leaseExpiresAt !== null &&
       leaseExpiresAt > nowMillis) {

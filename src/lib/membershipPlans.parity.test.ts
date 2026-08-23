@@ -99,6 +99,7 @@ describe("membership catalogue parity", () => {
     "PRESALE_SIGNUP_CUTOFF_AT_ISO",
     "PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS",
     "EXISTING_MEMBER_OFFER",
+    "YOUTH_FAMILY_OFFER",
     "MEMBERSHIP_SCHEMA_VERSION",
     "COMPANY",
     "PLAN_KEYS",
@@ -125,8 +126,8 @@ describe("membership catalogue parity", () => {
       resolveYouthPlanForAge,
     } = require("./membershipPlans") as typeof import("./membershipPlans");
 
-    expect(resolveYouthPlanForAge(3)).toBeNull();
-    expect(resolveYouthPlanForAge(4)).toBe("youth_youngstars");
+    expect(resolveYouthPlanForAge(5)).toBeNull();
+    expect(resolveYouthPlanForAge(6)).toBe("youth_youngstars");
     expect(resolveYouthPlanForAge(11)).toBe("youth_youngstars");
     expect(resolveYouthPlanForAge(12)).toBe("youth_teenstars");
     expect(resolveYouthPlanForAge(16)).toBe("youth_teenstars");
@@ -147,7 +148,7 @@ describe("membership catalogue parity", () => {
     expect(granting).toEqual(["adult_unlimited"]);
   });
 
-  it("publishes only the approved immutable checkout documents", () => {
+  it("freezes the approved 23 August checkout documents", () => {
     const {
       CHECKOUT_DOCUMENTS,
       CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION,
@@ -155,8 +156,8 @@ describe("membership catalogue parity", () => {
 
     expect(CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION).toBe(true);
     Object.values(CHECKOUT_DOCUMENTS).forEach((document) => {
-      expect(document.version).toMatch(/^ZAF-[A-Z-]+-2026-08-20-01$/);
-      expect(document.effectiveDate).toBe("2026-08-20");
+      expect(document.version).toMatch(/^ZAF-[A-Z-]+-2026-08-23-01$/);
+      expect(document.effectiveDate).toBe("2026-08-23");
       expect(document.sha256).toMatch(/^[a-f0-9]{64}$/);
       expect(JSON.stringify(document)).not.toMatch(/\b(?:DRAFT|PENDING)\b/i);
     });

@@ -30,12 +30,15 @@ export type MembershipBillingMode = "presale_deferred" | "standard";
  */
 export type MembershipDiscount = {
   couponId: string;
-  promotionCodeId: string;
-  amountOffPence: number;
-  currency: "gbp";
-  durationInMonths: number;
+  promotionCodeId: string | null;
+  amountOffPence: number | null;
+  currency: "gbp" | null;
+  durationInMonths: number | null;
   startsAt: number;
   endsAt: number | null;
+  kind?: "existing_member" | "youth_family";
+  percentOff?: number | null;
+  duration?: "repeating" | "forever";
 };
 
 export type MembershipPaymentSchedule = {
@@ -43,7 +46,7 @@ export type MembershipPaymentSchedule = {
   firstPaymentAt: number;
   standardMonthlyPence: number;
   discountedMonthlyPence: number | null;
-  discountedPaymentCount: number;
+  discountedPaymentCount: number | null;
   fullPriceFrom: number | null;
 };
 
@@ -70,9 +73,9 @@ export type CancellationRequestStatus =
   | "manual_review";
 
 /**
- * Safe server projection of the immutable cancellation receipt. Raw evidence
- * remains in a deny-all Firestore collection; the payer sees only the fields
- * needed to prove when and how their request was recorded.
+ * Safe server projection of a recorded cancellation request, for every request
+ * kind. Raw evidence remains private; the payer sees only the fields needed to
+ * prove when and how their request was recorded.
  */
 export type CancellationReceipt = {
   reference: string;
@@ -97,6 +100,8 @@ export type MyMembership = {
   paymentSchedule?: MembershipPaymentSchedule | null;
   grantsAlphaWodAccess: boolean;
   participantFullName: string;
+  participantFullNames?: string[];
+  participantCount?: number;
   participantIsPayer: boolean;
   currentPeriodEnd: number | null;
   cancelAt: number | null;
@@ -119,6 +124,8 @@ export type MyMembership = {
 };
 
 export type CheckoutRequest = {
+  /** Versioned request contract for the multi-participant checkout implementation. */
+  checkoutSchemaVersion: 2;
   /** Stable across retries of the same form submission for Stripe idempotency. */
   checkoutAttemptId: string;
   /**
@@ -129,6 +136,11 @@ export type CheckoutRequest = {
   planKey: PlanKey;
   participantFullName: string;
   participantDateOfBirth: string;
+  /** Additional children in the same youth plan; adults and mixed plans are rejected. */
+  additionalParticipants?: Array<{
+    fullName: string;
+    dateOfBirth: string;
+  }>;
   participantIsPayer: boolean;
   signedName: string;
   /** Exact ids checked individually; the server rejects any non-exact set. */
@@ -195,7 +207,10 @@ async function fingerprintCheckoutDetails(
         commercialTerms: createCommercialPlanSnapshot(details.planKey),
         signerRole: resolveCheckoutSignerRole(details.planKey),
         documents: resolveCheckoutDocuments(details.planKey),
-        statements: resolveCheckoutAcceptanceStatements(details.planKey),
+        statements: resolveCheckoutAcceptanceStatements(
+          details.planKey,
+          1 + (details.additionalParticipants?.length ?? 0)
+        ),
       },
     }))
   );
@@ -276,7 +291,7 @@ export async function createMembershipCheckoutSession(request: CheckoutRequest) 
     firstFullChargeDate: string;
     initialChargePence: number | null;
     promotionCodesEnabled: boolean;
-  }>(functions, "createMembershipCheckoutSession", {
+  }>(functions, "createMembershipCheckoutSessionV2", {
     limitedUseAppCheckTokens: true,
   });
 
@@ -438,7 +453,10 @@ export type AdminMembership = {
   grantsAlphaWodAccess: boolean;
   entitlementTargetUid: string | null;
   participantFullName: string;
+  participantFullNames?: string[];
+  participantCount?: number;
   participantAge: number | null;
+  participantAges?: number[];
   participantIsPayer: boolean;
   guardianFullName: string | null;
   currentPeriodEnd: number | null;

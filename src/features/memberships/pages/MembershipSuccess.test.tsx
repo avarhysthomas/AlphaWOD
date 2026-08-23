@@ -100,6 +100,7 @@ describe("MembershipSuccess claim persistence", () => {
     render(<MembershipSuccess />);
 
     await waitFor(() => expect(mockGetMyMemberships).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText("Participant: Buyer One")).toBeInTheDocument();
     expect(mockRememberPendingClaim).not.toHaveBeenCalled();
     expect(mockClearPendingClaim).toHaveBeenCalled();
     expect(mockClearCheckoutAttempt).toHaveBeenCalled();
@@ -297,6 +298,51 @@ describe("MembershipSuccess claim persistence", () => {
     expect(screen.queryByText("Payment confirmed")).not.toBeInTheDocument();
     expect(screen.queryByRole("link", {name: "Go to Zero Alpha App"}))
       .not.toBeInTheDocument();
+  });
+
+  it("confirms every child and the family price on a youth checkout", async () => {
+    mockSearchParams = "plan=youth_youngstars&session_id=cs_signed_in";
+    mockGetMyMemberships.mockResolvedValue({
+      ok: true,
+      memberships: [{
+        ...activeMembership,
+        planKey: "youth_youngstars",
+        planName: "HYROX Youngstars",
+        grantsAlphaWodAccess: false,
+        participantFullName: "Alex Child",
+        participantFullNames: ["Alex Child", "Sam Child"],
+        participantCount: 2,
+        participantIsPayer: false,
+        discount: {
+          couponId: "coupon_family_15",
+          promotionCodeId: null,
+          amountOffPence: null,
+          currency: null,
+          durationInMonths: null,
+          startsAt: 1787149200,
+          endsAt: null,
+          kind: "youth_family",
+          percentOff: 15,
+          duration: "forever",
+        },
+        paymentSchedule: {
+          amountDueTodayPence: 0,
+          firstPaymentAt: 1788220800,
+          standardMonthlyPence: 6000,
+          discountedMonthlyPence: 5100,
+          discountedPaymentCount: null,
+          fullPriceFrom: null,
+        },
+      }],
+      cancellationPreview: null,
+    });
+
+    render(<MembershipSuccess />);
+
+    expect(await screen.findByText("Participants: Alex Child, Sam Child"))
+      .toBeInTheDocument();
+    expect(screen.getByText("Family discount applied")).toBeInTheDocument();
+    expect(screen.getByText(/pay £51 per month instead of £60/i)).toBeInTheDocument();
   });
 
   it("keeps an existing member's app access available after presale checkout", async () => {

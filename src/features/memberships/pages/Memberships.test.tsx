@@ -28,8 +28,11 @@ jest.mock("../purchaseAvailability", () => ({
 jest.mock(
   "react-router-dom",
   () => ({
-    Link: ({children, to}: {children: React.ReactNode; to: string}) => (
-      <a href={to}>{children}</a>
+    Link: ({children, to, ...props}: {
+      children: React.ReactNode;
+      to: string;
+    } & React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
+      <a href={to} {...props}>{children}</a>
     ),
     useSearchParams: () => [new URLSearchParams(mockSearchParams)],
   }),
@@ -49,15 +52,21 @@ describe("Memberships presale presentation", () => {
     jest.restoreAllMocks();
   });
 
-  it("shows £0 today, the launch date, and the Adult Unlimited code offer", () => {
+  it("shows £0 today and the launch date without the removed Adult Unlimited offer copy", () => {
     render(<Memberships />);
 
+    const logoLink = screen.getByRole("link", {name: "Zero Alpha home"});
+    expect(logoLink).toHaveAttribute("href", "/");
     expect(screen.getByText("Ages 6 to 11")).toBeInTheDocument();
     expect(screen.getByText("£30")).toBeInTheDocument();
+    expect(screen.getByText(/Register 2 or more children.*automatic 15% discount/i))
+      .toBeInTheDocument();
+    expect(screen.getAllByText("/child/mo")).toHaveLength(2);
     expect(screen.getByText("£0 charged")).toBeInTheDocument();
     expect(screen.getAllByText("1 September 2026")).toHaveLength(2);
-    expect(screen.getByText("Zero Alpha App after first payment")).toBeInTheDocument();
-    expect(screen.getByText(/discount code during signup for £5 off/i)).toBeInTheDocument();
+    expect(screen.queryByText("Zero Alpha App after first payment")).not.toBeInTheDocument();
+    expect(screen.queryByText(/discount code during signup for £5 off/i))
+      .not.toBeInTheDocument();
     expect(screen.getAllByText(/£0 today · first payment 1 September 2026/i))
       .toHaveLength(4);
   });

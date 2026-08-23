@@ -86,6 +86,7 @@ describe("checkout attempt identifiers", () => {
     });
     (httpsCallable as jest.Mock).mockReturnValue(invoke);
     const checkout: Parameters<typeof createMembershipCheckoutSession>[0] = {
+      checkoutSchemaVersion: 2,
       checkoutAttemptId: "attempt_app_check_123456",
       expectedBillingMode: "presale_deferred",
       planKey: "adult_unlimited",
@@ -106,7 +107,7 @@ describe("checkout attempt identifiers", () => {
 
     expect(httpsCallable).toHaveBeenCalledWith(
       expect.anything(),
-      "createMembershipCheckoutSession",
+      "createMembershipCheckoutSessionV2",
       {limitedUseAppCheckTokens: true}
     );
     expect(invoke).toHaveBeenCalledWith(checkout);
@@ -125,6 +126,7 @@ describe("checkout attempt identifiers", () => {
 
   it("reuses an attempt after reload without persisting checkout PII", async () => {
     const details: CheckoutDetails = {
+      checkoutSchemaVersion: 2,
       expectedBillingMode: "presale_deferred",
       planKey: "adult_unlimited",
       participantFullName: "Private Person",
@@ -159,6 +161,7 @@ describe("checkout attempt identifiers", () => {
 
   it("rotates the attempt when chargeable details change", async () => {
     const base: CheckoutDetails = {
+      checkoutSchemaVersion: 2,
       expectedBillingMode: "presale_deferred",
       planKey: "adult_unlimited",
       participantFullName: "First Athlete",
@@ -186,6 +189,7 @@ describe("checkout attempt identifiers", () => {
 
   it("rotates the opaque attempt when the shared code changes", async () => {
     const base: CheckoutDetails = {
+      checkoutSchemaVersion: 2,
       expectedBillingMode: "presale_deferred",
       planKey: "adult_unlimited",
       participantFullName: "Discounted Athlete",
@@ -214,8 +218,45 @@ describe("checkout attempt identifiers", () => {
     expect(stored).not.toContain("MEMBER-CODE-TWO");
   });
 
+  it("rotates the attempt when another youth participant is added", async () => {
+    const base: CheckoutDetails = {
+      checkoutSchemaVersion: 2,
+      expectedBillingMode: "presale_deferred",
+      planKey: "youth_teenstars",
+      participantFullName: "First Child",
+      participantDateOfBirth: "2012-01-01",
+      participantIsPayer: false,
+      guardianFullName: "Ava Parent",
+      guardianRelationship: "Parent",
+      signedName: "Ava Parent",
+      acceptedStatementIds: [
+        "membership_contract",
+        "privacy_notice",
+        "guardian_authority",
+        "guardian_youth_addendum",
+        "recurring_payment_authority",
+        "immediate_performance",
+      ],
+    };
+    const first = await resolveCheckoutAttempt(base);
+    const changed = await resolveCheckoutAttempt({
+      ...base,
+      additionalParticipants: [{
+        fullName: "Second Child",
+        dateOfBirth: "2013-01-01",
+      }],
+    }, first);
+
+    expect(changed.id).not.toBe(first.id);
+    expect(changed.fingerprint).not.toBe(first.fingerprint);
+    const stored = window.sessionStorage.getItem("zaf.membershipCheckoutAttempt.v1") ?? "";
+    expect(stored).not.toContain("First Child");
+    expect(stored).not.toContain("Second Child");
+  });
+
   it("rotates an anonymous attempt when the payer signs in or changes account", async () => {
     const details: CheckoutDetails = {
+      checkoutSchemaVersion: 2,
       expectedBillingMode: "presale_deferred",
       planKey: "adult_unlimited",
       participantFullName: "Identity Change",

@@ -21,8 +21,8 @@ from docx.table import Table
 from docx.text.paragraph import Paragraph
 
 
-OUTPUT_DIR = Path("docs/legal-review/2026-08-20")
-VERSION_DATE = "20 August 2026"
+OUTPUT_DIR = Path("docs/legal-review/2026-08-23")
+VERSION_DATE = "23 August 2026"
 ENTITY = "ZERO ALPHA FITNESS LTD"
 COMPANY_NUMBER = "15978998"
 TRADING_NAME = "Zero Alpha Fitness"
@@ -64,7 +64,7 @@ SPECS = {
         "01-membership-terms.docx",
         "Membership Terms",
         "Public membership purchase and ongoing membership",
-        "ZAF-TERMS-2026-08-20-01",
+        "ZAF-TERMS-2026-08-23-01",
         "Membership terms for public membership purchase",
     ),
     "privacy": DocSpec(
@@ -72,7 +72,7 @@ SPECS = {
         "02-privacy-notice.docx",
         "Privacy Notice",
         "Membership, payment, AlphaWOD and participant information",
-        "ZAF-PRIVACY-2026-08-20-01",
+        "ZAF-PRIVACY-2026-08-23-01",
         "Privacy notice for membership and AlphaWOD data",
     ),
     "cancel": DocSpec(
@@ -80,7 +80,7 @@ SPECS = {
         "03-cancellation-refund-cooling-off-policy.docx",
         "Cancellation, Refund and Cooling-off Policy",
         "Plain-English rules for rolling monthly memberships",
-        "ZAF-CANCEL-2026-08-20-01",
+        "ZAF-CANCEL-2026-08-23-01",
         "Cancellation, refund and cooling-off policy",
     ),
     "adult": DocSpec(
@@ -88,15 +88,15 @@ SPECS = {
         "04-adult-participant-waiver.docx",
         "Adult Participant Waiver and Risk Acknowledgement",
         "For every participant aged 18 or over",
-        "ZAF-ADULT-WAIVER-2026-08-20-01",
+        "ZAF-ADULT-WAIVER-2026-08-23-01",
         "Adult participant waiver and risk acknowledgement",
     ),
     "guardian": DocSpec(
         "guardianAddendum",
         "05-parent-guardian-addendum.docx",
         "Parent/Guardian Consent and Youth Membership Addendum",
-        "For Youngstars (ages 4–11) and Teenstars (ages 12–16)",
-        "ZAF-GUARDIAN-2026-08-20-01",
+        "For Youngstars (ages 6–11) and Teenstars (ages 12–16), including multi-child checkouts",
+        "ZAF-GUARDIAN-2026-08-23-01",
         "Parent and guardian consent and youth membership addendum",
     ),
 }
@@ -280,8 +280,8 @@ def configure_document(doc: Document, spec: DocSpec) -> None:
     props.author = ENTITY
     props.keywords = "membership, customer terms, Zero Alpha Fitness"
     props.comments = "Final customer-facing publication copy."
-    props.created = datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)
-    props.modified = datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)
+    props.created = datetime(2026, 8, 23, 12, 0, tzinfo=timezone.utc)
+    props.modified = datetime(2026, 8, 23, 12, 0, tzinfo=timezone.utc)
 
     def format_header(header) -> None:
         header.is_linked_to_previous = False
@@ -508,7 +508,7 @@ def build_terms() -> Path:
     )
     add_para(
         doc,
-        "For an adult membership, the named participant must buy the membership for themselves and is also the payer and signer. For a participant under 18, the payer and signer must be the child’s parent or legal guardian, or another adult with lawful authority to enrol them.",
+        "For an adult membership, the named participant must buy the membership for themselves and is also the payer and signer. For one or more participants under 18, the payer and signer must be their parent or legal guardian, or another adult with lawful authority to enrol every named child.",
     )
     add_para(
         doc,
@@ -520,8 +520,8 @@ def build_terms() -> Path:
         doc,
         [
             "An adult participant must be aged 18 or over and must personally accept the Adult Participant Waiver and Risk Acknowledgement before taking part.",
-            "A Youngstars participant must be aged 4 to 11 inclusive. A Teenstars participant must be aged 12 to 16 inclusive.",
-            "A youth participant’s guardian must be the payer, confirm their relationship and authority, and accept the Parent/Guardian Consent and Youth Membership Addendum.",
+            "A Youngstars participant must be aged 6 to 11 inclusive. A Teenstars participant must be aged 12 to 16 inclusive. Every child named in a checkout must meet the selected plan’s age band.",
+            "A youth participant’s guardian must be the payer, confirm their relationship and lawful authority for each named child, and accept the Parent/Guardian Consent and Youth Membership Addendum for each child.",
             "An adult participant accepts these Terms, the payment obligation and the Adult Participant Waiver for their own membership. Third-party purchase of an adult membership is not supported.",
             "You must give accurate, complete and current information. You must not buy a youth membership for a child outside the stated age range or misrepresent authority to act for another person.",
         ],
@@ -535,7 +535,7 @@ def build_terms() -> Path:
             "Adult Unlimited Membership — £60 per month. This is the only paid membership that grants eligible AlphaWOD access after the first required payment succeeds.",
             "Adult Ladies Only Membership — £50 per month.",
             "Adult Gym Only — £45 per month.",
-            "Youth Membership — one catalogue card with Youngstars (ages 4–11) or Teenstars (ages 12–16), each £35 per month.",
+            "Youth Membership — Youngstars (ages 6–11) at £30 per child per month, or Teenstars (ages 12–16) at £35 per child per month.",
         ],
     )
     add_para(
@@ -544,23 +544,31 @@ def build_terms() -> Path:
     )
     add_para(
         doc,
-        "We may offer promotion codes subject to their stated eligibility, duration and limits. A promotion does not change the underlying rolling nature of the contract unless its terms expressly say so. A code has no cash value and cannot be applied retrospectively unless required by law or expressly agreed.",
+        "One youth Checkout may cover between one and ten children in the same selected plan. Youngstars and Teenstars cannot be combined in one Checkout. The contracted quantity is the number of children confirmed at Checkout or in a later written change confirmed by us.",
+    )
+    add_para(
+        doc,
+        "When the contracted quantity is two or more children, a recurring 15% multi-child discount applies to the full undiscounted monthly subtotal (the price per child multiplied by the contracted quantity). It does not apply at quantity one and does not combine with another promotion unless Stripe explicitly shows both before confirmation. Non-attendance does not change the contracted quantity, recurring total or discount.",
+    )
+    add_para(
+        doc,
+        "We may offer promotion codes subject to their stated eligibility, duration and limits. The automatic youth multi-child discount does not combine with another promotion unless Stripe explicitly shows both before confirmation. A promotion does not change the underlying rolling nature of the contract unless its terms expressly say so. A code has no cash value and cannot be applied retrospectively unless required by law or expressly agreed.",
     )
 
     doc.add_heading("4. How the contract is made", level=1)
     add_numbered(
         doc,
         [
-            "Choose the membership and, for youth membership, the correct age option.",
-            "Provide the required participant and payer or guardian details, review the documents, and complete each required acceptance or signature.",
-            "Review the amount due today, the full monthly price and the first payment or billing date shown by Stripe. During the founding presale, Checkout must show £0 due today and the first monthly payment on 1 September 2026; after opening, Stripe may show an immediate prorated charge to the next first of the month.",
+            "Choose the membership and, for youth membership, one plan and the number of children in that plan.",
+            "Provide the required details for every named participant and the payer or guardian, review the documents, and complete each required acceptance or signature.",
+            "Review the amount due today, the first payment or billing date and, for a youth membership, the quantity, price per child, undiscounted subtotal, multi-child discount and resulting recurring total shown by Stripe. During the founding presale, Checkout must show £0 due today and the first monthly payment on 1 September 2026; after opening, Stripe may show an immediate prorated charge to the next first of the month.",
             "Complete Stripe Checkout. Available payment methods are those Stripe displays for that transaction and may vary by device, location, currency and eligibility.",
             "The contract is formed when Stripe confirms completion of Checkout and we issue an on-screen or email confirmation, unless we promptly tell you that a clear pricing, eligibility or technical error prevented acceptance and refund any amount taken.",
         ],
     )
     add_para(
         doc,
-        "Stripe will present an unambiguous final confirmation control and summary. Before service begins, we will email a durable confirmation containing the agreed plan, amounts, next payment date, accepted document versions, cancellation information and signed acceptance evidence; a changeable website link alone is not the durable copy. During the founding presale, nothing is charged today; membership starts and the first monthly payment is taken on 1 September 2026. For a youth membership, Checkout completion does not itself book a first session. We will contact the guardian by email to arrange onboarding and the first session.",
+        "Stripe will present an unambiguous final confirmation control and summary. Before service begins, we will email a durable confirmation containing the agreed plan, every named participant, contracted quantity, price per child, undiscounted subtotal, discount, resulting recurring total, next payment date, accepted document versions, cancellation information and signed acceptance evidence; a changeable website link alone is not the durable copy. During the founding presale, nothing is charged today; membership starts and the first monthly payment is taken on 1 September 2026. For a youth membership, Checkout completion does not itself book a first session. We will contact the guardian by email to arrange onboarding and the first session.",
     )
     add_quote(
         doc,
@@ -578,7 +586,7 @@ def build_terms() -> Path:
     )
     add_para(
         doc,
-        "By completing Checkout, the payer authorises Stripe and us to store the selected payment method as permitted by that payment method and to collect the amount shown today, which is £0 during the founding presale, and future recurring amounts without the payer being present. The payer must keep the payment method valid and may update it through the secure Customer Portal.",
+        "By completing Checkout, the payer authorises Stripe and us to store the selected payment method as permitted by that payment method and to collect the amount shown today, which is £0 during the founding presale, and future recurring amounts without the payer being present. For a youth family subscription, that authority covers the displayed contracted quantity, price per child, subtotal, recurring 15% discount at quantity two or more, and resulting recurring total. The payer must keep the payment method valid and may update it through the secure Customer Portal.",
     )
 
     doc.add_heading("6. Price changes", level=1)
@@ -590,11 +598,15 @@ def build_terms() -> Path:
     doc.add_heading("7. What the membership provides", level=1)
     add_para(
         doc,
-        "The selected membership provides access to the facilities, sessions or services described for that plan at the time of purchase, subject to opening hours, capacity, timetables, coaching instructions, reasonable safety rules and temporary closures. Membership is personal to the named participant and cannot be sold, shared or transferred without our written agreement.",
+        "The selected membership provides access to the facilities, sessions or services described for that plan at the time of purchase, subject to opening hours, capacity, timetables, coaching instructions, reasonable safety rules and temporary closures. Each membership or youth place is personal to its named participant and cannot be sold, shared or transferred without our written agreement.",
     )
     add_para(
         doc,
         "We may make reasonable operational changes to timetables, instructors, equipment, class formats or facilities. We will not use this clause to remove the essential benefit of the membership without a fair remedy. If a change is material and adverse, we will give reasonable notice where practicable and any cancellation or refund rights required by law.",
+    )
+    add_para(
+        doc,
+        "Reaching the top of a youth age band does not automatically move a child, remove a place or change the recurring total. We will contact the payer about any transition. No plan, contracted-quantity, price or discount change takes effect until we confirm it in writing, including the effective date and resulting recurring total, and a new Checkout may be required.",
     )
 
     doc.add_heading("8. AlphaWOD access", level=1)
@@ -622,7 +634,7 @@ def build_terms() -> Path:
     )
     add_para(
         doc,
-        "A payer may request cancellation through the signed-in cancellation-request flow or by emailing support@zeroalphafitness.co.uk. The online flow records and acknowledges the outcome automatically. Email requests are handled manually using the time the message reaches the support inbox. The request should identify the payer, participant and membership. We will send an acknowledgement showing the effective end date and any remaining scheduled charge.",
+        "A payer may request cancellation through the signed-in cancellation-request flow or by emailing support@zeroalphafitness.co.uk. The online flow records and acknowledges the outcome automatically. Email requests are handled manually using the time the message reaches the support inbox. The request should identify the payer, every participant and the membership. We will send an acknowledgement showing the effective end date and any remaining scheduled charge.",
     )
     add_bullets(
         doc,
@@ -636,6 +648,10 @@ def build_terms() -> Path:
     add_para(
         doc,
         "The statutory cooling-off right for a newly formed distance contract is separate and is explained in section 10 and the Cancellation, Refund and Cooling-off Policy. It is not restricted by the ordinary renewal-notice rule above.",
+    )
+    add_para(
+        doc,
+        "A youth Checkout creates one subscription covering every child listed in that Checkout. An ordinary or cooling-off cancellation ends the whole subscription and all listed children’s places; the online flow does not cancel one child separately. Contact us about any requested change to the listed children. No addition, removal, plan, price or discount change takes effect unless and until we confirm it in writing, including the effective date and resulting recurring total. We may require cancellation and a new Checkout. Stopping attendance or asking to remove one child is not by itself a contract change.",
     )
 
     doc.add_heading("10. Cooling-off and refunds", level=1)
@@ -722,9 +738,9 @@ def build_terms() -> Path:
         doc,
         "Checkout acceptance text",
         [
-            "I have read and agree to the Membership Terms and the Cancellation, Refund and Cooling-off Policy. I confirm that the participant and payer or guardian details I supplied are accurate.",
+            "I have read and agree to the Membership Terms and the Cancellation, Refund and Cooling-off Policy. I confirm that all participant and payer or guardian details I supplied are accurate.",
             "I acknowledge that I have received and read the Privacy Notice explaining how personal information is used.",
-            "I authorise the amount Stripe shows today and future recurring monthly payments for the selected membership on the billing schedule shown at Checkout. Stripe will show the standard monthly price, any verified promotion and when the standard price resumes. This authority is subject to my cancellation and statutory rights.",
+            "I authorise the amount Stripe shows today and future recurring monthly payments for the selected membership on the billing schedule shown at Checkout. For a youth membership, Stripe will show the plan, quantity, price per child, undiscounted subtotal, recurring 15% discount when the quantity is two or more, and resulting recurring total. For another verified promotion, Stripe will show its effect and when the standard price resumes. This authority is subject to my cancellation and statutory rights.",
             "I expressly request that the membership and any eligible AlphaWOD access begin on the service start date shown, even if that is before the 14-day cooling-off period ends. I understand that, if I cancel during that period, Zero Alpha Fitness may retain or charge only the proportionate amount permitted by law for services supplied before cancellation.",
         ],
         "payer name and verified payer email",
@@ -796,7 +812,7 @@ def build_privacy() -> Path:
     doc.add_heading("Checkout short-form notice", level=2)
     add_quote(
         doc,
-        "ZERO ALPHA FITNESS LTD uses these details to set up and manage the participant’s membership, verify age and guardian authority, manage payment through Stripe, and provide eligible AlphaWOD access. Required fields are needed to complete the membership. If you provide details about another person, we will give them our Privacy Notice during onboarding. Marketing is not part of this purchase. Read the Privacy Notice.",
+        "ZERO ALPHA FITNESS LTD uses these details to set up and manage the named participant’s or participants’ membership, verify age and guardian authority for each child, manage payment through Stripe, and provide eligible AlphaWOD access. Required fields are needed to complete the membership. If you provide details about another person, we will give them our Privacy Notice during onboarding. Marketing is not part of this purchase. Read the Privacy Notice.",
     )
 
     doc.add_heading("2. The information we collect", level=1)
@@ -804,8 +820,8 @@ def build_privacy() -> Path:
     add_bullets(
         doc,
         [
-            "Participant name and date of birth, and the payer email collected through Stripe or the account-claim flow.",
-            "For youth membership, the child’s age band, guardian name, the guardian’s relationship to the child and declaration of authority.",
+            "Each participant’s name and date of birth, and the payer email collected through Stripe or the account-claim flow.",
+            "For youth membership, each child’s selected plan and age eligibility, the guardian’s name and relationship to each child, and the guardian’s declaration of authority for every named child.",
             "The Zero Alpha purchase form does not request a phone number or billing address. Stripe may ask the payer directly for information required by a selected payment method or its legal and fraud-prevention checks.",
         ],
     )
@@ -814,7 +830,7 @@ def build_privacy() -> Path:
         doc,
         [
             "Firebase account identifier, verified email status, sign-in and security records. Authentication providers handle credentials; we do not need to see the payer’s full password.",
-            "Selected plan, participant, start date, billing anchor, promotion use, subscription and access status, payment-failure grace period, cancellation request and effective end date.",
+            "Selected plan, every named participant, contracted quantity, price per child, undiscounted subtotal, multi-child-discount eligibility, rate and amount, resulting recurring total, start date, billing anchor, other promotion use, subscription and access status, payment-failure grace period, cancellation request and effective end date.",
             "Typed electronic signature, authority declaration, acceptance statements, accepted document version, timestamp and the audit context actually recorded at acceptance.",
             "AlphaWOD eligibility, account-claim state, bookings, attendance, workout or training entries and performance records for eligible adult users.",
         ],
@@ -839,7 +855,7 @@ def build_privacy() -> Path:
     add_bullets(
         doc,
         [
-            "Directly from an adult participant buying for themselves, or from a guardian buying for a child, during purchase, onboarding, account use or support contact.",
+            "Directly from an adult participant buying for themselves, or from a guardian buying for one or more children, during purchase, onboarding, account use or support contact.",
             "From Stripe about checkout, billing, payment, refund and dispute events.",
             "Automatically from the site, AlphaWOD, authentication service and security or operational logs.",
             "From authorised staff recording membership, onboarding, attendance, booking or training administration.",
@@ -847,7 +863,7 @@ def build_privacy() -> Path:
     )
     add_para(
         doc,
-        "Adult participants receive this Notice during their own Checkout. For a child, the guardian receives the full Notice and we will provide age-appropriate information to the child during onboarding.",
+        "Adult participants receive this Notice during their own Checkout. For children, the guardian receives the full Notice and we will provide age-appropriate information to each child during onboarding.",
     )
 
     doc.add_heading("4. Why we use information and our lawful bases", level=1)
@@ -870,7 +886,7 @@ def build_privacy() -> Path:
     doc.add_heading("5. Children and youth membership", level=1)
     add_para(
         doc,
-        "Youngstars covers ages 4–11 and Teenstars covers ages 12–16. The guardian is the payer and supplies the child’s details. Children do not receive AlphaWOD access under the initial public youth membership. We use only the information reasonably needed to verify the age option, arrange onboarding, provide the membership, protect the child and maintain appropriate evidence.",
+        "Youngstars covers ages 6–11 and Teenstars covers ages 12–16. One youth Checkout may contain one or more children in one selected plan only; Youngstars and Teenstars are not combined in one Checkout. The guardian is the payer and supplies each child’s details. Children do not receive AlphaWOD access under the initial public youth membership. We use only the information reasonably needed to verify each child’s eligibility, arrange onboarding, provide the membership, protect each child and maintain appropriate evidence.",
     )
     add_para(
         doc,
@@ -1001,7 +1017,7 @@ def build_privacy() -> Path:
         [
             "Confirm support@zeroalphafitness.co.uk as the privacy contact, nominate the internal owner, and confirm whether a data protection officer is required or appointed.",
             "Complete the data inventory: exact checkout, Firebase, Stripe, AlphaWOD, log, email, IP/user-agent and payment-method metadata fields actually stored.",
-            "Complete a child-focused legitimate-interests assessment and DPIA; prepare distinct child-friendly explanations for ages 4–11 and 12–16 before youth onboarding launches.",
+            "Complete a child-focused legitimate-interests assessment and DPIA; prepare distinct child-friendly explanations for ages 6–11 and 12–16 before youth onboarding launches.",
             "Classify AlphaWOD workout/performance fields and design an Article 9 process before collecting any data that reveals health.",
             "Verify each supplier’s current legal entity, role, data-processing agreement, subprocessor list, hosting/log regions and UK transfer mechanism.",
             "Complete the cookie/device-storage inventory and implement consent before any non-exempt technology operates.",
@@ -1034,6 +1050,17 @@ def build_cancellation() -> Path:
     spec = SPECS["cancel"]
     doc = Document()
     configure_document(doc, spec)
+    # Keep the short final contact section with the substantive policy instead
+    # of allowing Word/LibreOffice pagination to leave it alone on a fourth page.
+    normal = doc.styles["Normal"]
+    normal.font.size = Pt(10.25)
+    normal.paragraph_format.space_after = Pt(5)
+    normal.paragraph_format.line_spacing = 1.07
+    for list_style in ("List Bullet", "List Number"):
+        style = doc.styles[list_style]
+        style.font.size = Pt(10.25)
+        style.paragraph_format.space_after = Pt(3.5)
+        style.paragraph_format.line_spacing = 1.05
     add_document_title(doc, spec)
     add_draft_banner(doc)
 
@@ -1047,6 +1074,7 @@ def build_cancellation() -> Path:
             "If the request arrives later, the next first-of-month payment remains due and membership continues through that additional paid month.",
             "Payments are non-refundable except where required by law.",
             "A statutory 14-day cooling-off right for a new online contract is separate from the ordinary renewal-notice rule.",
+            "A youth family Checkout is one subscription. Ordinary or cooling-off cancellation ends every listed child’s place; the online flow does not cancel one child separately.",
         ],
     )
 
@@ -1061,7 +1089,7 @@ def build_cancellation() -> Path:
         doc,
         [
             "Use the signed-in cancellation-request flow. If you cannot access it, email support@zeroalphafitness.co.uk from the payer’s recorded email.",
-            "Identify the payer, participant and membership. Do not send card or bank details.",
+            "Identify the payer, every participant and the membership. Do not send card or bank details.",
             "The signed-in flow records the server receipt time and freezes the displayed outcome. For email, staff record the time the message reaches the support inbox, not when it was written or sent from a device.",
             "The online flow sends an acknowledgement automatically. Staff send the email-channel acknowledgement after intake. It shows the recorded receipt time, the final scheduled payment (if any) and the membership end date. Contact us promptly if it is wrong.",
         ],
@@ -1069,6 +1097,10 @@ def build_cancellation() -> Path:
     add_para(
         doc,
         "Stripe’s Customer Portal allows payment-method updates and invoice viewing. Its built-in pause and cancellation controls are disabled. Opening the portal or removing a payment method is not a cancellation request.",
+    )
+    add_para(
+        doc,
+        "A youth Checkout creates one subscription covering all children listed in that Checkout. An ordinary cancellation ends that whole subscription and all listed children’s places. The online flow does not cancel one child separately. Stopping one child’s attendance or asking us to remove one child does not itself change the contract, quantity, total or discount. Contact us about a requested roster change; it takes effect only when we confirm the effective date and resulting recurring total in writing, and we may require cancellation and a new Checkout.",
     )
 
     doc.add_heading("3. The 14-day renewal deadline", level=1)
@@ -1106,7 +1138,7 @@ def build_cancellation() -> Path:
     )
     add_para(
         doc,
-        "Checkout asks the payer separately to request that membership and eligible AlphaWOD access begin on the service start date shown, even if that is before the cooling-off period ends. If the payer makes that express request and cancels during the cooling-off period, we may keep or charge only the proportionate amount the law permits for services actually supplied before cancellation. A cooling-off request records an immediate cancellation outcome, but any refund or deduction is reviewed manually. The balance will be refunded within 14 days, to the original payment method unless the consumer expressly agrees otherwise, and without a refund fee. If the express service-start request was not made, we will not make a deduction that the Regulations prohibit.",
+        "Checkout asks the payer separately to request that membership and eligible AlphaWOD access begin on the service start date shown, even if that is before the cooling-off period ends. If the payer makes that express request and cancels during the cooling-off period, we may keep or charge only the proportionate amount the law permits for services actually supplied before cancellation. For a youth family subscription, cooling-off cancellation ends the whole subscription and every listed child’s place. A cooling-off request records an immediate cancellation outcome, but any refund or deduction is reviewed manually. The balance will be refunded within 14 days, to the original payment method unless the consumer expressly agrees otherwise, and without a refund fee. If the express service-start request was not made, we will not make a deduction that the Regulations prohibit.",
     )
     add_para(
         doc,
@@ -1124,7 +1156,7 @@ def build_cancellation() -> Path:
     )
     add_quote(
         doc,
-        "To ZERO ALPHA FITNESS LTD: I give notice that I cancel my membership contract. Payer name: [name]. Participant name: [name]. Contract date: [date]. Payer email: [email]. Date of notice: [date].",
+        "To ZERO ALPHA FITNESS LTD: I give notice that I cancel my membership contract. Payer name: [name]. Participant name(s): [all names]. Contract date: [date]. Payer email: [email]. Date of notice: [date].",
     )
 
     doc.add_heading("6. Refunds", level=1)
@@ -1346,7 +1378,7 @@ def build_guardian() -> Path:
     doc.add_heading("1. Youth membership covered", level=1)
     add_para(
         doc,
-        "This addendum applies to one named child enrolled in Youngstars (minimum age 4, maximum age 11) or Teenstars (minimum age 12, maximum age 16). Eligibility is based on age at the relevant date under the published transition policy. A guardian must contact us if the date of birth or selected age option is wrong.",
+        "This addendum applies separately to every named child enrolled in Youngstars (minimum age 6, maximum age 11) or Teenstars (minimum age 12, maximum age 16). One Checkout may cover between one and ten children in one selected plan only; Youngstars and Teenstars cannot be combined in one Checkout. References below to ‘the child’ apply separately to each listed child. A guardian must contact us if any date of birth or selected plan is wrong.",
     )
     add_para(
         doc,
@@ -1356,11 +1388,11 @@ def build_guardian() -> Path:
     doc.add_heading("2. Guardian authority and information", level=1)
     add_para(
         doc,
-        "I confirm that I am aged 18 or over, I am the child’s parent or legal guardian or otherwise have lawful authority to make the decisions and commitments in this addendum, and I am the payer. If responsibility is shared or restricted by a court order or other arrangement, I confirm that signing and enrolling the child is permitted and I will tell Zero Alpha Fitness promptly about any relevant restriction or change.",
+        "I confirm that I am aged 18 or over, I am each named child’s parent or legal guardian or otherwise have lawful authority to make the decisions and commitments in this addendum for every named child, and I am the payer. If responsibility is shared or restricted by a court order or other arrangement, I confirm that signing and enrolling each child is permitted and I will tell Zero Alpha Fitness promptly about any relevant restriction or change.",
     )
     add_para(
         doc,
-        "I confirm that the child’s name, date of birth, age option, my relationship and contact details are accurate. I understand that Zero Alpha Fitness may pause onboarding or participation while it reasonably verifies eligibility or authority.",
+        "I confirm that each child’s name, date of birth and selected plan, and my relationship and contact details for each child, are accurate. I understand that Zero Alpha Fitness may pause onboarding or participation while it reasonably verifies eligibility or authority.",
     )
 
     doc.add_heading("3. Activities and risks", level=1)
@@ -1411,7 +1443,15 @@ def build_guardian() -> Path:
     doc.add_heading("7. Membership, payment and cancellation", level=1)
     add_para(
         doc,
-        "As payer, I accept the £35 standard monthly price and recurring authority. During the founding presale, Stripe shows £0 due today and the first payment on 1 September 2026; after opening, Stripe may show immediate proration to the next first. I also accept the three-day past-due rule after service has started, the rule that a failed first scheduled payment means membership and access do not start, the no-pause rule, and the ordinary 14-day pre-renewal cancellation deadline. I understand that statutory cooling-off and refund rights remain separate and cannot be removed. The Membership Terms and Cancellation, Refund and Cooling-off Policy explain the details.",
+        "As payer, I accept the standard monthly price of £30 per Youngstars child or £35 per Teenstars child and the recurring authority. When the contracted quantity is two or more children, a recurring 15% multi-child discount applies to the full same-plan subtotal. It does not apply at quantity one. Stripe shows the quantity, price per child, undiscounted subtotal, discount and resulting recurring total before confirmation. Non-attendance does not change the contracted quantity, total or discount. During the founding presale, Stripe shows £0 due today and the first payment on 1 September 2026; after opening, Stripe may show immediate proration to the next first. I also accept the three-day past-due rule after service has started, the rule that a failed first scheduled payment means membership and access do not start, the no-pause rule, and the ordinary 14-day pre-renewal cancellation deadline. I understand that statutory cooling-off and refund rights remain separate and cannot be removed. The Membership Terms and Cancellation, Refund and Cooling-off Policy explain the details.",
+    )
+    add_para(
+        doc,
+        "The youth Checkout creates one subscription covering all listed children. An ordinary or cooling-off cancellation ends the whole subscription and all listed children’s places; the online flow does not cancel one child separately. A requested addition, removal, plan, price or discount change takes effect only when Zero Alpha Fitness confirms it in writing, including the effective date and resulting recurring total, and may require cancellation and a new Checkout.",
+    )
+    add_para(
+        doc,
+        "Reaching the top of an age band does not automatically move a child, remove a place or change the recurring total. Zero Alpha Fitness will contact the payer about any transition. No plan, contracted-quantity, price or discount change takes effect until confirmed in writing, and a new Checkout may be required.",
     )
 
     doc.add_heading("8. Conduct and proportionate restriction", level=1)
@@ -1445,18 +1485,18 @@ def build_guardian() -> Path:
         doc,
         "I intend my typed name and affirmative submission to authenticate and sign this addendum electronically. I will be able to review it before signing and receive or access a durable copy afterwards. The record will identify the document version and time of acceptance.",
     )
-    add_para(
+    continuing_effect = add_para(
         doc,
-        "This addendum continues while the child participates under the youth membership. A material change requires clear notice and any fresh agreement reasonably or legally required. If a provision is unenforceable, the remainder continues so far as lawful. The law and jurisdiction wording in the Membership Terms applies, subject to the child’s and consumer’s mandatory rights.",
+        "This addendum continues while the child participates. A material change requires clear notice and any fresh agreement reasonably or legally required. If a provision is unenforceable, the rest continues so far as lawful. The Membership Terms’ law and jurisdiction wording applies, subject to the child’s and consumer’s mandatory rights.",
     )
+    continuing_effect.paragraph_format.keep_together = True
 
-    doc.add_page_break()
     doc.add_heading("Guardian electronic signing arrangement", level=1)
-    add_quote(doc, "☐ I confirm that I am aged 18 or over, I am the named child’s parent or legal guardian or otherwise have lawful authority to enrol them, and I am the payer.")
-    add_quote(doc, "☐ I have read and agree to the Parent/Guardian Consent and Youth Membership Addendum. I understand the activities and inherent risks and consent to the child’s participation, subject to their statutory rights and Zero Alpha Fitness’s duty to take reasonable care.")
+    add_quote(doc, "☐ I confirm that I am aged 18 or over, I am each named child’s parent or legal guardian or otherwise have lawful authority to enrol every named child, and I am the payer.")
+    add_quote(doc, "☐ I have read and agree to the Parent/Guardian Consent and Youth Membership Addendum for each named child. I understand the activities and inherent risks and consent to each child’s participation, subject to their statutory rights and Zero Alpha Fitness’s duty to take reasonable care.")
     add_para(
         doc,
-        "Required fields: child full name and date of birth; selected Youngstars or Teenstars option; guardian full legal name; relationship; payer email collected by Stripe or the account-claim flow; authority declaration; typed signature; the exact acceptance statements; signature date/time; membership/order reference; addendum document ID and version.",
+        "Required fields: every child’s full name, date of birth and selected-plan eligibility; contracted quantity; price per child; undiscounted subtotal; discount rate and amount; resulting recurring total; guardian full legal name; relationship and authority for each child; payer email collected by Stripe or the account-claim flow; typed signature; the exact acceptance statements; signature date/time; membership/order reference; addendum document ID and version.",
     )
 
     add_review_appendix(
@@ -1465,7 +1505,7 @@ def build_guardian() -> Path:
             "Have safeguarding lead, counsel and insurer review the age bands, programme scope, coach-to-child supervision, handover/collection and emergency wording against actual operations.",
             "Define the age transition rule when a Youngstars child turns 12 or a Teenstars child turns 17, including notice, pricing, service transition and renewed documents.",
             "Confirm what evidence of guardian authority may be requested, how shared responsibility/court restrictions are handled, and who may collect a child.",
-            "Complete a child-focused DPIA and legitimate-interests assessment; prepare age-appropriate notices for ages 4–11 and 12–16.",
+            "Complete a child-focused DPIA and legitimate-interests assessment; prepare age-appropriate notices for ages 6–11 and 12–16.",
             "Design the secure safety-information route and Article 9 process before requesting any child health information.",
             "Confirm youth incident reporting, first aid, emergency contact and escalation procedures. The purchase flow currently does not collect a phone number; assess whether a separate onboarding emergency contact is operationally and legally required.",
             "Implement immutable or append-only evidence of the guardian declaration, exact terms, typed signature, verified identity context and timestamp.",
@@ -1569,7 +1609,7 @@ def write_plain_text_bundle(paths: Sequence[Path], output_dir: Path) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     specs_by_filename = {spec.filename: spec for spec in SPECS.values()}
     manifest: dict[str, object] = {
-        "effectiveDate": "2026-08-20",
+        "effectiveDate": "2026-08-23",
         "hashCovers": "UTF-8 bytes of content",
         "documents": {},
     }
@@ -1585,7 +1625,7 @@ def write_plain_text_bundle(paths: Sequence[Path], output_dir: Path) -> Path:
         documents[spec.registry_key] = {
             "title": spec.title,
             "version": spec.doc_id,
-            "effectiveDate": "2026-08-20",
+            "effectiveDate": "2026-08-23",
             "filename": target.name,
             "sha256": hashlib.sha256(encoded).hexdigest(),
             "bytes": len(encoded),

@@ -168,6 +168,73 @@ describe("AdminMemberships cancellation attention", () => {
       .not.toBeInTheDocument();
   });
 
+  it("shows every youth participant and the projected family total", async () => {
+    mockListMemberships.mockResolvedValue({
+      ok: true,
+      memberships: [{
+        subscriptionId: "sub_family",
+        payerUid: "payer-family",
+        payerEmail: "family@example.test",
+        planKey: "youth_teenstars",
+        planName: "HYROX Teenstars",
+        state: "past_due_grace",
+        stripeStatus: "past_due",
+        grantsAlphaWodAccess: false,
+        entitlementTargetUid: null,
+        participantFullName: "Alex Child",
+        participantFullNames: ["Alex Child", "Sam Child"],
+        participantCount: 2,
+        participantAge: 14,
+        participantAges: [14, 13],
+        participantIsPayer: false,
+        guardianFullName: "Ava Parent",
+        currentPeriodEnd: 1_790_809_200,
+        cancelAt: null,
+        disputeOpen: false,
+        accessRevoked: false,
+        providerContractStatus: "verified",
+        providerContractError: null,
+        pastDueSince: 1_790_809_200,
+        confirmationEmailStatus: "sent",
+        confirmationEmailError: null,
+        confirmationEmailProviderId: "email_family",
+        cancellationRequestStatus: null,
+        cancellationRequestError: null,
+        entitlementProjectionStatus: null,
+        entitlementProjectionError: null,
+        discount: {
+          couponId: "coupon_family_15",
+          promotionCodeId: null,
+          amountOffPence: null,
+          currency: null,
+          durationInMonths: null,
+          startsAt: 1787149200,
+          endsAt: null,
+          kind: "youth_family",
+          percentOff: 15,
+          duration: "forever",
+        },
+        paymentSchedule: {
+          amountDueTodayPence: 0,
+          firstPaymentAt: 1788220800,
+          standardMonthlyPence: 7000,
+          discountedMonthlyPence: 5950,
+          discountedPaymentCount: null,
+          fullPriceFrom: null,
+        },
+      }],
+    });
+
+    render(<AdminMemberships />);
+
+    expect(await screen.findByText(
+      "Participants: Alex Child · age 14; Sam Child · age 13 · guardian Ava Parent"
+    )).toBeInTheDocument();
+    expect(screen.getByText("Family discount applied")).toBeInTheDocument();
+    expect(screen.getByText(/pay £59.50 per month instead of £70/i))
+      .toBeInTheDocument();
+  });
+
   it("repairs only the account already linked to the membership", async () => {
     mockListMemberships.mockResolvedValue({
       ok: true,

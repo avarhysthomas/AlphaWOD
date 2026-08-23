@@ -1,5 +1,6 @@
 import {
   EXISTING_MEMBER_OFFER,
+  YOUTH_FAMILY_OFFER,
   MEMBERSHIP_PLANS,
   POLICY_TEXT,
   PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
@@ -10,6 +11,7 @@ import {
   isPlanKey,
   resolveDisplayAge,
   resolveYouthPlanForAge,
+  resolveYouthMonthlyPricing,
 } from "./membershipPlans";
 
 describe("founding presale", () => {
@@ -51,14 +53,14 @@ describe("resolveDisplayAge", () => {
 
 describe("plan eligibility", () => {
   it("routes youth ages to the approved plan", () => {
-    expect(resolveYouthPlanForAge(4)).toBe("youth_youngstars");
+    expect(resolveYouthPlanForAge(6)).toBe("youth_youngstars");
     expect(resolveYouthPlanForAge(11)).toBe("youth_youngstars");
     expect(resolveYouthPlanForAge(12)).toBe("youth_teenstars");
     expect(resolveYouthPlanForAge(16)).toBe("youth_teenstars");
   });
 
-  it("has no youth plan outside 4 to 16", () => {
-    expect(resolveYouthPlanForAge(3)).toBeNull();
+  it("has no youth plan outside 6 to 16", () => {
+    expect(resolveYouthPlanForAge(5)).toBeNull();
     expect(resolveYouthPlanForAge(17)).toBeNull();
     expect(resolveYouthPlanForAge(0)).toBeNull();
   });
@@ -71,7 +73,7 @@ describe("plan eligibility", () => {
   });
 
   it("bounds youth plans on both ends", () => {
-    expect(isAgeEligibleForPlan(MEMBERSHIP_PLANS.youth_youngstars, 3)).toBe(false);
+    expect(isAgeEligibleForPlan(MEMBERSHIP_PLANS.youth_youngstars, 5)).toBe(false);
     expect(isAgeEligibleForPlan(MEMBERSHIP_PLANS.youth_youngstars, 12)).toBe(false);
     expect(isAgeEligibleForPlan(MEMBERSHIP_PLANS.youth_teenstars, 11)).toBe(false);
     expect(isAgeEligibleForPlan(MEMBERSHIP_PLANS.youth_teenstars, 17)).toBe(false);
@@ -88,6 +90,35 @@ describe("formatPlanPrice", () => {
   it("renders whole pound amounts without decimals", () => {
     expect(formatPlanPrice(MEMBERSHIP_PLANS.adult_unlimited)).toBe("£60");
     expect(formatPlanPrice(MEMBERSHIP_PLANS.youth_teenstars)).toBe("£35");
+    expect(formatPlanPrice(MEMBERSHIP_PLANS.youth_youngstars)).toBe("£30");
+  });
+});
+
+describe("youth family pricing", () => {
+  it("discounts the full same-plan subtotal by 15% from two children", () => {
+    expect(YOUTH_FAMILY_OFFER).toMatchObject({
+      minimumParticipants: 2,
+      percentOff: 15,
+      maximumParticipants: 10,
+    });
+    expect(resolveYouthMonthlyPricing(MEMBERSHIP_PLANS.youth_youngstars, 1))
+      .toEqual({
+        standardMonthlyPence: 3000,
+        recurringMonthlyPence: 3000,
+        familyDiscountApplies: false,
+      });
+    expect(resolveYouthMonthlyPricing(MEMBERSHIP_PLANS.youth_youngstars, 3))
+      .toEqual({
+        standardMonthlyPence: 9000,
+        recurringMonthlyPence: 7650,
+        familyDiscountApplies: true,
+      });
+    expect(resolveYouthMonthlyPricing(MEMBERSHIP_PLANS.youth_teenstars, 2))
+      .toEqual({
+        standardMonthlyPence: 7000,
+        recurringMonthlyPence: 5950,
+        familyDiscountApplies: true,
+      });
   });
 });
 

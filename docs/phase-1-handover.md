@@ -1,6 +1,6 @@
 # Phase 1 Handover: Public Membership Purchase & Stripe Billing
 
-Date: 2026-08-18 (live prerequisite status updated 2026-08-20)
+Date: 2026-08-18 (youth-family release status updated 2026-08-23)
 
 This is the current implementation handover. The detailed operating and
 deployment runbook is
@@ -11,10 +11,16 @@ documents differ, use that rollout guide.
 
 Phase 1 is implemented in the local working tree. The only new production
 service deployed is the public `stripeWebhook` receiver; the customer frontend,
-seven callables and four scheduled workers remain undeployed.
+eight callables and four scheduled workers remain undeployed.
 The five live Stripe Price/Product pairs were supplied from Dashboard exports
-and independently re-read from Stripe's live API on 19 August 2026; all are
-active, live, monthly GBP objects with the approved amounts and product links.
+and independently re-read from Stripe's live API on 19 August 2026. The two
+youth pairs were read again on 23 August: Youngstars
+`price_1U5KoQFzNDZoGGA0s4t806bH` is £30 GBP monthly on
+`prod_V5Vq0l9VAaPox9`, and Teenstars `price_1U5Kt8FzNDZoGGA0ogq41DEw` is £35
+GBP monthly on `prod_V5VumrjZl1bWV1`. Live Coupon
+`zaf_youth_family_15pct_2026` was then created and verified in Stripe Dashboard
+on 23 August: valid, 15% off forever, no expiry, redemption cap or Promotion
+Code, and restricted exactly to those two youth Products.
 On 20 August the live Product-scoped no-expiry Coupon and Promotion Code,
 locked-down Portal `bpc_1U6SIkFzNDZoGGA0mSE5EepR`, active 14-event webhook
 `we_1U6SObFzNDZoGGA0cw5Yyqth`, and the existence of the Stripe API,
@@ -30,14 +36,19 @@ outbox, and returned through the local success route. That is a historical seam
 baseline, not proof of the newly implemented £0 presale or discount. Those paths,
 real Resend delivery and deployed staging remain untested.
 
-The business owner explicitly approved all five final legal documents on 20
-August 2026: the Membership Terms, Privacy Notice, Cancellation, Refund and
-Cooling-off Policy, Adult Participant Waiver and Parent/Guardian Addendum. The
-final DOCX files are under `docs/legal-review/2026-08-20/`; their canonical text
-has been exported to the stable public `.txt` files and synchronized into both
-plan catalogues with matching effective dates and SHA-256 digests.
-`CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION` is now `true` in both catalogue
-sources.
+The canonical youth release catalogue is Youngstars ages 6–11 at £30 per child
+per month and Teenstars ages 12–16 at £35 per child per month. Each youth
+subscription may contain 1–10 children on the selected same plan. One child pays
+the standard per-child price; at 2–10 children an automatic 15%-forever Coupon
+applies to the whole monthly subtotal. A mixed Youngstars/Teenstars bundle is
+not supported. Two Youngstars therefore recur at £51 and two Teenstars at
+£59.50.
+
+The business owner explicitly approved the frozen five-document 23 August 2026
+youth-family bundle on 23 August. Its stable public `.txt` files and both source
+registries are synchronized with matching effective dates and SHA-256 digests,
+and the source publication gate is `true`. The earlier 20 August bundle remains
+historical evidence for checkouts that accepted it.
 
 Purchase remains closed by two separately deployed environment controls:
 
@@ -46,8 +57,9 @@ Purchase remains closed by two separately deployed environment controls:
 2. `REACT_APP_MEMBERSHIP_PURCHASE_ENABLED=false` in the Vercel Production build
    keeps the customer-visible catalogue and form controls closed.
 
-The approved legal bundle must still be deployed through the confirmed Vercel
-Production workflow with both purchase controls closed, followed by
+The approved legal bundle and corrected Stripe youth configuration must still
+be verified through the Vercel/Stripe production workflows with both
+purchase controls closed, including
 `npm run verify:published-legal`, before the backend Phase 1 deployment or any
 gate opening. Final release test results and counts have not been frozen in this
 handover. The system must continue to render and freeze the exact plan- and
@@ -62,10 +74,12 @@ mirror and a parity test holds the two copies together.
 
 The new Functions surface is:
 
-- seven callables: `createMembershipCheckoutSession`,
-  `createCustomerPortalSession`, `getMyMemberships`,
+- eight callables: retained legacy `createMembershipCheckoutSession`, versioned
+  `createMembershipCheckoutSessionV2`, `createCustomerPortalSession`, `getMyMemberships`,
   `requestMembershipCancellation`, `claimMembership`, `listMemberships`, and
-  `linkMembershipParticipant`;
+  `linkMembershipParticipant`. The compatible frontend calls only V2 with
+  `checkoutSchemaVersion: 2`; V1 remains for stale-client fail-safe rollout and
+  is not an opening target;
 - one deployed public HTTP endpoint: `stripeWebhook`;
 - four scheduled workers: `recoverStripeEvents`,
   `recoverMembershipCancellations`, `reconcilePastDueMemberships`, and
@@ -88,11 +102,12 @@ Every one is denied to clients in `firestore.rules`. The memberships
 reconciler also requires the composite index in `firestore.indexes.json` on
 `state` and `nextReconcileAt`.
 
-The current billing schema version 1 is acceptable only if all ten collections
+The current billing schema version 2 is acceptable only if all ten collections
 are empty. Deploying the receiver and running unsigned probes do not prove that
 assumption; release preflight must. Existing billing documents
 mean stop and design a version bump/migration/backfill; this implementation is
-not a compatibility layer over unknown schema-v1 data.
+not a compatibility layer over unknown data. Retaining the V1 callable export is
+a transport rollout boundary, not a schema migration.
 
 The routes are public catalogue `/memberships`, public checkout
 `/memberships/checkout/:planKey`, public return/claim
@@ -101,7 +116,7 @@ admin operations `/admin/memberships`.
 
 ## 3) Money, uniqueness and entitlement invariants
 
-Checkout creates deterministic participant locks and, for a signed-in
+Checkout creates a deterministic lock for every participant and, for a signed-in
 Adult Unlimited payer, an AlphaWOD payer lock before calling Stripe. A local
 lock expiry timestamp is never enough to make a replacement sale safe. The
 backend retrieves the Checkout Session and releases the lock only after Stripe
@@ -146,6 +161,16 @@ Price from 1 December. Staff manually moderate redemptions against the small
 eligible cohort. Test and live Coupon/Code objects are separate provider
 configuration.
 
+Youth checkout freezes 1–10 separately named and dated children, all eligible
+for the selected same plan. Stripe receives one subscription item at the
+canonical per-child Price with quantity equal to that frozen participant count.
+At quantity 2–10 the server automatically applies the allowlisted youth-family
+Coupon to the entire subtotal; fulfilment requires exactly 15% off forever, no
+redemption deadline or cap, and `applies_to` containing exactly both youth
+Products. There is no customer-entered family Promotion Code. Every child's
+identity lock, age, quantity, Price and discount must agree before fulfilment;
+unknown or malformed provider state fails closed.
+
 Final AlphaWOD ownership is also recorded in a deterministic
 `membershipEntitlementOwners` document. Claim, fulfilment and admin linking
 acquire that owner in their Firestore transaction, preventing two concurrent
@@ -175,7 +200,8 @@ closed before the requested new purchase, claim or link is committed.
 The browser's resumable checkout attempt is scoped to its complete context. It
 stores only an opaque attempt id and request hash in `sessionStorage`, not raw
 participant or signature fields. The hash includes the payer uid or anonymous
-state, checkout input and the current `CHECKOUT_DOCUMENTS` versions, so an auth
+state, every child in the checkout input and the current `CHECKOUT_DOCUMENTS`
+versions, so an auth
 change, account switch or document-version change rotates the attempt.
 
 The success page is also session-scoped: it only confirms a membership whose
@@ -272,7 +298,7 @@ Terminal `dead_letter` and `manual_review` paths emit a critical log and a
 and provider message id are projected onto the membership and shown to admins;
 the admin attention filter includes terminal confirmation failures.
 
-The frozen confirmation carries each accepted approved document's title,
+The frozen confirmation carries each accepted registered document's title,
 version, SHA-256 digest and complete canonical content both inline and as an
 attached UTF-8 plain-text file. That evidence is created with the outbox record
 and cannot be rebuilt from mutable links during a retry. Real Resend delivery
@@ -324,6 +350,8 @@ orphan-outbox manual review.
 It also covers the £0/no-proration presale contract, scheduled access and first-
 invoice activation/failure, the allowlisted three-payment discount, UTC day-1
 anchor regression, terminal Session-to-intent binding, frozen Price rotation,
+same-plan 1–10-child youth quantities, per-child age validation, 15%-forever
+whole-subtotal pricing and schema-version-2 V2 intake boundary,
 healable subscription-contract drift restriction, overdue immediate
 cancellation/refund review, current-state success copy and verified-email resend
 recovery; App Check replay/app binding and privacy-safe checkout throttling; exact
@@ -348,17 +376,15 @@ staging or real Resend delivery; normal checkout remains closed.
 
 ## 7) Release work still required
 
-No item below authorises deployment or opening either purchase gate. The legal
-documents are approved and the checked-in source bundle is complete; complete
-the remaining operational, abuse and data-lifecycle work, then follow this
-order:
+No item below authorises deployment or opening either purchase gate. The
+Stripe family configuration and production verification remain release
+blockers; keep both purchase controls false while completing the remaining
+operational, abuse and data-lifecycle work, then follow this order:
 
-1. The five 20 August documents are approved and finalized as DOCX files, the
-   byte-identical customer text is registered at stable public URLs, the
-   effective dates and SHA-256 digests are frozen, and the source gate is `true`
-   in both catalogues. Deploy that exact bundle in the closed frontend release
-   and run `npm run verify:published-legal`; do not deploy the backend Phase 1
-   services if the production bytes differ. Separately staff the cooling-off
+1. Deploy the explicitly approved, byte-identical 23 August customer text at
+   its stable public URLs in the closed frontend release and run
+   `npm run verify:published-legal`; do not deploy the backend Phase 1 services
+   if the production bytes differ. Separately staff the cooling-off
    proportionate-service/refund decision, execution and audit SLA. The online
    notice, immutable receipt, immediate provider stop, recovery and durable
    acknowledgement are implemented, but the refund amount remains a human
@@ -393,22 +419,36 @@ order:
    Unlimited code. Then use an isolated Stripe Test Clock to prove the expected
    September/October/November £55 invoices and December £60 invoice. In deployed
    staging, additionally exercise Events recovery, anonymous account claim, a
-   configured Resend test sender/recipient and actual Resend delivery.
+   configured Resend test sender/recipient and actual Resend delivery. Run one-
+   and two-child journeys for both youth plans and independently verify Stripe
+   item quantities, every Firestore participant, the family Coupon and recurring
+   totals (£51 for two Youngstars; £59.50 for two Teenstars). The existing
+   post-payment verifier does not yet prove the family Coupon.
 7. The live catalogue, £5/repeating-three-month Product-restricted no-expiry
    Coupon `zaf_existing_member_5off_3mo_2026`, shared no-expiry Promotion Code
    `promo_1U6EsgFzNDZoGGA0DjPqkz08`, locked-down Portal, webhook destination and
    required Stripe secrets were verified without enabling purchase. Record
    those exact provider ids in the git-ignored production configuration and
-   verify the Resend domain and delivery; never reuse test objects.
+   verify the Resend domain and delivery; never reuse test objects. Re-read the
+   five live Price/Product pairs and live youth-family Coupon
+   `zaf_youth_family_15pct_2026`; confirm it remains exactly 15% off forever,
+   without a redemption deadline/cap or Promotion Code and restricted to
+   exactly both youth Products. Put its id in
+   `STRIPE_YOUTH_FAMILY_COUPON_ID` and pass
+   `npm run verify:stripe-live-config --prefix functions` while both purchase
+   gates remain closed. The Dashboard verification does not replace this
+   API-backed preflight.
 8. Prove all ten production billing collections are empty before accepting
-   schema version 1. If they are not, stop for a migration/version plan. Then
+   schema version 2. If they are not, stop for a migration/version plan. The V1
+   callable is a stale-client safety boundary, not an old-schema compatibility
+   path. Then
    enter the Phase 0 maintenance, callable-transport and identity-admin freezes
    with the required backups and IAM restoration manifest.
 9. Deploy the `state`/`nextReconcileAt` index and reviewed final deny-all rules.
    Keep the backend runtime purchase parameter false. Confirm the external
    Vercel project, Production branch, canonical domain and complete Production
    environment; the repository cannot prove those bindings.
-10. With the approved document source gate true but
+10. Only after the revised document source checks pass, and with
     `REACT_APP_MEMBERSHIP_PURCHASE_ENABLED=false`, deploy the exact reviewed
     frontend commit through that confirmed Vercel workflow. Record its commit
     SHA, verify SPA routing and run the deployed-byte legal preflight. Do not
@@ -416,27 +456,32 @@ order:
 11. Run the armed backend preflight, then use the rollout guide's two batches of
     at most ten Functions: first redeploy the signed public webhook from the
     exact reviewed release commit and deploy the four scheduled
-    workers, then the seven callables. Create and immediately re-block the new
+    workers, then the eight callables, including both checkout exports. Create
+    and immediately re-block the new
     callables; keep the webhook public and scheduler IAM separate. Do not use a
     blanket Functions deploy. The `functions` package's blanket deploy script is
     deliberately blocked; use the selective manifest with the Phase 0-pinned
     Firebase CLI 15.5.1.
 12. Because the compatible closed frontend is already live, restore the exact
-    reviewed service-level client-callable transport for the seven callables—
-    never a project-wide invoker grant—and verify IAM and schedules. Smoke-test
-    every callable through the real Firebase client transport. Anonymous
-    checkout must reach its handler and fail at the closed runtime gate without
-    creating a Stripe Session, while signed-in, ownership and admin paths must
-    enforce their handler boundaries.
+    reviewed service-level client-callable transport for
+    `createMembershipCheckoutSessionV2` and the six non-checkout callables—
+    never a project-wide invoker grant—and keep legacy
+    `createMembershipCheckoutSession` blocked. Verify IAM and schedules.
+    Schema-version-2 anonymous checkout must reach the V2 handler and fail at
+    the closed runtime gate without creating a Stripe Session, while signed-in,
+    ownership and admin paths must enforce their handler boundaries.
 13. Record final release results and counts. Only after every blocker and
-    provider check passes may an authorised operator open the backend intake
-    function and then deploy the same frontend commit with its Vercel Production
+    provider check passes may an authorised operator open only the V2 backend
+    intake and then deploy the same frontend commit with its Vercel Production
     purchase gate true, using `production-operations.md`. Rollback closes and
-    redeploys the backend intake first, then closes the frontend gate.
+    redeploys V2 first, then closes the frontend gate. V1 remains closed.
 
-Cooling-off self-service and its durable acknowledgement remain launch blockers;
-inside-window requests are failed closed to staffed review rather than passed
-through the ordinary renewal-notice calculation.
+Cooling-off self-service now freezes an immutable receipt before the provider
+change, stops billing immediately, recovers interrupted work and queues a
+durable acknowledgement without passing the request through the ordinary
+renewal-notice calculation. The staffed decision, calculation, execution and
+audit SLA for any proportionate service charge or refund remains a launch
+blocker.
 Automated Promotion Code issuance, advance price-change notices, automated youth
 onboarding, and an audited linked-participant transfer workflow are deliberately
 not built. The shared code is created, distributed and manually moderated by the

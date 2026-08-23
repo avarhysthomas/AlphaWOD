@@ -13,6 +13,7 @@ const {
   EXISTING_MEMBER_OFFER,
   MEMBERSHIP_PLANS,
   PLAN_KEYS,
+  YOUTH_FAMILY_OFFER,
 } = require("../lib/membershipPlans");
 const {
   assertProductionClosedConfig,
@@ -119,6 +120,26 @@ async function main() {
     );
   }
 
+  const familyCoupon = await stripe.coupons.retrieve(
+    environment.STRIPE_YOUTH_FAMILY_COUPON_ID,
+    {expand: ["applies_to"]}
+  );
+  const expectedYouthProducts = YOUTH_FAMILY_OFFER.eligiblePlanKeys
+    .map((planKey) => productsByPlan.get(planKey)).sort();
+  const familyProducts = [...(familyCoupon.applies_to?.products ?? [])].sort();
+  if (familyCoupon.deleted === true || familyCoupon.livemode !== true ||
+    familyCoupon.valid !== true ||
+    familyCoupon.percent_off !== YOUTH_FAMILY_OFFER.percentOff ||
+    familyCoupon.amount_off !== null || familyCoupon.currency !== null ||
+    familyCoupon.duration !== "forever" ||
+    familyCoupon.duration_in_months !== null ||
+    familyCoupon.redeem_by !== null || familyCoupon.max_redemptions !== null ||
+    familyProducts.length !== expectedYouthProducts.length ||
+    familyProducts.some((productId, index) =>
+      productId !== expectedYouthProducts[index])) {
+    throw new Error("The LIVE youth family Coupon does not match the approved offer.");
+  }
+
   const portal = await stripe.billingPortal.configurations.retrieve(
     environment.STRIPE_PORTAL_CONFIGURATION_ID
   );
@@ -139,6 +160,7 @@ async function main() {
   );
   console.log(`- Existing-member Coupon: ${coupon.id}`);
   console.log(`- Shared reusable Promotion Code: ${promotionCode.id}`);
+  console.log(`- Youth family Coupon: ${familyCoupon.id}`);
   console.log(`- Customer Portal: ${portal.id}`);
 }
 

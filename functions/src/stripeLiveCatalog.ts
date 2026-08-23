@@ -126,7 +126,7 @@ export const APPROVED_LIVE_STRIPE_CATALOGUE = {
     productId: "prod_V5Vq0l9VAaPox9",
     productName: "HYROX Youngstars U11",
     priceId: "price_1U5KoQFzNDZoGGA0s4t806bH",
-    amountPence: 3500,
+    amountPence: 3000,
     currency: "gbp",
     interval: "month",
     intervalCount: 1,

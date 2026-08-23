@@ -24,7 +24,7 @@ function createFakeStripe() {
     ["price_unlimited", {amount: 6000, name: "Adult Unlimited Membership"}],
     ["price_ladies", {amount: 5000, name: "Adult Ladies Only Membership"}],
     ["price_gym", {amount: 4500, name: "Adult Gym Only"}],
-    ["price_youngstars", {amount: 3500, name: "HYROX Youngstars"}],
+    ["price_youngstars", {amount: 3000, name: "HYROX Youngstars"}],
     ["price_teenstars", {amount: 3500, name: "HYROX Teenstars"}],
   ].map(([id, value]) => [id, {
     id,
@@ -69,6 +69,22 @@ function createFakeStripe() {
       max_redemptions: null,
       redeem_by: null,
       applies_to: {products: ["prod_price_unlimited"]},
+      deleted: false,
+      valid: true,
+    }], ["coupon_youth_family_15pct", {
+      id: "coupon_youth_family_15pct",
+      object: "coupon",
+      livemode: false,
+      amount_off: null,
+      currency: null,
+      percent_off: 15,
+      duration: "forever",
+      duration_in_months: null,
+      max_redemptions: null,
+      redeem_by: null,
+      applies_to: {
+        products: ["prod_price_youngstars", "prod_price_teenstars"],
+      },
       deleted: false,
       valid: true,
     }]]),
@@ -216,9 +232,10 @@ function createFakeStripe() {
         }
         const id = `cs_fake_${state.checkoutSessions.size + 1}`;
         const promotionCodeId = payload["discounts[0][promotion_code]"] || null;
+        const directCouponId = payload["discounts[0][coupon]"] || null;
         const promotionCode = promotionCodeId ?
           state.promotionCodes.get(promotionCodeId) : null;
-        const couponId = promotionCode?.promotion?.coupon ?? null;
+        const couponId = directCouponId ?? promotionCode?.promotion?.coupon ?? null;
         const coupon = couponId ? state.coupons.get(couponId) : null;
         const billingAnchor = Number(
           payload["subscription_data[billing_cycle_anchor]"]
@@ -245,6 +262,7 @@ function createFakeStripe() {
           metadata: {
             intentId: payload["metadata[intentId]"],
             planKey: payload["metadata[planKey]"],
+            participantCount: payload["metadata[participantCount]"],
             ...(payload["metadata[firebaseUid]"] ? {
               firebaseUid: payload["metadata[firebaseUid]"],
             } : {}),
@@ -258,10 +276,14 @@ function createFakeStripe() {
           payment_status: "unpaid",
           payment_method_collection: payload.payment_method_collection || null,
           allow_promotion_codes: payload.allow_promotion_codes === "true",
-          discounts: promotionCodeId ? [{
+          discounts: couponId ? [{
             coupon: couponId,
             promotion_code: promotionCodeId,
           }] : [],
+          line_items: [{
+            price: payload["line_items[0][price]"],
+            quantity: Number(payload["line_items[0][quantity]"]),
+          }],
           mode: payload.mode,
         };
         state.checkoutSessions.set(id, session);

@@ -34,6 +34,7 @@ process.env.STRIPE_PRICE_YOUTH_TEENSTARS = "price_teenstars";
 process.env.STRIPE_EXISTING_MEMBER_COUPON_ID = "coupon_existing_member_5x3";
 process.env.STRIPE_EXISTING_MEMBER_PROMOTION_CODE_ID =
   "promo_existing_member_shared";
+process.env.STRIPE_YOUTH_FAMILY_COUPON_ID = "coupon_youth_family_15pct";
 
 const functionsTest = require("firebase-functions-test")();
 // firebase-functions-test installs its own synthetic runtime project id. Bind
@@ -71,6 +72,9 @@ const db = admin.firestore();
 const claimMembership = functionsTest.wrap(functions.claimMembership);
 const createMembershipCheckoutSession = functionsTest.wrap(
   functions.createMembershipCheckoutSession
+);
+const createMembershipCheckoutSessionV2 = functionsTest.wrap(
+  functions.createMembershipCheckoutSessionV2
 );
 const createCustomerPortalSession = functionsTest.wrap(
   functions.createCustomerPortalSession
@@ -371,6 +375,7 @@ test.beforeEach(clearEmulators);
 function validCheckoutData(attemptId = "attempt_checkout_test_123456") {
   return {
     checkoutAttemptId: attemptId,
+    checkoutSchemaVersion: 2,
     expectedBillingMode: "presale_deferred",
     planKey: "adult_unlimited",
     participantFullName: "Checkout Athlete",
@@ -382,28 +387,104 @@ function validCheckoutData(attemptId = "attempt_checkout_test_123456") {
   };
 }
 
-test("the deployed checkout handler stays closed while the runtime gate is closed", async () => {
-  const original = process.env.MEMBERSHIP_PURCHASE_ENABLED;
+function youthCheckoutData({planKey, attemptId, children}) {
+  const [participant, ...additionalParticipants] = children;
+  return {
+    ...validCheckoutData(attemptId),
+    planKey,
+    participantFullName: participant.fullName,
+    participantDateOfBirth: participant.dateOfBirth,
+    participantIsPayer: false,
+    additionalParticipants,
+    signedName: "Paying Adult",
+    guardianFullName: "Paying Adult",
+    guardianRelationship: "Parent",
+    acceptedStatementIds: resolveCheckoutAcceptanceStatements(
+      planKey,
+      children.length
+    ).map(({id}) => id),
+  };
+}
+
+function legacyParticipantKeyFor(fullName, dateOfBirth) {
+  return createHash("sha256")
+    .update(`${fullName.trim().toLowerCase()}|${dateOfBirth}`)
+    .digest("hex");
+}
+
+test("both deployed checkout exports require the version 2 request contract", async () => {
+  const originalPurchaseEnabled = process.env.MEMBERSHIP_PURCHASE_ENABLED;
+  const sessionsBefore = fakeStripe.state.checkoutSessions.size;
+  process.env.MEMBERSHIP_PURCHASE_ENABLED = "false";
+  try {
+    for (const [handlerIndex, checkoutHandler] of [
+      createMembershipCheckoutSession,
+      createMembershipCheckoutSessionV2,
+    ].entries()) {
+      for (const checkoutSchemaVersion of [undefined, 1, 3]) {
+        const data = validCheckoutData(
+          `attempt_schema_${handlerIndex}_${checkoutSchemaVersion ?? "missing"}`
+        );
+        if (checkoutSchemaVersion === undefined) delete data.checkoutSchemaVersion;
+        else data.checkoutSchemaVersion = checkoutSchemaVersion;
+
+        await assert.rejects(
+          () => checkoutHandler(request(data)),
+          /Refresh the membership page/i
+        );
+      }
+
+      await assert.rejects(
+        () => checkoutHandler(request(validCheckoutData(
+          `attempt_schema_${handlerIndex}_current_contract`
+        ))),
+        /not enabled for this environment/i
+      );
+    }
+    assert.equal(fakeStripe.state.checkoutSessions.size, sessionsBefore);
+    assert.equal((await db.collection("membershipIntents").get()).size, 0);
+    assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 0);
+  } finally {
+    if (originalPurchaseEnabled === undefined) {
+      delete process.env.MEMBERSHIP_PURCHASE_ENABLED;
+    } else {
+      process.env.MEMBERSHIP_PURCHASE_ENABLED = originalPurchaseEnabled;
+    }
+  }
+});
+
+test("the runtime gate stays closed in the isolated local test journey", async () => {
+  const original = {
+    MEMBERSHIP_PURCHASE_ENABLED: process.env.MEMBERSHIP_PURCHASE_ENABLED,
+    MEMBERSHIP_TEST_JOURNEY_ENABLED: process.env.MEMBERSHIP_TEST_JOURNEY_ENABLED,
+    APP_PUBLIC_ORIGIN: process.env.APP_PUBLIC_ORIGIN,
+  };
   try {
     process.env.MEMBERSHIP_PURCHASE_ENABLED = "false";
+    process.env.MEMBERSHIP_TEST_JOURNEY_ENABLED = "true";
+    process.env.APP_PUBLIC_ORIGIN = "http://127.0.0.1:3000";
     await assert.rejects(
       () => createMembershipCheckoutSession(request(validCheckoutData())),
       /not enabled for this environment/i
     );
   } finally {
-    if (original === undefined) delete process.env.MEMBERSHIP_PURCHASE_ENABLED;
-    else process.env.MEMBERSHIP_PURCHASE_ENABLED = original;
+    Object.entries(original).forEach(([key, value]) => {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    });
   }
 });
 
-test("the local test flag cannot bypass the normal purchase gate after publication", () => {
+test("the local test flag cannot bypass the normal purchase gate", () => {
   const original = {
     MEMBERSHIP_PURCHASE_ENABLED: process.env.MEMBERSHIP_PURCHASE_ENABLED,
     MEMBERSHIP_TEST_JOURNEY_ENABLED: process.env.MEMBERSHIP_TEST_JOURNEY_ENABLED,
+    APP_PUBLIC_ORIGIN: process.env.APP_PUBLIC_ORIGIN,
   };
   try {
     process.env.MEMBERSHIP_PURCHASE_ENABLED = "false";
     process.env.MEMBERSHIP_TEST_JOURNEY_ENABLED = "true";
+    process.env.APP_PUBLIC_ORIGIN = "http://127.0.0.1:3000";
     assert.throws(
       () => membershipTesting.requirePurchaseFlowOpen(),
       /not enabled for this environment/i
@@ -1953,6 +2034,338 @@ test("a youth checkout preserves the child and paying adult and redirects with i
   }
 });
 
+test("youth q1, q2, and q3 checkout derives exact quantity, subtotal, and family Coupon", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  const planCases = [
+    {
+      planKey: "youth_youngstars",
+      priceId: "price_youngstars",
+      unitAmountPence: 3000,
+      datesOfBirth: ["2017-05-05", "2018-06-06", "2019-07-07"],
+    },
+    {
+      planKey: "youth_teenstars",
+      priceId: "price_teenstars",
+      unitAmountPence: 3500,
+      datesOfBirth: ["2012-05-05", "2011-06-06", "2010-07-07"],
+    },
+  ];
+  const sessionsBefore = fakeStripe.state.checkoutSessions.size;
+
+  try {
+    for (const planCase of planCases) {
+      assert.equal(
+        fakeStripe.state.prices.get(planCase.priceId).unit_amount,
+        planCase.unitAmountPence
+      );
+      for (const participantCount of [1, 2, 3]) {
+        const children = planCase.datesOfBirth
+          .slice(0, participantCount)
+          .map((dateOfBirth, index) => ({
+            fullName: `${planCase.planKey} q${participantCount} Child ${index + 1}`,
+            dateOfBirth,
+          }));
+        const checkout = await handler(request(youthCheckoutData({
+          planKey: planCase.planKey,
+          attemptId: `attempt_${planCase.planKey}_q${participantCount}_billing`,
+          children,
+        })));
+        const intentQuery = await db.collection("membershipIntents")
+          .where("checkoutSessionId", "==", checkout.sessionId)
+          .get();
+        assert.equal(intentQuery.size, 1);
+        const intent = intentQuery.docs[0];
+        const familyDiscountApplies = participantCount >= 2;
+        const standardMonthlyPence =
+          planCase.unitAmountPence * participantCount;
+        const recurringMonthlyPence = familyDiscountApplies ?
+          Math.round(standardMonthlyPence * 0.85) : standardMonthlyPence;
+
+        assert.equal(intent.get("participantCount"), participantCount);
+        assert.equal(intent.get("participants").length, participantCount);
+        assert.equal(intent.get("participantKeys").length, participantCount);
+        assert.equal(new Set(intent.get("participantKeys")).size, participantCount);
+        assert.deepEqual(intent.get("order"), {
+          participantCount,
+          unitAmountPence: planCase.unitAmountPence,
+          standardMonthlyPence,
+          familyDiscountPercent: familyDiscountApplies ? 15 : null,
+          recurringMonthlyPence,
+        });
+        assert.equal(
+          intent.get("familyDiscountCouponId"),
+          familyDiscountApplies ? "coupon_youth_family_15pct" : null
+        );
+
+        const sent = fakeStripe.lastUpdateTo("/v1/checkout/sessions");
+        assert.equal(sent.payload["line_items[0][price]"], planCase.priceId);
+        assert.equal(
+          sent.payload["line_items[0][quantity]"],
+          String(participantCount)
+        );
+        assert.equal(
+          sent.payload["discounts[0][coupon]"],
+          familyDiscountApplies ? "coupon_youth_family_15pct" : undefined
+        );
+        assert.equal(sent.payload["discounts[0][promotion_code]"], undefined);
+        assert.equal(sent.payload.allow_promotion_codes, undefined);
+        assert.equal(
+          sent.payload["metadata[participantCount]"],
+          String(participantCount)
+        );
+
+        const providerSession = fakeStripe.state.checkoutSessions.get(
+          checkout.sessionId
+        );
+        assert.deepEqual(providerSession.line_items, [{
+          price: planCase.priceId,
+          quantity: participantCount,
+        }]);
+        assert.deepEqual(providerSession.discounts, familyDiscountApplies ? [{
+          coupon: "coupon_youth_family_15pct",
+          promotion_code: null,
+        }] : []);
+
+        const locks = await db.collection("membershipCheckoutLocks")
+          .where("intentId", "==", intent.id)
+          .get();
+        assert.equal(locks.size, participantCount);
+      }
+    }
+    assert.equal(
+      fakeStripe.state.checkoutSessions.size,
+      sessionsBefore + planCases.length * 3
+    );
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("the backend accepts ten youth participants and rejects eleven", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  const sessionsBefore = fakeStripe.state.checkoutSessions.size;
+  const children = Array.from({length: 11}, (_, index) => ({
+    fullName: `Youngstars Boundary Child ${index + 1}`,
+    dateOfBirth: "2018-05-05",
+  }));
+
+  try {
+    const accepted = await handler(request(youthCheckoutData({
+      planKey: "youth_youngstars",
+      attemptId: "attempt_youngstars_ten_children",
+      children: children.slice(0, 10),
+    })));
+    const acceptedIntent = await db.collection("membershipIntents")
+      .where("checkoutSessionId", "==", accepted.sessionId)
+      .get();
+    assert.equal(acceptedIntent.size, 1);
+    assert.equal(acceptedIntent.docs[0].get("participantCount"), 10);
+    assert.equal(
+      fakeStripe.state.checkoutSessions.get(accepted.sessionId).line_items[0].quantity,
+      10
+    );
+
+    await assert.rejects(
+      () => handler(request(youthCheckoutData({
+        planKey: "youth_youngstars",
+        attemptId: "attempt_youngstars_eleven_children",
+        children,
+      }))),
+      /at most 10 children/i
+    );
+    assert.equal(fakeStripe.state.checkoutSessions.size, sessionsBefore + 1);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("q2 Youngstars and Teenstars fulfil with a forever 15% recurring schedule", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  const fixedNow = new Date("2026-08-18T10:00:00Z").getTime();
+  Date.now = () => fixedNow;
+  const planCases = [
+    {
+      planKey: "youth_youngstars",
+      priceId: "price_youngstars",
+      unitAmountPence: 3000,
+      standardMonthlyPence: 6000,
+      recurringMonthlyPence: 5100,
+      datesOfBirth: ["2017-05-05", "2018-06-06"],
+    },
+    {
+      planKey: "youth_teenstars",
+      priceId: "price_teenstars",
+      unitAmountPence: 3500,
+      standardMonthlyPence: 7000,
+      recurringMonthlyPence: 5950,
+      datesOfBirth: ["2012-05-05", "2011-06-06"],
+    },
+  ];
+
+  try {
+    for (const planCase of planCases) {
+      const children = planCase.datesOfBirth.map((dateOfBirth, index) => ({
+        fullName: `${planCase.planKey} Fulfil Child ${index + 1}`,
+        dateOfBirth,
+      }));
+      const checkout = await handler(request(youthCheckoutData({
+        planKey: planCase.planKey,
+        attemptId: `attempt_${planCase.planKey}_q2_fulfil`,
+        children,
+      })));
+      const intentQuery = await db.collection("membershipIntents")
+        .where("checkoutSessionId", "==", checkout.sessionId)
+        .get();
+      assert.equal(intentQuery.size, 1);
+      const intent = intentQuery.docs[0];
+      const subscriptionId = `sub_${planCase.planKey}_q2_family`;
+      const customerId = `cus_${planCase.planKey}_q2_family`;
+      const completedAt = Math.floor(fixedNow / 1000);
+      fakeStripe.setSubscription(subscriptionId, {
+        status: "active",
+        customer: customerId,
+        billing_cycle_anchor: intent.get("billingCycleAnchor"),
+        metadata: {
+          intentId: intent.id,
+          planKey: planCase.planKey,
+          participantCount: "2",
+        },
+        discounts: [{
+          id: `di_${planCase.planKey}_q2_family`,
+          object: "discount",
+          source: {type: "coupon", coupon: "coupon_youth_family_15pct"},
+          promotion_code: null,
+          start: completedAt,
+          end: null,
+        }],
+        items: {
+          object: "list",
+          data: [{
+            id: `si_${planCase.planKey}_q2_family`,
+            current_period_end: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+            price: planCase.priceId,
+            quantity: 2,
+          }],
+        },
+      });
+      const providerSession = fakeStripe.state.checkoutSessions.get(
+        checkout.sessionId
+      );
+      Object.assign(providerSession, {
+        status: "complete",
+        payment_status: "no_payment_required",
+        payment_method_collection: "always",
+        subscription: subscriptionId,
+        customer: customerId,
+        customer_details: {
+          email: `${planCase.planKey}@example.test`,
+        },
+        amount_total: 0,
+      });
+      fakeStripe.state.checkoutSessions.set(checkout.sessionId, providerSession);
+
+      await handleStripeEvent({
+        id: `evt_${planCase.planKey}_q2_family`,
+        type: "checkout.session.completed",
+        created: completedAt,
+        data: {object: {id: checkout.sessionId}},
+      }, async () => undefined);
+
+      const membership = await db.collection("memberships")
+        .doc(subscriptionId)
+        .get();
+      assert.equal(membership.get("providerContractStatus"), "verified");
+      assert.equal(membership.get("state"), "scheduled");
+      assert.equal(membership.get("participantCount"), 2);
+      assert.equal(membership.get("participants").length, 2);
+      assert.deepEqual(membership.get("order"), {
+        participantCount: 2,
+        unitAmountPence: planCase.unitAmountPence,
+        standardMonthlyPence: planCase.standardMonthlyPence,
+        familyDiscountPercent: 15,
+        recurringMonthlyPence: planCase.recurringMonthlyPence,
+      });
+      assert.deepEqual(membership.get("discount"), {
+        kind: "youth_family",
+        couponId: "coupon_youth_family_15pct",
+        promotionCodeId: null,
+        amountOffPence: null,
+        percentOff: 15,
+        currency: null,
+        duration: "forever",
+        durationInMonths: null,
+        startsAt: completedAt,
+        endsAt: null,
+      });
+      assert.deepEqual(membership.get("paymentSchedule"), {
+        amountDueTodayPence: 0,
+        firstPaymentAt: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+        standardMonthlyPence: planCase.standardMonthlyPence,
+        discountedMonthlyPence: planCase.recurringMonthlyPence,
+        discountedPaymentCount: null,
+        fullPriceFrom: null,
+      });
+      const confirmationOutbox = await db.collection("membershipEmailOutbox")
+        .doc(subscriptionId)
+        .get();
+      assert.equal(confirmationOutbox.exists, true);
+      assert.equal(confirmationOutbox.get("kind"), "membership_confirmation");
+      const [agreementAttachment] = confirmationOutbox.get("payload.attachments");
+      assert.equal(agreementAttachment.filename, "membership-agreement.html");
+      const confirmationHtml = Buffer.from(
+        agreementAttachment.content,
+        "base64"
+      ).toString("utf8");
+      const discountAmountPence = planCase.standardMonthlyPence -
+        planCase.recurringMonthlyPence;
+      const standardTotal = `£${(planCase.standardMonthlyPence / 100).toFixed(2)}`;
+      const discountAmount = `£${(discountAmountPence / 100).toFixed(2)}`;
+      const recurringTotal = `£${(planCase.recurringMonthlyPence / 100).toFixed(2)}`;
+      assert.match(
+        confirmationHtml,
+        />Contracted quantity<\/td><td[^>]*><strong>2 children<\/strong>/
+      );
+      assert.match(
+        confirmationHtml,
+        new RegExp(
+          ">Price per child<\\/td><td[^>]*><strong>" +
+          `£${(planCase.unitAmountPence / 100).toFixed(2)} per month` +
+          "<\\/strong>"
+        )
+      );
+      assert.match(confirmationHtml, />Undiscounted monthly subtotal<\/td>/);
+      assert.ok(confirmationHtml.includes(
+        `<strong>${standardTotal} per month</strong>`
+      ));
+      assert.match(confirmationHtml, />Family discount<\/td>/);
+      assert.ok(confirmationHtml.includes(
+        `<strong>15% (−${discountAmount}) off the ${standardTotal} subtotal; ` +
+        `${recurringTotal} per month while this subscription covers at least two children</strong>`
+      ));
+      assert.match(
+        confirmationHtml,
+        new RegExp(
+          ">Recurring monthly total<\\/td><td[^>]*><strong>" +
+          `${recurringTotal} per month<\\/strong>`
+        )
+      );
+    }
+  } finally {
+    Date.now = realNow;
+  }
+});
+
 test("every adult plan rejects a purchase made for another adult before Stripe", async () => {
   const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
     () => undefined
@@ -1976,6 +2389,296 @@ test("every adult plan rejects a purchase made for another adult before Stripe",
   assert.equal(fakeStripe.state.checkoutSessions.size, sessionsBefore);
   assert.equal((await db.collection("membershipIntents").get()).size, 0);
   assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 0);
+});
+
+test("adult checkout rejects additional participants before Stripe", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const sessionsBefore = fakeStripe.state.checkoutSessions.size;
+
+  await assert.rejects(
+    () => handler(request({
+      ...validCheckoutData("attempt_adult_additional_participant"),
+      additionalParticipants: [{
+        fullName: "Another Adult",
+        dateOfBirth: "1991-02-02",
+      }],
+    })),
+    /additional participants are available only for youth memberships/i
+  );
+
+  assert.equal(fakeStripe.state.checkoutSessions.size, sessionsBefore);
+  assert.equal((await db.collection("membershipIntents").get()).size, 0);
+  assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 0);
+});
+
+test("every child must be inside the selected youth plan age band", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  const sessionsBefore = fakeStripe.state.checkoutSessions.size;
+  const invalidCases = [
+    youthCheckoutData({
+      planKey: "youth_youngstars",
+      attemptId: "attempt_youngstars_primary_age_five",
+      children: [{fullName: "Too Young", dateOfBirth: "2020-08-19"}],
+    }),
+    youthCheckoutData({
+      planKey: "youth_youngstars",
+      attemptId: "attempt_youngstars_mixed_age_group",
+      children: [
+        {fullName: "Youngstar", dateOfBirth: "2018-05-05"},
+        {fullName: "Teenstar", dateOfBirth: "2013-05-05"},
+      ],
+    }),
+    youthCheckoutData({
+      planKey: "youth_teenstars",
+      attemptId: "attempt_teenstars_primary_age_seventeen",
+      children: [{fullName: "Too Old", dateOfBirth: "2009-08-18"}],
+    }),
+    youthCheckoutData({
+      planKey: "youth_teenstars",
+      attemptId: "attempt_teenstars_mixed_age_group",
+      children: [
+        {fullName: "Teenstar", dateOfBirth: "2012-05-05"},
+        {fullName: "Youngstar", dateOfBirth: "2018-05-05"},
+      ],
+    }),
+  ];
+
+  try {
+    for (const data of invalidCases) {
+      await assert.rejects(
+        () => handler(request(data)),
+        /age \(\d+\) is not eligible/i
+      );
+    }
+    assert.equal(fakeStripe.state.checkoutSessions.size, sessionsBefore);
+    assert.equal((await db.collection("membershipIntents").get()).size, 0);
+    assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 0);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("the same child cannot bypass a youth checkout lock with name variants", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  const sessionsBefore = fakeStripe.state.checkoutSessions.size;
+
+  try {
+    const variants = [
+      " duplicate child ",
+      "Duplicate   Child",
+      "Ｄｕｐｌｉｃａｔｅ Child",
+    ];
+    for (const [index, variant] of variants.entries()) {
+      await assert.rejects(
+        () => handler(request(youthCheckoutData({
+          planKey: "youth_youngstars",
+          attemptId: `attempt_duplicate_youngstar_child_${index}`,
+          children: [
+            {fullName: "Duplicate Child", dateOfBirth: "2018-05-05"},
+            {fullName: variant, dateOfBirth: "2018-05-05"},
+          ],
+        }))),
+        /each child can be included only once/i
+      );
+    }
+    assert.equal(fakeStripe.state.checkoutSessions.size, sessionsBefore);
+    assert.equal((await db.collection("membershipIntents").get()).size, 0);
+    assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 0);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("checkout rejects unsafe characters in every person-name field", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  const sessionsBefore = fakeStripe.state.checkoutSessions.size;
+  const checkoutFor = (attemptId) => youthCheckoutData({
+    planKey: "youth_youngstars",
+    attemptId,
+    children: [
+      {fullName: "Primary Child", dateOfBirth: "2018-05-05"},
+      {fullName: "Additional Child", dateOfBirth: "2017-06-06"},
+    ],
+  });
+  const cases = [
+    {
+      data: {...checkoutFor("attempt_unsafe_primary_name"),
+        participantFullName: "Primary\u200b Child"},
+      field: "participantFullName",
+    },
+    {
+      data: (() => {
+        const data = checkoutFor("attempt_unsafe_additional_name");
+        data.additionalParticipants[0].fullName = "Additional\u00ad Child";
+        return data;
+      })(),
+      field: "additionalParticipants[0].fullName",
+    },
+    {
+      data: {...checkoutFor("attempt_unsafe_guardian_name"),
+        guardianFullName: "Paying\u202e Adult"},
+      field: "guardianFullName",
+    },
+    {
+      data: {...checkoutFor("attempt_unsafe_signed_name"),
+        signedName: "Paying\u2060 Adult"},
+      field: "signedName",
+    },
+    {
+      data: {...checkoutFor("attempt_control_signed_name"),
+        signedName: "Paying\nAdult"},
+      field: "signedName",
+    },
+  ];
+
+  try {
+    for (const {data, field} of cases) {
+      await assert.rejects(
+        () => handler(request(data)),
+        (error) => {
+          assert.equal(error.code, "invalid-argument");
+          assert.match(error.message, /unsupported invisible or control characters/i);
+          assert.ok(error.message.includes(field));
+          return true;
+        }
+      );
+    }
+    assert.equal(
+      membershipTesting.participantKeyFor(
+        "Invisible\u200b Child",
+        "2018-05-05"
+      ),
+      membershipTesting.participantKeyFor("Invisible Child", "2018-05-05")
+    );
+    assert.equal(
+      membershipTesting.participantKeyFor(
+        "Invisible\nChild",
+        "2018-05-05"
+      ),
+      membershipTesting.participantKeyFor("Invisible Child", "2018-05-05")
+    );
+    assert.equal(fakeStripe.state.checkoutSessions.size, sessionsBefore);
+    assert.equal((await db.collection("membershipIntents").get()).size, 0);
+    assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 0);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("pre-v2 singular memberships block canonically equivalent new checkouts", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  const legacyCases = [
+    {
+      id: "spaces",
+      storedName: "Legacy   Child",
+      requestedName: "Legacy Child",
+      dateOfBirth: "2018-05-05",
+    },
+    {
+      id: "fullwidth",
+      storedName: "Ｆｕｌｌｗｉｄｔｈ Child",
+      requestedName: "Fullwidth Child",
+      dateOfBirth: "2017-06-06",
+    },
+  ];
+
+  try {
+    for (const legacyCase of legacyCases) {
+      await seedMembership(`sub_legacy_${legacyCase.id}`, {
+        planKey: "youth_youngstars",
+        stripePriceId: "price_youngstars",
+        participant: {
+          fullName: legacyCase.storedName,
+          dateOfBirth: legacyCase.dateOfBirth,
+          age: 9,
+          isPayer: false,
+          participantKey: legacyParticipantKeyFor(
+            legacyCase.storedName,
+            legacyCase.dateOfBirth
+          ),
+        },
+      });
+    }
+    const sessionsBefore = fakeStripe.state.checkoutSessions.size;
+
+    for (const legacyCase of legacyCases) {
+      await assert.rejects(
+        () => handler(request(youthCheckoutData({
+          planKey: "youth_youngstars",
+          attemptId: `attempt_legacy_${legacyCase.id}_bypass`,
+          children: [{
+            fullName: legacyCase.requestedName,
+            dateOfBirth: legacyCase.dateOfBirth,
+          }],
+        }))),
+        (error) => {
+          assert.equal(error.code, "already-exists");
+          assert.equal(error.details?.reason, "checkout_in_progress");
+          return true;
+        }
+      );
+    }
+    assert.equal(fakeStripe.state.checkoutSessions.size, sessionsBefore);
+    assert.equal((await db.collection("membershipIntents").get()).size, 0);
+    assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 0);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("a legacy singular DOB match does not block a different sibling", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  const dateOfBirth = "2018-05-05";
+
+  try {
+    await seedMembership("sub_legacy_same_birthday_sibling", {
+      planKey: "youth_youngstars",
+      stripePriceId: "price_youngstars",
+      participant: {
+        fullName: "Existing Sibling",
+        dateOfBirth,
+        age: 8,
+        isPayer: false,
+        participantKey: legacyParticipantKeyFor("Existing Sibling", dateOfBirth),
+      },
+    });
+    const sessionsBefore = fakeStripe.state.checkoutSessions.size;
+    const checkout = await handler(request(youthCheckoutData({
+      planKey: "youth_youngstars",
+      attemptId: "attempt_same_birthday_different_sibling",
+      children: [{fullName: "Different Sibling", dateOfBirth}],
+    })));
+
+    assert.ok(checkout.sessionId);
+    assert.equal(fakeStripe.state.checkoutSessions.size, sessionsBefore + 1);
+    const intents = await db.collection("membershipIntents").get();
+    assert.equal(intents.size, 1);
+    assert.equal(intents.docs[0].get("participant.fullName"), "Different Sibling");
+  } finally {
+    Date.now = realNow;
+  }
 });
 
 test("a retry never returns a Checkout Session frozen in another Stripe mode", async () => {
@@ -2356,6 +3059,8 @@ test("checkout completion fulfils membership and queues its durable confirmation
     .doc("sub_fulfil_handler").get();
   assert.equal(outbox.get("status"), "pending");
   assert.equal(outbox.get("initialChargePence"), 2500);
+  assert.match(outbox.get("payload.subject"), /Welcome to Zero Alpha/);
+  assert.equal(outbox.get("payload.attachments").length, 5);
   assert.equal((await intentRef.get()).get("status"), "fulfilled");
   assert.equal((await intentRef.get()).get("checkoutSessionId"), "cs_fulfil_handler");
   assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 0);
@@ -2998,6 +3703,68 @@ test("a late paid session cannot fulfil after its uniqueness lock was reclaimed"
   );
 });
 
+test("fulfilment rechecks a canonically equivalent pre-v2 membership", async () => {
+  const participantName = "Legacy Athlete";
+  const dateOfBirth = "1990-01-01";
+  const intentRef = db.collection("membershipIntents")
+    .doc("intent_legacy_membership_race");
+  const intent = reservationIntent("legacy_membership_race", {
+    participantName,
+    participantKey: membershipTesting.participantKeyFor(
+      participantName,
+      dateOfBirth
+    ),
+  });
+  await membershipTesting.reserveCheckoutAttempt(intentRef, intent, Date.now());
+  const storedName = "Legacy   Athlete";
+  await seedMembership("sub_pre_v2_fulfilment_race", {
+    participant: {
+      fullName: storedName,
+      dateOfBirth,
+      age: 36,
+      isPayer: true,
+      participantKey: legacyParticipantKeyFor(storedName, dateOfBirth),
+    },
+  });
+  fakeStripe.setSubscription("sub_legacy_membership_race", {
+    status: "active",
+    customer: "cus_legacy_membership_race",
+    billing_cycle_anchor: intent.billingCycleAnchor,
+    metadata: {intentId: intentRef.id, planKey: intent.planKey},
+  });
+
+  await assert.rejects(
+    () => handleStripeEvent({
+      id: "evt_legacy_membership_race",
+      type: "checkout.session.async_payment_succeeded",
+      created: Math.floor(Date.now() / 1000),
+      data: {object: {
+        id: "cs_legacy_membership_race",
+        object: "checkout.session",
+        livemode: false,
+        mode: "subscription",
+        metadata: {intentId: intentRef.id, planKey: intent.planKey},
+        payment_status: "paid",
+        subscription: "sub_legacy_membership_race",
+        customer: "cus_legacy_membership_race",
+        customer_details: {email: "legacy-race@example.test"},
+        amount_total: 2500,
+      }},
+    }, async () => undefined),
+    /unique fulfilment reservation/i
+  );
+  assert.equal(
+    (await db.collection("memberships").doc("sub_legacy_membership_race").get())
+      .exists,
+    false
+  );
+  assert.equal(
+    (await db.collection("memberships").doc("sub_pre_v2_fulfilment_race").get())
+      .exists,
+    true
+  );
+});
+
 test("claiming by checkout session grants AlphaWOD access and approves the account", async () => {
   await createMember("buyer", {email: "buyer@example.test", emailVerified: false});
   await seedMembership("sub_claim_session");
@@ -3531,6 +4298,7 @@ test("cancellation sends the policy's cancel_at to Stripe and records the outcom
   await createMember("buyer", {email: "buyer@example.test", emailVerified: true});
   await seedMembership("sub_cancel", {payerUid: "buyer"});
   const expected = resolveCancellationOutcome(Date.now());
+  const receivedNoEarlierThan = Date.now();
 
   const result = await requestMembershipCancellation(
     request({
@@ -3541,6 +4309,11 @@ test("cancellation sends the policy's cancel_at to Stripe and records the outcom
 
   assert.equal(result.outcome.cancelAtUnixSeconds, expected.cancelAtUnixSeconds);
   assert.equal(result.outcome.nextBillingDate, expected.nextBillingDate);
+  assert.equal(result.receipt.kind, "contractual");
+  assert.ok(result.receipt.reference);
+  const receivedAtMillis = Date.parse(result.receipt.receivedAt);
+  assert.ok(receivedAtMillis >= receivedNoEarlierThan);
+  assert.ok(receivedAtMillis <= Date.now());
 
   // The date the policy computed is the date Stripe actually received.
   const sent = fakeStripe.lastUpdateTo("/v1/subscriptions/sub_cancel");
@@ -3554,6 +4327,98 @@ test("cancellation sends the policy's cancel_at to Stripe and records the outcom
     stored.get("cancellationOutcome").accessEndsOnDate,
     expected.accessEndsOnDate
   );
+  assert.equal(stored.get("cancellationRequest.id"), result.receipt.reference);
+  assert.equal(
+    stored.get("cancellationRequest.receivedAt").toMillis(),
+    receivedAtMillis
+  );
+
+  const projected = await getMyMemberships(request({}, "buyer"));
+  assert.deepEqual(projected.memberships[0].cancellationReceipt, result.receipt);
+});
+
+test("one youth-family cancellation receipt covers the subscription for every child", async () => {
+  const nowMillis = new Date("2026-08-23T09:15:00Z").getTime();
+  const subscriptionId = "sub_youngstars_family_cancel";
+  const participants = [{
+    fullName: "Sam Family",
+    dateOfBirth: "2018-05-05",
+    age: 8,
+    isPayer: false,
+    participantKey: "key_family_sam",
+  }, {
+    fullName: "Alex Family",
+    dateOfBirth: "2017-04-04",
+    age: 9,
+    isPayer: false,
+    participantKey: "key_family_alex",
+  }];
+  await createMember("familycancel", {
+    email: "familycancel@example.test",
+    emailVerified: true,
+  });
+  await seedMembership(subscriptionId, {
+    payerUid: "familycancel",
+    payerEmail: "familycancel@example.test",
+    planKey: "youth_youngstars",
+    stripePriceId: "price_youngstars",
+    participant: participants[0],
+    participants,
+    participantKeys: participants.map(({participantKey}) => participantKey),
+    participantCount: participants.length,
+    guardian: {
+      fullName: "Taylor Family",
+      email: "familycancel@example.test",
+      relationshipToParticipant: "Parent",
+    },
+  });
+  fakeStripe.setSubscription(subscriptionId, {
+    items: {
+      object: "list",
+      data: [{
+        id: `si_${subscriptionId}`,
+        current_period_end: 1788220800,
+        price: "price_youngstars",
+        quantity: 2,
+      }],
+    },
+  });
+
+  const realNow = Date.now;
+  Date.now = () => nowMillis;
+  try {
+    const expected = resolveCancellationOutcome(nowMillis);
+    const result = await requestMembershipCancellation(request({
+      subscriptionId,
+      expectedCancelAtUnixSeconds: expected.cancelAtUnixSeconds,
+    }, "familycancel"));
+
+    assert.equal(result.receipt.kind, "contractual");
+    assert.equal(result.receipt.receivedAt, new Date(nowMillis).toISOString());
+    assert.equal(
+      fakeStripe.state.subscriptions.get(subscriptionId).cancel_at,
+      expected.cancelAtUnixSeconds
+    );
+
+    const stored = await db.collection("memberships").doc(subscriptionId).get();
+    assert.equal(stored.get("cancellationRequest.id"), result.receipt.reference);
+    assert.equal(stored.get("participantCount"), 2);
+    assert.deepEqual(
+      stored.get("participants").map(({fullName}) => fullName),
+      ["Sam Family", "Alex Family"]
+    );
+
+    const projected = await getMyMemberships(request({}, "familycancel"));
+    assert.equal(projected.memberships.length, 1);
+    assert.deepEqual(
+      projected.memberships[0].participantFullNames,
+      ["Sam Family", "Alex Family"]
+    );
+    assert.equal(projected.memberships[0].participantCount, 2);
+    assert.deepEqual(projected.memberships[0].cancellationReceipt, result.receipt);
+  } finally {
+    Date.now = realNow;
+  }
 });
 
 test("cooling-off cancellation records an immutable receipt before stopping Stripe", async () => {
@@ -4043,6 +4908,9 @@ test("a scheduled presale can cancel before service and prevent its first charge
 
     assert.equal(result.outcome.finalPaymentDate, null);
     assert.equal(result.outcome.cancelAtUnixSeconds, Math.floor(nowMillis / 1000));
+    assert.equal(result.receipt.kind, "presale_withdrawal");
+    assert.equal(result.receipt.receivedAt, new Date(nowMillis).toISOString());
+    assert.ok(result.receipt.reference);
     assert.equal(
       fakeStripe.state.subscriptions.get("sub_presale_cancel").status,
       "canceled"
@@ -4051,7 +4919,10 @@ test("a scheduled presale can cancel before service and prevent its first charge
       .doc("sub_presale_cancel").get();
     assert.equal(membership.get("state"), "cancelled");
     assert.equal(membership.get("cancellationRequest.kind"), "presale_withdrawal");
+    assert.equal(membership.get("cancellationRequest.id"), result.receipt.reference);
     assert.equal(membership.get("firstPaymentReceivedAt"), null);
+    const projected = await getMyMemberships(request({}, "presalecancel"));
+    assert.deepEqual(projected.memberships[0].cancellationReceipt, result.receipt);
   } finally {
     Date.now = realNow;
   }
@@ -5451,7 +6322,7 @@ test("subscription contract drift fails access closed and becomes visible", asyn
   assert.equal(membership.get("state"), "active");
   assert.equal(membership.get("accessRevoked"), false);
   assert.equal(membership.get("providerContractStatus"), "manual_review");
-  assert.match(membership.get("providerContractError"), /quantity one/i);
+  assert.match(membership.get("providerContractError"), /quantity 1/i);
   assert.equal((await accessOf("contractdrift")).alphaWodAccess, false);
 
   subscription.items.data[0].quantity = 1;
@@ -6067,10 +6938,10 @@ test("confirmation outbox freezes one payload and retries with one provider key"
   );
   const before = await db.collection("membershipEmailOutbox").doc("sub_email_retry").get();
   assert.equal(before.get("initialChargePence"), 1234);
-  assert.match(
-    before.get("payload.html"),
-    /\/account\/membership\?claim=email/
-  );
+  assert.match(before.get("payload.subject"), /Welcome to Zero Alpha/);
+  assert.match(before.get("payload.html"), /You’re in\. Let’s get to work\./);
+  assert.match(before.get("payload.html"), /signed membership record/);
+  assert.doesNotMatch(before.get("payload.html"), /Complete immutable document copies/);
   assert.equal(before.get("commercialTerms.planName"), "Adult Unlimited Membership");
   assert.equal(before.get("commercialTerms.amountPence"), 6000);
   assert.deepEqual(
@@ -6081,12 +6952,18 @@ test("confirmation outbox freezes one payload and retries with one provider key"
     before.get("acceptedStatements").map(({id}) => id),
     membership.acceptances.acceptedStatementIds
   );
-  assert.match(before.get("payload.html"), /Complete immutable document copies/);
-  assert.match(before.get("payload.html"), /Statements you accepted separately/);
-  assert.match(before.get("payload.html"), /acknowledgement is evidence of receipt/);
-  assert.equal(before.get("payload.attachments").length, 4);
+  assert.equal(before.get("payload.attachments").length, 5);
+  assert.equal(before.get("payload.attachments")[0].filename, "membership-agreement.html");
+  const agreementHtml = Buffer.from(
+    before.get("payload.attachments")[0].content,
+    "base64"
+  ).toString("utf8");
+  assert.match(agreementHtml, /Complete immutable document copies/);
+  assert.match(agreementHtml, /Statements you accepted separately/);
+  assert.match(agreementHtml, /acknowledgement is evidence of receipt/);
+  assert.match(agreementHtml, /https:\/\/alpha-wod\.vercel\.app\/ZERO-ALPHA\.png/);
   assert.equal(
-    Buffer.from(before.get("payload.attachments")[0].content, "base64").toString("utf8"),
+    Buffer.from(before.get("payload.attachments")[1].content, "base64").toString("utf8"),
     membership.acceptances.documents[0].content
   );
   const dispatchNow = Date.now() + 1000;
@@ -6126,6 +7003,70 @@ test("confirmation outbox freezes one payload and retries with one provider key"
   assert.equal(sentOutbox.get("status"), "sent");
   assert.equal(sentOutbox.get("providerMessageId"), "email_resend_1");
   assert.ok((await membershipRef.get()).get("confirmationEmailSentAt"));
+  assert.equal((await db.collection("membershipEmailOutbox")
+    .where("subscriptionId", "==", "sub_email_retry").get()).size, 1);
+});
+
+test("welcome email uses one branded shell with membership-specific variants", async () => {
+  const variants = [
+    ["adult_unlimited", "You’re in. Let’s get to work.", /Zero Alpha App access included/],
+    ["adult_ladies", "Welcome to Ladies Only.", /Ladies-only coached sessions/],
+    ["adult_gym", "Your gym membership is ready.", /Independent gym-floor training/],
+    ["youth_youngstars", "A strong start begins here.", /aged 6 to 11/],
+    ["youth_teenstars", "Their next level starts here.", /aged 12 to 16/],
+  ];
+
+  for (const [planKey, headline, inclusion] of variants) {
+    const youth = planKey.startsWith("youth_");
+    const subscriptionId = `sub_welcome_${planKey}`;
+    await seedMembership(subscriptionId, {
+      planKey,
+      payerUid: null,
+      confirmationEmailSentAt: null,
+      participant: youth ? {
+        fullName: "Young Athlete",
+        dateOfBirth: planKey === "youth_youngstars" ? "2018-05-05" : "2012-05-05",
+        age: planKey === "youth_youngstars" ? 8 : 14,
+        isPayer: false,
+        participantKey: `key_${subscriptionId}`,
+      } : {
+        fullName: "Adult Athlete",
+        dateOfBirth: "1990-01-01",
+        age: 36,
+        isPayer: true,
+        participantKey: `key_${subscriptionId}`,
+      },
+      guardian: youth ? {
+        fullName: "Paying Adult",
+        relationship: "Parent",
+        confirmedAuthority: true,
+      } : null,
+    });
+    const membership = (await db.collection("memberships").doc(subscriptionId).get()).data();
+    const payload = membershipTesting.buildWelcomePayload(membership);
+
+    assert.ok(payload);
+    assert.match(payload.subject, /Welcome to Zero Alpha/);
+    assert.equal(payload.reply_to, "support@zeroalphafitness.co.uk");
+    assert.match(payload.html, new RegExp(headline.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(payload.html, inclusion);
+    assert.match(payload.html, /https:\/\/alpha-wod\.vercel\.app\/ZERO-ALPHA\.png/);
+    assert.match(payload.html, /alt="Zero Alpha Fitness"/);
+    assert.match(payload.html, /signed membership record/);
+    assert.equal(payload.attachments, undefined);
+    if (planKey === "adult_unlimited") {
+      assert.match(payload.html, /Sign up or log into the Zero Alpha app!/);
+      assert.match(payload.html, /https:\/\/alpha-wod\.vercel\.app\/login/);
+      assert.match(payload.html, /Open the Zero Alpha app/);
+    } else {
+      assert.doesNotMatch(payload.html, /Sign up or log into the Zero Alpha app!/);
+      assert.doesNotMatch(payload.html, /https:\/\/alpha-wod\.vercel\.app\/login/);
+      assert.doesNotMatch(payload.html, /Open the Zero Alpha app/);
+    }
+    if (youth) {
+      assert.match(payload.html, /Hi Paying Adult/);
+    }
+  }
 });
 
 test("a youth confirmation clearly labels the child and paying adult", async () => {
@@ -6152,12 +7093,18 @@ test("a youth confirmation clearly labels the child and paying adult", async () 
   const payload = membershipTesting.buildConfirmationPayload(membership, 1234);
 
   assert.ok(payload);
-  assert.match(payload.html, />Child<\/td>/);
-  assert.match(payload.html, />Young Athlete<\/strong>/);
-  assert.match(payload.html, />Paying adult<\/td>/);
-  assert.match(payload.html, />Paying Adult \(Parent\)<\/strong>/);
-  assert.doesNotMatch(payload.html, />Participant<\/td>/);
-  assert.doesNotMatch(payload.html, />Parent or guardian<\/td>/);
+  assert.match(payload.html, /Hi Paying Adult/);
+  assert.match(payload.html, /Young Athlete/);
+  const agreementHtml = Buffer.from(
+    payload.attachments[0].content,
+    "base64"
+  ).toString("utf8");
+  assert.match(agreementHtml, />Child<\/td>/);
+  assert.match(agreementHtml, />Young Athlete<\/strong>/);
+  assert.match(agreementHtml, />Paying adult<\/td>/);
+  assert.match(agreementHtml, />Paying Adult \(Parent\)<\/strong>/);
+  assert.doesNotMatch(agreementHtml, />Participant<\/td>/);
+  assert.doesNotMatch(agreementHtml, />Parent or guardian<\/td>/);
 });
 
 test("an orphan confirmation outbox never recreates its membership", async () => {

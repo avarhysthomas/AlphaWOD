@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import MembershipCheckout from "./MembershipCheckout";
 
@@ -184,11 +184,11 @@ describe("MembershipCheckout", () => {
       "autocomplete",
       "name"
     );
-    expect(screen.getByLabelText(/Child’s full name/i)).toHaveAttribute(
+    expect(screen.getByLabelText(/Child 1 full name/i)).toHaveAttribute(
       "autocomplete",
       "off"
     );
-    expect(screen.getByLabelText(/Child’s date of birth/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Child 1 date of birth/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Relationship to child/i)).toBeInTheDocument();
     expect(
       screen.getByLabelText(/named child.*parent or legal guardian or otherwise/i)
@@ -201,6 +201,10 @@ describe("MembershipCheckout", () => {
     renderCheckout("adult_unlimited");
 
     expect(screen.queryByText("Paying adult")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", {name: /Add another child/i}))
+      .not.toBeInTheDocument();
+    expect(screen.queryByRole("region", {name: /Monthly price/i}))
+      .not.toBeInTheDocument();
     expect(screen.getByText(/Adult memberships can only be purchased for yourself/i))
       .toBeInTheDocument();
     expect(screen.queryByLabelText(/I am the participant/i)).not.toBeInTheDocument();
@@ -247,7 +251,7 @@ describe("MembershipCheckout", () => {
     eightYearsAgo.setFullYear(eightYearsAgo.getFullYear() - 8);
     const iso = eightYearsAgo.toISOString().slice(0, 10);
 
-    await userEvent.type(screen.getByLabelText(/Child’s date of birth/i), iso);
+    await userEvent.type(screen.getByLabelText(/Child 1 date of birth/i), iso);
 
     expect(screen.getByText(/is for ages 12 to 16/i)).toBeInTheDocument();
     expect(
@@ -262,10 +266,127 @@ describe("MembershipCheckout", () => {
     fourteenYearsAgo.setFullYear(fourteenYearsAgo.getFullYear() - 14);
     const iso = fourteenYearsAgo.toISOString().slice(0, 10);
 
-    await userEvent.type(screen.getByLabelText(/Child’s date of birth/i), iso);
+    await userEvent.type(screen.getByLabelText(/Child 1 date of birth/i), iso);
 
     expect(screen.queryByText(/is for ages 12 to 16/i)).not.toBeInTheDocument();
-    expect(screen.getByText("Child age 14")).toBeInTheDocument();
+    expect(screen.getByText(/Child 1 age 14.*eligible for HYROX Teenstars/i))
+      .toBeInTheDocument();
+  });
+
+  it.each([
+    ["youth_youngstars", "£60.00", "£9.00", "£51.00"],
+    ["youth_teenstars", "£70.00", "£10.50", "£59.50"],
+  ])(
+    "applies the automatic family discount to two children on %s",
+    async (planKey, standardTotal, saving, discountedTotal) => {
+      renderCheckout(planKey);
+
+      expect(screen.getByRole("region", {name: "Monthly price for 1 child"}))
+        .toHaveTextContent(/Add a second child.*15% off/i);
+      await userEvent.click(screen.getByRole("button", {name: "Add another child"}));
+
+      const summary = screen.getByRole("region", {
+        name: "Monthly price for 2 children",
+      });
+      expect(within(summary).getByText(standardTotal)).toBeInTheDocument();
+      expect(within(summary).getByText(`−${saving}`)).toBeInTheDocument();
+      expect(within(summary).getByText(discountedTotal)).toBeInTheDocument();
+      expect(summary).toHaveTextContent(/automatic 15% family discount.*full monthly subtotal/i);
+      expect(screen.getByLabelText(/Relationship to children/i)).toBeInTheDocument();
+      expect(screen.getByLabelText(/each named child.*each of them/i)).toBeInTheDocument();
+    }
+  );
+
+  it("validates every child's age against the selected programme", async () => {
+    mockLocalJourneyEnabled = true;
+    renderCheckout("youth_teenstars");
+
+    const fourteenYearsAgo = new Date();
+    fourteenYearsAgo.setFullYear(fourteenYearsAgo.getFullYear() - 14);
+    const eightYearsAgo = new Date();
+    eightYearsAgo.setFullYear(eightYearsAgo.getFullYear() - 8);
+
+    await userEvent.type(
+      screen.getByLabelText(/Child 1 date of birth/i),
+      fourteenYearsAgo.toISOString().slice(0, 10)
+    );
+    await userEvent.click(screen.getByRole("button", {name: "Add another child"}));
+    const childTwoDate = screen.getByLabelText(/Child 2 date of birth/i);
+    await userEvent.type(childTwoDate, eightYearsAgo.toISOString().slice(0, 10));
+
+    expect(childTwoDate).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText(/HYROX Teenstars is for ages 12 to 16.*gives age 8/i))
+      .toBeInTheDocument();
+    expect(screen.getByRole("button", {name: "Continue to Stripe — £0 today"}))
+      .toBeDisabled();
+    expect(mockCreateCheckout).not.toHaveBeenCalled();
+  });
+
+  it("caps one youth checkout at ten children", async () => {
+    renderCheckout("youth_youngstars");
+
+    for (let childNumber = 2; childNumber <= 10; childNumber += 1) {
+      await userEvent.click(screen.getByRole("button", {name: "Add another child"}));
+    }
+
+    expect(screen.getByText("10 of 10 children")).toBeInTheDocument();
+    expect(screen.getByRole("button", {name: "Maximum children added"}))
+      .toBeDisabled();
+    expect(screen.getAllByRole("group", {name: /Child \d+ details/i})).toHaveLength(10);
+  });
+
+  it("requires fresh acceptance when the number of children changes", async () => {
+    renderCheckout("youth_youngstars");
+
+    await acceptAllCheckoutStatements();
+    expect(screen.getAllByRole("checkbox").every((checkbox) =>
+      (checkbox as HTMLInputElement).checked
+    )).toBe(true);
+
+    await userEvent.click(screen.getByRole("button", {name: "Add another child"}));
+
+    expect(screen.getAllByRole("checkbox").every((checkbox) =>
+      !(checkbox as HTMLInputElement).checked
+    )).toBe(true);
+    expect(screen.getByLabelText(/future recurring monthly payments for 2 HYROX Youngstars participants/i))
+      .not.toBeChecked();
+  });
+
+  it("requires fresh acceptance when a named child's details change", async () => {
+    renderCheckout("youth_youngstars");
+
+    await userEvent.type(screen.getByLabelText(/Child 1 full name/i), "Alex Child");
+    await acceptAllCheckoutStatements();
+    expect(screen.getAllByRole("checkbox").every((checkbox) =>
+      (checkbox as HTMLInputElement).checked
+    )).toBe(true);
+
+    await userEvent.type(screen.getByLabelText(/Child 1 full name/i), " Junior");
+
+    expect(screen.getAllByRole("checkbox").every((checkbox) =>
+      !(checkbox as HTMLInputElement).checked
+    )).toBe(true);
+  });
+
+  it("requires fresh acceptance when the selected youth programme changes", async () => {
+    const view = renderCheckout("youth_youngstars");
+
+    await acceptAllCheckoutStatements();
+    expect(screen.getAllByRole("checkbox").every((checkbox) =>
+      (checkbox as HTMLInputElement).checked
+    )).toBe(true);
+    expect(screen.getByLabelText(/standard monthly price is £30\.00/i)).toBeChecked();
+
+    mockPlanKey = "youth_teenstars";
+    view.rerender(<MembershipCheckout />);
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("checkbox").every((checkbox) =>
+        !(checkbox as HTMLInputElement).checked
+      )).toBe(true);
+    });
+    expect(screen.getByLabelText(/standard monthly price is £35\.00/i)).not.toBeChecked();
+    expect(mockClearCheckoutAttempt).toHaveBeenCalledWith();
   });
 
   it("lets a signed-out visitor reach the purchase form without signing in", () => {
@@ -325,8 +446,8 @@ describe("MembershipCheckout", () => {
     await userEvent.click(
       screen.getByLabelText(/I confirm that I am aged 18 or over.*named child/i)
     );
-    await userEvent.type(screen.getByLabelText(/Child’s full name/i), "Alex Child");
-    await userEvent.type(screen.getByLabelText(/Child’s date of birth/i), dateOfBirth);
+    await userEvent.type(screen.getByLabelText(/Child 1 full name/i), "Alex Child");
+    await userEvent.type(screen.getByLabelText(/Child 1 date of birth/i), dateOfBirth);
     await acceptAllCheckoutStatements();
     await userEvent.type(
       screen.getByLabelText(/Type the paying adult’s full name to sign/i),
@@ -337,6 +458,7 @@ describe("MembershipCheckout", () => {
     await waitFor(() => expect(mockCreateCheckout).toHaveBeenCalledTimes(1));
     expect(mockCreateCheckout).toHaveBeenCalledWith(expect.objectContaining({
       planKey: "youth_teenstars",
+      checkoutSchemaVersion: 2,
       participantFullName: "Alex Child",
       participantDateOfBirth: dateOfBirth,
       participantIsPayer: false,
@@ -352,6 +474,65 @@ describe("MembershipCheckout", () => {
         "immediate_performance",
       ],
     }));
+    expect(mockCreateCheckout.mock.calls[0][0]).not.toHaveProperty(
+      "additionalParticipants"
+    );
+  });
+
+  it("submits additional Teenstars children under one versioned checkout", async () => {
+    mockLocalJourneyEnabled = true;
+    mockSignedIn = false;
+    mockCreateCheckout.mockResolvedValue({sessionUrl: ""});
+    renderCheckout("youth_teenstars");
+
+    const fourteenYearsAgo = new Date();
+    fourteenYearsAgo.setFullYear(fourteenYearsAgo.getFullYear() - 14);
+    const thirteenYearsAgo = new Date();
+    thirteenYearsAgo.setFullYear(thirteenYearsAgo.getFullYear() - 13);
+    const firstDateOfBirth = fourteenYearsAgo.toISOString().slice(0, 10);
+    const secondDateOfBirth = thirteenYearsAgo.toISOString().slice(0, 10);
+
+    await userEvent.click(screen.getByRole("button", {name: "Add another child"}));
+    await userEvent.type(
+      screen.getByLabelText(/^Paying adult’s full name$/i),
+      "Ava Parent"
+    );
+    await userEvent.type(screen.getByLabelText(/Relationship to children/i), "Parent");
+    await userEvent.type(screen.getByLabelText(/Child 1 full name/i), "Alex Child");
+    await userEvent.type(screen.getByLabelText(/Child 1 date of birth/i), firstDateOfBirth);
+    await userEvent.type(screen.getByLabelText(/Child 2 full name/i), "Sam Child");
+    await userEvent.type(screen.getByLabelText(/Child 2 date of birth/i), secondDateOfBirth);
+    await acceptAllCheckoutStatements();
+    await userEvent.type(
+      screen.getByLabelText(/Type the paying adult’s full name to sign/i),
+      "Ava Parent"
+    );
+    await userEvent.click(getCheckoutButton());
+
+    await waitFor(() => expect(mockCreateCheckout).toHaveBeenCalledTimes(1));
+    expect(mockResolveCheckoutAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        checkoutSchemaVersion: 2,
+        planKey: "youth_teenstars",
+        participantFullName: "Alex Child",
+        participantDateOfBirth: firstDateOfBirth,
+        additionalParticipants: [{
+          fullName: "Sam Child",
+          dateOfBirth: secondDateOfBirth,
+        }],
+      }),
+      null,
+      {payerUid: null}
+    );
+    expect(mockCreateCheckout).toHaveBeenCalledWith(expect.objectContaining({
+      checkoutSchemaVersion: 2,
+      checkoutAttemptId: "attempt_test",
+      participantFullName: "Alex Child",
+      additionalParticipants: [{
+        fullName: "Sam Child",
+        dateOfBirth: secondDateOfBirth,
+      }],
+    }));
   });
 
   it("redirects an unknown plan back to the catalogue", () => {
@@ -359,18 +540,19 @@ describe("MembershipCheckout", () => {
     expect(screen.getByText("redirected:/memberships")).toBeInTheDocument();
   });
 
-  it("makes the presale charge and service date explicit before Stripe", () => {
+  it("shows the simplified Discount Code field during the Adult Unlimited presale", () => {
     mockLocalJourneyEnabled = true;
     renderCheckout("adult_unlimited");
 
     expect(screen.getByText("£0 charged")).toBeInTheDocument();
     expect(screen.getAllByText("1 September 2026")).toHaveLength(2);
     expect(getCheckoutButton()).toHaveAccessibleName("Continue to Stripe — £0 today");
-    expect(screen.getByText(/£55 in September, October and November/i))
-      .toBeInTheDocument();
-    expect(screen.getByLabelText(/Discount code/i)).toBeInTheDocument();
-    expect(screen.getByText(/verify and apply your code before opening Stripe/i))
-      .toBeInTheDocument();
+    expect(screen.getByLabelText("Discount Code")).toBeInTheDocument();
+    expect(screen.queryByText("Existing-member offer")).not.toBeInTheDocument();
+    expect(screen.queryByText(/£55 in September, October and November/i))
+      .not.toBeInTheDocument();
+    expect(screen.queryByText(/verify and apply your code before opening Stripe/i))
+      .not.toBeInTheDocument();
   });
 
   it("does not advertise the Adult Unlimited promotion code on other plans", () => {

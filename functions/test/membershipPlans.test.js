@@ -11,6 +11,7 @@ const {
   CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION,
   CHECKOUT_DOCUMENTS,
   EXISTING_MEMBER_OFFER,
+  YOUTH_FAMILY_OFFER,
   MEMBERSHIP_PLANS,
   PLAN_KEYS,
   PRESALE_CHECKOUT_ANCHOR_MARGIN_SECONDS,
@@ -60,7 +61,7 @@ test("catalogue matches the approved public price list", () => {
   assert.equal(MEMBERSHIP_PLANS.adult_unlimited.amountPence, 6000);
   assert.equal(MEMBERSHIP_PLANS.adult_ladies.amountPence, 5000);
   assert.equal(MEMBERSHIP_PLANS.adult_gym.amountPence, 4500);
-  assert.equal(MEMBERSHIP_PLANS.youth_youngstars.amountPence, 3500);
+  assert.equal(MEMBERSHIP_PLANS.youth_youngstars.amountPence, 3000);
   assert.equal(MEMBERSHIP_PLANS.youth_teenstars.amountPence, 3500);
 });
 
@@ -69,11 +70,11 @@ test("only Adult Unlimited automatically includes AlphaWOD access", () => {
   assert.deepEqual(granting, ["adult_unlimited"]);
 });
 
-test("registry contains the approved immutable checkout documents", () => {
+test("registry freezes the approved 23 August checkout documents", () => {
   assert.equal(CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION, true);
   for (const document of Object.values(CHECKOUT_DOCUMENTS)) {
-    assert.match(document.version, /^ZAF-[A-Z-]+-2026-08-20-01$/);
-    assert.equal(document.effectiveDate, "2026-08-20");
+    assert.match(document.version, /^ZAF-[A-Z-]+-2026-08-23-01$/);
+    assert.equal(document.effectiveDate, "2026-08-23");
     assert.match(document.sha256, /^[a-f0-9]{64}$/);
     assert.doesNotMatch(JSON.stringify(document), /\b(?:DRAFT|PENDING)\b/i);
   }
@@ -123,7 +124,7 @@ test("checkout legal requirements are exact for adult self-signers and youth gua
 
 test("commercial snapshots contain the complete customer-facing plan contract", () => {
   assert.deepEqual(createCommercialPlanSnapshot("adult_unlimited"), {
-    catalogueSchemaVersion: 1,
+    catalogueSchemaVersion: 2,
     planKey: "adult_unlimited",
     planName: "Adult Unlimited Membership",
     audience: "adult",
@@ -161,12 +162,26 @@ test("past-due grace persists an exact London-calendar deadline across DST", () 
 });
 
 test("youth age routing follows the approved boundaries", () => {
-  assert.equal(resolveYouthPlanForAge(3), null);
-  assert.equal(resolveYouthPlanForAge(4), "youth_youngstars");
+  assert.equal(resolveYouthPlanForAge(5), null);
+  assert.equal(resolveYouthPlanForAge(6), "youth_youngstars");
   assert.equal(resolveYouthPlanForAge(11), "youth_youngstars");
   assert.equal(resolveYouthPlanForAge(12), "youth_teenstars");
   assert.equal(resolveYouthPlanForAge(16), "youth_teenstars");
   assert.equal(resolveYouthPlanForAge(17), null);
+});
+
+test("multi-child youth acceptance freezes the full recurring family price", () => {
+  assert.equal(YOUTH_FAMILY_OFFER.minimumParticipants, 2);
+  assert.equal(YOUTH_FAMILY_OFFER.percentOff, 15);
+  assert.equal(YOUTH_FAMILY_OFFER.maximumParticipants, 10);
+  const youngstars = resolveCheckoutAcceptanceStatements("youth_youngstars", 2)
+    .find(({id}) => id === "recurring_payment_authority").statement;
+  const teenstars = resolveCheckoutAcceptanceStatements("youth_teenstars", 3)
+    .find(({id}) => id === "recurring_payment_authority").statement;
+  assert.match(youngstars, /standard total is £60\.00 per month/i);
+  assert.match(youngstars, /recurring total £51\.00/i);
+  assert.match(teenstars, /standard total is £105\.00 per month/i);
+  assert.match(teenstars, /recurring total £89\.25/i);
 });
 
 test("adult plans require 18 and youth plans are bounded at both ends", () => {

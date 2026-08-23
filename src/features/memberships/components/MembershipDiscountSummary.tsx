@@ -1,6 +1,7 @@
 import React from "react";
 import {
   MEMBERSHIP_PLANS,
+  YOUTH_FAMILY_OFFER,
   type PlanKey,
 } from "../../../lib/membershipPlans";
 import {
@@ -14,6 +15,7 @@ type MembershipDiscountSummaryProps = {
   discount?: MembershipDiscount | null;
   paymentSchedule?: MembershipPaymentSchedule | null;
   firstPaymentAt?: number | null;
+  participantCount?: number;
   className?: string;
 };
 
@@ -50,6 +52,10 @@ function formatPaymentMonths(firstPaymentAt: number, count: number): string {
   return `${dates.slice(0, -1).join(", ")} and ${dates[dates.length - 1]}`;
 }
 
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
 /**
  * Shows only complete, economically valid discount data. A partially migrated
  * or malformed backend record is omitted instead of promising the wrong price.
@@ -59,39 +65,78 @@ export default function MembershipDiscountSummary({
   discount,
   paymentSchedule,
   firstPaymentAt,
+  participantCount,
   className = "",
 }: MembershipDiscountSummaryProps) {
   const plan = MEMBERSHIP_PLANS[planKey];
-  const discountIsDisplayable = Boolean(
-    discount &&
-    discount.currency === "gbp" &&
-    Number.isInteger(discount.amountOffPence) &&
-    discount.amountOffPence > 0 &&
-    discount.amountOffPence < plan.amountPence &&
-    Number.isInteger(discount.durationInMonths) &&
-    discount.durationInMonths > 0 &&
-    discount.durationInMonths <= 36
-  );
-
-  if (!discount || !discountIsDisplayable) return null;
+  if (!discount) return null;
 
   const standardPrice = paymentSchedule &&
-    Number.isInteger(paymentSchedule.standardMonthlyPence) &&
-    paymentSchedule.standardMonthlyPence > 0
+    isPositiveInteger(paymentSchedule.standardMonthlyPence)
     ? paymentSchedule.standardMonthlyPence
     : plan.amountPence;
   const scheduledDiscountedPrice = paymentSchedule?.discountedMonthlyPence;
-  const discountedPrice = typeof scheduledDiscountedPrice === "number" &&
-    Number.isInteger(scheduledDiscountedPrice) &&
-    scheduledDiscountedPrice > 0 &&
+  const inferredParticipantCount = standardPrice % plan.amountPence === 0 ?
+    standardPrice / plan.amountPence : null;
+  const familyParticipantCount = isPositiveInteger(participantCount) ?
+    participantCount : inferredParticipantCount;
+  const expectedFamilyPrice = Math.round(
+    standardPrice * (100 - YOUTH_FAMILY_OFFER.percentOff) / 100
+  );
+  const familyDiscountIsDisplayable =
+    discount.kind === "youth_family" &&
+    plan.audience === "youth" &&
+    (YOUTH_FAMILY_OFFER.eligiblePlanKeys as readonly PlanKey[]).includes(planKey) &&
+    discount.percentOff === YOUTH_FAMILY_OFFER.percentOff &&
+    discount.duration === "forever" &&
+    discount.amountOffPence === null &&
+    discount.durationInMonths === null &&
+    discount.endsAt === null &&
+    isPositiveInteger(familyParticipantCount) &&
+    familyParticipantCount >= YOUTH_FAMILY_OFFER.minimumParticipants &&
+    familyParticipantCount <= YOUTH_FAMILY_OFFER.maximumParticipants &&
+    standardPrice === plan.amountPence * familyParticipantCount &&
+    isPositiveInteger(scheduledDiscountedPrice) &&
+    scheduledDiscountedPrice === expectedFamilyPrice;
+
+  if (familyDiscountIsDisplayable) {
+    return (
+      <div
+        className={`rounded-2xl border border-emerald-500/25 bg-emerald-500/10 p-5 text-sm leading-7 text-emerald-50/90 ${className}`.trim()}
+      >
+        <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-emerald-200">
+          Family discount applied
+        </p>
+        <p className="mt-3">
+          {YOUTH_FAMILY_OFFER.percentOff}% off the full monthly total for{" "}
+          {familyParticipantCount} children. You&rsquo;ll pay{" "}
+          {formatGbp(scheduledDiscountedPrice)} per month instead of{" "}
+          {formatGbp(standardPrice)} while this membership includes at least two children.
+        </p>
+      </div>
+    );
+  }
+
+  const amountOffPence = discount.amountOffPence;
+  const durationInMonths = discount.durationInMonths;
+  const fixedDiscountIsDisplayable =
+    (discount.kind === undefined || discount.kind === "existing_member") &&
+    discount.currency === "gbp" &&
+    isPositiveInteger(amountOffPence) &&
+    amountOffPence < plan.amountPence &&
+    isPositiveInteger(durationInMonths) &&
+    durationInMonths <= 36;
+
+  if (!fixedDiscountIsDisplayable) return null;
+
+  const discountedPrice = isPositiveInteger(scheduledDiscountedPrice) &&
     scheduledDiscountedPrice < standardPrice
     ? scheduledDiscountedPrice
-    : standardPrice - discount.amountOffPence;
-  const discountedPaymentCount = paymentSchedule &&
-    Number.isInteger(paymentSchedule.discountedPaymentCount) &&
-    paymentSchedule.discountedPaymentCount > 0
-    ? paymentSchedule.discountedPaymentCount
-    : discount.durationInMonths;
+    : standardPrice - amountOffPence;
+  const scheduledDiscountedPaymentCount = paymentSchedule?.discountedPaymentCount;
+  const discountedPaymentCount = isPositiveInteger(scheduledDiscountedPaymentCount)
+    ? scheduledDiscountedPaymentCount
+    : durationInMonths;
   const projectedFirstPaymentAt = paymentSchedule?.firstPaymentAt ?? firstPaymentAt;
   const safeFirstPaymentAt = typeof projectedFirstPaymentAt === "number" &&
     Number.isFinite(projectedFirstPaymentAt) && projectedFirstPaymentAt > 0
@@ -104,7 +149,7 @@ export default function MembershipDiscountSummary({
     : safeFirstPaymentAt !== null
       ? addUtcMonths(safeFirstPaymentAt, discountedPaymentCount)
       : null;
-  const amountOffPence = standardPrice - discountedPrice;
+  const displayedAmountOffPence = standardPrice - discountedPrice;
   const paymentWord = discountedPaymentCount === 1 ? "payment" : "payments";
 
   return (
@@ -115,7 +160,7 @@ export default function MembershipDiscountSummary({
         Existing-member discount applied
       </p>
       <p className="mt-3">
-        {formatGbp(amountOffPence)} off each of your first{" "}
+        {formatGbp(displayedAmountOffPence)} off each of your first{" "}
         {discountedPaymentCount} monthly {paymentWord}. You&rsquo;ll pay{" "}
         {formatGbp(discountedPrice)} per month while the offer applies, then{" "}
         {formatGbp(standardPrice)} per month.

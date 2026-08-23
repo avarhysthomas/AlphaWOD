@@ -13,6 +13,7 @@ const {
   MEMBERSHIP_PLANS,
   PLAN_KEYS,
   PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
+  YOUTH_FAMILY_OFFER,
 } = require("../lib/membershipPlans");
 const {redactProviderSecrets, stripeCliTestKey} = require("./stripeCliTestKey");
 
@@ -204,6 +205,29 @@ async function main() {
   if (sharedPromotionCodeVerified) {
     console.log(`- Shared reusable Promotion Code: ${promotionCodeId}`);
   }
+
+  const familyCouponId = required("STRIPE_YOUTH_FAMILY_COUPON_ID");
+  const familyCoupon = await stripe.coupons.retrieve(familyCouponId, {
+    expand: ["applies_to"],
+  });
+  const expectedYouthProducts = YOUTH_FAMILY_OFFER.eligiblePlanKeys
+    .map((planKey) => productsByPlan.get(planKey)).sort();
+  const familyProducts = [...(familyCoupon.applies_to?.products ?? [])].sort();
+  if (familyCoupon.deleted === true || familyCoupon.livemode !== false ||
+    familyCoupon.valid !== true ||
+    familyCoupon.percent_off !== YOUTH_FAMILY_OFFER.percentOff ||
+    familyCoupon.amount_off !== null || familyCoupon.currency !== null ||
+    familyCoupon.duration !== "forever" ||
+    familyCoupon.duration_in_months !== null ||
+    familyCoupon.redeem_by !== null || familyCoupon.max_redemptions !== null ||
+    familyProducts.length !== expectedYouthProducts.length ||
+    familyProducts.some((productId, index) =>
+      productId !== expectedYouthProducts[index])) {
+    throw new Error(
+      "STRIPE_YOUTH_FAMILY_COUPON_ID does not match the approved test offer."
+    );
+  }
+  console.log(`- Youth family Coupon: ${familyCoupon.id}`);
 }
 
 main().catch((error) => {

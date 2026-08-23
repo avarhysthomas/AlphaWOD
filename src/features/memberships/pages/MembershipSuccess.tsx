@@ -22,6 +22,7 @@ import {
   type MyMembership,
 } from "../services/membership";
 import MembershipDiscountSummary from "../components/MembershipDiscountSummary";
+import {resolveParticipantFullNames} from "../components/membershipPresentation";
 
 const CARD =
   "rounded-[28px] border border-white/10 bg-[#151311] p-7 shadow-[0_26px_80px_rgba(0,0,0,0.42)]";
@@ -145,6 +146,11 @@ export default function MembershipSuccess() {
     membership,
     hasAlphaWodAccess(appUser)
   ) : null;
+  const participantFullNames = membership ? resolveParticipantFullNames(
+    membership.participantFullName,
+    membership.participantFullNames,
+    membership.participantCount
+  ) : [];
   const presale = isFoundingPresale();
   const isAlphaWodAccountJourney = membership
     ? membership.planKey === "adult_unlimited" &&
@@ -266,12 +272,20 @@ export default function MembershipSuccess() {
                 : `This page has no checkout reference. Return to your membership page or contact ${COMPANY.supportEmail}.`}
           </p>
 
+          {membership && participantFullNames.length > 0 && (
+            <p className="mt-4 text-sm text-white/55">
+              {participantFullNames.length === 1 ? "Participant" : "Participants"}:{" "}
+              {participantFullNames.join(", ")}
+            </p>
+          )}
+
           {membership && (
             <MembershipDiscountSummary
               planKey={membership.planKey}
               discount={membership.discount}
               paymentSchedule={membership.paymentSchedule}
               firstPaymentAt={membership.firstPaymentAt}
+              participantCount={membership.participantCount}
               className="mt-6"
             />
           )}

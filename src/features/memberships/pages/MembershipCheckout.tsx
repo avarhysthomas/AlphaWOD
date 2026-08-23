@@ -6,6 +6,8 @@ import {
   EXISTING_MEMBER_OFFER,
   MEMBERSHIP_PLANS,
   POLICY_TEXT,
+  YOUTH_FAMILY_OFFER,
+  formatPence,
   resolveCheckoutAcceptanceStatements,
   resolveCheckoutDocuments,
   formatPlanPrice,
@@ -13,6 +15,7 @@ import {
   isAgeEligibleForPlan,
   isPlanKey,
   resolveDisplayAge,
+  resolveYouthMonthlyPricing,
   resolveYouthPlanForAge,
   type CheckoutAcceptanceId,
 } from "../../../lib/membershipPlans";
@@ -41,6 +44,12 @@ type CheckoutBlockReason =
   | "checkout_processing"
   | "membership_exists";
 
+type AdditionalParticipantInput = {
+  id: number;
+  fullName: string;
+  dateOfBirth: string;
+};
+
 function resolveCheckoutBlockReason(error: unknown): CheckoutBlockReason | null {
   const candidate = error as {details?: {reason?: unknown} | null} | null;
   const reason = candidate?.details?.reason;
@@ -66,6 +75,9 @@ export default function MembershipCheckout() {
 
   const [participantFullName, setParticipantFullName] = useState("");
   const [participantDateOfBirth, setParticipantDateOfBirth] = useState("");
+  const [additionalParticipants, setAdditionalParticipants] = useState<
+    AdditionalParticipantInput[]
+  >([]);
   const [guardianFullName, setGuardianFullName] = useState("");
   const [guardianRelationship, setGuardianRelationship] = useState("");
   const [promotionCode, setPromotionCode] = useState("");
@@ -80,10 +92,24 @@ export default function MembershipCheckout() {
     useState<CheckoutBlockReason | null>(null);
   const checkoutAttempt = useRef<CheckoutAttempt | null>(null);
   const checkoutBlockRef = useRef<HTMLDivElement | null>(null);
+  const nextParticipantId = useRef(2);
+  const acceptedPlanKey = useRef(planKey);
 
   useEffect(() => {
     if (checkoutBlockReason) checkoutBlockRef.current?.focus();
   }, [checkoutBlockReason]);
+
+  useEffect(() => {
+    if (acceptedPlanKey.current === planKey) return;
+
+    acceptedPlanKey.current = planKey;
+    setAcceptedStatements({});
+    checkoutAttempt.current = null;
+    clearCheckoutAttempt();
+    setError("");
+    setBillingPolicyChanged(false);
+    setCheckoutBlockReason(null);
+  }, [planKey]);
 
   const plan = isPlanKey(planKey) ? MEMBERSHIP_PLANS[planKey] : null;
   const {
@@ -92,6 +118,7 @@ export default function MembershipCheckout() {
     localTestJourneyEnabled,
   } = MEMBERSHIP_PURCHASE_AVAILABILITY;
   const isYouth = plan?.audience === "youth";
+  const participantCount = isYouth ? 1 + additionalParticipants.length : 1;
   const presale = isFoundingPresale();
   const promotionCodeAvailable =
     presale && plan?.key === EXISTING_MEMBER_OFFER.planKey;
@@ -100,8 +127,8 @@ export default function MembershipCheckout() {
     [plan]
   );
   const checkoutStatements = useMemo(
-    () => plan ? resolveCheckoutAcceptanceStatements(plan.key) : [],
-    [plan]
+    () => plan ? resolveCheckoutAcceptanceStatements(plan.key, participantCount) : [],
+    [participantCount, plan]
   );
 
   const age = useMemo(
@@ -114,6 +141,50 @@ export default function MembershipCheckout() {
   const suggestedYouthPlan = age === null ? null : resolveYouthPlanForAge(age);
   const ageMismatch =
     plan !== null && age !== null && !isAgeEligibleForPlan(plan, age);
+  const additionalParticipantAges = useMemo(
+    () => additionalParticipants.map((participant) => {
+      const participantAge = resolveDisplayAge(participant.dateOfBirth);
+      return {
+        age: participantAge,
+        suggestedYouthPlan: participantAge === null ?
+          null : resolveYouthPlanForAge(participantAge),
+      };
+    }),
+    [additionalParticipants]
+  );
+
+  const addYouthParticipant = () => {
+    if (!isYouth || participantCount >= YOUTH_FAMILY_OFFER.maximumParticipants) return;
+    const id = nextParticipantId.current;
+    nextParticipantId.current += 1;
+    setAdditionalParticipants((current) => [
+      ...current,
+      {id, fullName: "", dateOfBirth: ""},
+    ]);
+    // The legal statements change from one child to multiple children.
+    setAcceptedStatements({});
+  };
+
+  const updateAdditionalParticipant = (
+    id: number,
+    field: "fullName" | "dateOfBirth",
+    value: string
+  ) => {
+    setAdditionalParticipants((current) => current.map((participant) =>
+      participant.id === id ? {...participant, [field]: value} : participant
+    ));
+    // These acknowledgements confirm the accuracy of every named child's
+    // details. A post-acceptance edit therefore needs a fresh confirmation.
+    setAcceptedStatements({});
+  };
+
+  const removeAdditionalParticipant = (id: number) => {
+    setAdditionalParticipants((current) => current.filter(
+      (participant) => participant.id !== id
+    ));
+    // Require a fresh confirmation because the named participants changed.
+    setAcceptedStatements({});
+  };
 
   const setStatementAccepted = (id: CheckoutAcceptanceId, checked: boolean) => {
     setAcceptedStatements((current) => ({...current, [id]: checked}));
@@ -132,6 +203,14 @@ export default function MembershipCheckout() {
     guardianFullName.trim().length >= 2 &&
     guardianRelationship.trim().length >= 2
   );
+  const additionalParticipantsReady = !isYouth || additionalParticipants.every(
+    (participant, index) => {
+      const participantAge = additionalParticipantAges[index]?.age ?? null;
+      return participant.fullName.trim().length >= 2 &&
+        participantAge !== null &&
+        isAgeEligibleForPlan(plan, participantAge);
+    }
+  );
   const allStatementsAccepted = checkoutStatements.every(({id}) =>
     acceptedStatements[id] === true
   );
@@ -140,6 +219,7 @@ export default function MembershipCheckout() {
     participantFullName.trim().length >= 2 &&
     age !== null &&
     !ageMismatch &&
+    additionalParticipantsReady &&
     guardianReady &&
     allStatementsAccepted &&
     signatureMatches &&
@@ -159,6 +239,7 @@ export default function MembershipCheckout() {
       setBillingPolicyChanged(false);
 
       const checkoutDetails: CheckoutDetails = {
+        checkoutSchemaVersion: 2,
         // This is deliberately the same snapshot that chose every price/date
         // shown on this render. The callable fails closed if the cutoff moved.
         expectedBillingMode: presale ? "presale_deferred" : "standard",
@@ -177,6 +258,12 @@ export default function MembershipCheckout() {
           ? {
               guardianFullName: guardianFullName.trim(),
               guardianRelationship: guardianRelationship.trim(),
+              ...(additionalParticipants.length > 0 ? {
+                additionalParticipants: additionalParticipants.map((participant) => ({
+                  fullName: participant.fullName.trim(),
+                  dateOfBirth: participant.dateOfBirth,
+                })),
+              } : {}),
             }
           : {}),
       };
@@ -230,6 +317,11 @@ export default function MembershipCheckout() {
     }
   };
 
+  const youthPricing = isYouth ? resolveYouthMonthlyPricing(plan, participantCount) : null;
+  const familySavingPence = youthPricing ?
+    youthPricing.standardMonthlyPence - youthPricing.recurringMonthlyPence : 0;
+  const childWord = participantCount === 1 ? "child" : "children";
+
   return (
     <div className="carbon-fiber-bg min-h-screen overflow-x-hidden text-[#f4f0ea]">
       <div className="mx-auto max-w-2xl px-5 pb-24 pt-10 sm:px-8">
@@ -242,7 +334,10 @@ export default function MembershipCheckout() {
           {plan.name}
         </h1>
         <p className="mt-4 text-sm leading-7 text-white/70">
-          {formatPlanPrice(plan)} per month. {presale
+          {isYouth
+            ? `${formatPlanPrice(plan)} per child, per month. `
+            : `${formatPlanPrice(plan)} per month. `}
+          {presale
             ? POLICY_TEXT.presaleRule
             : POLICY_TEXT.prorationRule}
         </p>
@@ -321,23 +416,14 @@ export default function MembershipCheckout() {
         <form onSubmit={handleSubmit} className="mt-8 space-y-5">
           {promotionCodeAvailable && (
             <div className="rounded-[28px] border border-amber-500/25 bg-amber-500/10 p-6">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-amber-200">
-                Existing-member offer
-              </p>
-              <p id="promotion-code-hint" className="mt-3 text-sm leading-7 text-amber-50/85">
-                Enter the existing-member discount code to get £5 off each of your
-                first three monthly payments: £55 in September, October and November,
-                then £60 from December. Leave this blank if you do not have the code.
-              </p>
-              <label className="mt-5 block">
-                <span className="block text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-100/65">
-                  Discount code <span className="normal-case tracking-normal">(optional)</span>
+              <label className="block">
+                <span className="block text-[11px] font-semibold uppercase tracking-[0.24em] text-amber-200">
+                  Discount Code
                 </span>
                 <input
                   className={`${FIELD} border-amber-200/20 bg-black/30 focus:border-amber-100/55`}
                   value={promotionCode}
                   onChange={(event) => setPromotionCode(event.target.value)}
-                  aria-describedby="promotion-code-hint"
                   autoCapitalize="characters"
                   autoComplete="off"
                   autoCorrect="off"
@@ -345,9 +431,6 @@ export default function MembershipCheckout() {
                   maxLength={64}
                 />
               </label>
-              <p className="mt-3 text-xs leading-6 text-amber-100/60">
-                We&rsquo;ll verify and apply your code before opening Stripe.
-              </p>
             </div>
           )}
 
@@ -355,8 +438,9 @@ export default function MembershipCheckout() {
             <div className={CARD}>
               <p className={EYEBROW}>Paying adult</p>
               <p className="mt-4 text-sm leading-7 text-white/70">
-                Enter the details of the adult who will pay for this child&rsquo;s
-                membership. {POLICY_TEXT.guardianRequirement}
+                Enter the details of the adult who will pay for {participantCount === 1
+                  ? "this child’s membership"
+                  : "these children’s memberships"}. {POLICY_TEXT.guardianRequirement}
               </p>
 
               <label className="mt-5 block">
@@ -364,7 +448,10 @@ export default function MembershipCheckout() {
                 <input
                   className={FIELD}
                   value={guardianFullName}
-                  onChange={(event) => setGuardianFullName(event.target.value)}
+                  onChange={(event) => {
+                    setGuardianFullName(event.target.value);
+                    setAcceptedStatements({});
+                  }}
                   autoComplete="name"
                   maxLength={160}
                   required
@@ -372,11 +459,16 @@ export default function MembershipCheckout() {
               </label>
 
               <label className="mt-5 block">
-                <span className={LABEL}>Relationship to child</span>
+                <span className={LABEL}>
+                  Relationship to {participantCount === 1 ? "child" : "children"}
+                </span>
                 <input
                   className={FIELD}
                   value={guardianRelationship}
-                  onChange={(event) => setGuardianRelationship(event.target.value)}
+                  onChange={(event) => {
+                    setGuardianRelationship(event.target.value);
+                    setAcceptedStatements({});
+                  }}
                   placeholder="Parent, legal guardian"
                   maxLength={80}
                   required
@@ -403,62 +495,295 @@ export default function MembershipCheckout() {
           <div className={CARD}>
             <p className={EYEBROW}>{isYouth ? "Child details" : "Your details"}</p>
 
-            <label className="mt-5 block">
-              <span className={LABEL}>
-                {isYouth ? "Child’s full name" : "Your full name"}
-              </span>
-              <input
-                className={FIELD}
-                value={participantFullName}
-                onChange={(event) => setParticipantFullName(event.target.value)}
-                autoComplete={isYouth ? "off" : "name"}
-                maxLength={160}
-                required
-              />
-            </label>
+            {isYouth ? (
+              <>
+                <p className="mt-4 text-sm leading-7 text-white/70">
+                  Add up to {YOUTH_FAMILY_OFFER.maximumParticipants} children from the same
+                  age band. The {YOUTH_FAMILY_OFFER.percentOff}% family discount is applied
+                  automatically when you register 2 or more children.
+                </p>
 
-            <label className="mt-5 block">
-              <span className={LABEL}>
-                {isYouth ? "Child’s date of birth" : "Your date of birth"}
-              </span>
-              <input
-                type="date"
-                className={FIELD}
-                value={participantDateOfBirth}
-                onChange={(event) => setParticipantDateOfBirth(event.target.value)}
-                required
-              />
-            </label>
+                <div className="mt-6 border-y border-white/10">
+                  <fieldset className="py-6">
+                    <legend className="sr-only">Child 1 details</legend>
+                    <div className="flex items-center justify-between gap-4">
+                      <p
+                        id="child-1-heading"
+                        className="text-sm font-semibold text-white"
+                      >
+                        Child 1
+                      </p>
+                      <span className="text-xs text-white/45">
+                        Ages {plan.minAge} to {plan.maxAge}
+                      </span>
+                    </div>
 
-            {age !== null && (
-              <p className="mt-3 text-xs text-white/45">
-                {isYouth ? "Child age" : "Age"} {age}
-              </p>
-            )}
+                    <label className="mt-5 block">
+                      <span className={LABEL}>Child 1 full name</span>
+                      <input
+                        className={FIELD}
+                        value={participantFullName}
+                        onChange={(event) => {
+                          setParticipantFullName(event.target.value);
+                          setAcceptedStatements({});
+                        }}
+                        autoComplete="off"
+                        maxLength={160}
+                        required
+                      />
+                    </label>
 
-            {ageMismatch && (
-              <div className="mt-4 rounded-2xl border border-red-500/25 bg-red-500/10 p-4 text-sm leading-6 text-red-100">
-                {plan.name} is for ages {plan.minAge}
-                {plan.maxAge ? ` to ${plan.maxAge}` : " and over"}, and this date of birth
-                gives age {age}.
-                {suggestedYouthPlan && suggestedYouthPlan !== plan.key && (
-                  <>
-                    {" "}
-                    <Link
-                      to={`/memberships/checkout/${suggestedYouthPlan}`}
-                      className="underline underline-offset-4"
-                    >
-                      Switch to {MEMBERSHIP_PLANS[suggestedYouthPlan].name}
-                    </Link>
-                    .
-                  </>
+                    <label className="mt-5 block">
+                      <span className={LABEL}>Child 1 date of birth</span>
+                      <input
+                        type="date"
+                        className={FIELD}
+                        value={participantDateOfBirth}
+                        onChange={(event) => {
+                          setParticipantDateOfBirth(event.target.value);
+                          setAcceptedStatements({});
+                        }}
+                        aria-describedby={participantDateOfBirth ? "child-1-age-status" : undefined}
+                        aria-invalid={participantDateOfBirth.length > 0 &&
+                          (age === null || ageMismatch)}
+                        required
+                      />
+                    </label>
+
+                    {participantDateOfBirth && age === null && (
+                      <p id="child-1-age-status" className="mt-3 text-sm text-red-200">
+                        Enter a valid date of birth that is not in the future.
+                      </p>
+                    )}
+                    {age !== null && !ageMismatch && (
+                      <p id="child-1-age-status" className="mt-3 text-xs text-white/45">
+                        Child 1 age {age} · eligible for {plan.name}
+                      </p>
+                    )}
+                    {ageMismatch && (
+                      <div
+                        id="child-1-age-status"
+                        className="mt-4 rounded-2xl border border-red-500/25 bg-red-500/10 p-4 text-sm leading-6 text-red-100"
+                      >
+                        {plan.name} is for ages {plan.minAge}
+                        {plan.maxAge ? ` to ${plan.maxAge}` : " and over"}, and this date of
+                        birth gives age {age}.
+                        {suggestedYouthPlan && suggestedYouthPlan !== plan.key && (
+                          <>
+                            {" "}
+                            <Link
+                              to={`/memberships/checkout/${suggestedYouthPlan}`}
+                              className="underline underline-offset-4"
+                            >
+                              Switch to {MEMBERSHIP_PLANS[suggestedYouthPlan].name}
+                            </Link>
+                            .
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </fieldset>
+
+                  {additionalParticipants.map((participant, index) => {
+                    const childNumber = index + 2;
+                    const participantAge = additionalParticipantAges[index]?.age ?? null;
+                    const participantAgeMismatch = participantAge !== null &&
+                      !isAgeEligibleForPlan(plan, participantAge);
+                    const participantSuggestedPlan =
+                      additionalParticipantAges[index]?.suggestedYouthPlan ?? null;
+                    const ageStatusId = `child-${participant.id}-age-status`;
+
+                    return (
+                      <fieldset
+                        key={participant.id}
+                        className="border-t border-white/10 py-6"
+                      >
+                        <legend className="sr-only">Child {childNumber} details</legend>
+                        <div className="flex items-center justify-between gap-4">
+                          <p
+                            id={`child-${participant.id}-heading`}
+                            className="text-sm font-semibold text-white"
+                          >
+                            Child {childNumber}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => removeAdditionalParticipant(participant.id)}
+                            className="min-h-11 rounded-xl px-3 text-sm font-semibold text-white/60 underline decoration-white/25 underline-offset-4 transition hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+                            aria-label={`Remove child ${childNumber}`}
+                          >
+                            Remove
+                          </button>
+                        </div>
+
+                        <label className="mt-5 block">
+                          <span className={LABEL}>Child {childNumber} full name</span>
+                          <input
+                            className={FIELD}
+                            value={participant.fullName}
+                            onChange={(event) => updateAdditionalParticipant(
+                              participant.id,
+                              "fullName",
+                              event.target.value
+                            )}
+                            autoComplete="off"
+                            maxLength={160}
+                            required
+                          />
+                        </label>
+
+                        <label className="mt-5 block">
+                          <span className={LABEL}>Child {childNumber} date of birth</span>
+                          <input
+                            type="date"
+                            className={FIELD}
+                            value={participant.dateOfBirth}
+                            onChange={(event) => updateAdditionalParticipant(
+                              participant.id,
+                              "dateOfBirth",
+                              event.target.value
+                            )}
+                            aria-describedby={participant.dateOfBirth ? ageStatusId : undefined}
+                            aria-invalid={participant.dateOfBirth.length > 0 &&
+                              (participantAge === null || participantAgeMismatch)}
+                            required
+                          />
+                        </label>
+
+                        {participant.dateOfBirth && participantAge === null && (
+                          <p id={ageStatusId} className="mt-3 text-sm text-red-200">
+                            Enter a valid date of birth that is not in the future.
+                          </p>
+                        )}
+                        {participantAge !== null && !participantAgeMismatch && (
+                          <p id={ageStatusId} className="mt-3 text-xs text-white/45">
+                            Child {childNumber} age {participantAge} · eligible for {plan.name}
+                          </p>
+                        )}
+                        {participantAgeMismatch && (
+                          <div
+                            id={ageStatusId}
+                            className="mt-4 rounded-2xl border border-red-500/25 bg-red-500/10 p-4 text-sm leading-6 text-red-100"
+                          >
+                            {plan.name} is for ages {plan.minAge}
+                            {plan.maxAge ? ` to ${plan.maxAge}` : " and over"}, and this date
+                            of birth gives age {participantAge}.
+                            {participantSuggestedPlan && participantSuggestedPlan !== plan.key && (
+                              <>
+                                {" "}
+                                <Link
+                                  to={`/memberships/checkout/${participantSuggestedPlan}`}
+                                  className="underline underline-offset-4"
+                                >
+                                  Switch to {MEMBERSHIP_PLANS[participantSuggestedPlan].name}
+                                </Link>
+                                .
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </fieldset>
+                    );
+                  })}
+                </div>
+
+                <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+                  <button
+                    type="button"
+                    onClick={addYouthParticipant}
+                    disabled={participantCount >= YOUTH_FAMILY_OFFER.maximumParticipants}
+                    className="min-h-11 rounded-xl border border-white/15 px-4 py-3 text-sm font-bold text-white transition hover:border-white/35 hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white disabled:cursor-not-allowed disabled:border-white/5 disabled:text-white/35"
+                  >
+                    {participantCount >= YOUTH_FAMILY_OFFER.maximumParticipants
+                      ? "Maximum children added"
+                      : "Add another child"}
+                  </button>
+                  <p className="text-xs text-white/45">
+                    {participantCount} of {YOUTH_FAMILY_OFFER.maximumParticipants} children
+                  </p>
+                </div>
+
+                {youthPricing && (
+                  <section
+                    aria-labelledby="monthly-price-summary"
+                    aria-live="polite"
+                    className="mt-7 border-t border-white/10 pt-6"
+                  >
+                    <h2 id="monthly-price-summary" className="text-sm font-semibold text-white">
+                      Monthly price for {participantCount} {childWord}
+                    </h2>
+                    <dl className="mt-4 space-y-3 text-sm">
+                      <div className="flex items-baseline justify-between gap-4 text-white/60">
+                        <dt>{participantCount} {childWord} × {formatPence(plan.amountPence)}</dt>
+                        <dd>{formatPence(youthPricing.standardMonthlyPence)}</dd>
+                      </div>
+                      {youthPricing.familyDiscountApplies && (
+                        <div className="flex items-baseline justify-between gap-4 text-emerald-200">
+                          <dt>Family discount ({YOUTH_FAMILY_OFFER.percentOff}%)</dt>
+                          <dd>−{formatPence(familySavingPence)}</dd>
+                        </div>
+                      )}
+                      <div className="flex items-baseline justify-between gap-4 border-t border-white/10 pt-3 text-white">
+                        <dt className="font-semibold">Recurring monthly total</dt>
+                        <dd className="font-heading text-2xl">
+                          {formatPence(youthPricing.recurringMonthlyPence)}
+                        </dd>
+                      </div>
+                    </dl>
+                    <p className="mt-4 text-xs leading-6 text-white/50">
+                      {youthPricing.familyDiscountApplies
+                        ? `The automatic ${YOUTH_FAMILY_OFFER.percentOff}% family discount applies to the full monthly subtotal while this membership includes 2 or more children.`
+                        : `Add a second child in the same age band to receive ${YOUTH_FAMILY_OFFER.percentOff}% off the full monthly total.`}
+                    </p>
+                  </section>
                 )}
-              </div>
-            )}
-            {!isYouth && (
-              <p className="mt-5 text-sm leading-6 text-white/55">
-                Adult memberships can only be purchased for yourself.
-              </p>
+              </>
+            ) : (
+              <>
+                <label className="mt-5 block">
+                  <span className={LABEL}>Your full name</span>
+                  <input
+                    className={FIELD}
+                    value={participantFullName}
+                    onChange={(event) => {
+                      setParticipantFullName(event.target.value);
+                      setAcceptedStatements({});
+                    }}
+                    autoComplete="name"
+                    maxLength={160}
+                    required
+                  />
+                </label>
+
+                <label className="mt-5 block">
+                  <span className={LABEL}>Your date of birth</span>
+                  <input
+                    type="date"
+                    className={FIELD}
+                    value={participantDateOfBirth}
+                    onChange={(event) => {
+                      setParticipantDateOfBirth(event.target.value);
+                      setAcceptedStatements({});
+                    }}
+                    required
+                  />
+                </label>
+
+                {age !== null && (
+                  <p className="mt-3 text-xs text-white/45">Age {age}</p>
+                )}
+
+                {ageMismatch && (
+                  <div className="mt-4 rounded-2xl border border-red-500/25 bg-red-500/10 p-4 text-sm leading-6 text-red-100">
+                    {plan.name} is for ages {plan.minAge}
+                    {plan.maxAge ? ` to ${plan.maxAge}` : " and over"}, and this date of
+                    birth gives age {age}.
+                  </div>
+                )}
+                <p className="mt-5 text-sm leading-6 text-white/55">
+                  Adult memberships can only be purchased for yourself.
+                </p>
+              </>
             )}
           </div>
 

@@ -92,6 +92,18 @@ const activeMembership = {
   coolingOffActive: false,
 };
 
+const multiChildTeenstarsMembership = {
+  ...activeMembership,
+  subscriptionId: "sub_teenstars_family",
+  planKey: "youth_teenstars",
+  planName: "HYROX Teenstars",
+  grantsAlphaWodAccess: false,
+  participantFullName: "Alex Child",
+  participantFullNames: ["Alex Child", "Sam Child"],
+  participantCount: 2,
+  participantIsPayer: false,
+};
+
 describe("MembershipManage pending-claim recovery", () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -215,6 +227,32 @@ describe("MembershipManage cancellation confirmation", () => {
     ));
   });
 
+  it.each([
+    ["standard", multiChildTeenstarsMembership],
+    ["presale", {
+      ...multiChildTeenstarsMembership,
+      state: "scheduled",
+      billingMode: "presale_deferred",
+      cancellationMode: "cancel_before_start",
+      cancellationPreview,
+    }],
+  ])("states the whole-family impact before a %s cancellation", async (_label, membership) => {
+    mockGetMyMemberships.mockResolvedValue({
+      ok: true,
+      memberships: [membership],
+      cancellationPreview,
+    });
+
+    render(<MembershipManage />);
+    fireEvent.click(await screen.findByRole("button", {name: "Request cancellation"}));
+
+    expect(screen.getByText(/Submitting this request cancels the whole HYROX Teenstars/))
+      .toHaveTextContent(
+        "The places for Alex Child and Sam Child will all end with it. " +
+        "Individual children cannot be removed online."
+      );
+  });
+
   it("shows a presale membership as scheduled with £0 today and no access warning", async () => {
     mockGetMyMemberships.mockResolvedValue({
       ok: true,
@@ -265,6 +303,51 @@ describe("MembershipManage cancellation confirmation", () => {
       .toBeInTheDocument();
   });
 
+  it("shows every Teenstars child with the ongoing family discount", async () => {
+    mockGetMyMemberships.mockResolvedValue({
+      ok: true,
+      memberships: [{
+        ...activeMembership,
+        planKey: "youth_teenstars",
+        planName: "HYROX Teenstars",
+        grantsAlphaWodAccess: false,
+        participantFullName: "Alex Child",
+        participantFullNames: ["Alex Child", "Sam Child"],
+        participantCount: 2,
+        participantIsPayer: false,
+        discount: {
+          couponId: "coupon_family_15",
+          promotionCodeId: null,
+          amountOffPence: null,
+          currency: null,
+          durationInMonths: null,
+          startsAt: 1787149200,
+          endsAt: null,
+          kind: "youth_family",
+          percentOff: 15,
+          duration: "forever",
+        },
+        paymentSchedule: {
+          amountDueTodayPence: 0,
+          firstPaymentAt: 1788220800,
+          standardMonthlyPence: 7000,
+          discountedMonthlyPence: 5950,
+          discountedPaymentCount: null,
+          fullPriceFrom: null,
+        },
+      }],
+      cancellationPreview,
+    });
+
+    render(<MembershipManage />);
+
+    expect(await screen.findByText("Participants: Alex Child, Sam Child"))
+      .toBeInTheDocument();
+    expect(screen.getByText("Family discount applied")).toBeInTheDocument();
+    expect(screen.getByText(/pay £59.50 per month instead of £70/i))
+      .toBeInTheDocument();
+  });
+
   it("returns an existing member to the app immediately after scheduled checkout", async () => {
     mockAppUser = {
       role: "user",
@@ -303,7 +386,7 @@ describe("MembershipManage cancellation confirmation", () => {
   it("keeps a cooling-off cancellation action available and marks its request kind", async () => {
     mockGetMyMemberships.mockResolvedValue({
       ok: true,
-      memberships: [{...activeMembership, coolingOffActive: true}],
+      memberships: [{...multiChildTeenstarsMembership, coolingOffActive: true}],
       cancellationPreview,
     });
 
@@ -314,12 +397,17 @@ describe("MembershipManage cancellation confirmation", () => {
     fireEvent.click(screen.getByRole("button", {
       name: "Cancel during cooling-off period",
     }));
+    expect(screen.getByText(/Submitting this request cancels the whole HYROX Teenstars/))
+      .toHaveTextContent(
+        "The places for Alex Child and Sam Child will all end with it. " +
+        "Individual children cannot be removed online."
+      );
     fireEvent.click(screen.getByRole("button", {
       name: "Submit cooling-off cancellation",
     }));
 
     await waitFor(() => expect(mockRequestMembershipCancellation).toHaveBeenCalledWith(
-      "sub_active",
+      "sub_teenstars_family",
       cancellationPreview.cancelAtUnixSeconds,
       "cooling_off"
     ));
@@ -458,11 +546,61 @@ describe("MembershipManage cancellation confirmation", () => {
 
     expect(await screen.findByText("Cancellation receipt")).toBeInTheDocument();
     expect(screen.getByText("cancel_COFF_01J5X5YJ7S")).toBeInTheDocument();
+    expect(screen.getByText("19 Aug 2026, 15:05"))
+      .toHaveAttribute("dateTime", "2026-08-19T14:05:00.000Z");
     expect(screen.getByText("Cancellation request accepted")).toBeInTheDocument();
     expect(screen.getByText(/Cooling-off cancellation · Acknowledgement sent/i))
       .toBeInTheDocument();
     expect(screen.queryByRole("button", {name: "Request cancellation"}))
       .not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["contractual", "Membership cancellation"],
+    ["presale_withdrawal", "Cancellation before start"],
+  ] as const)(
+    "shows the recorded receipt time for a %s request",
+    async (kind, kindLabel) => {
+      mockGetMyMemberships.mockResolvedValue({
+        ok: true,
+        memberships: [{
+          ...activeMembership,
+          cancellationRequestStatus: "accepted",
+          cancellationRequestKind: kind,
+          cancellationReceipt: {
+            reference: `cancel_${kind}`,
+            receivedAt: "2026-08-19T14:05:00.000Z",
+            kind,
+          },
+        }],
+        cancellationPreview,
+      });
+
+      render(<MembershipManage />);
+
+      expect(await screen.findByText(`cancel_${kind}`)).toBeInTheDocument();
+      expect(screen.getByText("19 Aug 2026, 15:05"))
+        .toHaveAttribute("dateTime", "2026-08-19T14:05:00.000Z");
+      expect(screen.getByText(kindLabel)).toBeInTheDocument();
+      expect(screen.queryByText(/Acknowledgement pending/i)).not.toBeInTheDocument();
+    }
+  );
+
+  it("confirms that every child place ends with a family subscription", async () => {
+    mockGetMyMemberships.mockResolvedValue({
+      ok: true,
+      memberships: [{
+        ...multiChildTeenstarsMembership,
+        state: "cancelled",
+        cancellationOutcome: cancellationPreview,
+      }],
+      cancellationPreview,
+    });
+
+    render(<MembershipManage />);
+
+    expect(await screen.findByText(/This cancellation applies to the whole HYROX Teenstars/))
+      .toHaveTextContent("The places for Alex Child and Sam Child all end with it.");
   });
 
   it("separates refund review from acceptance of the cancellation request", async () => {

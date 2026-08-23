@@ -1,0 +1,193 @@
+Privacy Notice
+
+Membership, payment, AlphaWOD and participant information
+
+VERSION DATE
+23 August 2026
+
+DOCUMENT ID
+ZAF-PRIVACY-2026-08-23-01
+
+CONTRACTING ENTITY
+ZERO ALPHA FITNESS LTD · 15978998
+
+TRADING NAME
+Zero Alpha Fitness
+
+PUBLIC CONTACT
+support@zeroalphafitness.co.uk
+
+WEBSITE
+https://alpha-wod.vercel.app/
+
+1. Who we are
+
+ZERO ALPHA FITNESS LTD, a company registered in England and Wales under company number 15978998, trading as Zero Alpha Fitness, is the controller of the personal information described in this Notice. Our registered office is 18 Bryngwyn Bach, Llanelli, United Kingdom, SA14 8SH. Our public trading and contact address is Unit 3, Felinfoel Business Hub, Llanelli, SA14 8BE. For privacy questions or requests, email support@zeroalphafitness.co.uk.
+
+This Notice covers membership buyers and payers, adult participants, children in Youngstars or Teenstars, their parents or guardians, AlphaWOD account holders, and people who contact support or exercise a privacy right.
+
+Checkout short-form notice
+
+ZERO ALPHA FITNESS LTD uses these details to set up and manage the named participant’s or participants’ membership, verify age and guardian authority for each child, manage payment through Stripe, and provide eligible AlphaWOD access. Required fields are needed to complete the membership. If you provide details about another person, we will give them our Privacy Notice during onboarding. Marketing is not part of this purchase. Read the Privacy Notice.
+
+2. The information we collect
+
+Identity, eligibility and contact information
+
+• Each participant’s name and date of birth, and the payer email collected through Stripe or the account-claim flow.
+
+• For youth membership, each child’s selected plan and age eligibility, the guardian’s name and relationship to each child, and the guardian’s declaration of authority for every named child.
+
+• The Zero Alpha purchase form does not request a phone number or billing address. Stripe may ask the payer directly for information required by a selected payment method or its legal and fraud-prevention checks.
+
+Account, membership and agreement information
+
+• Firebase account identifier, verified email status, sign-in and security records. Authentication providers handle credentials; we do not need to see the payer’s full password.
+
+• Selected plan, every named participant, contracted quantity, price per child, undiscounted subtotal, multi-child-discount eligibility, rate and amount, resulting recurring total, start date, billing anchor, other promotion use, subscription and access status, payment-failure grace period, cancellation request and effective end date.
+
+• Typed electronic signature, authority declaration, acceptance statements, accepted document version, timestamp and the audit context actually recorded at acceptance.
+
+• AlphaWOD eligibility, account-claim state, bookings, attendance, workout or training entries and performance records for eligible adult users.
+
+Payment information
+
+Stripe collects and processes payment details. We expect to receive identifiers and status information such as Stripe customer, Checkout Session, subscription, invoice, payment, refund and dispute references, and limited payment-method information where Stripe makes it available. We do not store full card or bank credentials in the Zero Alpha application.
+
+Technical, communications and safety information
+
+• IP address, device/browser information, timestamps, authentication events, security, error and audit logs to the extent the service providers and our implementation record them.
+
+• Transactional email delivery events, support correspondence, complaints and privacy requests.
+
+• The public purchase form does not request health or injury details. If safety information is needed during onboarding, it must be collected through the separate, clearly explained process provided for that purpose.
+
+• Photographs, video or promotional media only through a separate optional consent process; media consent is not a condition of membership.
+
+3. Where the information comes from
+
+• Directly from an adult participant buying for themselves, or from a guardian buying for one or more children, during purchase, onboarding, account use or support contact.
+
+• From Stripe about checkout, billing, payment, refund and dispute events.
+
+• Automatically from the site, AlphaWOD, authentication service and security or operational logs.
+
+• From authorised staff recording membership, onboarding, attendance, booking or training administration.
+
+Adult participants receive this Notice during their own Checkout. For children, the guardian receives the full Notice and we will provide age-appropriate information to each child during onboarding.
+
+4. Why we use information and our lawful bases
+
+We use personal information only where a lawful basis applies:
+
+• Contract — to take the payer’s payment, create and administer their subscription, send essential billing/service messages, process cancellation and deliver services that are objectively necessary under a contract with that person.
+
+• Legitimate interests — to administer a youth membership, confirm guardian authority and age eligibility, prevent duplicate subscriptions and fraud, secure the service, keep proportionate audit evidence, administer ordinary bookings and training, manage claims and improve reliable operations. Our interests are providing the agreed service, protecting users and the business, and demonstrating what was agreed. We must balance those interests against each person’s rights, with extra weight for children.
+
+• Legal obligation — to keep company, accounting and transaction records and make disclosures where a specific law requires it.
+
+• Consent — only where a genuinely optional activity requires it, such as optional marketing, promotional media, or a separately designed optional feature using health information. Consent can be withdrawn without affecting earlier lawful use.
+
+• Vital interests — exceptionally, where processing is necessary to protect someone’s life and they cannot consent, for example in a genuine emergency.
+
+Service, security, payment and cancellation messages are not marketing. If we introduce marketing, we will keep it separate from purchase acceptance and use consent or another route only where PECR and data-protection law allow it. Every marketing message will offer the required opt-out.
+
+5. Children and youth membership
+
+Youngstars covers ages 6–11 and Teenstars covers ages 12–16. One youth Checkout may contain one or more children in one selected plan only; Youngstars and Teenstars are not combined in one Checkout. The guardian is the payer and supplies each child’s details. Children do not receive AlphaWOD access under the initial public youth membership. We use only the information reasonably needed to verify each child’s eligibility, arrange onboarding, provide the membership, protect each child and maintain appropriate evidence.
+
+A child’s data-protection rights belong to the child. Whether a guardian may exercise a right for them depends on the child’s understanding, authority and best interests. We will explain relevant processing in language and a format appropriate to the child’s age. We do not use a guardian’s acceptance of the membership documents as blanket data-protection consent.
+
+6. Health and other special-category information
+
+DO NOT SUBMIT HEALTH DETAILS AT CHECKOUT
+
+Do not type medical conditions, injuries, medication or other health information into a signature, promotion-code, support or general checkout field. If information is needed for safe participation, use the separate secure onboarding route provided by Zero Alpha Fitness.
+
+Information about health is special-category data. If we collect it, we need both an Article 6 lawful basis and an Article 9 condition, plus clear information and appropriate safeguards. Some workout or performance entries may reveal health even if they are not labelled medical. Before any such feature is used, we will classify the fields, identify the lawful condition, minimise access and retention, and provide a just-in-time notice. Where explicit consent is the appropriate condition for an optional feature, it will be specific, separate and withdrawable.
+
+7. Automated status changes and human review
+
+Stripe events and our rules may automatically update subscription status and related access—for example, allowing Adult Unlimited access after confirmed payment, applying a three-day past-due grace period, blocking a duplicate active subscription, suspending access when a dispute opens, restoring it after a dispute is won, or revoking it after a lost dispute or full refund. These rules use payment and membership status rather than profiling a person’s character. A person may contact us for an explanation, correction and human review of an incorrect or exceptional result.
+
+8. Who receives information
+
+We share only what is reasonably necessary with:
+
+• Stripe, payment networks, banks and payment-method providers for Checkout, Billing, payment authentication, fraud prevention, refunds, disputes and the Customer Portal. Stripe may act as our service provider and as an independent controller for some legal, network and fraud purposes under its own notice.
+
+• Google Firebase and Google Cloud for authentication, database, server functions and related infrastructure.
+
+• Vercel for website delivery, hosting and operational logs.
+
+• Resend for transactional email delivery.
+
+• Authorised Zero Alpha Fitness staff and contractors who need the information for their role.
+
+• Accountants, insurers, legal advisers, courts, regulators, law-enforcement bodies or a buyer/reorganised business where disclosure is lawful, necessary and appropriately protected.
+
+A supplier is not automatically our processor for every activity. We verify each role, contract and subprocessor and keep access limited to the relevant purpose.
+
+9. International transfers
+
+Some suppliers or their subprocessors may process information outside the UK. Where this involves a restricted transfer, we use an applicable UK adequacy regulation or an approved UK International Data Transfer Agreement or UK Addendum, together with any required risk assessment and supplementary protections. A person may ask us for information about the relevant safeguard.
+
+10. How long we keep information
+
+We keep information only for as long as needed for the purpose, legal records, security and live disputes, then delete or irreversibly anonymise it. Our retention schedule is:
+
+• Company, accounting, invoice and transaction records — normally six years from the end of the company financial year to which they relate, subject to any longer lawful requirement or live enquiry.
+
+• Membership account, subscription, cancellation and essential support records — while active and normally up to six years after the membership or account relationship ends where needed for contract, complaint or claim records; unnecessary live-profile data should be removed sooner.
+
+• Adult waiver, guardian authority, acceptance version and signature evidence — six years after adult membership ends; for a child, until at least the 21st birthday or resolution of a live claim, whichever is later, subject to any longer lawful, insurance or safeguarding requirement.
+
+• Bookings, attendance and ordinary workout/performance entries — for the operational period communicated in AlphaWOD settings and then deleted or anonymised.
+
+• Authentication, security and technical logs — a short, documented period appropriate to the risk, normally no more than 12 months unless needed for an incident, fraud or claim.
+
+• Optional marketing — until consent is withdrawn or the purpose ends, while retaining only a minimal suppression record where needed to honour an opt-out.
+
+A deletion request does not override a lawful need to retain a limited record. Where possible, financial and claims evidence will be separated from the live app profile so unnecessary operational information can be removed.
+
+11. Cookies, local storage and similar technologies
+
+The site, Firebase authentication, Stripe and hosting services may use cookies, browser storage, device identifiers or similar storage and access technologies for requested sessions, security, payment authentication, fraud prevention and reliable delivery. Strictly necessary technologies do not require consent but still require clear information. Any non-exempt analytics, advertising or cross-service tracking remains disabled unless and until valid consent is obtained.
+
+12. Security
+
+We use proportionate technical and organisational measures designed to protect information, including access controls, verified sign-in and one-time purchase-claim verification, separation of payment credentials from the app, audit logging and supplier security terms. No online service is risk-free. If a personal-data breach creates a legally reportable risk, we will notify the ICO and affected people as required.
+
+13. Your rights
+
+Depending on the circumstances, a person may have the right to:
+
+• be informed and obtain access to their personal information;
+
+• correct inaccurate or incomplete information;
+
+• ask for erasure or restriction;
+
+• receive portable information where the legal conditions apply;
+
+• withdraw consent at any time where consent is used;
+
+• object to direct marketing; and
+
+• ask for safeguards and human review concerning qualifying automated decisions.
+
+RIGHT TO OBJECT
+
+You may object to processing based on our legitimate interests. Tell us what you object to and why by emailing support@zeroalphafitness.co.uk. We will stop unless we demonstrate compelling legitimate grounds that override your interests, rights and freedoms, or the processing is needed for legal claims. Direct marketing stops when you object.
+
+We may need reasonable information to verify identity and authority before acting. We do not charge for an ordinary request, but the law allows limited exceptions. We will respond within the applicable time and explain any lawful refusal or extension.
+
+14. Complaints
+
+Send a data-protection complaint to support@zeroalphafitness.co.uk or Unit 3, Felinfoel Business Hub, Llanelli, SA14 8BE. We will provide a direct route, acknowledge the complaint within 30 days, investigate appropriately, keep the complainant informed and provide the outcome without undue delay. A person may also complain to the UK Information Commissioner’s Office (ICO).
+
+ICO complaint information: ico.org.uk/make-a-complaint/data-protection-complaints/
+
+15. Changes to this Notice
+
+We will version and date this Notice. If a change materially affects how active-member information is used, we will provide a clear notice before the new use where required. Earlier acceptance and transaction records remain linked to the version provided at the relevant time.
