@@ -562,6 +562,15 @@ describe("MembershipCheckout", () => {
     expect(screen.queryByLabelText(/Discount code/i)).not.toBeInTheDocument();
   });
 
+  it("explains the banking-app handoff before checkout", () => {
+    renderCheckout("adult_gym");
+
+    expect(screen.getByText(/Your bank may open its app to approve/i))
+      .toHaveTextContent(/Keep this browser tab open/i);
+    expect(screen.getByText(/Your bank may open its app to approve/i))
+      .toHaveTextContent(/Don’t restart checkout on another phone/i);
+  });
+
   it("returns to standard prorated checkout after the presale boundary", () => {
     jest.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-02T09:00:00.000Z"));
     mockLocalJourneyEnabled = true;
@@ -670,8 +679,10 @@ describe("MembershipCheckout", () => {
 
     const panel = await screen.findByRole("alert", {name: "Checkout unavailable"});
     expect(panel).toHaveFocus();
-    expect(panel).toHaveTextContent(/checkout or membership setup is already in progress/i);
-    expect(panel).toHaveTextContent(/return to the original tab/i);
+    expect(panel).toHaveTextContent(/checkout or membership setup already exists/i);
+    expect(panel).toHaveTextContent(/approval in your banking app/i);
+    expect(panel).toHaveTextContent(/Do not start it again on another phone/i);
+    expect(panel).toHaveTextContent(/original browser tab and your email/i);
     expect(panel).not.toHaveTextContent(/No membership has been created/i);
     expect(screen.queryByText(/RAW checkout_in_progress server message/i))
       .not.toBeInTheDocument();

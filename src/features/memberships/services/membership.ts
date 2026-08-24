@@ -156,6 +156,73 @@ export type CheckoutAttempt = {id: string; fingerprint: string};
 export type CheckoutAttemptContext = {payerUid: string | null};
 
 const CHECKOUT_ATTEMPT_KEY = "zaf.membershipCheckoutAttempt.v1";
+const CHECKOUT_ATTEMPT_TTL_MS = 24 * 60 * 60 * 1000;
+
+type StoredCheckoutAttempt = CheckoutAttempt & {expiresAt: number};
+
+function checkoutAttemptStorages(): Storage[] {
+  const storages: Storage[] = [];
+  // Accessing a Storage getter can itself throw in a sandboxed or privacy-
+  // restricted browser, before getItem/setItem is reached.
+  try {
+    storages.push(window.sessionStorage);
+  } catch {
+    // Continue with localStorage or the in-memory attempt.
+  }
+  try {
+    storages.push(window.localStorage);
+  } catch {
+    // Continue with sessionStorage or the in-memory attempt.
+  }
+  return storages;
+}
+
+function storedCheckoutAttempt(
+  storage: Storage,
+  expectedFingerprint?: string
+): StoredCheckoutAttempt | null {
+  try {
+    const saved = JSON.parse(
+      storage.getItem(CHECKOUT_ATTEMPT_KEY) || "null"
+    ) as Partial<StoredCheckoutAttempt> | null;
+    if (!isCheckoutAttemptId(saved?.id) ||
+      typeof saved?.fingerprint !== "string" ||
+      (expectedFingerprint !== undefined &&
+        saved.fingerprint !== expectedFingerprint)) {
+      return null;
+    }
+
+    // Older same-tab entries did not have a TTL. Migrate them once and apply
+    // the same short lifetime used by the cross-tab recovery copy.
+    const expiresAt = typeof saved.expiresAt === "number" ?
+      saved.expiresAt : Date.now() + CHECKOUT_ATTEMPT_TTL_MS;
+    if (expiresAt <= Date.now()) {
+      storage.removeItem(CHECKOUT_ATTEMPT_KEY);
+      return null;
+    }
+    return {id: saved.id, fingerprint: saved.fingerprint, expiresAt};
+  } catch {
+    return null;
+  }
+}
+
+function rememberCheckoutAttempt(attempt: CheckoutAttempt): void {
+  const stored: StoredCheckoutAttempt = {
+    ...attempt,
+    expiresAt: Date.now() + CHECKOUT_ATTEMPT_TTL_MS,
+  };
+  const serialized = JSON.stringify(stored);
+  // sessionStorage preserves the normal same-tab flow. localStorage is the
+  // recovery copy for mobile bank-app redirects that reopen the site in a new
+  // tab or browser activity. It contains no checkout PII or Stripe identifier.
+  for (const storage of checkoutAttemptStorages()) {
+    try {
+      storage.setItem(CHECKOUT_ATTEMPT_KEY, serialized);
+    } catch {
+      // The other store or the in-memory attempt may still be available.
+    }
+  }
+}
 
 /**
  * Creates a high-entropy attempt identifier in the browser. The checkout page
@@ -220,8 +287,9 @@ async function fingerprintCheckoutDetails(
 }
 
 /**
- * Reuses one opaque attempt across retries and page reloads without storing
- * names, dates of birth, signatures, or other checkout details in the browser.
+ * Reuses one opaque attempt across retries, page reloads and mobile bank-app
+ * tab switches without storing names, dates of birth, signatures, or other
+ * checkout details in the browser.
  */
 export async function resolveCheckoutAttempt(
   details: CheckoutDetails,
@@ -233,51 +301,43 @@ export async function resolveCheckoutAttempt(
     return current;
   }
 
-  try {
-    const saved = JSON.parse(
-      window.sessionStorage.getItem(CHECKOUT_ATTEMPT_KEY) || "null"
-    ) as Partial<CheckoutAttempt> | null;
-    if (saved?.fingerprint === fingerprint && isCheckoutAttemptId(saved.id)) {
-      return {id: saved.id, fingerprint};
+  for (const storage of checkoutAttemptStorages()) {
+    const saved = storedCheckoutAttempt(storage, fingerprint);
+    if (saved) {
+      const recovered = {id: saved.id, fingerprint};
+      // Mirror a legacy or cross-tab value into both stores so the success
+      // return and any later same-device retry see the same verifier.
+      rememberCheckoutAttempt(recovered);
+      return recovered;
     }
-  } catch {
-    // A same-page retry still reuses `current` when storage is unavailable.
   }
 
   const attempt = {id: createCheckoutAttemptId(), fingerprint};
-  try {
-    window.sessionStorage.setItem(CHECKOUT_ATTEMPT_KEY, JSON.stringify(attempt));
-  } catch {
-    // Private browsing can deny storage; the in-memory attempt remains safe.
-  }
+  rememberCheckoutAttempt(attempt);
   return attempt;
 }
 
 export function clearCheckoutAttempt(attemptId?: string): void {
-  try {
-    if (attemptId) {
-      const saved = JSON.parse(
-        window.sessionStorage.getItem(CHECKOUT_ATTEMPT_KEY) || "null"
-      ) as Partial<CheckoutAttempt> | null;
-      if (saved?.id !== attemptId) return;
+  for (const storage of checkoutAttemptStorages()) {
+    try {
+      if (attemptId) {
+        const saved = storedCheckoutAttempt(storage);
+        if (saved?.id !== attemptId) continue;
+      }
+      storage.removeItem(CHECKOUT_ATTEMPT_KEY);
+    } catch {
+      // A stale opaque verifier expires naturally and cannot create a charge.
     }
-    window.sessionStorage.removeItem(CHECKOUT_ATTEMPT_KEY);
-  } catch {
-    // Nothing to clear when browser storage is unavailable.
   }
 }
 
 /** Returns the browser-held verifier for the checkout that just redirected. */
 export function readCheckoutAttemptId(): string | null {
-  try {
-    const saved = JSON.parse(
-      window.sessionStorage.getItem(CHECKOUT_ATTEMPT_KEY) || "null"
-    ) as Partial<CheckoutAttempt> | null;
-    const attemptId = saved?.id;
-    return isCheckoutAttemptId(attemptId) ? attemptId : null;
-  } catch {
-    return null;
+  for (const storage of checkoutAttemptStorages()) {
+    const saved = storedCheckoutAttempt(storage);
+    if (saved) return saved.id;
   }
+  return null;
 }
 
 export async function createMembershipCheckoutSession(request: CheckoutRequest) {

@@ -74,6 +74,7 @@ describe("checkout attempt identifiers", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     window.sessionStorage.clear();
+    window.localStorage.clear();
   });
 
   it("uses a limited-use App Check token for the sensitive checkout call", async () => {
@@ -124,7 +125,7 @@ describe("checkout attempt identifiers", () => {
     });
   });
 
-  it("reuses an attempt after reload without persisting checkout PII", async () => {
+  it("reuses an attempt after reload or a bank-app tab switch without persisting checkout PII", async () => {
     const details: CheckoutDetails = {
       checkoutSchemaVersion: 2,
       expectedBillingMode: "presale_deferred",
@@ -148,15 +149,64 @@ describe("checkout attempt identifiers", () => {
     expect(afterReload).toEqual(first);
     expect(readCheckoutAttemptId()).toBe(first.id);
 
-    const stored = window.sessionStorage.getItem("zaf.membershipCheckoutAttempt.v1") ?? "";
-    expect(stored).not.toContain("Private Person");
-    expect(stored).not.toContain("1990-01-01");
-    expect(stored).not.toContain("PRIVATE-EXISTING-001");
-    expect(window.localStorage.getItem("zaf.membershipCheckoutAttempt.v1")).toBeNull();
+    const sessionCopy = window.sessionStorage.getItem(
+      "zaf.membershipCheckoutAttempt.v1"
+    ) ?? "";
+    const recoveryCopy = window.localStorage.getItem(
+      "zaf.membershipCheckoutAttempt.v1"
+    ) ?? "";
+    for (const stored of [sessionCopy, recoveryCopy]) {
+      expect(stored).not.toContain("Private Person");
+      expect(stored).not.toContain("1990-01-01");
+      expect(stored).not.toContain("PRIVATE-EXISTING-001");
+    }
+
+    // Android/iOS banking hand-offs can reopen the return URL in a new browser
+    // activity whose sessionStorage is empty. Recover the same attempt instead
+    // of creating a duplicate checkout reservation.
+    window.sessionStorage.clear();
+    const afterBankAppReturn = await resolveCheckoutAttempt(details, null);
+    expect(afterBankAppReturn).toEqual(first);
+    expect(window.sessionStorage.getItem("zaf.membershipCheckoutAttempt.v1"))
+      .not.toBeNull();
 
     clearCheckoutAttempt(first.id);
+    expect(window.sessionStorage.getItem("zaf.membershipCheckoutAttempt.v1"))
+      .toBeNull();
+    expect(window.localStorage.getItem("zaf.membershipCheckoutAttempt.v1"))
+      .toBeNull();
     const replacement = await resolveCheckoutAttempt(details, null);
     expect(replacement.id).not.toBe(first.id);
+  });
+
+  it("expires a cross-tab checkout verifier after 24 hours", async () => {
+    const now = jest.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const details: CheckoutDetails = {
+      checkoutSchemaVersion: 2,
+      expectedBillingMode: "presale_deferred",
+      planKey: "adult_unlimited",
+      participantFullName: "Short Lived Attempt",
+      participantDateOfBirth: "1990-01-01",
+      participantIsPayer: true,
+      signedName: "Short Lived Attempt",
+      acceptedStatementIds: [
+        "membership_contract",
+        "privacy_notice",
+        "adult_participant_waiver",
+        "recurring_payment_authority",
+        "immediate_performance",
+      ],
+    };
+    const first = await resolveCheckoutAttempt(details);
+
+    window.sessionStorage.clear();
+    now.mockReturnValue(1_000_000 + 24 * 60 * 60 * 1000 + 1);
+    expect(readCheckoutAttemptId()).toBeNull();
+    expect(window.localStorage.getItem("zaf.membershipCheckoutAttempt.v1"))
+      .toBeNull();
+    const replacement = await resolveCheckoutAttempt(details, null);
+    expect(replacement.id).not.toBe(first.id);
+    now.mockRestore();
   });
 
   it("rotates the attempt when chargeable details change", async () => {

@@ -871,6 +871,11 @@ export default function MembershipCheckout() {
           <div className={CARD}>
             <p className={EYEBROW}>What happens next</p>
             <p className="mt-4 text-sm leading-7 text-white/70">
+              Your bank may open its app to approve your payment method. Keep this browser
+              tab open, approve it in your banking app, then return here. Don&rsquo;t restart
+              checkout on another phone.
+            </p>
+            <p className="mt-3 text-sm leading-7 text-white/70">
               {presale ? POLICY_TEXT.prorationAuthority : POLICY_TEXT.prorationRule}
             </p>
             <p className="mt-3 text-sm leading-7 text-white/70">
@@ -917,7 +922,7 @@ export default function MembershipCheckout() {
               </h2>
               <p id="checkout-block-description" className="mt-2 text-sm leading-6 text-amber-50/85">
                 {checkoutBlockReason === "checkout_in_progress"
-                  ? "A checkout or membership setup is already in progress for these details. If you just left Stripe, return to the original tab. Otherwise, wait a moment and check again, or contact us if you need help."
+                  ? "A checkout or membership setup already exists for these details. It may have completed after approval in your banking app. Do not start it again on another phone. Check the original browser tab and your email first. If there is still no confirmation after a few minutes, check again or contact us."
                   : checkoutBlockReason === "checkout_processing"
                     ? "Stripe has submitted your checkout and we’re waiting for confirmation. Do not start another checkout while it is being confirmed."
                     : "This account or participant already has an active or scheduled membership. We haven’t opened another checkout."}
