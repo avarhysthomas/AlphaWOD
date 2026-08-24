@@ -6,6 +6,22 @@ const mockListMemberships = jest.fn();
 const mockLinkMembershipParticipant = jest.fn();
 const mockReleaseAbandonedMembershipCheckout = jest.fn();
 
+function interruptedCheckoutIssue(seed = "c") {
+  return {
+    intentId: `attempt_${seed.repeat(64)}`,
+    planKey: "adult_unlimited",
+    planName: "Adult Unlimited Membership",
+    participantFullNames: ["Stacey Example"],
+    participantCount: 1,
+    payerUid: null,
+    payerEmail: null,
+    status: "created",
+    createdAt: Date.parse("2026-08-24T09:00:00.000Z"),
+    checkoutExpiresAt: 1_788_227_200,
+    canRelease: true,
+  };
+}
+
 jest.mock("../../../components/layout/AppBottomNav", () => () => (
   <nav aria-label="Primary" />
 ));
@@ -50,6 +66,8 @@ describe("AdminMemberships cancellation attention", () => {
     mockReleaseAbandonedMembershipCheckout.mockResolvedValue({
       ok: true,
       outcome: "released",
+      recoveryEmailStatus: "queued",
+      recoveryEmailRecipient: "s***@example.test",
     });
     mockListMemberships.mockResolvedValue({
       ok: true,
@@ -124,8 +142,8 @@ describe("AdminMemberships cancellation attention", () => {
       .not.toBeInTheDocument();
   });
 
-  it("lets an admin verify and release Stacey's interrupted unpaid checkout", async () => {
-    jest.spyOn(window, "confirm").mockReturnValue(true);
+  it("lets an admin verify, release and queue an email for an interrupted checkout", async () => {
+    const confirm = jest.spyOn(window, "confirm").mockReturnValue(true);
     mockListMemberships.mockResolvedValue({
       ok: true,
       memberships: [],
@@ -153,13 +171,125 @@ describe("AdminMemberships cancellation attention", () => {
       target: {value: "issues"},
     });
     expect(screen.getByText("Stacey Example")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", {name: "Verify and release"}));
+    fireEvent.click(screen.getByRole("button", {name: "Verify, release & email"}));
 
     await waitFor(() => expect(mockReleaseAbandonedMembershipCheckout)
       .toHaveBeenCalledWith(`attempt_${"a".repeat(64)}`));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining(
+      "Verify, release and email Stacey Example?"
+    ));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining(
+      "a recovery email will be queued after release"
+    ));
     expect(await screen.findByText(
-      "Stacey Example’s unpaid checkout was released. They can now start again."
+      "Stacey Example’s unpaid checkout was released. They can now start again. " +
+      "A recovery email was queued to s***@example.test."
     )).toBeInTheDocument();
+  });
+
+  it("reports an email that was already queued without calling it sent", async () => {
+    jest.spyOn(window, "confirm").mockReturnValue(true);
+    mockListMemberships.mockResolvedValue({
+      ok: true,
+      memberships: [],
+      checkoutIssues: [interruptedCheckoutIssue()],
+    });
+    mockReleaseAbandonedMembershipCheckout.mockResolvedValue({
+      ok: true,
+      outcome: "already_released",
+      recoveryEmailStatus: "already_queued",
+      recoveryEmailRecipient: "s***@example.test",
+    });
+
+    render(<AdminMemberships />);
+    fireEvent.click(await screen.findByRole("button", {
+      name: "Verify, release & email",
+    }));
+
+    const status = await screen.findByRole("status");
+    expect(status).toHaveTextContent(
+      "Stacey Example’s checkout was already released. " +
+      "A recovery email was already queued to s***@example.test."
+    );
+    expect(status).not.toHaveTextContent(/\bsent\b/i);
+  });
+
+  it("requires manual follow-up when Stripe has no verified email address", async () => {
+    jest.spyOn(window, "confirm").mockReturnValue(true);
+    mockListMemberships.mockResolvedValue({
+      ok: true,
+      memberships: [],
+      checkoutIssues: [interruptedCheckoutIssue("d")],
+    });
+    mockReleaseAbandonedMembershipCheckout.mockResolvedValue({
+      ok: true,
+      outcome: "released",
+      recoveryEmailStatus: "manual_review",
+      recoveryEmailRecipient: null,
+    });
+
+    render(<AdminMemberships />);
+    fireEvent.click(await screen.findByRole("button", {
+      name: "Verify, release & email",
+    }));
+
+    const status = await screen.findByRole("status");
+    expect(status).toHaveTextContent(
+      "No recovery email was queued because no verified email address was available. " +
+      "Follow up with the customer manually."
+    );
+    expect(status).toHaveClass("text-amber-100");
+    expect(status).not.toHaveTextContent(/\bsent\b/i);
+  });
+
+  it("reports a quarantined email record without blaming the address", async () => {
+    jest.spyOn(window, "confirm").mockReturnValue(true);
+    mockListMemberships.mockResolvedValue({
+      ok: true,
+      memberships: [],
+      checkoutIssues: [interruptedCheckoutIssue("f")],
+    });
+    mockReleaseAbandonedMembershipCheckout.mockResolvedValue({
+      ok: true,
+      outcome: "released",
+      recoveryEmailStatus: "manual_review",
+      recoveryEmailRecipient: "s***@example.test",
+    });
+
+    render(<AdminMemberships />);
+    fireEvent.click(await screen.findByRole("button", {
+      name: "Verify, release & email",
+    }));
+
+    const status = await screen.findByRole("status");
+    expect(status).toHaveTextContent(
+      "No recovery email was queued because its delivery record needs billing review."
+    );
+    expect(status).not.toHaveTextContent(/no verified email address/i);
+    expect(status).not.toHaveTextContent(/\bsent\b/i);
+  });
+
+  it("handles an older release response without claiming an email was queued", async () => {
+    jest.spyOn(window, "confirm").mockReturnValue(true);
+    mockListMemberships.mockResolvedValue({
+      ok: true,
+      memberships: [],
+      checkoutIssues: [interruptedCheckoutIssue("e")],
+    });
+    mockReleaseAbandonedMembershipCheckout.mockResolvedValue({
+      ok: true,
+      outcome: "released",
+    });
+
+    render(<AdminMemberships />);
+    fireEvent.click(await screen.findByRole("button", {
+      name: "Verify, release & email",
+    }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Stacey Example’s unpaid checkout was released. They can now start again. " +
+      "No recovery email was queued."
+    );
   });
 
   it("warns when an older billing service omits interrupted checkout data", async () => {
@@ -201,13 +331,69 @@ describe("AdminMemberships cancellation attention", () => {
     );
 
     render(<AdminMemberships />);
-    fireEvent.click(await screen.findByRole("button", {name: "Verify and release"}));
+    fireEvent.click(await screen.findByRole("button", {
+      name: "Verify, release & email",
+    }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Stripe now reports this checkout is processing."
     );
     expect(mockListMemberships).toHaveBeenCalledTimes(2);
     expect(screen.queryByText("Stacey Example")).not.toBeInTheDocument();
+  });
+
+  it("keeps a claimed release visible after an error so staff can resume it", async () => {
+    jest.spyOn(window, "confirm").mockReturnValue(true);
+    const createdIssue = interruptedCheckoutIssue("9");
+    const claimedIssue = {
+      ...createdIssue,
+      status: "release_claimed",
+    };
+    mockListMemberships
+      .mockResolvedValueOnce({
+        ok: true,
+        memberships: [],
+        checkoutIssues: [createdIssue],
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        memberships: [],
+        checkoutIssues: [claimedIssue],
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        memberships: [],
+        checkoutIssues: [],
+      });
+    mockReleaseAbandonedMembershipCheckout
+      .mockRejectedValueOnce(new Error("The release response was interrupted."))
+      .mockResolvedValueOnce({
+        ok: true,
+        outcome: "released",
+        recoveryEmailStatus: "queued",
+        recoveryEmailRecipient: "s***@example.test",
+      });
+
+    render(<AdminMemberships />);
+    fireEvent.click(await screen.findByRole("button", {
+      name: "Verify, release & email",
+    }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The release response was interrupted."
+    );
+    expect(screen.getByText("Release interrupted — retry")).toBeInTheDocument();
+    expect(screen.getByText("Stacey Example")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", {
+      name: "Verify, release & email",
+    }));
+    await waitFor(() => expect(mockReleaseAbandonedMembershipCheckout)
+      .toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "A recovery email was queued to s***@example.test."
+    );
+    expect(mockListMemberships).toHaveBeenCalledTimes(3);
   });
 
   it("keeps a healthy presale membership out of attention and shows its schedule", async () => {

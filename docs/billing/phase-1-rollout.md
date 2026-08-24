@@ -898,6 +898,54 @@ Requires `RESEND_API_KEY` (already used for invites) and the
 `MEMBERSHIP_FROM_EMAIL` param, which defaults to
 `hello@zeroalphafitness.co.uk`. That domain must be verified in Resend.
 
+### Interrupted-checkout recovery email
+
+The admin `Verify, release & email` action is a Stripe-authoritative recovery
+operation, not a membership cancellation and not a welcome-email path. It may
+queue a recovery email only after the exact bound Checkout Session has been
+proved `expired` and unpaid. An open, unpaid Session is expired first; a
+completed, paid or uncertain Session remains locked and creates no recovery
+outbox row.
+
+Before any Stripe mutation, a Firestore transaction proves the intent is still
+the exact staff-selected attempt and still owns every reservation lock, then
+writes a durable release claim bound to those immutable facts. This claim lets
+the same admin action resume safely if an expiry webhook wins the following
+race or the callable stops after Stripe expires the Session. A naturally
+expired/failed attempt without that pre-terminal claim is never emailed
+retroactively.
+
+After provider verification, the reservation release, ownership-checked lock
+deletion, deterministic audit record and frozen `checkout_recovery` outbox row
+are one Firestore transaction. The row ID and Resend idempotency key are
+deterministically derived from a one-way hash of the intent ID, and the outbox
+row carries the recovery-email schema version. Replaying the admin action cannot
+replace the original recipient or body.
+
+Recipient evidence comes only from the verified terminal Stripe Session, its
+exact bound Customer, or the authenticated intent's frozen payer email. Raw
+addresses stay in the server-only outbox; intent and audit projections retain
+only the source and hash. If no valid address exists, releasing the unpaid
+reservation still succeeds and atomically records `manual_review` without a
+delivery schedule. The admin result says the email was **queued**, never sent;
+`retryMembershipConfirmations` performs delivery with the existing lease,
+backoff, 23-hour retry and systemic-failure circuit.
+
+Deploy this workflow in dependency order: deploy and verify
+`retryMembershipConfirmations` first, deploy and verify `listMemberships`
+second, then deploy and verify `releaseAbandonedMembershipCheckout`, and
+publish the admin frontend last. Do not deploy the worker and release callable
+as one unordered batch: the previous worker does not understand
+`checkout_recovery` rows and could dead-letter one during the scheduler
+interval. The list revision must precede the release callable so a claimed
+operation remains visible and retryable if a webhook or callable failure
+interrupts finalization.
+
+The dedicated message says the sign-up did not complete, no payment was taken,
+no membership was created and the place is available again. Its only primary
+action starts a fresh journey at `/memberships`; it never links back to the
+expired Checkout Session or attaches membership agreements.
+
 ## 9b. Known product gaps, deliberately not built
 
 - **Automated cooling-off refund calculation.** Online cooling-off notice,

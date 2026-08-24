@@ -177,12 +177,53 @@ while a scheduled worker is unhealthy.
    the frozen outbox/idempotency key and contractual evidence. Correct delivery
    configuration before an audited retry; do not compose a replacement message
    from mutable current plan data.
-6. For orphan locks, duplicate sessions, customer conflicts, cancellation drift
+6. For checkout-recovery email `manual_review`, first confirm the intent has the
+   staff-release marker, the exact Checkout Session is expired and unpaid, and
+   the projected outbox/recipient hash agrees. A missing recipient is not a
+   failed release: contact the customer out of band only if staff already hold a
+   lawful address. Never paste an address into the outbox or reuse an expired
+   Checkout URL.
+7. For orphan locks, duplicate sessions, customer conflicts, cancellation drift
    or entitlement-projection review, keep the record for audit and escalate to
    the billing owner. Direct Firestore edits are not a recovery procedure.
-7. Close the incident only after Stripe, Firestore entitlement, email/outbox,
+8. Close the incident only after Stripe, Firestore entitlement, email/outbox,
    webhook ledger and audit evidence agree, alerts have recovered, and a second
    reviewer signs off.
+
+## Staff recovery for an interrupted Checkout
+
+Use Admin → Memberships → Interrupted checkouts only after the customer is no
+longer using the original Checkout page and the ten-minute guard has elapsed.
+The action re-reads Stripe before changing anything. If Stripe reports a
+completed, paid or uncertain Session, stop: the reservation stays locked and no
+email is queued.
+
+For a verified unpaid release, check the result banner:
+
+- `queued`: the frozen restart email is awaiting or retrying through the
+  scheduled worker; this does not claim delivery;
+- `already_queued`: the durable row was queued by an earlier invocation; this
+  deliberately makes no claim about its current delivery state;
+- `manual_review`: the place was released, but either no Stripe-verified email
+  address was available or the frozen delivery evidence could not be created
+  safely, so no send will be attempted;
+- `not_applicable`: the attempt was already terminal without this staff recovery
+  email workflow, and must not be emailed retroactively.
+
+The email worker may be retried only through its reviewed outbox path. Never
+send the expired Session URL manually, create a fake membership, or rebuild the
+message from current mutable plan data.
+
+For a recovery-email rollout, deploy and verify the scheduled
+`retryMembershipConfirmations` worker first, then deploy and verify
+`listMemberships`, and only then deploy and verify
+`releaseAbandonedMembershipCheckout`; publish the admin frontend last. Never
+reverse or combine the worker and release steps, because an older worker can
+quarantine the new outbox kind before the next five-minute run. The list
+revision must already expose an interrupted release as retryable. If the release
+callable stops after its durable claim or an expiry webhook wins the race, rerun
+the same admin action: it resumes the claimed operation and preserves the one
+frozen outbox/audit identity.
 
 ## Opening and rollback boundary
 

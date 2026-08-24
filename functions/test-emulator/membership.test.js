@@ -44,6 +44,10 @@ process.env.MEMBERSHIP_FIREBASE_PROJECT_ID = process.env.GCLOUD_PROJECT ||
 const functions = require("../lib/index");
 const {__testing: membershipTesting} = require("../lib/membership");
 const {
+  checkoutRecoveryIdempotencyKey,
+  checkoutRecoveryOutboxId,
+} = require("../lib/membershipCheckoutRecovery");
+const {
   PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
   PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
   createCommercialPlanSnapshot,
@@ -5205,19 +5209,25 @@ test("scheduled recovery applies a frozen cancellation without the payer returni
     },
   }, {merge: true});
 
-  const result = await membershipTesting.recoverPendingCancellationsOnce(recoveryNow);
+  const realNow = Date.now;
+  Date.now = () => recoveryNow;
+  try {
+    const result = await membershipTesting.recoverPendingCancellationsOnce(recoveryNow);
 
-  assert.deepEqual(result, {processed: 1, failed: 0, skipped: 0});
-  const stored = await db.collection("memberships").doc("sub_cancel_worker").get();
-  assert.equal(stored.get("cancellationRequest.status"), "applied");
-  assert.equal(
-    stored.get("cancellationOutcome.cancelAtUnixSeconds"),
-    frozenOutcome.cancelAtUnixSeconds
-  );
-  assert.equal(
-    fakeStripe.state.subscriptions.get("sub_cancel_worker").cancel_at,
-    frozenOutcome.cancelAtUnixSeconds
-  );
+    assert.deepEqual(result, {processed: 1, failed: 0, skipped: 0});
+    const stored = await db.collection("memberships").doc("sub_cancel_worker").get();
+    assert.equal(stored.get("cancellationRequest.status"), "applied");
+    assert.equal(
+      stored.get("cancellationOutcome.cancelAtUnixSeconds"),
+      frozenOutcome.cancelAtUnixSeconds
+    );
+    assert.equal(
+      fakeStripe.state.subscriptions.get("sub_cancel_worker").cancel_at,
+      frozenOutcome.cancelAtUnixSeconds
+    );
+  } finally {
+    Date.now = realNow;
+  }
 });
 
 test("scheduled cancellation recovery keeps a provider failure retryable", async () => {
@@ -5240,14 +5250,20 @@ test("scheduled cancellation recovery keeps a provider failure retryable", async
     },
   }, {merge: true});
 
-  const result = await membershipTesting.recoverPendingCancellationsOnce(recoveryNow);
+  const realNow = Date.now;
+  Date.now = () => recoveryNow;
+  try {
+    const result = await membershipTesting.recoverPendingCancellationsOnce(recoveryNow);
 
-  assert.deepEqual(result, {processed: 0, failed: 1, skipped: 0});
-  const stored = await db.collection("memberships").doc("sub_cancel_outage").get();
-  assert.equal(stored.get("cancellationRequest.status"), "pending");
-  assert.equal(stored.get("cancellationRequest.repairGeneration"), 1);
-  assert.ok(stored.get("cancellationRequest.nextAttemptAt").toMillis() > recoveryNow);
-  assert.match(stored.get("cancellationRequest.lastError"), /No such subscription/i);
+    assert.deepEqual(result, {processed: 0, failed: 1, skipped: 0});
+    const stored = await db.collection("memberships").doc("sub_cancel_outage").get();
+    assert.equal(stored.get("cancellationRequest.status"), "pending");
+    assert.equal(stored.get("cancellationRequest.repairGeneration"), 1);
+    assert.ok(stored.get("cancellationRequest.nextAttemptAt").toMillis() > recoveryNow);
+    assert.match(stored.get("cancellationRequest.lastError"), /No such subscription/i);
+  } finally {
+    Date.now = realNow;
+  }
 });
 
 test("convergence requeues and repairs a confirmed schedule removed in Stripe", async () => {
@@ -5276,32 +5292,38 @@ test("convergence requeues and repairs a confirmed schedule removed in Stripe", 
     cancel_at: null,
   });
 
-  await membershipTesting.convergeMembershipFromStripe(
-    "sub_cancel_drift",
-    async () => undefined,
-    {},
-    nowMillis
-  );
-  const queued = await db.collection("memberships").doc("sub_cancel_drift").get();
-  assert.equal(queued.get("cancellationOutcome"), null);
-  assert.equal(queued.get("cancellationRequest.status"), "pending");
-  assert.equal(queued.get("cancellationRequest.repairGeneration"), 1);
-  assert.equal(queued.get("cancelAt"), frozenOutcome.cancelAtUnixSeconds);
+  const realNow = Date.now;
+  Date.now = () => nowMillis;
+  try {
+    await membershipTesting.convergeMembershipFromStripe(
+      "sub_cancel_drift",
+      async () => undefined,
+      {},
+      nowMillis
+    );
+    const queued = await db.collection("memberships").doc("sub_cancel_drift").get();
+    assert.equal(queued.get("cancellationOutcome"), null);
+    assert.equal(queued.get("cancellationRequest.status"), "pending");
+    assert.equal(queued.get("cancellationRequest.repairGeneration"), 1);
+    assert.equal(queued.get("cancelAt"), frozenOutcome.cancelAtUnixSeconds);
 
-  const result = await membershipTesting.recoverPendingCancellationsOnce(
-    nowMillis + 1
-  );
-  assert.deepEqual(result, {processed: 1, failed: 0, skipped: 0});
-  const repaired = await db.collection("memberships").doc("sub_cancel_drift").get();
-  assert.equal(repaired.get("cancellationRequest.status"), "applied");
-  assert.equal(
-    repaired.get("cancellationOutcome.cancelAtUnixSeconds"),
-    frozenOutcome.cancelAtUnixSeconds
-  );
-  assert.equal(
-    fakeStripe.state.subscriptions.get("sub_cancel_drift").cancel_at,
-    frozenOutcome.cancelAtUnixSeconds
-  );
+    const result = await membershipTesting.recoverPendingCancellationsOnce(
+      nowMillis + 1
+    );
+    assert.deepEqual(result, {processed: 1, failed: 0, skipped: 0});
+    const repaired = await db.collection("memberships").doc("sub_cancel_drift").get();
+    assert.equal(repaired.get("cancellationRequest.status"), "applied");
+    assert.equal(
+      repaired.get("cancellationOutcome.cancelAtUnixSeconds"),
+      frozenOutcome.cancelAtUnixSeconds
+    );
+    assert.equal(
+      fakeStripe.state.subscriptions.get("sub_cancel_drift").cancel_at,
+      frozenOutcome.cancelAtUnixSeconds
+    );
+  } finally {
+    Date.now = realNow;
+  }
 });
 
 test("an overdue cancellation stops billing and preserves refund-review evidence", async () => {
@@ -5713,6 +5735,9 @@ test("admin recovery expires only a verified open unpaid checkout and releases i
     const intents = await db.collection("membershipIntents").get();
     assert.equal(intents.size, 1);
     const intent = intents.docs[0];
+    const providerSession = fakeStripe.state.checkoutSessions.get(checkout.sessionId);
+    providerSession.customer_details = {email: "Recovery.Buyer@Example.test"};
+    fakeStripe.state.checkoutSessions.set(checkout.sessionId, providerSession);
     const checkoutSessionUrl = intent.get("checkoutSessionUrl");
     await intent.ref.update({
       createdAt: admin.firestore.Timestamp.fromMillis(
@@ -5746,6 +5771,9 @@ test("admin recovery expires only a verified open unpaid checkout and releases i
     ));
 
     assert.equal(result.outcome, "released");
+    assert.equal(result.recoveryEmailStatus, "queued");
+    assert.equal(result.recoveryEmailRecipient, "r***@example.test");
+    assert.equal("manualReviewReason" in result, false);
     assert.equal(
       fakeStripe.state.checkoutSessions.get(checkout.sessionId).status,
       "expired"
@@ -5757,16 +5785,545 @@ test("admin recovery expires only a verified open unpaid checkout and releases i
       released.get("manualRecoveryReason"),
       "staff_verified_open_unpaid"
     );
+    const outboxId = checkoutRecoveryOutboxId(intent.id);
+    const queuedOutbox = await db.collection("membershipEmailOutbox")
+      .doc(outboxId).get();
+    assert.equal(queuedOutbox.get("schemaVersion"), 1);
+    assert.equal(queuedOutbox.get("kind"), "checkout_recovery");
+    assert.equal(queuedOutbox.get("intentId"), intent.id);
+    assert.equal(queuedOutbox.get("checkoutSessionId"), checkout.sessionId);
+    assert.equal(queuedOutbox.get("providerSessionStatus"), "expired");
+    assert.equal(queuedOutbox.get("providerPaymentStatus"), "unpaid");
+    assert.equal(queuedOutbox.get("recipientSource"), "stripe_session_customer_details");
+    assert.equal(queuedOutbox.get("payload").to[0], "recovery.buyer@example.test");
+    assert.equal(
+      queuedOutbox.get("idempotencyKey"),
+      checkoutRecoveryIdempotencyKey(intent.id)
+    );
+    assert.match(queuedOutbox.get("payload.html"), /Restart my signup/);
+    assert.match(queuedOutbox.get("payload.text"), /No payment was taken/);
+    assert.equal(released.get("checkoutRecoveryEmailStatus"), "pending");
+    assert.equal(released.get("checkoutRecoveryEmailOutboxId"), outboxId);
+    assert.equal(released.get("checkoutRecoveryEmailRecipientMasked"), "r***@example.test");
     assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 0);
     const audits = await db.collection("membershipAudit")
       .where("type", "==", "abandoned_checkout_released").get();
     assert.equal(audits.size, 1);
     assert.equal(audits.docs[0].get("releasedBy"), "checkoutreleaseadmin");
+
+    const repeat = await releaseAbandonedMembershipCheckout(request(
+      {intentId: intent.id},
+      "checkoutreleaseadmin"
+    ));
+    assert.equal(repeat.outcome, "already_released");
+    assert.equal(repeat.recoveryEmailStatus, "already_queued");
+    assert.equal(repeat.recoveryEmailRecipient, "r***@example.test");
+    assert.equal(
+      (await db.collection("membershipEmailOutbox")
+        .where("intentId", "==", intent.id).get()).size,
+      1
+    );
+    assert.deepEqual(
+      (await db.collection("membershipEmailOutbox").doc(outboxId).get())
+        .get("payload"),
+      queuedOutbox.get("payload")
+    );
+
+    const sends = [];
+    const dispatchNow = queuedOutbox.get("nextAttemptAt").toMillis() + 1000;
+    assert.equal(
+      await membershipTesting.processMembershipConfirmationOutbox(
+        outboxId,
+        dispatchNow,
+        async (payload, idempotencyKey) => {
+          sends.push({payload, idempotencyKey});
+          throw new Error(
+            "provider response for recovery.buyer@example.test was lost"
+          );
+        }
+      ),
+      "failed"
+    );
+    const failedOutbox = await db.collection("membershipEmailOutbox")
+      .doc(outboxId).get();
+    assert.match(failedOutbox.get("lastError"), /\[redacted-email\]/);
+    assert.doesNotMatch(failedOutbox.get("lastError"), /recovery\.buyer@example\.test/);
+    assert.equal(
+      await membershipTesting.processMembershipConfirmationOutbox(
+        outboxId,
+        dispatchNow + 6 * 60 * 1000,
+        async (payload, idempotencyKey) => {
+          sends.push({payload, idempotencyKey});
+          return {providerMessageId: "recovery_email_1"};
+        }
+      ),
+      "sent"
+    );
+    assert.equal(sends.length, 2);
+    assert.deepEqual(sends[0], sends[1]);
+    assert.equal(
+      (await db.collection("membershipEmailOutbox").doc(outboxId).get())
+        .get("providerMessageId"),
+      "recovery_email_1"
+    );
+    const sentIntent = await intent.ref.get();
+    assert.equal(sentIntent.get("checkoutRecoveryEmailStatus"), "sent");
+    assert.equal(sentIntent.get("checkoutRecoveryEmailProviderId"), "recovery_email_1");
+    assert.ok(sentIntent.get("checkoutRecoveryEmailSentAt"));
+    assert.equal((await db.collection("memberships").get()).size, 0);
     const afterRelease = await listMemberships(request(
       {},
       "checkoutreleaseadmin"
     ));
     assert.equal(afterRelease.checkoutIssues.length, 0);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("admin recovery resumes exactly once after an expiry webhook wins the finalize race", async () => {
+  const createCheckout = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  try {
+    await createMember("checkoutraceretryadmin", {
+      profile: {
+        role: "admin",
+        approvalStatus: "approved",
+        entitlementStatus: "active",
+        entitlementSource: "staff",
+        alphaWodAccess: true,
+      },
+    });
+    const checkout = await createCheckout(request(
+      validCheckoutData("attempt_staff_release_webhook_race_retry_123456")
+    ));
+    const intent = (await db.collection("membershipIntents").get()).docs[0];
+    await intent.ref.update({
+      createdAt: admin.firestore.Timestamp.fromMillis(
+        Date.now() - 20 * 60 * 1000
+      ),
+    });
+    const providerSession = fakeStripe.state.checkoutSessions.get(
+      checkout.sessionId
+    );
+    providerSession.customer_details = {email: "race.retry@example.test"};
+    fakeStripe.state.checkoutSessions.set(checkout.sessionId, providerSession);
+
+    let interleavings = 0;
+    const crashingRelease = membershipTesting.buildReleaseAbandonedCheckoutHandler(
+      async () => undefined,
+      async () => {
+        interleavings += 1;
+        const expiredSession = fakeStripe.state.checkoutSessions.get(
+          checkout.sessionId
+        );
+        assert.equal(expiredSession.status, "expired");
+        assert.equal(await membershipTesting.transitionCheckoutReservation(
+          intent.ref,
+          "expired",
+          {
+            endedByStripeEvent: "checkout.session.expired",
+            endedAt: admin.firestore.Timestamp.now(),
+          },
+          true,
+          {
+            sessionId: expiredSession.id,
+            mode: expiredSession.mode,
+            planKey: expiredSession.metadata.planKey,
+          }
+        ), true);
+        throw new Error("simulated function crash after Stripe expiry");
+      }
+    );
+
+    await assert.rejects(
+      () => crashingRelease(request(
+        {intentId: intent.id},
+        "checkoutraceretryadmin"
+      )),
+      /simulated function crash/
+    );
+    assert.equal(interleavings, 1);
+    const interrupted = await intent.ref.get();
+    assert.equal(interrupted.get("status"), "expired");
+    assert.equal(
+      interrupted.get("checkoutRecoveryReleaseClaimId"),
+      checkoutRecoveryOutboxId(intent.id)
+    );
+    assert.equal(
+      interrupted.get("checkoutRecoveryReleaseClaimedBy"),
+      "checkoutraceretryadmin"
+    );
+    assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 0);
+    assert.equal((await db.collection("membershipEmailOutbox").get()).size, 0);
+    assert.equal((await db.collection("membershipAudit")
+      .where("type", "==", "abandoned_checkout_released").get()).size, 0);
+    const resumableList = await listMemberships(request(
+      {},
+      "checkoutraceretryadmin"
+    ));
+    assert.equal(resumableList.checkoutIssues.length, 1);
+    assert.equal(resumableList.checkoutIssues[0].intentId, intent.id);
+    assert.equal(resumableList.checkoutIssues[0].status, "release_claimed");
+    assert.equal(resumableList.checkoutIssues[0].canRelease, true);
+
+    const resumed = await releaseAbandonedMembershipCheckout(request(
+      {intentId: intent.id},
+      "checkoutraceretryadmin"
+    ));
+    assert.equal(resumed.outcome, "released");
+    assert.equal(resumed.recoveryEmailStatus, "queued");
+    assert.equal(resumed.recoveryEmailRecipient, "r***@example.test");
+
+    const replay = await releaseAbandonedMembershipCheckout(request(
+      {intentId: intent.id},
+      "checkoutraceretryadmin"
+    ));
+    assert.equal(replay.outcome, "already_released");
+    assert.equal(replay.recoveryEmailStatus, "already_queued");
+    const finalized = await intent.ref.get();
+    assert.equal(finalized.get("manualRecoveryBy"), "checkoutraceretryadmin");
+    assert.equal(
+      finalized.get("checkoutRecoveryEmailOutboxId"),
+      checkoutRecoveryOutboxId(intent.id)
+    );
+    assert.equal((await db.collection("membershipEmailOutbox")
+      .where("intentId", "==", intent.id).get()).size, 1);
+    assert.equal((await db.collection("membershipAudit")
+      .where("type", "==", "abandoned_checkout_released").get()).size, 1);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("admin recovery queues a provider-expired checkout from its exact Stripe Customer", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  try {
+    await createMember("checkoutcustomerfallbackadmin", {
+      profile: {
+        role: "admin",
+        approvalStatus: "approved",
+        entitlementStatus: "active",
+        entitlementSource: "staff",
+        alphaWodAccess: true,
+      },
+    });
+    const checkout = await handler(request(
+      validCheckoutData("attempt_provider_expired_customer_fallback_123456")
+    ));
+    const intent = (await db.collection("membershipIntents").get()).docs[0];
+    await intent.ref.update({
+      createdAt: admin.firestore.Timestamp.fromMillis(
+        Date.now() - 20 * 60 * 1000
+      ),
+    });
+    fakeStripe.state.customers.set("cus_recovery_fallback", {
+      id: "cus_recovery_fallback",
+      object: "customer",
+      livemode: false,
+      email: "Provider.Customer@Example.test",
+    });
+    const session = fakeStripe.state.checkoutSessions.get(checkout.sessionId);
+    session.status = "expired";
+    session.payment_status = "unpaid";
+    session.customer = "cus_recovery_fallback";
+    delete session.customer_details;
+    delete session.customer_email;
+    fakeStripe.state.checkoutSessions.set(checkout.sessionId, session);
+
+    const result = await releaseAbandonedMembershipCheckout(request(
+      {intentId: intent.id},
+      "checkoutcustomerfallbackadmin"
+    ));
+
+    assert.equal(result.outcome, "released");
+    assert.equal(result.recoveryEmailStatus, "queued");
+    assert.equal(result.recoveryEmailRecipient, "p***@example.test");
+    const released = await intent.ref.get();
+    assert.equal(
+      released.get("manualRecoveryReason"),
+      "staff_verified_provider_expired"
+    );
+    assert.equal(
+      released.get("checkoutRecoveryEmailRecipientSource"),
+      "stripe_customer"
+    );
+    const outbox = await db.collection("membershipEmailOutbox")
+      .doc(checkoutRecoveryOutboxId(intent.id)).get();
+    assert.equal(outbox.get("status"), "pending");
+    assert.equal(outbox.get("recipientSource"), "stripe_customer");
+    assert.equal(outbox.get("payload").to[0], "provider.customer@example.test");
+    assert.equal(outbox.get("releaseReason"), "staff_verified_provider_expired");
+    assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 0);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("admin recovery releases without an address into durable manual review", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  try {
+    await createMember("checkoutmanualreviewadmin", {
+      profile: {
+        role: "admin",
+        approvalStatus: "approved",
+        entitlementStatus: "active",
+        entitlementSource: "staff",
+        alphaWodAccess: true,
+      },
+    });
+    await handler(request(
+      validCheckoutData("attempt_staff_release_no_email_123456")
+    ));
+    const intent = (await db.collection("membershipIntents").get()).docs[0];
+    await intent.ref.update({
+      createdAt: admin.firestore.Timestamp.fromMillis(
+        Date.now() - 20 * 60 * 1000
+      ),
+    });
+
+    const result = await releaseAbandonedMembershipCheckout(request(
+      {intentId: intent.id},
+      "checkoutmanualreviewadmin"
+    ));
+
+    assert.equal(result.outcome, "released");
+    assert.equal(result.recoveryEmailStatus, "manual_review");
+    assert.equal(result.recoveryEmailRecipient, null);
+    const outboxId = checkoutRecoveryOutboxId(intent.id);
+    const outbox = await db.collection("membershipEmailOutbox").doc(outboxId).get();
+    assert.equal(outbox.get("kind"), "checkout_recovery");
+    assert.equal(outbox.get("status"), "manual_review");
+    assert.match(outbox.get("deadLetterReason"), /no verified recovery email/i);
+    assert.equal(outbox.get("payload"), undefined);
+    assert.equal(outbox.get("idempotencyKey"), undefined);
+    assert.equal(outbox.get("nextAttemptAt"), undefined);
+    const released = await intent.ref.get();
+    assert.equal(released.get("status"), "expired");
+    assert.equal(released.get("checkoutRecoveryEmailStatus"), "manual_review");
+    assert.match(released.get("checkoutRecoveryEmailError"), /no verified recovery email/i);
+    let sends = 0;
+    assert.equal(
+      await membershipTesting.processMembershipConfirmationOutbox(
+        outboxId,
+        Date.now() + 1000,
+        async () => {
+          sends += 1;
+          return {providerMessageId: "must_not_send"};
+        }
+      ),
+      "terminal"
+    );
+    assert.equal(sends, 0);
+    assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 0);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("admin recovery quarantines a pre-existing deterministic outbox conflict", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  try {
+    await createMember("checkoutconflictadmin", {
+      profile: {
+        role: "admin",
+        approvalStatus: "approved",
+        entitlementStatus: "active",
+        entitlementSource: "staff",
+        alphaWodAccess: true,
+      },
+    });
+    const checkout = await handler(request(
+      validCheckoutData("attempt_preexisting_recovery_outbox_123456")
+    ));
+    const intent = (await db.collection("membershipIntents").get()).docs[0];
+    await intent.ref.update({
+      createdAt: admin.firestore.Timestamp.fromMillis(
+        Date.now() - 20 * 60 * 1000
+      ),
+    });
+    const session = fakeStripe.state.checkoutSessions.get(checkout.sessionId);
+    session.customer_details = {email: "conflict@example.test"};
+    fakeStripe.state.checkoutSessions.set(checkout.sessionId, session);
+    const outboxId = checkoutRecoveryOutboxId(intent.id);
+    await db.collection("membershipEmailOutbox").doc(outboxId).set({
+      kind: "checkout_recovery",
+      intentId: intent.id,
+      checkoutSessionId: checkout.sessionId,
+      status: "pending",
+      payload: {
+        from: "Zero Alpha Fitness <support@example.test>",
+        to: ["conflict@example.test"],
+        reply_to: "support@example.test",
+        subject: "Untrusted pre-existing row",
+        text: "Untrusted",
+        html: "<p>Untrusted</p>",
+      },
+      idempotencyKey: checkoutRecoveryIdempotencyKey(intent.id),
+      nextAttemptAt: admin.firestore.Timestamp.fromMillis(Date.now() - 1000),
+    });
+
+    const result = await releaseAbandonedMembershipCheckout(request(
+      {intentId: intent.id},
+      "checkoutconflictadmin"
+    ));
+    assert.equal(result.outcome, "released");
+    assert.equal(result.recoveryEmailStatus, "manual_review");
+    assert.equal(result.recoveryEmailRecipient, "c***@example.test");
+    assert.equal(
+      (await intent.ref.get()).get("checkoutRecoveryEmailStatus"),
+      "manual_review"
+    );
+
+    let sends = 0;
+    assert.equal(
+      await membershipTesting.processMembershipConfirmationOutbox(
+        outboxId,
+        Date.now() + 1000,
+        async () => {
+          sends += 1;
+          return {providerMessageId: "must_not_send"};
+        }
+      ),
+      "terminal"
+    );
+    assert.equal(sends, 0);
+    const quarantined = await db.collection("membershipEmailOutbox")
+      .doc(outboxId).get();
+    assert.equal(quarantined.get("status"), "manual_review");
+    assert.match(quarantined.get("deadLetterReason"), /release evidence is invalid/i);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("admin recovery never retro-queues naturally terminal checkout intents", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  await createMember("checkoutterminaladmin", {
+    profile: {
+      role: "admin",
+      approvalStatus: "approved",
+      entitlementStatus: "active",
+      entitlementSource: "staff",
+      alphaWodAccess: true,
+    },
+  });
+  const checkout = await handler(request(
+    validCheckoutData("attempt_natural_terminal_no_retro_email_123456")
+  ));
+  const intent = (await db.collection("membershipIntents").get()).docs[0];
+  const session = fakeStripe.state.checkoutSessions.get(checkout.sessionId);
+  session.status = "expired";
+  session.customer_details = {email: "natural@example.test"};
+  fakeStripe.state.checkoutSessions.set(checkout.sessionId, session);
+  assert.equal(await membershipTesting.transitionCheckoutReservation(
+    intent.ref,
+    "expired",
+    {verifiedTerminalAt: admin.firestore.Timestamp.now()},
+    true,
+    {
+      sessionId: session.id,
+      mode: session.mode,
+      planKey: session.metadata.planKey,
+    }
+  ), true);
+
+  const result = await releaseAbandonedMembershipCheckout(request(
+    {intentId: intent.id},
+    "checkoutterminaladmin"
+  ));
+
+  assert.equal(result.outcome, "already_released");
+  assert.equal(result.recoveryEmailStatus, "not_applicable");
+  assert.equal(result.recoveryEmailRecipient, null);
+  assert.equal(
+    (await db.collection("membershipEmailOutbox")
+      .where("intentId", "==", intent.id).get()).size,
+    0
+  );
+  assert.equal(
+    (await db.collection("membershipAudit")
+      .where("type", "==", "abandoned_checkout_released").get()).size,
+    0
+  );
+  await db.collection("membershipIntents").doc().set({
+    status: "expired",
+    createdAt: admin.firestore.Timestamp.now(),
+    checkoutRecoveryReleaseClaimId: "legacy-noncanonical-claim",
+  });
+  const listWithLegacyIntent = await listMemberships(request(
+    {},
+    "checkoutterminaladmin"
+  ));
+  assert.equal(listWithLegacyIntent.checkoutIssues.length, 0);
+});
+
+test("admin recovery never queues an expired checkout with paid evidence", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  try {
+    await createMember("checkoutpaidexpiredadmin", {
+      profile: {
+        role: "admin",
+        approvalStatus: "approved",
+        entitlementStatus: "active",
+        entitlementSource: "staff",
+        alphaWodAccess: true,
+      },
+    });
+    const checkout = await handler(request(
+      validCheckoutData("attempt_paid_expired_no_recovery_email_123456")
+    ));
+    const intent = (await db.collection("membershipIntents").get()).docs[0];
+    await intent.ref.update({
+      createdAt: admin.firestore.Timestamp.fromMillis(
+        Date.now() - 20 * 60 * 1000
+      ),
+    });
+    const session = fakeStripe.state.checkoutSessions.get(checkout.sessionId);
+    session.status = "expired";
+    session.payment_status = "paid";
+    session.customer_details = {email: "paid@example.test"};
+    fakeStripe.state.checkoutSessions.set(checkout.sessionId, session);
+
+    await assert.rejects(
+      () => releaseAbandonedMembershipCheckout(request(
+        {intentId: intent.id},
+        "checkoutpaidexpiredadmin"
+      )),
+      (error) => {
+        assert.equal(error.code, "failed-precondition");
+        assert.equal(error.details?.reason, "checkout_processing");
+        return true;
+      }
+    );
+    assert.equal((await intent.ref.get()).get("status"), "created");
+    assert.equal(
+      (await db.collection("membershipEmailOutbox")
+        .where("intentId", "==", intent.id).get()).size,
+      0
+    );
+    assert.ok((await db.collection("membershipCheckoutLocks").get()).size > 0);
   } finally {
     Date.now = realNow;
   }
@@ -5820,6 +6377,11 @@ test("admin recovery keeps a completed checkout locked for fulfilment", async ()
       fakeStripe.state.checkoutSessions.get(checkout.sessionId).status,
       "complete"
     );
+    assert.equal(
+      (await db.collection("membershipEmailOutbox")
+        .where("intentId", "==", intent.id).get()).size,
+      0
+    );
   } finally {
     Date.now = realNow;
   }
@@ -5863,6 +6425,11 @@ test("admin recovery cannot release a checkout during its ten-minute safety wind
       }
     );
     assert.equal((await intent.ref.get()).get("status"), "created");
+    assert.equal(
+      (await db.collection("membershipEmailOutbox")
+        .where("intentId", "==", intent.id).get()).size,
+      0
+    );
     assert.ok((await db.collection("membershipCheckoutLocks").get()).size > 0);
     assert.equal(
       fakeStripe.state.checkoutSessions.get(checkout.sessionId).status,

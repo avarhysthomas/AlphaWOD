@@ -580,11 +580,42 @@ export type AdminCheckoutIssue = {
   participantCount: number;
   payerUid: string | null;
   payerEmail: string | null;
-  status: "reserved" | "created" | "payment_pending";
+  status: "reserved" | "created" | "payment_pending" | "release_claimed";
   createdAt: number | null;
   checkoutExpiresAt: number;
   canRelease: boolean;
 };
+
+export type CheckoutRecoveryEmailStatus =
+  | "queued"
+  | "already_queued"
+  | "manual_review"
+  | "not_applicable";
+
+export type ReleaseAbandonedMembershipCheckoutResult = {
+  ok: boolean;
+  intentId: string;
+  outcome: "released" | "already_released";
+  recoveryEmailStatus: CheckoutRecoveryEmailStatus;
+  /** Masked by the server; never contains the full recipient address. */
+  recoveryEmailRecipient: string | null;
+};
+
+type ReleaseAbandonedMembershipCheckoutResponse = Omit<
+  ReleaseAbandonedMembershipCheckoutResult,
+  "recoveryEmailStatus" | "recoveryEmailRecipient"
+> & {
+  /** Absent on older deployments that released checkouts without email recovery. */
+  recoveryEmailStatus?: unknown;
+  recoveryEmailRecipient?: unknown;
+};
+
+function isCheckoutRecoveryEmailStatus(
+  value: unknown
+): value is CheckoutRecoveryEmailStatus {
+  return value === "queued" || value === "already_queued" ||
+    value === "manual_review" || value === "not_applicable";
+}
 
 export async function listMemberships() {
   const invoke = httpsCallable<Record<string, never>, {
@@ -598,14 +629,25 @@ export async function listMemberships() {
   return result.data;
 }
 
-export async function releaseAbandonedMembershipCheckout(intentId: string) {
+export async function releaseAbandonedMembershipCheckout(
+  intentId: string
+): Promise<ReleaseAbandonedMembershipCheckoutResult> {
   const invoke = httpsCallable<
     {intentId: string},
-    {ok: boolean; intentId: string; outcome: "released" | "already_released"}
+    ReleaseAbandonedMembershipCheckoutResponse
   >(functions, "releaseAbandonedMembershipCheckout");
 
   const result = await invoke({intentId});
-  return result.data;
+  const recoveryEmailRecipient = typeof result.data.recoveryEmailRecipient ===
+      "string" && result.data.recoveryEmailRecipient.trim() ?
+    result.data.recoveryEmailRecipient.trim() : null;
+  return {
+    ...result.data,
+    recoveryEmailStatus: isCheckoutRecoveryEmailStatus(
+      result.data.recoveryEmailStatus
+    ) ? result.data.recoveryEmailStatus : "not_applicable",
+    recoveryEmailRecipient,
+  } satisfies ReleaseAbandonedMembershipCheckoutResult;
 }
 
 export async function linkMembershipParticipant(

@@ -115,7 +115,7 @@ describe("checkout attempt identifiers", () => {
     expect(invoke).toHaveBeenCalledWith(checkout);
   });
 
-  it("sends only the selected intent id to the admin checkout recovery callable", async () => {
+  it("normalizes an older checkout release response without email fields", async () => {
     const invoke = jest.fn().mockResolvedValue({
       data: {
         ok: true,
@@ -125,13 +125,42 @@ describe("checkout attempt identifiers", () => {
     });
     (httpsCallable as jest.Mock).mockReturnValue(invoke);
 
-    await releaseAbandonedMembershipCheckout(`attempt_${"a".repeat(64)}`);
+    const result = await releaseAbandonedMembershipCheckout(
+      `attempt_${"a".repeat(64)}`
+    );
 
     expect(httpsCallable).toHaveBeenCalledWith(
       expect.anything(),
       "releaseAbandonedMembershipCheckout"
     );
     expect(invoke).toHaveBeenCalledWith({intentId: `attempt_${"a".repeat(64)}`});
+    expect(result).toEqual({
+      ok: true,
+      intentId: `attempt_${"a".repeat(64)}`,
+      outcome: "released",
+      recoveryEmailStatus: "not_applicable",
+      recoveryEmailRecipient: null,
+    });
+  });
+
+  it("preserves the masked recipient and queued recovery email outcome", async () => {
+    const intentId = `attempt_${"b".repeat(64)}`;
+    const invoke = jest.fn().mockResolvedValue({
+      data: {
+        ok: true,
+        intentId,
+        outcome: "released",
+        recoveryEmailStatus: "queued",
+        recoveryEmailRecipient: "s***@example.test",
+      },
+    });
+    (httpsCallable as jest.Mock).mockReturnValue(invoke);
+
+    const result = await releaseAbandonedMembershipCheckout(intentId);
+
+    expect(invoke).toHaveBeenCalledWith({intentId});
+    expect(result.recoveryEmailStatus).toBe("queued");
+    expect(result.recoveryEmailRecipient).toBe("s***@example.test");
   });
 
   it("creates unique opaque UUID-shaped values for Stripe idempotency", () => {

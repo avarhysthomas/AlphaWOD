@@ -108,6 +108,16 @@ import {
   cancellationAcknowledgementOutboxId,
 } from "./membershipCancellation";
 import {
+  CHECKOUT_RECOVERY_RECIPIENT_SOURCES,
+  MEMBERSHIP_CHECKOUT_RECOVERY_EMAIL_SCHEMA_VERSION,
+  buildCheckoutRecoveryPayload,
+  canonicalizeCheckoutRecoveryEmail,
+  checkoutRecoveryIdempotencyKey,
+  checkoutRecoveryOutboxId,
+  maskCheckoutRecoveryEmail,
+  type CheckoutRecoveryRecipientSource,
+} from "./membershipCheckoutRecovery";
+import {
   APPROVED_LIVE_STRIPE_CATALOGUE,
   matchesApprovedLiveStripeCatalogueEntry,
 } from "./stripeLiveCatalog";
@@ -429,6 +439,10 @@ type MembershipAcceptanceRecord = CheckoutAcceptanceRecord & {
   coolingOffEndsAt: string;
 };
 
+type CheckoutRecoveryReleaseReason =
+  | "staff_verified_open_unpaid"
+  | "staff_verified_provider_expired";
+
 type MembershipIntentDoc = {
   schemaVersion: number;
   /** Hash of the client-generated retry key; the raw key is never persisted. */
@@ -473,6 +487,24 @@ type MembershipIntentDoc = {
   reservationExpiresAt: Timestamp;
   reservationLockIds: string[];
   createdAt: FieldValue | Timestamp;
+  /** Durable staff-release recovery-email projection; absent on natural expiry. */
+  checkoutRecoveryEmailOutboxId?: string;
+  checkoutRecoveryEmailStatus?:
+    "pending" | "sent" | "manual_review" | "dead_letter";
+  checkoutRecoveryEmailError?: string;
+  checkoutRecoveryEmailProviderId?: string | null;
+  checkoutRecoveryEmailSentAt?: FieldValue | Timestamp;
+  checkoutRecoveryEmailRecipientHash?: string;
+  checkoutRecoveryEmailRecipientSource?: CheckoutRecoveryRecipientSource;
+  checkoutRecoveryEmailRecipientMasked?: string;
+  /** Durable proof that an admin began this exact release while locks were owned. */
+  checkoutRecoveryReleaseClaimId?: string;
+  checkoutRecoveryReleaseClaimBinding?: string;
+  checkoutRecoveryReleaseClaimedAt?: FieldValue | Timestamp;
+  checkoutRecoveryReleaseClaimedBy?: string;
+  manualRecoveryAt?: FieldValue | Timestamp;
+  manualRecoveryBy?: string;
+  manualRecoveryReason?: CheckoutRecoveryReleaseReason;
 };
 
 type MembershipDiscount = {
@@ -2422,7 +2454,7 @@ async function reconcileExpiredCheckoutReservations(
 
 type OwnedCheckoutResumeOutcome =
   | {kind: "open"; session: Stripe.Checkout.Session}
-  | {kind: "expired"};
+  | {kind: "expired"; session: Stripe.Checkout.Session};
 
 function checkoutProcessingError(): HttpsError {
   return new HttpsError(
@@ -2548,7 +2580,8 @@ async function verifyCheckoutSessionCandidate(
   payerUid: string | null,
   expectedStripeCustomerId: string | null,
   expectedDisposition: "same_attempt" | "owned_resume_candidate",
-  nowMillis = Date.now()
+  nowMillis = Date.now(),
+  transitionExpired = true
 ): Promise<OwnedCheckoutResumeOutcome> {
   const intent = reservation.intent;
   const sessionId = intent.checkoutSessionId;
@@ -2621,6 +2654,7 @@ async function verifyCheckoutSessionCandidate(
     throw checkoutProcessingError();
   }
   if (session.status === "expired") {
+    if (!transitionExpired) return {kind: "expired", session};
     const transitioned = await transitionCheckoutReservation(
       reservation.intentRef,
       "expired",
@@ -2633,7 +2667,7 @@ async function verifyCheckoutSessionCandidate(
       }
     );
     if (!transitioned) throw checkoutProcessingError();
-    return {kind: "expired"};
+    return {kind: "expired", session};
   }
   if (session.status !== "open" || !session.url) {
     console.error("CRITICAL_BILLING_CHECKOUT_RESUME_UNSAFE_STATUS", {
@@ -7260,7 +7294,7 @@ type AdminCheckoutIssue = {
   participantCount: number;
   payerUid: string | null;
   payerEmail: string | null;
-  status: "reserved" | "created" | "payment_pending";
+  status: "reserved" | "created" | "payment_pending" | "release_claimed";
   createdAt: number | null;
   checkoutExpiresAt: number;
   canRelease: boolean;
@@ -7410,13 +7444,20 @@ export function buildListMemberships(requireAdmin: (request: any) => Promise<voi
       .map((receipt) => [receipt.id, receipt.data()]));
     const asOfUnixSeconds = Math.floor(Date.now() / 1000);
     const storedMemberships = snap.docs.map((doc) => doc.data() as MembershipDoc);
-    const checkoutIssues = checkoutIssueSnap.docs.filter((doc) =>
-      doc.get("status") === "reserved" || doc.get("status") === "created" ||
-      doc.get("status") === "payment_pending"
-    ).map((doc): AdminCheckoutIssue => {
+    const checkoutIssues = checkoutIssueSnap.docs.filter((doc) => {
+      const intent = doc.data() as MembershipIntentDoc;
+      const resumableRelease = intent.status === "expired" &&
+        hasCheckoutRecoveryReleaseClaim(doc.id, intent) &&
+        !hasStaffCheckoutRecoveryEmailMarker(doc.id, intent);
+      return intent.status === "reserved" || intent.status === "created" ||
+        intent.status === "payment_pending" || resumableRelease;
+    }).map((doc): AdminCheckoutIssue => {
       const intent = doc.data() as MembershipIntentDoc;
       const participants = participantsFor(intent);
       const createdAt = timestampMillis(intent.createdAt);
+      const resumableRelease = intent.status === "expired" &&
+        hasCheckoutRecoveryReleaseClaim(doc.id, intent) &&
+        !hasStaffCheckoutRecoveryEmailMarker(doc.id, intent);
       return {
         intentId: doc.id,
         planKey: intent.planKey,
@@ -7425,10 +7466,11 @@ export function buildListMemberships(requireAdmin: (request: any) => Promise<voi
         participantCount: participantCountFor(intent),
         payerUid: intent.payerUid ?? null,
         payerEmail: intent.payerEmail ?? null,
-        status: intent.status as AdminCheckoutIssue["status"],
+        status: resumableRelease ? "release_claimed" :
+          intent.status as AdminCheckoutIssue["status"],
         createdAt,
         checkoutExpiresAt: intent.checkoutExpiresAt,
-        canRelease: intent.status === "created" &&
+        canRelease: (intent.status === "created" || resumableRelease) &&
           typeof intent.checkoutSessionId === "string" &&
           Boolean(intent.checkoutSessionId) &&
           typeof intent.checkoutSessionUrl === "string" &&
@@ -7537,14 +7579,476 @@ export function buildListMemberships(requireAdmin: (request: any) => Promise<voi
 
 function requireMembershipIntentId(value: unknown): string {
   const intentId = requireBoundedString(value, "intentId", 72, 72);
-  if (!/^attempt_[a-f0-9]{64}$/.test(intentId)) {
+  if (!isCanonicalMembershipIntentId(intentId)) {
     throw new HttpsError("invalid-argument", "intentId is not a checkout intent.");
   }
   return intentId;
 }
 
+function isCanonicalMembershipIntentId(value: unknown): value is string {
+  return typeof value === "string" && /^attempt_[a-f0-9]{64}$/.test(value);
+}
+
+type CheckoutRecoveryReleaseEmailStatus =
+  | "queued"
+  | "already_queued"
+  | "manual_review"
+  | "not_applicable";
+
+type CheckoutRecoveryRecipient = {
+  email: string;
+  maskedEmail: string;
+  source: CheckoutRecoveryRecipientSource;
+};
+
+type PreparedCheckoutRecoveryEmail = {
+  recipient: CheckoutRecoveryRecipient | null;
+  payload: ReturnType<typeof buildCheckoutRecoveryPayload> | null;
+  manualReviewReason: string | null;
+};
+
+function checkoutRecoveryRecipient(
+  value: unknown,
+  source: CheckoutRecoveryRecipientSource
+): CheckoutRecoveryRecipient | null {
+  const email = canonicalizeCheckoutRecoveryEmail(value);
+  const maskedEmail = maskCheckoutRecoveryEmail(email);
+  return email && maskedEmail ? {email, maskedEmail, source} : null;
+}
+
+/** Resolves only addresses frozen by Auth or returned by the exact Stripe objects. */
+async function resolveCheckoutRecoveryRecipient(
+  session: Stripe.Checkout.Session,
+  intent: MembershipIntentDoc
+): Promise<CheckoutRecoveryRecipient | null> {
+  const sessionDetails = checkoutRecoveryRecipient(
+    session.customer_details?.email,
+    "stripe_session_customer_details"
+  );
+  if (sessionDetails) return sessionDetails;
+
+  const sessionEmail = checkoutRecoveryRecipient(
+    session.customer_email,
+    "stripe_session_customer_email"
+  );
+  if (sessionEmail) return sessionEmail;
+
+  const authenticatedIntentEmail = intent.payerUid ?
+    checkoutRecoveryRecipient(intent.payerEmail, "authenticated_intent") : null;
+  if (authenticatedIntentEmail) return authenticatedIntentEmail;
+
+  const customerId = idOf(session.customer);
+  if (!customerId) return null;
+  try {
+    const embedded = typeof session.customer === "object" && session.customer &&
+        !("deleted" in session.customer) ? session.customer as Stripe.Customer : null;
+    if (embedded) {
+      assertStripeObjectMode("Customer", embedded.id, embedded.livemode);
+      const embeddedEmail = checkoutRecoveryRecipient(
+        embedded.email,
+        "stripe_customer"
+      );
+      if (embeddedEmail) return embeddedEmail;
+    }
+    const customer = await stripe().customers.retrieve(customerId);
+    if (customer.deleted) return null;
+    assertStripeObjectMode("Customer", customer.id, customer.livemode);
+    return checkoutRecoveryRecipient(customer.email, "stripe_customer");
+  } catch (error) {
+    // A missing address or unavailable Customer must not re-lock an unpaid,
+    // provider-expired checkout. The transaction records manual-review evidence.
+    console.error("Checkout recovery email Customer lookup failed", {
+      intentIdHash: sha256(session.metadata?.intentId ?? ""),
+      checkoutSessionIdHash: sha256(session.id),
+      stripeCustomerIdHash: sha256(customerId),
+      provider: checkoutRecoveryProviderDiagnostic(error),
+    });
+    return null;
+  }
+}
+
+function prepareCheckoutRecoveryEmail(
+  intent: MembershipIntentDoc,
+  recipient: CheckoutRecoveryRecipient | null
+): PreparedCheckoutRecoveryEmail {
+  if (!recipient) {
+    return {
+      recipient: null,
+      payload: null,
+      manualReviewReason:
+        "No verified recovery email address was available after Stripe checkout release.",
+    };
+  }
+  try {
+    return {
+      recipient,
+      payload: buildCheckoutRecoveryPayload({
+        recipientEmail: recipient.email,
+        fromEmail: membershipFromEmail.value().trim() || COMPANY.confirmationSender,
+        publicOrigin: resolveReturnOrigin(),
+        planName: intent.commercialTerms?.planName ?? getPlan(intent.planKey).name,
+        participantFullNames: participantsFor(intent).map(({fullName}) => fullName),
+      }),
+      manualReviewReason: null,
+    };
+  } catch (error) {
+    console.error("Checkout recovery email payload could not be frozen", {
+      planKey: intent.planKey,
+      error: error instanceof Error ? error.message.slice(0, 500) : String(error),
+    });
+    return {
+      recipient,
+      payload: null,
+      manualReviewReason:
+        "The recovery email payload could not be frozen safely after checkout release.",
+    };
+  }
+}
+
+function checkoutRecoveryReleaseClaimBinding(
+  intent: MembershipIntentDoc
+): string {
+  return sha256(JSON.stringify({
+    schemaVersion: intent.schemaVersion,
+    checkoutAttemptHash: intent.checkoutAttemptHash,
+    requestFingerprint: intent.requestFingerprint,
+    payerUid: intent.payerUid,
+    payerEmail: intent.payerEmail,
+    planKey: intent.planKey,
+    planName: intent.commercialTerms?.planName ?? null,
+    participantCount: intent.participantCount,
+    participantFullNames: participantsFor(intent).map(({fullName}) => fullName),
+    stripeMode: intent.stripeMode,
+    checkoutSessionId: intent.checkoutSessionId,
+    checkoutSessionUrl: intent.checkoutSessionUrl,
+    checkoutExpiresAt: intent.checkoutExpiresAt,
+    reservationLockIds: intent.reservationLockIds,
+    createdAtMillis: timestampMillis(intent.createdAt),
+  }));
+}
+
+function hasCheckoutRecoveryReleaseClaim(
+  intentId: string,
+  intent: MembershipIntentDoc
+): boolean {
+  if (!isCanonicalMembershipIntentId(intentId)) return false;
+  return intent.checkoutRecoveryReleaseClaimId ===
+      checkoutRecoveryOutboxId(intentId) &&
+    typeof intent.checkoutRecoveryReleaseClaimedBy === "string" &&
+    Boolean(intent.checkoutRecoveryReleaseClaimedBy) &&
+    intent.checkoutRecoveryReleaseClaimBinding ===
+      checkoutRecoveryReleaseClaimBinding(intent);
+}
+
+type CheckoutRecoveryReleaseClaimResult =
+  | {kind: "claimed"; intent: MembershipIntentDoc}
+  | {kind: "terminal"; intent: MembershipIntentDoc};
+
+/**
+ * Freezes proof that staff began this exact recovery while every reservation
+ * lock was still owned. The marker is written before Stripe is mutated, so a
+ * webhook interleaving or function crash can be resumed without treating an
+ * unrelated naturally expired checkout as an email candidate.
+ */
+async function acquireCheckoutRecoveryReleaseClaim(
+  intentRef: DocumentReference,
+  expectedIntent: MembershipIntentDoc,
+  claimedBy: string
+): Promise<CheckoutRecoveryReleaseClaimResult> {
+  const claimId = checkoutRecoveryOutboxId(intentRef.id);
+  const expectedBinding = checkoutRecoveryReleaseClaimBinding(expectedIntent);
+  return db().runTransaction(async (tx) => {
+    const freshSnap = await tx.get(intentRef);
+    if (!freshSnap.exists) {
+      throw new HttpsError("not-found", "Checkout reservation not found.");
+    }
+    const fresh = freshSnap.data() as MembershipIntentDoc;
+    if (fresh.stripeMode !== assertBillingEnvironment().stripeMode) {
+      throw checkoutRecoveryReviewError();
+    }
+    if (fresh.status === "failed" ||
+      (fresh.status === "expired" &&
+        !hasCheckoutRecoveryReleaseClaim(intentRef.id, fresh))) {
+      return {kind: "terminal" as const, intent: fresh};
+    }
+    if (fresh.status === "payment_pending" || fresh.status === "fulfilled") {
+      throw checkoutProcessingError();
+    }
+    if (fresh.status !== "created" && fresh.status !== "expired") {
+      throw checkoutRecoveryReviewError();
+    }
+
+    const freshBinding = checkoutRecoveryReleaseClaimBinding(fresh);
+    if (freshBinding !== expectedBinding) {
+      throw checkoutRecoveryReviewError();
+    }
+    if (hasCheckoutRecoveryReleaseClaim(intentRef.id, fresh)) {
+      return {kind: "claimed" as const, intent: fresh};
+    }
+    if (fresh.checkoutRecoveryReleaseClaimId ||
+      fresh.checkoutRecoveryReleaseClaimBinding ||
+      fresh.checkoutRecoveryReleaseClaimedBy ||
+      fresh.checkoutRecoveryReleaseClaimedAt) {
+      throw checkoutRecoveryReviewError();
+    }
+
+    const lockIds = Array.isArray(fresh.reservationLockIds) ?
+      fresh.reservationLockIds : [];
+    const lockRefs = lockIds.map((id) =>
+      db().collection(CHECKOUT_LOCK_COLLECTION).doc(id)
+    );
+    const lockSnaps = await Promise.all(lockRefs.map((ref) => tx.get(ref)));
+    const ownsEveryLock = lockRefs.length > 0 && lockSnaps.every((lock) =>
+      lock.exists && lock.get("intentId") === intentRef.id
+    );
+    if (!ownsEveryLock) throw checkoutRecoveryReviewError();
+
+    tx.set(intentRef, {
+      checkoutRecoveryReleaseClaimId: claimId,
+      checkoutRecoveryReleaseClaimBinding: freshBinding,
+      checkoutRecoveryReleaseClaimedAt: serverTimestamp(),
+      checkoutRecoveryReleaseClaimedBy: claimedBy,
+      updatedAt: serverTimestamp(),
+    }, {merge: true});
+    return {
+      kind: "claimed" as const,
+      intent: {
+        ...fresh,
+        checkoutRecoveryReleaseClaimId: claimId,
+        checkoutRecoveryReleaseClaimBinding: freshBinding,
+        checkoutRecoveryReleaseClaimedBy: claimedBy,
+      },
+    };
+  });
+}
+
+function terminalCheckoutRecoveryEmailResponse(
+  intentId: string,
+  intent: MembershipIntentDoc
+): {
+  outcome: "already_released";
+  recoveryEmailStatus: CheckoutRecoveryReleaseEmailStatus;
+  recoveryEmailRecipient: string | null;
+} {
+  const hasStaffEmailMarker = hasStaffCheckoutRecoveryEmailMarker(
+    intentId,
+    intent
+  );
+  if (!hasStaffEmailMarker) {
+    return {
+      outcome: "already_released",
+      recoveryEmailStatus: "not_applicable",
+      recoveryEmailRecipient: null,
+    };
+  }
+  const recoveryEmailStatus = intent.checkoutRecoveryEmailStatus === "pending" ||
+      intent.checkoutRecoveryEmailStatus === "sent" ?
+    "already_queued" : "manual_review";
+  return {
+    outcome: "already_released",
+    recoveryEmailStatus,
+    recoveryEmailRecipient:
+      typeof intent.checkoutRecoveryEmailRecipientMasked === "string" ?
+        intent.checkoutRecoveryEmailRecipientMasked : null,
+  };
+}
+
+function hasStaffCheckoutRecoveryEmailMarker(
+  intentId: string,
+  intent: MembershipIntentDoc
+): boolean {
+  return intent.status === "expired" &&
+    typeof intent.manualRecoveryBy === "string" && Boolean(intent.manualRecoveryBy) &&
+    (intent.manualRecoveryReason === "staff_verified_open_unpaid" ||
+      intent.manualRecoveryReason === "staff_verified_provider_expired") &&
+    intent.checkoutRecoveryEmailOutboxId === checkoutRecoveryOutboxId(intentId);
+}
+
+async function finalizeStaffCheckoutRelease(
+  intentRef: DocumentReference,
+  expectedIntent: MembershipIntentDoc,
+  expiredSession: Stripe.Checkout.Session,
+  releasedBy: string,
+  releaseReason: CheckoutRecoveryReleaseReason,
+  preparedEmail: PreparedCheckoutRecoveryEmail
+): Promise<{
+  outcome: "released" | "already_released";
+  recoveryEmailStatus: CheckoutRecoveryReleaseEmailStatus;
+  recoveryEmailRecipient: string | null;
+  manualReviewReason: string | null;
+}> {
+  const outboxId = checkoutRecoveryOutboxId(intentRef.id);
+  const outboxRef = db().collection(CONFIRMATION_OUTBOX_COLLECTION).doc(outboxId);
+  const auditRef = db().collection("membershipAudit")
+    .doc(`checkout-release_${sha256(intentRef.id)}`);
+  return db().runTransaction(async (tx) => {
+    const freshSnap = await tx.get(intentRef);
+    const outboxSnap = await tx.get(outboxRef);
+    if (!freshSnap.exists) {
+      throw new HttpsError("not-found", "Checkout reservation not found.");
+    }
+    const fresh = freshSnap.data() as MembershipIntentDoc;
+    const lockIds = Array.isArray(fresh.reservationLockIds) ?
+      fresh.reservationLockIds : [];
+    const lockRefs = lockIds.map((id) =>
+      db().collection(CHECKOUT_LOCK_COLLECTION).doc(id)
+    );
+    const lockSnaps = await Promise.all(lockRefs.map((ref) => tx.get(ref)));
+
+    const alreadyFinalizedByStaff = hasStaffCheckoutRecoveryEmailMarker(
+      intentRef.id,
+      fresh
+    );
+    if (alreadyFinalizedByStaff || fresh.status === "failed") {
+      return {
+        ...terminalCheckoutRecoveryEmailResponse(intentRef.id, fresh),
+        manualReviewReason: fresh.checkoutRecoveryEmailError ?? null,
+      };
+    }
+    if (fresh.status === "payment_pending" || fresh.status === "fulfilled") {
+      throw checkoutProcessingError();
+    }
+    const currentLockIds = Array.isArray(fresh.reservationLockIds) ?
+      fresh.reservationLockIds : [];
+    const releaseClaimInvalid = !hasCheckoutRecoveryReleaseClaim(
+      intentRef.id,
+      fresh
+    );
+    const bindingChanged =
+      (fresh.status !== "created" && fresh.status !== "expired") ||
+      fresh.stripeMode !== expectedIntent.stripeMode ||
+      fresh.requestFingerprint !== expectedIntent.requestFingerprint ||
+      fresh.payerUid !== expectedIntent.payerUid ||
+      fresh.payerEmail !== expectedIntent.payerEmail ||
+      fresh.planKey !== expectedIntent.planKey ||
+      fresh.checkoutSessionId !== expectedIntent.checkoutSessionId ||
+      fresh.checkoutSessionUrl !== expectedIntent.checkoutSessionUrl ||
+      fresh.checkoutExpiresAt !== expectedIntent.checkoutExpiresAt ||
+      timestampMillis(fresh.createdAt) !== timestampMillis(expectedIntent.createdAt) ||
+      currentLockIds.length !== expectedIntent.reservationLockIds.length ||
+      currentLockIds.some((id, index) =>
+        id !== expectedIntent.reservationLockIds[index]
+      );
+    if (releaseClaimInvalid || bindingChanged ||
+      expiredSession.status !== "expired" ||
+      expiredSession.payment_status !== "unpaid" ||
+      checkoutSessionCommonBindingMismatch(expiredSession, intentRef, fresh)) {
+      throw checkoutRecoveryReviewError();
+    }
+
+    lockSnaps.forEach((lock, index) => {
+      if (lock.exists && lock.get("intentId") === intentRef.id) {
+        tx.delete(lockRefs[index]);
+      }
+    });
+
+    const recipient = preparedEmail.recipient;
+    const recipientHash = recipient ? sha256(recipient.email) : null;
+    const existingOutboxConflict = outboxSnap.exists;
+    const ownsEveryLock = lockRefs.length > 0 && lockSnaps.every((lock) =>
+      lock.exists && lock.get("intentId") === intentRef.id
+    );
+    const preparedEmailReady = Boolean(preparedEmail.payload && recipient);
+    const manualReviewReason = existingOutboxConflict ?
+      "A checkout recovery outbox row already existed without matching release evidence." :
+      fresh.status === "created" && !ownsEveryLock ?
+        "The checkout no longer owned every reservation lock at staff release." :
+        preparedEmail.manualReviewReason ?? (!preparedEmailReady ?
+          "Checkout recovery email routing evidence was incomplete." : null);
+    const queueEmail = preparedEmailReady && !manualReviewReason;
+    const projectedStatus = queueEmail ? "pending" : "manual_review";
+
+    tx.set(intentRef, {
+      status: "expired",
+      verifiedTerminalAt: serverTimestamp(),
+      manualRecoveryAt: serverTimestamp(),
+      manualRecoveryBy: releasedBy,
+      manualRecoveryReason: releaseReason,
+      checkoutRecoveryEmailOutboxId: outboxId,
+      checkoutRecoveryEmailStatus: projectedStatus,
+      checkoutRecoveryEmailError: manualReviewReason ?? FieldValue.delete(),
+      checkoutRecoveryEmailRecipientHash: recipientHash ?? FieldValue.delete(),
+      checkoutRecoveryEmailRecipientSource:
+        recipient?.source ?? FieldValue.delete(),
+      checkoutRecoveryEmailRecipientMasked:
+        recipient?.maskedEmail ?? FieldValue.delete(),
+      checkoutRecoveryEmailProviderId: FieldValue.delete(),
+      checkoutRecoveryEmailSentAt: FieldValue.delete(),
+      updatedAt: serverTimestamp(),
+    }, {merge: true});
+
+    if (!outboxSnap.exists && queueEmail && preparedEmail.payload && recipient) {
+      tx.create(outboxRef, {
+        schemaVersion: MEMBERSHIP_CHECKOUT_RECOVERY_EMAIL_SCHEMA_VERSION,
+        kind: "checkout_recovery",
+        intentId: intentRef.id,
+        checkoutSessionId: expiredSession.id,
+        stripeMode: fresh.stripeMode,
+        providerSessionStatus: "expired",
+        providerPaymentStatus: "unpaid",
+        releaseReason,
+        releasedBy,
+        recipientEmailHash: recipientHash,
+        recipientSource: recipient.source,
+        status: "pending",
+        payload: preparedEmail.payload,
+        idempotencyKey: checkoutRecoveryIdempotencyKey(intentRef.id),
+        attemptCount: 0,
+        nextAttemptAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    } else if (!outboxSnap.exists) {
+      tx.create(outboxRef, {
+        schemaVersion: MEMBERSHIP_CHECKOUT_RECOVERY_EMAIL_SCHEMA_VERSION,
+        kind: "checkout_recovery",
+        intentId: intentRef.id,
+        checkoutSessionId: expiredSession.id,
+        stripeMode: fresh.stripeMode,
+        providerSessionStatus: "expired",
+        providerPaymentStatus: "unpaid",
+        releaseReason,
+        releasedBy,
+        ...(recipientHash ? {recipientEmailHash: recipientHash} : {}),
+        ...(recipient ? {recipientSource: recipient.source} : {}),
+        status: "manual_review",
+        deadLetterReason: manualReviewReason,
+        deadLetteredAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+
+    tx.set(auditRef, {
+      type: "abandoned_checkout_released",
+      intentId: intentRef.id,
+      checkoutSessionId: expiredSession.id,
+      releasedBy,
+      providerStatus: "expired",
+      providerPaymentStatus: "unpaid",
+      releaseReason,
+      recoveryEmailStatus: queueEmail ? "queued" : "manual_review",
+      recoveryEmailOutboxId: outboxId,
+      recoveryReleaseClaimId: fresh.checkoutRecoveryReleaseClaimId,
+      recoveryReleaseClaimedBy: fresh.checkoutRecoveryReleaseClaimedBy,
+      ...(manualReviewReason ? {
+        recoveryEmailManualReviewReason: manualReviewReason,
+      } : {}),
+      createdAt: serverTimestamp(),
+    });
+
+    return {
+      outcome: "released" as const,
+      recoveryEmailStatus: queueEmail ? "queued" as const : "manual_review" as const,
+      recoveryEmailRecipient: recipient?.maskedEmail ?? null,
+      manualReviewReason,
+    };
+  });
+}
+
 function buildReleaseAbandonedCheckoutHandler(
-  requireAdmin: (request: any) => Promise<void>
+  requireAdmin: (request: any) => Promise<void>,
+  afterProviderTerminalVerified?: () => Promise<void>
 ) {
   return async (request: any) => {
     const staffUid = requireAuthUid(request);
@@ -7562,14 +8066,21 @@ function buildReleaseAbandonedCheckoutHandler(
         "This checkout belongs to another Stripe environment."
       );
     }
-    if (intent.status === "expired" || intent.status === "failed") {
+    const hasReleaseClaim = hasCheckoutRecoveryReleaseClaim(intentId, intent);
+    if (intent.status === "failed" ||
+      (intent.status === "expired" && !hasReleaseClaim)) {
       await transitionCheckoutReservation(intentRef, intent.status);
-      return {ok: true, intentId, outcome: "already_released" as const};
+      return {
+        ok: true,
+        intentId,
+        ...terminalCheckoutRecoveryEmailResponse(intentId, intent),
+      };
     }
     if (intent.status === "payment_pending" || intent.status === "fulfilled") {
       throw checkoutProcessingError();
     }
-    if (intent.status !== "created" ||
+    if ((intent.status !== "created" &&
+        !(intent.status === "expired" && hasReleaseClaim)) ||
       typeof intent.checkoutSessionId !== "string" ||
       !intent.checkoutSessionId ||
       typeof intent.checkoutSessionUrl !== "string" ||
@@ -7590,72 +8101,80 @@ function buildReleaseAbandonedCheckoutHandler(
       );
     }
 
+    const claimResult = await acquireCheckoutRecoveryReleaseClaim(
+      intentRef,
+      intent,
+      staffUid
+    );
+    if (claimResult.kind === "terminal") {
+      return {
+        ok: true,
+        intentId,
+        ...terminalCheckoutRecoveryEmailResponse(intentId, claimResult.intent),
+      };
+    }
+    const recoveryIntent = claimResult.intent;
+
     let expectedStripeCustomerId: string | null = null;
-    if (intent.payerUid) {
-      const profile = await db().collection("users").doc(intent.payerUid).get();
+    if (recoveryIntent.payerUid) {
+      const profile = await db().collection("users")
+        .doc(recoveryIntent.payerUid).get();
       const storedCustomerId = profile.exists ? profile.get("stripeCustomerId") : null;
       expectedStripeCustomerId = typeof storedCustomerId === "string" &&
           storedCustomerId ? storedCustomerId : null;
     }
     const reservation: CheckoutReservationResult = {
       created: false,
-      intent,
+      intent: recoveryIntent,
       intentRef,
       disposition: "same_attempt",
     };
     const verified = await verifyCheckoutSessionCandidate(
       reservation,
-      intent.payerUid ?? null,
+      recoveryIntent.payerUid ?? null,
       expectedStripeCustomerId,
-      "same_attempt"
+      "same_attempt",
+      Date.now(),
+      false
     );
 
-    if (verified.kind === "expired") {
-      await intentRef.set({
-        manualRecoveryAt: serverTimestamp(),
-        manualRecoveryBy: staffUid,
-        manualRecoveryReason: "staff_verified_provider_expired",
-        updatedAt: serverTimestamp(),
-      }, {merge: true});
-      await writeAudit({
-        type: "abandoned_checkout_released",
-        intentId,
-        checkoutSessionId: intent.checkoutSessionId,
-        releasedBy: staffUid,
-        providerStatus: "expired",
-      });
-      return {ok: true, intentId, outcome: "released" as const};
-    }
     if (verified.session.payment_status !== "unpaid") {
       throw checkoutProcessingError();
     }
 
     let expired: Stripe.Checkout.Session;
-    try {
-      expired = await stripe().checkout.sessions.expire(verified.session.id);
-    } catch (expireError) {
+    let releaseReason: CheckoutRecoveryReleaseReason;
+    if (verified.kind === "expired") {
+      expired = verified.session;
+      releaseReason = "staff_verified_provider_expired";
+    } else {
+      releaseReason = "staff_verified_open_unpaid";
       try {
-        const current = await stripe().checkout.sessions.retrieve(
-          verified.session.id
-        );
-        assertStripeObjectMode("Checkout Session", current.id, current.livemode);
-        if (current.status === "complete") {
-          await extendCheckoutReservationForAsyncPayment(intentRef);
-          throw checkoutProcessingError();
+        expired = await stripe().checkout.sessions.expire(verified.session.id);
+      } catch (expireError) {
+        try {
+          const current = await stripe().checkout.sessions.retrieve(
+            verified.session.id
+          );
+          assertStripeObjectMode("Checkout Session", current.id, current.livemode);
+          if (current.status === "complete") {
+            await extendCheckoutReservationForAsyncPayment(intentRef);
+            throw checkoutProcessingError();
+          }
+          if (current.status === "expired") {
+            expired = current;
+          } else {
+            throw expireError;
+          }
+        } catch (refreshError) {
+          if (refreshError instanceof HttpsError) throw refreshError;
+          console.error("Staff checkout release could not verify Stripe", {
+            intentIdHash: sha256(intentId),
+            checkoutSessionIdHash: sha256(verified.session.id),
+            provider: checkoutRecoveryProviderDiagnostic(expireError),
+          });
+          throw checkoutRecoveryUnavailableError();
         }
-        if (current.status === "expired") {
-          expired = current;
-        } else {
-          throw expireError;
-        }
-      } catch (refreshError) {
-        if (refreshError instanceof HttpsError) throw refreshError;
-        console.error("Staff checkout release could not verify Stripe", {
-          intentIdHash: sha256(intentId),
-          checkoutSessionIdHash: sha256(verified.session.id),
-          provider: checkoutRecoveryProviderDiagnostic(expireError),
-        });
-        throw checkoutRecoveryUnavailableError();
       }
     }
 
@@ -7663,13 +8182,14 @@ function buildReleaseAbandonedCheckoutHandler(
     const mismatch = checkoutSessionCommonBindingMismatch(
       expired,
       intentRef,
-      intent
-    ) || (intent.payerUid ? checkoutAuthenticatedBindingMismatch(
+      recoveryIntent
+    ) || (recoveryIntent.payerUid ? checkoutAuthenticatedBindingMismatch(
       expired,
-      intent.payerUid,
+      recoveryIntent.payerUid,
       expectedStripeCustomerId
     ) : checkoutAnonymousBindingMismatch(expired));
-    if (expired.status !== "expired" || mismatch) {
+    if (expired.status !== "expired" ||
+      expired.payment_status !== "unpaid" || mismatch) {
       console.error("Staff checkout release binding mismatch", {
         intentIdHash: sha256(intentId),
         checkoutSessionIdHash: sha256(verified.session.id),
@@ -7679,32 +8199,38 @@ function buildReleaseAbandonedCheckoutHandler(
       throw checkoutRecoveryReviewError();
     }
 
-    const transitioned = await transitionCheckoutReservation(
-      intentRef,
-      "expired",
-      {
-        verifiedTerminalAt: serverTimestamp(),
-        manualRecoveryAt: serverTimestamp(),
-        manualRecoveryBy: staffUid,
-        manualRecoveryReason: "staff_verified_open_unpaid",
-      },
-      true,
-      {
-        sessionId: expired.id,
-        mode: expired.mode,
-        planKey: expired.metadata?.planKey ?? null,
-      }
-    );
-    if (!transitioned) throw checkoutProcessingError();
+    if (afterProviderTerminalVerified) {
+      await afterProviderTerminalVerified();
+    }
 
-    await writeAudit({
-      type: "abandoned_checkout_released",
+    const recipient = await resolveCheckoutRecoveryRecipient(
+      expired,
+      recoveryIntent
+    );
+    const preparedEmail = prepareCheckoutRecoveryEmail(recoveryIntent, recipient);
+    const releaseOutcome = await finalizeStaffCheckoutRelease(
+      intentRef,
+      recoveryIntent,
+      expired,
+      staffUid,
+      releaseReason,
+      preparedEmail
+    );
+
+    if (releaseOutcome.recoveryEmailStatus === "manual_review") {
+      console.error("CRITICAL_BILLING_CHECKOUT_RECOVERY_EMAIL_MANUAL_REVIEW", {
+        intentId,
+        outboxId: checkoutRecoveryOutboxId(intentId),
+        reason: releaseOutcome.manualReviewReason,
+      });
+    }
+    return {
+      ok: true,
       intentId,
-      checkoutSessionId: expired.id,
-      releasedBy: staffUid,
-      providerStatus: expired.status,
-    });
-    return {ok: true, intentId, outcome: "released" as const};
+      outcome: releaseOutcome.outcome,
+      recoveryEmailStatus: releaseOutcome.recoveryEmailStatus,
+      recoveryEmailRecipient: releaseOutcome.recoveryEmailRecipient,
+    };
   };
 }
 
@@ -8377,9 +8903,10 @@ const CONFIRMATION_EMAIL_RETRY_WINDOW_MS = 23 * 60 * 60 * 1000;
 
 type ConfirmationEmailPayload = {
   from: string;
-  to: string[];
+  to: readonly string[];
   reply_to?: string;
   subject: string;
+  text?: string;
   html: string;
   attachments?: Array<{
     filename: string;
@@ -8393,16 +8920,30 @@ type ConfirmationEmailSender = (
   idempotencyKey: string
 ) => Promise<{providerMessageId: string | null}>;
 
-type MembershipEmailKind =
+type MembershipDocumentEmailKind =
   | "membership_confirmation"
   | "membership_cancellation_acknowledgement";
+
+type MembershipEmailKind = MembershipDocumentEmailKind | "checkout_recovery";
 
 type ConfirmationEmailLeaseResult =
   | {
     state: "acquired";
     outboxId: string;
     subscriptionId: string;
-    kind: MembershipEmailKind;
+    intentId: null;
+    kind: MembershipDocumentEmailKind;
+    leaseToken: string;
+    payload: ConfirmationEmailPayload;
+    idempotencyKey: string;
+    attemptCount: number;
+  }
+  | {
+    state: "acquired";
+    outboxId: string;
+    subscriptionId: null;
+    intentId: string;
+    kind: "checkout_recovery";
     leaseToken: string;
     payload: ConfirmationEmailPayload;
     idempotencyKey: string;
@@ -8412,11 +8953,12 @@ type ConfirmationEmailLeaseResult =
 
 function isMembershipEmailKind(value: unknown): value is MembershipEmailKind {
   return value === "membership_confirmation" ||
-    value === "membership_cancellation_acknowledgement";
+    value === "membership_cancellation_acknowledgement" ||
+    value === "checkout_recovery";
 }
 
 function membershipEmailProjectionFields(
-  kind: MembershipEmailKind,
+  kind: MembershipDocumentEmailKind,
   status: "pending" | "sent" | "manual_review" | "dead_letter",
   error: string | null = null,
   providerMessageId: string | null = null
@@ -8438,6 +8980,22 @@ function membershipEmailProjectionFields(
     ...(status === "sent" ? {
       confirmationEmailSentAt: serverTimestamp(),
       confirmationEmailProviderId: providerMessageId,
+    } : {}),
+    updatedAt: serverTimestamp(),
+  };
+}
+
+function checkoutRecoveryEmailProjectionFields(
+  status: "pending" | "sent" | "manual_review" | "dead_letter",
+  error: string | null = null,
+  providerMessageId: string | null = null
+): Record<string, unknown> {
+  return {
+    checkoutRecoveryEmailStatus: status,
+    checkoutRecoveryEmailError: error ?? FieldValue.delete(),
+    ...(status === "sent" ? {
+      checkoutRecoveryEmailSentAt: serverTimestamp(),
+      checkoutRecoveryEmailProviderId: providerMessageId,
     } : {}),
     updatedAt: serverTimestamp(),
   };
@@ -8731,6 +9289,100 @@ function isSystemicResendFailure(
       SYSTEMIC_RESEND_ERROR_NAMES.has(providerErrorName)) || status === 429;
 }
 
+type ConfirmationEmailLeaseTransactionOutcome = {
+  result: ConfirmationEmailLeaseResult;
+  terminalReason: string | null;
+  kind: MembershipEmailKind | null;
+  subscriptionId: string | null;
+  intentId: string | null;
+};
+
+function confirmationOutboxTerminalFields(
+  status: "manual_review" | "dead_letter",
+  reason: string
+): Record<string, unknown> {
+  return {
+    status,
+    deadLetteredAt: serverTimestamp(),
+    deadLetterReason: reason,
+    leaseToken: FieldValue.delete(),
+    leaseExpiresAt: FieldValue.delete(),
+    nextAttemptAt: FieldValue.delete(),
+    updatedAt: serverTimestamp(),
+  };
+}
+
+function checkoutRecoveryRoutingMismatch(
+  outboxId: string,
+  outbox: DocumentSnapshot,
+  intent: DocumentSnapshot
+): string | null {
+  const intentId = intent.id;
+  const manualRecoveryReason = intent.get("manualRecoveryReason");
+  if (intent.get("status") !== "expired") return "intent_status";
+  if (typeof intent.get("manualRecoveryBy") !== "string" ||
+    !intent.get("manualRecoveryBy")) return "staff_release_actor";
+  if (manualRecoveryReason !== "staff_verified_open_unpaid" &&
+    manualRecoveryReason !== "staff_verified_provider_expired") {
+    return "staff_release_reason";
+  }
+  if (intent.get("checkoutRecoveryEmailOutboxId") !== outboxId ||
+    outboxId !== checkoutRecoveryOutboxId(intentId)) return "outbox_binding";
+  if (intent.get("checkoutRecoveryEmailStatus") !== "pending") {
+    return "intent_email_status";
+  }
+  if (outbox.get("intentId") !== intentId) return "intent_binding";
+  if (outbox.get("checkoutSessionId") !== intent.get("checkoutSessionId")) {
+    return "session_binding";
+  }
+  if (outbox.get("stripeMode") !== intent.get("stripeMode") ||
+    intent.get("stripeMode") !== assertBillingEnvironment().stripeMode) {
+    return "stripe_mode";
+  }
+  if (outbox.get("providerSessionStatus") !== "expired" ||
+    outbox.get("providerPaymentStatus") !== "unpaid") {
+    return "provider_terminal_evidence";
+  }
+  if (outbox.get("releaseReason") !== manualRecoveryReason ||
+    outbox.get("releasedBy") !== intent.get("manualRecoveryBy")) {
+    return "staff_release_binding";
+  }
+  return null;
+}
+
+function checkoutRecoveryPayloadMismatch(
+  intentId: string,
+  payload: ConfirmationEmailPayload | undefined,
+  idempotencyKey: unknown,
+  outbox: DocumentSnapshot,
+  intent: DocumentSnapshot
+): string | null {
+  if (!payload || typeof payload !== "object" ||
+    typeof payload.from !== "string" || !payload.from ||
+    !Array.isArray(payload.to) || payload.to.length !== 1 ||
+    typeof payload.reply_to !== "string" ||
+    typeof payload.subject !== "string" || !payload.subject ||
+    typeof payload.text !== "string" || !payload.text ||
+    typeof payload.html !== "string" || !payload.html ||
+    payload.attachments !== undefined) return "payload_shape";
+  const recipient = canonicalizeCheckoutRecoveryEmail(payload.to[0]);
+  if (!recipient || recipient !== payload.to[0]) return "payload_recipient";
+  if (idempotencyKey !== checkoutRecoveryIdempotencyKey(intentId)) {
+    return "idempotency_key";
+  }
+  const recipientHash = sha256(recipient);
+  if (outbox.get("recipientEmailHash") !== recipientHash ||
+    intent.get("checkoutRecoveryEmailRecipientHash") !== recipientHash ||
+    intent.get("checkoutRecoveryEmailRecipientMasked") !==
+      maskCheckoutRecoveryEmail(recipient)) return "recipient_binding";
+  const source = outbox.get("recipientSource");
+  if (!CHECKOUT_RECOVERY_RECIPIENT_SOURCES.includes(source) ||
+    intent.get("checkoutRecoveryEmailRecipientSource") !== source) {
+    return "recipient_source";
+  }
+  return null;
+}
+
 async function acquireConfirmationEmailLease(
   outboxId: string,
   nowMillis = Date.now(),
@@ -8738,7 +9390,7 @@ async function acquireConfirmationEmailLease(
 ): Promise<ConfirmationEmailLeaseResult> {
   const outboxRef = db().collection(CONFIRMATION_OUTBOX_COLLECTION)
     .doc(outboxId);
-  const outcome = await db().runTransaction(async (tx) => {
+  const outcome: ConfirmationEmailLeaseTransactionOutcome = await db().runTransaction(async (tx) => {
     const snap = await tx.get(outboxRef);
     if (!snap.exists) {
       return {
@@ -8746,51 +9398,73 @@ async function acquireConfirmationEmailLease(
         terminalReason: null,
         kind: null,
         subscriptionId: null,
+        intentId: null,
       };
     }
     const kind = snap.get("kind");
-    const subscriptionId = snap.get("subscriptionId");
-    if (!isMembershipEmailKind(kind) || typeof subscriptionId !== "string" ||
-      !subscriptionId) {
+    if (!isMembershipEmailKind(kind)) {
       const terminalReason =
         "Membership email outbox routing evidence is missing or invalid.";
-      tx.set(outboxRef, {
-        status: "dead_letter",
-        deadLetteredAt: serverTimestamp(),
-        deadLetterReason: terminalReason,
-        leaseToken: FieldValue.delete(),
-        leaseExpiresAt: FieldValue.delete(),
-        nextAttemptAt: FieldValue.delete(),
-        updatedAt: serverTimestamp(),
-      }, {merge: true});
+      tx.set(outboxRef, confirmationOutboxTerminalFields(
+        "dead_letter",
+        terminalReason
+      ), {merge: true});
       return {
         result: {state: "terminal"} as const,
         terminalReason,
         kind: null,
-        subscriptionId: typeof subscriptionId === "string" ?
-          subscriptionId : null,
+        subscriptionId: null,
+        intentId: null,
       };
     }
-    const membershipRef = db().collection("memberships").doc(subscriptionId);
-    const membership = await tx.get(membershipRef);
-    if (!membership.exists) {
-      const terminalReason = "Membership email outbox has no membership document.";
-      tx.set(outboxRef, {
-        status: "manual_review",
-        deadLetteredAt: serverTimestamp(),
-        deadLetterReason: terminalReason,
-        leaseToken: FieldValue.delete(),
-        leaseExpiresAt: FieldValue.delete(),
-        nextAttemptAt: FieldValue.delete(),
-        updatedAt: serverTimestamp(),
-      }, {merge: true});
+
+    const rawSubscriptionId = snap.get("subscriptionId");
+    const rawIntentId = snap.get("intentId");
+    const subscriptionId = kind === "checkout_recovery" ? null :
+      typeof rawSubscriptionId === "string" && rawSubscriptionId ?
+        rawSubscriptionId : null;
+    const intentId = kind === "checkout_recovery" &&
+        typeof rawIntentId === "string" &&
+        /^attempt_[a-f0-9]{64}$/.test(rawIntentId) ? rawIntentId : null;
+    if ((kind === "checkout_recovery" &&
+        (!intentId || outboxId !== checkoutRecoveryOutboxId(intentId))) ||
+      (kind !== "checkout_recovery" && !subscriptionId)) {
+      const terminalReason =
+        "Membership email outbox routing evidence is missing or invalid.";
+      tx.set(outboxRef, confirmationOutboxTerminalFields(
+        "dead_letter",
+        terminalReason
+      ), {merge: true});
       return {
         result: {state: "terminal"} as const,
         terminalReason,
         kind,
         subscriptionId,
+        intentId,
       };
     }
+
+    const destinationRef = kind === "checkout_recovery" ?
+      db().collection("membershipIntents").doc(intentId as string) :
+      db().collection("memberships").doc(subscriptionId as string);
+    const destination = await tx.get(destinationRef);
+    if (!destination.exists) {
+      const terminalReason = kind === "checkout_recovery" ?
+        "Checkout recovery email outbox has no checkout intent document." :
+        "Membership email outbox has no membership document.";
+      tx.set(outboxRef, confirmationOutboxTerminalFields(
+        "manual_review",
+        terminalReason
+      ), {merge: true});
+      return {
+        result: {state: "terminal"} as const,
+        terminalReason,
+        kind,
+        subscriptionId,
+        intentId,
+      };
+    }
+
     const status = snap.get("status");
     if (status === "sent") {
       return {
@@ -8798,6 +9472,7 @@ async function acquireConfirmationEmailLease(
         terminalReason: null,
         kind,
         subscriptionId,
+        intentId,
       };
     }
     if (status === "dead_letter" || status === "manual_review") {
@@ -8806,6 +9481,60 @@ async function acquireConfirmationEmailLease(
         terminalReason: null,
         kind,
         subscriptionId,
+        intentId,
+      };
+    }
+
+    if (kind === "checkout_recovery") {
+      const mismatch = checkoutRecoveryRoutingMismatch(
+        outboxId,
+        snap,
+        destination
+      );
+      if (mismatch) {
+        const terminalReason =
+          `Checkout recovery email release evidence is invalid (${mismatch}).`;
+        tx.set(outboxRef, confirmationOutboxTerminalFields(
+          "manual_review",
+          terminalReason
+        ), {merge: true});
+        tx.update(destinationRef, checkoutRecoveryEmailProjectionFields(
+          "manual_review",
+          terminalReason
+        ));
+        return {
+          result: {state: "terminal"} as const,
+          terminalReason,
+          kind,
+          subscriptionId,
+          intentId,
+        };
+      }
+    }
+    if (status !== "pending" && status !== "sending") {
+      const terminalReason = "Membership email outbox status is invalid.";
+      tx.set(outboxRef, confirmationOutboxTerminalFields(
+        "dead_letter",
+        terminalReason
+      ), {merge: true});
+      if (kind === "checkout_recovery") {
+        tx.update(destinationRef, checkoutRecoveryEmailProjectionFields(
+          "dead_letter",
+          terminalReason
+        ));
+      } else {
+        tx.update(destinationRef, membershipEmailProjectionFields(
+          kind,
+          "dead_letter",
+          terminalReason
+        ));
+      }
+      return {
+        result: {state: "terminal"} as const,
+        terminalReason,
+        kind,
+        subscriptionId,
+        intentId,
       };
     }
     const leaseExpiresAt = timestampMillis(snap.get("leaseExpiresAt"));
@@ -8816,6 +9545,7 @@ async function acquireConfirmationEmailLease(
         terminalReason: null,
         kind,
         subscriptionId,
+        intentId,
       };
     }
     const nextAttemptAt = timestampMillis(snap.get("nextAttemptAt"));
@@ -8826,6 +9556,7 @@ async function acquireConfirmationEmailLease(
         terminalReason: null,
         kind,
         subscriptionId,
+        intentId,
       };
     }
 
@@ -8834,51 +9565,68 @@ async function acquireConfirmationEmailLease(
     if (retryDeadlineAt !== null && nowMillis >= retryDeadlineAt) {
       const terminalReason =
         "Resend idempotency window expired before confirmed delivery.";
-      tx.set(outboxRef, {
-        status: "manual_review",
-        deadLetteredAt: serverTimestamp(),
-        deadLetterReason: terminalReason,
-        leaseToken: FieldValue.delete(),
-        leaseExpiresAt: FieldValue.delete(),
-        nextAttemptAt: FieldValue.delete(),
-        updatedAt: serverTimestamp(),
-      }, {merge: true});
-      tx.update(membershipRef, membershipEmailProjectionFields(
-        kind,
+      tx.set(outboxRef, confirmationOutboxTerminalFields(
         "manual_review",
-        "Delivery requires manual review."
-      ));
+        terminalReason
+      ), {merge: true});
+      if (kind === "checkout_recovery") {
+        tx.update(destinationRef, checkoutRecoveryEmailProjectionFields(
+          "manual_review",
+          "Delivery requires manual review."
+        ));
+      } else {
+        tx.update(destinationRef, membershipEmailProjectionFields(
+          kind,
+          "manual_review",
+          "Delivery requires manual review."
+        ));
+      }
       return {
         result: {state: "terminal"} as const,
         terminalReason,
         kind,
         subscriptionId,
+        intentId,
       };
     }
 
     const payload = snap.get("payload") as ConfirmationEmailPayload | undefined;
     const idempotencyKey = snap.get("idempotencyKey");
-    if (!payload || typeof idempotencyKey !== "string") {
-      const terminalReason = "Membership email payload is missing or invalid.";
-      tx.set(outboxRef, {
-        status: "dead_letter",
-        deadLetteredAt: serverTimestamp(),
-        deadLetterReason: terminalReason,
-        leaseToken: FieldValue.delete(),
-        leaseExpiresAt: FieldValue.delete(),
-        nextAttemptAt: FieldValue.delete(),
-        updatedAt: serverTimestamp(),
-      }, {merge: true});
-      tx.update(membershipRef, membershipEmailProjectionFields(
-        kind,
+    const recoveryPayloadMismatch = kind === "checkout_recovery" ?
+      checkoutRecoveryPayloadMismatch(
+        intentId as string,
+        payload,
+        idempotencyKey,
+        snap,
+        destination
+      ) : null;
+    if (!payload || typeof idempotencyKey !== "string" ||
+      recoveryPayloadMismatch) {
+      const terminalReason = recoveryPayloadMismatch ?
+        `Checkout recovery email payload is invalid (${recoveryPayloadMismatch}).` :
+        "Membership email payload is missing or invalid.";
+      tx.set(outboxRef, confirmationOutboxTerminalFields(
         "dead_letter",
         terminalReason
-      ));
+      ), {merge: true});
+      if (kind === "checkout_recovery") {
+        tx.update(destinationRef, checkoutRecoveryEmailProjectionFields(
+          "dead_letter",
+          terminalReason
+        ));
+      } else {
+        tx.update(destinationRef, membershipEmailProjectionFields(
+          kind,
+          "dead_letter",
+          terminalReason
+        ));
+      }
       return {
         result: {state: "terminal"} as const,
         terminalReason,
         kind,
         subscriptionId,
+        intentId,
       };
     }
 
@@ -8902,39 +9650,58 @@ async function acquireConfirmationEmailLease(
       } : {}),
       updatedAt: serverTimestamp(),
     }, {merge: true});
+    const acquired = kind === "checkout_recovery" ? {
+      state: "acquired" as const,
+      outboxId,
+      subscriptionId: null,
+      intentId: intentId as string,
+      kind,
+      leaseToken,
+      payload,
+      idempotencyKey,
+      attemptCount: attemptCount + 1,
+    } : {
+      state: "acquired" as const,
+      outboxId,
+      subscriptionId: subscriptionId as string,
+      intentId: null,
+      kind,
+      leaseToken,
+      payload,
+      idempotencyKey,
+      attemptCount: attemptCount + 1,
+    };
     return {
-      result: {
-        state: "acquired",
-        outboxId,
-        subscriptionId,
-        kind,
-        leaseToken,
-        payload,
-        idempotencyKey,
-        attemptCount: attemptCount + 1,
-      } as const,
+      result: acquired,
       terminalReason: null,
       kind,
       subscriptionId,
+      intentId,
     };
   });
   if (outcome.terminalReason) {
+    const checkoutRecovery = outcome.kind === "checkout_recovery";
     const cancellationAcknowledgement = outcome.kind ===
       "membership_cancellation_acknowledgement";
-    console.error(cancellationAcknowledgement ?
-      "CRITICAL_BILLING_CANCELLATION_ACKNOWLEDGEMENT_MANUAL_REVIEW" :
-      "CRITICAL_BILLING_CONFIRMATION_MANUAL_REVIEW", {
+    console.error(checkoutRecovery ?
+      "CRITICAL_BILLING_CHECKOUT_RECOVERY_EMAIL_MANUAL_REVIEW" :
+      cancellationAcknowledgement ?
+        "CRITICAL_BILLING_CANCELLATION_ACKNOWLEDGEMENT_MANUAL_REVIEW" :
+        "CRITICAL_BILLING_CONFIRMATION_MANUAL_REVIEW", {
       outboxId,
       subscriptionId: outcome.subscriptionId,
+      intentId: outcome.intentId,
       reason: outcome.terminalReason,
     });
     await writeAudit({
-      type: cancellationAcknowledgement ?
-        "cancellation_acknowledgement_terminal" :
-        "confirmation_email_terminal",
+      type: checkoutRecovery ? "checkout_recovery_email_terminal" :
+        cancellationAcknowledgement ?
+          "cancellation_acknowledgement_terminal" :
+          "confirmation_email_terminal",
       severity: "critical",
       outboxId,
       subscriptionId: outcome.subscriptionId,
+      intentId: outcome.intentId,
       reason: outcome.terminalReason,
     }).catch((error) =>
       console.error("Could not write membership-email terminal audit", outboxId, error)
@@ -8951,6 +9718,13 @@ class ConfirmationDeliveryError extends Error {
   ) {
     super(message);
   }
+}
+
+function redactCheckoutRecoveryDeliveryError(message: string): string {
+  return message.replace(
+    /[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+/g,
+    "[redacted-email]"
+  );
 }
 
 const sendConfirmationViaResend: ConfirmationEmailSender = async (
@@ -9013,16 +9787,19 @@ async function processMembershipConfirmationOutbox(
 
   const outboxRef = db().collection(CONFIRMATION_OUTBOX_COLLECTION)
     .doc(outboxId);
-  const {subscriptionId, kind} = lease;
-  const membershipRef = db().collection("memberships").doc(subscriptionId);
+  const destinationRef = lease.kind === "checkout_recovery" ?
+    db().collection("membershipIntents").doc(lease.intentId) :
+    db().collection("memberships").doc(lease.subscriptionId);
+  const ownerAuditFields = lease.kind === "checkout_recovery" ?
+    {intentId: lease.intentId} : {subscriptionId: lease.subscriptionId};
   try {
     const delivery = await sender(lease.payload, lease.idempotencyKey);
     const markOutcome = await db().runTransaction(async (tx) => {
       const snap = await tx.get(outboxRef);
-      const membership = await tx.get(membershipRef);
+      const destination = await tx.get(destinationRef);
       if (!snap.exists || snap.get("status") !== "sending" ||
         snap.get("leaseToken") !== lease.leaseToken) {
-        return {marked: false, missingMembership: false};
+        return {marked: false, missingDestination: false};
       }
       tx.set(outboxRef, {
         status: "sent",
@@ -9034,41 +9811,52 @@ async function processMembershipConfirmationOutbox(
         lastError: FieldValue.delete(),
         updatedAt: serverTimestamp(),
       }, {merge: true});
-      if (membership.exists) {
-        tx.update(membershipRef, membershipEmailProjectionFields(
-          kind,
-          "sent",
-          null,
-          delivery.providerMessageId
-        ));
+      if (destination.exists) {
+        tx.update(destinationRef, lease.kind === "checkout_recovery" ?
+          checkoutRecoveryEmailProjectionFields(
+            "sent",
+            null,
+            delivery.providerMessageId
+          ) : membershipEmailProjectionFields(
+            lease.kind,
+            "sent",
+            null,
+            delivery.providerMessageId
+          ));
       }
-      return {marked: true, missingMembership: !membership.exists};
+      return {marked: true, missingDestination: !destination.exists};
     });
     if (!markOutcome.marked) return "in_progress";
-    if (markOutcome.missingMembership) {
-      console.error(kind === "membership_cancellation_acknowledgement" ?
-        "CRITICAL_BILLING_SENT_CANCELLATION_ACKNOWLEDGEMENT_ORPHAN" :
-        "CRITICAL_BILLING_SENT_CONFIRMATION_ORPHAN", {
+    if (markOutcome.missingDestination) {
+      console.error(lease.kind === "checkout_recovery" ?
+        "CRITICAL_BILLING_SENT_CHECKOUT_RECOVERY_EMAIL_ORPHAN" :
+        lease.kind === "membership_cancellation_acknowledgement" ?
+          "CRITICAL_BILLING_SENT_CANCELLATION_ACKNOWLEDGEMENT_ORPHAN" :
+          "CRITICAL_BILLING_SENT_CONFIRMATION_ORPHAN", {
         outboxId,
-        subscriptionId,
+        ...ownerAuditFields,
       });
       await writeAudit({
-        type: kind === "membership_cancellation_acknowledgement" ?
-          "cancellation_acknowledgement_orphaned_after_send" :
-          "confirmation_email_orphaned_after_send",
+        type: lease.kind === "checkout_recovery" ?
+          "checkout_recovery_email_orphaned_after_send" :
+          lease.kind === "membership_cancellation_acknowledgement" ?
+            "cancellation_acknowledgement_orphaned_after_send" :
+            "confirmation_email_orphaned_after_send",
         severity: "critical",
         outboxId,
-        subscriptionId,
+        ...ownerAuditFields,
         providerMessageId: delivery.providerMessageId,
       }).catch((error) =>
-        console.error("Could not write sent-orphan audit", subscriptionId, error)
+        console.error("Could not write sent-orphan audit", outboxId, error)
       );
     }
     await writeAudit({
-      type: kind === "membership_cancellation_acknowledgement" ?
-        "cancellation_acknowledgement_sent" : "confirmation_email_sent",
+      type: lease.kind === "checkout_recovery" ?
+        "checkout_recovery_email_sent" :
+        lease.kind === "membership_cancellation_acknowledgement" ?
+          "cancellation_acknowledgement_sent" : "confirmation_email_sent",
       outboxId,
-      subscriptionId,
+      ...ownerAuditFields,
       providerMessageId: delivery.providerMessageId,
     }).catch((error) =>
       console.error("Could not write membership email audit", outboxId, error)
@@ -9079,18 +9867,20 @@ async function processMembershipConfirmationOutbox(
       error.status : null;
     const providerErrorName = error instanceof ConfirmationDeliveryError ?
       error.providerErrorName : null;
-    const message = error instanceof Error ? error.message : String(error);
+    const rawMessage = error instanceof Error ? error.message : String(error);
+    const message = lease.kind === "checkout_recovery" ?
+      redactCheckoutRecoveryDeliveryError(rawMessage) : rawMessage;
     const failureNow = Math.max(nowMillis, Date.now());
     const failureOutcome = await db().runTransaction(async (tx) => {
       const snap = await tx.get(outboxRef);
-      const membership = await tx.get(membershipRef);
+      const destination = await tx.get(destinationRef);
       if (!snap.exists || snap.get("status") !== "sending" ||
         snap.get("leaseToken") !== lease.leaseToken) return null;
       const retryDeadlineAt = timestampMillis(snap.get("retryDeadlineAt"));
       const permanent = isPermanentConfirmationFailure(errorStatus, providerErrorName);
       const windowExpired = retryDeadlineAt !== null && failureNow >= retryDeadlineAt;
       const terminalStatus = permanent ? "dead_letter" : "manual_review";
-      const orphan = !membership.exists;
+      const orphan = !destination.exists;
       const terminal = permanent || windowExpired || orphan;
       tx.set(outboxRef, {
         status: terminal ? (orphan ? "manual_review" : terminalStatus) : "pending",
@@ -9110,34 +9900,42 @@ async function processMembershipConfirmationOutbox(
         }),
         updatedAt: serverTimestamp(),
       }, {merge: true});
-      if (membership.exists) {
-        tx.update(membershipRef, membershipEmailProjectionFields(
-          kind,
-          terminal ? terminalStatus : "pending",
-          message.slice(0, 500)
-        ));
+      if (destination.exists) {
+        tx.update(destinationRef, lease.kind === "checkout_recovery" ?
+          checkoutRecoveryEmailProjectionFields(
+            terminal ? terminalStatus : "pending",
+            message.slice(0, 500)
+          ) : membershipEmailProjectionFields(
+            lease.kind,
+            terminal ? terminalStatus : "pending",
+            message.slice(0, 500)
+          ));
       }
       return {terminal, orphan};
     });
     if (!failureOutcome) return "in_progress";
     const {terminal, orphan} = failureOutcome;
     if (terminal || orphan) {
-      console.error(kind === "membership_cancellation_acknowledgement" ?
-        "CRITICAL_BILLING_CANCELLATION_ACKNOWLEDGEMENT_MANUAL_REVIEW" :
-        "CRITICAL_BILLING_CONFIRMATION_MANUAL_REVIEW", {
+      console.error(lease.kind === "checkout_recovery" ?
+        "CRITICAL_BILLING_CHECKOUT_RECOVERY_EMAIL_MANUAL_REVIEW" :
+        lease.kind === "membership_cancellation_acknowledgement" ?
+          "CRITICAL_BILLING_CANCELLATION_ACKNOWLEDGEMENT_MANUAL_REVIEW" :
+          "CRITICAL_BILLING_CONFIRMATION_MANUAL_REVIEW", {
         outboxId,
-        subscriptionId,
+        ...ownerAuditFields,
         providerErrorName,
         error: message,
         orphan,
       });
       await writeAudit({
-        type: kind === "membership_cancellation_acknowledgement" ?
-          "cancellation_acknowledgement_terminal" :
-          "confirmation_email_terminal",
+        type: lease.kind === "checkout_recovery" ?
+          "checkout_recovery_email_terminal" :
+          lease.kind === "membership_cancellation_acknowledgement" ?
+            "cancellation_acknowledgement_terminal" :
+            "confirmation_email_terminal",
         severity: "critical",
         outboxId,
-        subscriptionId,
+        ...ownerAuditFields,
         providerErrorName,
         error: message.slice(0, 1000),
         orphan,
@@ -9145,7 +9943,17 @@ async function processMembershipConfirmationOutbox(
         console.error("Could not write membership-email terminal audit", outboxId, auditError)
       );
     } else {
-      console.error("Membership email delivery failed", outboxId, error);
+      if (lease.kind === "checkout_recovery") {
+        console.error("Checkout recovery email delivery failed", {
+          outboxId,
+          intentId: lease.intentId,
+          providerErrorName,
+          status: errorStatus,
+          error: message,
+        });
+      } else {
+        console.error("Membership email delivery failed", outboxId, error);
+      }
     }
     if (!terminal && isSystemicResendFailure(errorStatus, providerErrorName)) {
       console.error("CRITICAL_BILLING_RESEND_CONFIGURATION", {

@@ -214,6 +214,12 @@ function createFakeStripe() {
         state.customers.set(id, customer);
         return send(200, customer);
       }
+      const customerMatch = path.match(/^\/v1\/customers\/([^/]+)$/);
+      if (customerMatch && req.method === "GET") {
+        const customer = state.customers.get(customerMatch[1]);
+        if (!customer) return notFound(`No such customer: ${customerMatch[1]}`);
+        return send(200, customer);
+      }
 
       // --- Checkout sessions ---
       if (path === "/v1/checkout/sessions" && req.method === "POST") {

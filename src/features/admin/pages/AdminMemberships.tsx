@@ -36,6 +36,10 @@ type StatusFilter =
   | "awaiting"
   | "ended"
   | "all";
+type CheckoutRecoveryNotice = {
+  message: string;
+  tone: "success" | "warning";
+};
 
 const PLAN_TABS: Array<{key: PlanFilter; label: string}> = [
   {key: "all", label: "All memberships"},
@@ -455,7 +459,8 @@ export default function AdminMemberships() {
   const [linkUid, setLinkUid] = useState("");
   const [busySubscriptionId, setBusySubscriptionId] = useState("");
   const [busyCheckoutIntentId, setBusyCheckoutIntentId] = useState("");
-  const [checkoutRecoveryMessage, setCheckoutRecoveryMessage] = useState("");
+  const [checkoutRecoveryNotice, setCheckoutRecoveryNotice] =
+    useState<CheckoutRecoveryNotice | null>(null);
   const loadRequestIdRef = useRef(0);
 
   const load = useCallback(async () => {
@@ -602,19 +607,52 @@ export default function AdminMemberships() {
   const releaseCheckout = async (issue: AdminCheckoutIssue) => {
     const names = issue.participantFullNames.join(", ") || "this customer";
     const confirmed = window.confirm(
-      `Verify and release the interrupted checkout for ${names}?\n\n` +
-      "Stripe will be checked first. A completed, paid or uncertain checkout will stay locked."
+      `Verify, release and email ${names}?\n\n` +
+      "Stripe will be checked first. A completed, paid or uncertain checkout will stay " +
+      "locked. If a verified email address is available, a recovery email will be queued " +
+      "after release."
     );
     if (!confirmed) return;
 
     try {
       setBusyCheckoutIntentId(issue.intentId);
-      setCheckoutRecoveryMessage("");
+      setCheckoutRecoveryNotice(null);
       setError("");
       const result = await releaseAbandonedMembershipCheckout(issue.intentId);
-      setCheckoutRecoveryMessage(result.outcome === "already_released" ?
+      const releaseMessage = result.outcome === "already_released" ?
         `${names}’s checkout was already released.` :
-        `${names}’s unpaid checkout was released. They can now start again.`);
+        `${names}’s unpaid checkout was released. They can now start again.`;
+      const recipient = result.recoveryEmailRecipient ??
+        "the verified Stripe email address";
+      switch (result.recoveryEmailStatus) {
+      case "queued":
+        setCheckoutRecoveryNotice({
+          message: `${releaseMessage} A recovery email was queued to ${recipient}.`,
+          tone: "success",
+        });
+        break;
+      case "already_queued":
+        setCheckoutRecoveryNotice({
+          message: `${releaseMessage} A recovery email was already queued to ${recipient}.`,
+          tone: "success",
+        });
+        break;
+      case "manual_review":
+        setCheckoutRecoveryNotice({
+          message: result.recoveryEmailRecipient ?
+            `${releaseMessage} No recovery email was queued because its delivery ` +
+              "record needs billing review." :
+            `${releaseMessage} No recovery email was queued because no verified ` +
+              "email address was available. Follow up with the customer manually.",
+          tone: "warning",
+        });
+        break;
+      default:
+        setCheckoutRecoveryNotice({
+          message: `${releaseMessage} No recovery email was queued.`,
+          tone: "warning",
+        });
+      }
       await load();
     } catch (releaseError: unknown) {
       const releaseMessage = releaseError instanceof Error ?
@@ -686,10 +724,17 @@ export default function AdminMemberships() {
           </div>
         ) : null}
 
-        {checkoutRecoveryMessage ? (
-          <div role="status" className="mt-5 flex items-start gap-3 rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.08] px-4 py-4 text-sm text-emerald-100">
-            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
-            <p>{checkoutRecoveryMessage}</p>
+        {checkoutRecoveryNotice ? (
+          <div
+            role="status"
+            className={`mt-5 flex items-start gap-3 rounded-2xl border px-4 py-4 text-sm ${checkoutRecoveryNotice.tone === "success" ?
+              "border-emerald-400/20 bg-emerald-400/[0.08] text-emerald-100" :
+              "border-amber-400/20 bg-amber-400/[0.08] text-amber-100"}`}
+          >
+            {checkoutRecoveryNotice.tone === "success" ?
+              <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" /> :
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />}
+            <p>{checkoutRecoveryNotice.message}</p>
           </div>
         ) : null}
 
@@ -728,7 +773,8 @@ export default function AdminMemberships() {
                       These are Stripe checkout reservations, not completed memberships.
                       Release one only after the customer confirms they were knocked out
                       of checkout. The server will recheck Stripe and refuse any completed,
-                      paid or uncertain Session.
+                      paid or uncertain Session. After a safe release, it will queue a
+                      recovery email when Stripe has a verified address.
                     </p>
                   </div>
                   <label className="relative block w-full lg:w-72">
@@ -755,7 +801,8 @@ export default function AdminMemberships() {
                     const busy = busyCheckoutIntentId === issue.intentId;
                     const stateLabel = issue.status === "payment_pending" ?
                       "Confirmation pending" : issue.status === "reserved" ?
-                        "Provider result unknown" : "Checkout interrupted";
+                        "Provider result unknown" : issue.status === "release_claimed" ?
+                          "Release interrupted — retry" : "Checkout interrupted";
                     return (
                       <article
                         key={issue.intentId}
@@ -793,7 +840,7 @@ export default function AdminMemberships() {
                           >
                             <ShieldCheck className="h-4 w-4" />
                             {busy ? "Checking Stripe…" : issue.canRelease ?
-                              "Verify and release" : "Billing review required"}
+                              "Verify, release & email" : "Billing review required"}
                           </button>
                         </div>
                       </article>
