@@ -11,6 +11,7 @@ import {
   SquarePen,
   BarChart3,
   Activity,
+  CreditCard,
   Rows3,
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
@@ -35,6 +36,7 @@ export const baseNavItems: NavItem[] = [
 
 export const adminNavItems: NavItem[] = [
   { to: "/admin/insights", label: "Insights", icon: BarChart3, adminOnly: true },
+  { to: "/admin/memberships", label: "Memberships", icon: CreditCard, adminOnly: true },
   { to: "/admin/strength-blocks", label: "Strength Blocks", icon: Rows3, adminOnly: true },
   { to: "/admin/performance", label: "Admin Performance", icon: Activity, adminOnly: true },
   { to: "/display", label: "Display", icon: MonitorPlay, adminOnly: true },

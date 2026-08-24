@@ -166,7 +166,8 @@ export default function App() {
 
   const isAuthed = !!user;
   const waiverBypass = location.pathname.startsWith("/memberships") ||
-    location.pathname === "/account/membership";
+    location.pathname === "/account/membership" ||
+    location.pathname === "/admin/memberships";
   return (
     <WaiverGate bypass={waiverBypass}>
     <React.Suspense fallback={<LoadingScreen />}>

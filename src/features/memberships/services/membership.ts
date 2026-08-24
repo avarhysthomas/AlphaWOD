@@ -496,7 +496,7 @@ export function clearPendingClaim(): void {
 
 export type AdminMembership = {
   subscriptionId: string;
-  payerUid: string;
+  payerUid: string | null;
   payerEmail: string | null;
   planKey: PlanKey;
   planName: string;
@@ -509,6 +509,10 @@ export type AdminMembership = {
   firstPaymentReceivedAt?: number | null;
   discount?: MembershipDiscount | null;
   paymentSchedule?: MembershipPaymentSchedule | null;
+  /** Current contracted monthly value, calculated by the server. */
+  monthlyRecurringPence: number;
+  /** Whether that value is healthy projected income, at risk, or excluded. */
+  revenueState: "projected" | "at_risk" | "excluded";
   stripeStatus: string;
   grantsAlphaWodAccess: boolean;
   entitlementTargetUid: string | null;
@@ -543,10 +547,36 @@ export type AdminMembership = {
   entitlementProjectionError: string | null;
 };
 
+export type AdminMembershipSummaryBucket = {
+  totalSubscriptions: number;
+  openSubscriptions: number;
+  openParticipants: number;
+  currentSubscriptions: number;
+  scheduledSubscriptions: number;
+  paymentIssueSubscriptions: number;
+  awaitingPaymentSubscriptions: number;
+  endedSubscriptions: number;
+  projectedMonthlyPence: number;
+  atRiskMonthlyPence: number;
+};
+
+export type AdminMembershipPlanSummary = AdminMembershipSummaryBucket & {
+  planKey: PlanKey;
+  planName: string;
+};
+
+export type AdminMembershipSummary = AdminMembershipSummaryBucket & {
+  asOf: string;
+  plans: AdminMembershipPlanSummary[];
+  isComplete: boolean;
+  reportingLimit: number;
+};
+
 export async function listMemberships() {
   const invoke = httpsCallable<Record<string, never>, {
     ok: boolean;
     memberships: AdminMembership[];
+    summary: AdminMembershipSummary;
   }>(functions, "listMemberships");
 
   const result = await invoke({});

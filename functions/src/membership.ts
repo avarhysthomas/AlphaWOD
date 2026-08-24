@@ -7231,6 +7231,145 @@ async function findMembershipIdForDispute(dispute: Stripe.Dispute): Promise<stri
  * Admin
  * -------------------------------------------------------------- */
 
+type AdminMembershipRevenueState = "projected" | "at_risk" | "excluded";
+
+type AdminMembershipFinancialProjection = {
+  monthlyRecurringPence: number;
+  revenueState: AdminMembershipRevenueState;
+};
+
+type AdminMembershipSummaryBucket = {
+  totalSubscriptions: number;
+  openSubscriptions: number;
+  openParticipants: number;
+  currentSubscriptions: number;
+  scheduledSubscriptions: number;
+  paymentIssueSubscriptions: number;
+  awaitingPaymentSubscriptions: number;
+  endedSubscriptions: number;
+  projectedMonthlyPence: number;
+  atRiskMonthlyPence: number;
+};
+
+function emptyAdminMembershipSummaryBucket(): AdminMembershipSummaryBucket {
+  return {
+    totalSubscriptions: 0,
+    openSubscriptions: 0,
+    openParticipants: 0,
+    currentSubscriptions: 0,
+    scheduledSubscriptions: 0,
+    paymentIssueSubscriptions: 0,
+    awaitingPaymentSubscriptions: 0,
+    endedSubscriptions: 0,
+    projectedMonthlyPence: 0,
+    atRiskMonthlyPence: 0,
+  };
+}
+
+/**
+ * Returns the membership's current contracted monthly amount from frozen
+ * server-side commercial evidence. This is a projection, not cash received.
+ */
+function adminMembershipFinancialProjectionFor(
+  membership: MembershipDoc,
+  asOfUnixSeconds = Math.floor(Date.now() / 1000)
+): AdminMembershipFinancialProjection {
+  const order = orderFor(membership);
+  const schedule = membership.paymentSchedule;
+  const standardMonthlyPence = Number.isSafeInteger(schedule?.standardMonthlyPence) &&
+      schedule.standardMonthlyPence >= 0 ?
+    schedule.standardMonthlyPence : order.standardMonthlyPence;
+  const discountedMonthlyPence = Number.isSafeInteger(schedule?.discountedMonthlyPence) &&
+      (schedule?.discountedMonthlyPence as number) >= 0 ?
+    schedule?.discountedMonthlyPence as number : null;
+  const fullPriceFrom = typeof schedule?.fullPriceFrom === "number" ?
+    schedule.fullPriceFrom : null;
+  const discountEndsAt = typeof membership.discount?.endsAt === "number" ?
+    membership.discount.endsAt : null;
+  const discountIsForever = membership.discount?.duration === "forever";
+  const discountIsActive = discountedMonthlyPence !== null && Boolean(membership.discount) && (
+    discountIsForever ||
+    (fullPriceFrom !== null && asOfUnixSeconds < fullPriceFrom) ||
+    (fullPriceFrom === null && discountEndsAt !== null && asOfUnixSeconds < discountEndsAt)
+  );
+  const monthlyRecurringPence = discountIsActive ?
+    discountedMonthlyPence : standardMonthlyPence;
+
+  if (membership.accessRevoked || membership.state === "cancelled" ||
+    membership.state === "revoked" || membership.state === "incomplete") {
+    return {monthlyRecurringPence, revenueState: "excluded"};
+  }
+  if (membership.disputeOpen || membership.state === "disputed" ||
+    membership.state === "past_due_grace" || membership.state === "past_due_suspended") {
+    return {monthlyRecurringPence, revenueState: "at_risk"};
+  }
+  return {monthlyRecurringPence, revenueState: "projected"};
+}
+
+function applyAdminMembershipToSummaryBucket(
+  bucket: AdminMembershipSummaryBucket,
+  membership: MembershipDoc,
+  projection: AdminMembershipFinancialProjection
+): void {
+  bucket.totalSubscriptions += 1;
+  const participantCount = participantCountFor(membership);
+
+  if (projection.revenueState !== "excluded") {
+    bucket.openSubscriptions += 1;
+    bucket.openParticipants += participantCount;
+  }
+  if (membership.state === "active" && projection.revenueState === "projected") {
+    bucket.currentSubscriptions += 1;
+  }
+  if (membership.state === "scheduled" && projection.revenueState === "projected") {
+    bucket.scheduledSubscriptions += 1;
+  }
+  if (membership.state === "incomplete") bucket.awaitingPaymentSubscriptions += 1;
+  if (membership.state === "cancelled" || membership.state === "revoked") {
+    bucket.endedSubscriptions += 1;
+  }
+  if (projection.revenueState === "projected") {
+    bucket.projectedMonthlyPence += projection.monthlyRecurringPence;
+  }
+  if (projection.revenueState === "at_risk") {
+    bucket.paymentIssueSubscriptions += 1;
+    bucket.atRiskMonthlyPence += projection.monthlyRecurringPence;
+  }
+}
+
+function buildAdminMembershipFinancialSummary(
+  memberships: MembershipDoc[],
+  asOfUnixSeconds = Math.floor(Date.now() / 1000)
+) {
+  const totals = emptyAdminMembershipSummaryBucket();
+  const plans = Object.fromEntries(PLAN_KEYS.map((planKey) => [
+    planKey,
+    {
+      planKey,
+      planName: getPlan(planKey).name,
+      ...emptyAdminMembershipSummaryBucket(),
+    },
+  ])) as Record<PlanKey, AdminMembershipSummaryBucket & {
+    planKey: PlanKey;
+    planName: string;
+  }>;
+
+  for (const membership of memberships) {
+    const projection = adminMembershipFinancialProjectionFor(
+      membership,
+      asOfUnixSeconds
+    );
+    applyAdminMembershipToSummaryBucket(totals, membership, projection);
+    applyAdminMembershipToSummaryBucket(plans[membership.planKey], membership, projection);
+  }
+
+  return {
+    asOf: new Date(asOfUnixSeconds * 1000).toISOString(),
+    ...totals,
+    plans: PLAN_KEYS.map((planKey) => plans[planKey]),
+  };
+}
+
 export function buildListMemberships(requireAdmin: (request: any) => Promise<void>) {
   return onCall({region: REGION}, async (request) => {
     requireAuthUid(request);
@@ -7248,9 +7387,15 @@ export function buildListMemberships(requireAdmin: (request: any) => Promise<voi
     const receipts = new Map(receiptSnaps
       .filter((receipt) => receipt.exists)
       .map((receipt) => [receipt.id, receipt.data()]));
+    const asOfUnixSeconds = Math.floor(Date.now() / 1000);
+    const storedMemberships = snap.docs.map((doc) => doc.data() as MembershipDoc);
     const memberships = snap.docs.map((doc) => {
       const membership = doc.data() as MembershipDoc;
       const participants = participantsFor(membership);
+      const financialProjection = adminMembershipFinancialProjectionFor(
+        membership,
+        asOfUnixSeconds
+      );
       const requestReceiptId = membership.cancellationRequest?.receiptId;
       let receipt: MembershipCancellationReceipt | null = null;
       if (requestReceiptId) {
@@ -7287,6 +7432,8 @@ export function buildListMemberships(requireAdmin: (request: any) => Promise<voi
         firstPaymentReceivedAt: membership.firstPaymentReceivedAt ?? null,
         discount: membership.discount ?? null,
         paymentSchedule: membership.paymentSchedule ?? null,
+        monthlyRecurringPence: financialProjection.monthlyRecurringPence,
+        revenueState: financialProjection.revenueState,
         currentPeriodEnd: membership.currentPeriodEnd ?? null,
         cancelAt: membership.cancelAt ?? null,
         disputeOpen: membership.disputeOpen ?? false,
@@ -7323,7 +7470,19 @@ export function buildListMemberships(requireAdmin: (request: any) => Promise<voi
       };
     });
 
-    return {ok: true, memberships, planKeys: PLAN_KEYS};
+    return {
+      ok: true,
+      memberships,
+      planKeys: PLAN_KEYS,
+      summary: {
+        ...buildAdminMembershipFinancialSummary(
+          storedMemberships,
+          asOfUnixSeconds
+        ),
+        isComplete: snap.size < 500,
+        reportingLimit: 500,
+      },
+    };
   });
 }
 
@@ -7556,6 +7715,8 @@ export const __testing = {
   resolveCurrentPeriodEnd,
   resolveInvoiceSubscriptionId,
   resolveApprovedCheckoutDiscount,
+  adminMembershipFinancialProjectionFor,
+  buildAdminMembershipFinancialSummary,
 };
 
 /** ---------------------------------------------------------------

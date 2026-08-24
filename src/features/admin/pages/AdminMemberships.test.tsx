@@ -5,6 +5,10 @@ import AdminMemberships from "./AdminMemberships";
 const mockListMemberships = jest.fn();
 const mockLinkMembershipParticipant = jest.fn();
 
+jest.mock("../../../components/layout/AppBottomNav", () => () => (
+  <nav aria-label="Primary" />
+));
+
 jest.mock("../../memberships/services/membership", () => ({
   MEMBERSHIP_STATE_LABEL: {
     incomplete: "Awaiting payment",
@@ -82,10 +86,17 @@ describe("AdminMemberships cancellation attention", () => {
     });
   });
 
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   it("keeps a cancellation manual-review record in attention and shows its error", async () => {
     render(<AdminMemberships />);
 
-    expect(await screen.findByText("Adult Gym Only")).toBeInTheDocument();
+    expect(await screen.findByText("Review Member")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", {
+      name: "View details for Review Member",
+    }));
     expect(screen.getByText("Cancellation request needs manual review"))
       .toBeInTheDocument();
     expect(screen.getByText(
@@ -155,13 +166,11 @@ describe("AdminMemberships cancellation attention", () => {
 
     render(<AdminMemberships />);
 
-    expect(await screen.findByText("No memberships match this filter."))
-      .toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", {name: "scheduled"}));
-
-    expect(await screen.findByRole("heading", {name: "Adult Unlimited Membership"}))
-      .toBeInTheDocument();
-    expect(screen.getByText("Scheduled — starts 1 September")).toBeInTheDocument();
+    expect(await screen.findByText("Scheduled Member")).toBeInTheDocument();
+    expect(screen.getAllByText("Scheduled").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", {
+      name: "View details for Scheduled Member",
+    }));
     expect(screen.getByText("Pre-opening membership")).toBeInTheDocument();
     expect(screen.getByText("Existing-member discount applied")).toBeInTheDocument();
     expect(screen.queryByText("Zero Alpha App access has not been applied"))
@@ -222,14 +231,20 @@ describe("AdminMemberships cancellation attention", () => {
           discountedPaymentCount: null,
           fullPriceFrom: null,
         },
+        monthlyRecurringPence: 5950,
+        revenueState: "at_risk",
       }],
     });
 
     render(<AdminMemberships />);
 
-    expect(await screen.findByText(
-      "Participants: Alex Child · age 14; Sam Child · age 13 · guardian Ava Parent"
-    )).toBeInTheDocument();
+    expect(await screen.findByText("Alex Child")).toBeInTheDocument();
+    expect(screen.getByText("Sam Child")).toBeInTheDocument();
+    expect(screen.getByText("Guardian Ava Parent")).toBeInTheDocument();
+    expect(screen.getByText("£59.50")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", {
+      name: "View details for Alex Child, Sam Child",
+    }));
     expect(screen.getByText("Family discount applied")).toBeInTheDocument();
     expect(screen.getByText(/pay £59.50 per month instead of £70/i))
       .toBeInTheDocument();
@@ -272,6 +287,9 @@ describe("AdminMemberships cancellation attention", () => {
     render(<AdminMemberships />);
 
     fireEvent.click(await screen.findByRole("button", {
+      name: "View details for Repair Member",
+    }));
+    fireEvent.click(await screen.findByRole("button", {
       name: "Repair Zero Alpha App access",
     }));
 
@@ -281,7 +299,7 @@ describe("AdminMemberships cancellation attention", () => {
         "repair-target"
       );
     });
-    expect(screen.getByText(/reapplies access only to the account already linked/i))
+    expect(screen.getByText(/Zero Alpha App access target: repair-target/i))
       .toBeInTheDocument();
   });
 
@@ -324,6 +342,9 @@ describe("AdminMemberships cancellation attention", () => {
 
     render(<AdminMemberships />);
     fireEvent.click(await screen.findByRole("button", {
+      name: "View details for Repair Member",
+    }));
+    fireEvent.click(await screen.findByRole("button", {
       name: "Repair Zero Alpha App access",
     }));
 
@@ -331,5 +352,99 @@ describe("AdminMemberships cancellation attention", () => {
       .toBeInTheDocument();
     expect(screen.getByRole("button", {name: "Repair Zero Alpha App access"}))
       .toBeEnabled();
+  });
+
+  it("shows server-calculated income and filters rows by membership plan", async () => {
+    const bucket = {
+      totalSubscriptions: 1,
+      openSubscriptions: 1,
+      openParticipants: 1,
+      currentSubscriptions: 1,
+      scheduledSubscriptions: 0,
+      paymentIssueSubscriptions: 0,
+      awaitingPaymentSubscriptions: 0,
+      endedSubscriptions: 0,
+      projectedMonthlyPence: 4500,
+      atRiskMonthlyPence: 0,
+    };
+    mockListMemberships.mockResolvedValue({
+      ok: true,
+      memberships: [
+        {
+          subscriptionId: "sub_gym",
+          payerUid: "payer-gym",
+          payerEmail: "gym@example.test",
+          planKey: "adult_gym",
+          planName: "Adult Gym Only",
+          state: "active",
+          stripeStatus: "active",
+          grantsAlphaWodAccess: false,
+          entitlementTargetUid: null,
+          participantFullName: "Gym Member",
+          participantAge: 30,
+          participantIsPayer: true,
+          guardianFullName: null,
+          currentPeriodEnd: 1_790_809_200,
+          cancelAt: null,
+          disputeOpen: false,
+          accessRevoked: false,
+          monthlyRecurringPence: 4500,
+          revenueState: "projected",
+        },
+        {
+          subscriptionId: "sub_ladies",
+          payerUid: "payer-ladies",
+          payerEmail: "ladies@example.test",
+          planKey: "adult_ladies",
+          planName: "Adult Ladies Only Membership",
+          state: "active",
+          stripeStatus: "active",
+          grantsAlphaWodAccess: false,
+          entitlementTargetUid: null,
+          participantFullName: "Ladies Member",
+          participantAge: 32,
+          participantIsPayer: true,
+          guardianFullName: null,
+          currentPeriodEnd: 1_790_809_200,
+          cancelAt: null,
+          disputeOpen: false,
+          accessRevoked: false,
+          monthlyRecurringPence: 5000,
+          revenueState: "projected",
+        },
+      ],
+      summary: {
+        ...bucket,
+        totalSubscriptions: 2,
+        openSubscriptions: 2,
+        openParticipants: 2,
+        currentSubscriptions: 2,
+        projectedMonthlyPence: 9500,
+        asOf: "2026-08-24T12:00:00.000Z",
+        isComplete: true,
+        reportingLimit: 500,
+        plans: [
+          {planKey: "adult_gym", planName: "Adult Gym Only", ...bucket},
+          {
+            planKey: "adult_ladies",
+            planName: "Adult Ladies Only Membership",
+            ...bucket,
+            projectedMonthlyPence: 5000,
+          },
+        ],
+      },
+    });
+
+    render(<AdminMemberships />);
+
+    expect(await screen.findByText("£95")).toBeInTheDocument();
+    expect(screen.getByText("Gym Member")).toBeInTheDocument();
+    expect(screen.getByText("Ladies Member")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", {name: /Adult Gym Only 1/i}));
+
+    expect(screen.getByText("Gym Member")).toBeInTheDocument();
+    expect(screen.queryByText("Ladies Member")).not.toBeInTheDocument();
+    expect(screen.getByText(/£45 projected monthly/i)).toBeInTheDocument();
   });
 });
