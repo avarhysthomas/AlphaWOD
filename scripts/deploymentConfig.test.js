@@ -131,6 +131,7 @@ test("membership Functions deploy in complete selective batches of ten or fewer"
     "functions:getMyMemberships",
     "functions:linkMembershipParticipant",
     "functions:listMemberships",
+    "functions:releaseAbandonedMembershipCheckout",
     "functions:recoverMembershipCancellations",
     "functions:recoverStripeEvents",
     "functions:reconcilePastDueMemberships",

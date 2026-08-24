@@ -572,14 +572,39 @@ export type AdminMembershipSummary = AdminMembershipSummaryBucket & {
   reportingLimit: number;
 };
 
+export type AdminCheckoutIssue = {
+  intentId: string;
+  planKey: PlanKey;
+  planName: string;
+  participantFullNames: string[];
+  participantCount: number;
+  payerUid: string | null;
+  payerEmail: string | null;
+  status: "reserved" | "created" | "payment_pending";
+  createdAt: number | null;
+  checkoutExpiresAt: number;
+  canRelease: boolean;
+};
+
 export async function listMemberships() {
   const invoke = httpsCallable<Record<string, never>, {
     ok: boolean;
     memberships: AdminMembership[];
     summary: AdminMembershipSummary;
+    checkoutIssues: AdminCheckoutIssue[];
   }>(functions, "listMemberships");
 
   const result = await invoke({});
+  return result.data;
+}
+
+export async function releaseAbandonedMembershipCheckout(intentId: string) {
+  const invoke = httpsCallable<
+    {intentId: string},
+    {ok: boolean; intentId: string; outcome: "released" | "already_released"}
+  >(functions, "releaseAbandonedMembershipCheckout");
+
+  const result = await invoke({intentId});
   return result.data;
 }
 

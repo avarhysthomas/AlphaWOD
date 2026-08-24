@@ -39,6 +39,7 @@ import {
   buildCreateMembershipCheckoutSession,
   buildListMemberships,
   buildLinkMembershipParticipant,
+  buildReleaseAbandonedMembershipCheckout,
   buildRecoverMembershipCancellations,
   buildRecoverStripeEvents,
   buildReconcilePastDueMemberships,
@@ -2295,6 +2296,8 @@ export const requestMembershipCancellation = buildRequestMembershipCancellation(
 );
 export const claimMembership = buildClaimMembership(convergeUserDerivedAccess);
 export const listMemberships = buildListMemberships(requireAdmin);
+export const releaseAbandonedMembershipCheckout =
+  buildReleaseAbandonedMembershipCheckout(requireAdmin);
 export const linkMembershipParticipant = buildLinkMembershipParticipant(
   requireAdmin,
   convergeUserDerivedAccess

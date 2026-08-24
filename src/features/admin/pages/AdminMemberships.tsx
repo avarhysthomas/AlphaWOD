@@ -1,4 +1,4 @@
-import React, {useCallback, useEffect, useMemo, useState} from "react";
+import React, {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import {Link} from "react-router-dom";
 import {
   AlertTriangle,
@@ -9,6 +9,7 @@ import {
   PoundSterling,
   RefreshCw,
   Search,
+  ShieldCheck,
   Users,
 } from "lucide-react";
 import AppBottomNav from "../../../components/layout/AppBottomNav";
@@ -19,6 +20,8 @@ import {
   formatUnixDate,
   linkMembershipParticipant,
   listMemberships,
+  releaseAbandonedMembershipCheckout,
+  type AdminCheckoutIssue,
   type AdminMembership,
   type AdminMembershipSummary,
   type MembershipState,
@@ -439,6 +442,7 @@ function MembershipDetails({
 
 export default function AdminMemberships() {
   const [memberships, setMemberships] = useState<AdminMembership[]>([]);
+  const [checkoutIssues, setCheckoutIssues] = useState<AdminCheckoutIssue[]>([]);
   const [summary, setSummary] = useState<AdminMembershipSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -450,20 +454,36 @@ export default function AdminMemberships() {
   const [linkingSubscriptionId, setLinkingSubscriptionId] = useState<string | null>(null);
   const [linkUid, setLinkUid] = useState("");
   const [busySubscriptionId, setBusySubscriptionId] = useState("");
+  const [busyCheckoutIntentId, setBusyCheckoutIntentId] = useState("");
+  const [checkoutRecoveryMessage, setCheckoutRecoveryMessage] = useState("");
+  const loadRequestIdRef = useRef(0);
 
   const load = useCallback(async () => {
+    const requestId = ++loadRequestIdRef.current;
     try {
       setRefreshing(true);
       setError("");
       const result = await listMemberships();
+      if (requestId !== loadRequestIdRef.current) return;
       setMemberships(result.memberships);
+      if (Array.isArray(result.checkoutIssues)) {
+        setCheckoutIssues(result.checkoutIssues);
+      } else {
+        setCheckoutIssues([]);
+        setError(
+          "Interrupted checkout data is unavailable because the billing admin service is out of date. Update the service before releasing checkout reservations."
+        );
+      }
       setSummary(result.summary ?? null);
     } catch (loadError: unknown) {
+      if (requestId !== loadRequestIdRef.current) return;
       setError(loadError instanceof Error ?
         loadError.message : "Could not load membership reporting.");
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (requestId === loadRequestIdRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
 
@@ -517,6 +537,22 @@ export default function AdminMemberships() {
       });
   }, [memberships, planFilter, search, statusFilter]);
 
+  const filteredCheckoutIssues = useMemo(() => {
+    const normalizedSearch = search.trim().toLowerCase();
+    return checkoutIssues.filter((issue) => {
+      if (planFilter !== "all" && issue.planKey !== planFilter) return false;
+      if (!normalizedSearch) return true;
+      return [
+        ...issue.participantFullNames,
+        issue.payerEmail,
+        issue.intentId,
+      ].filter(Boolean).join(" ").toLowerCase().includes(normalizedSearch);
+    });
+  }, [checkoutIssues, planFilter, search]);
+  const planCheckoutIssueCount = checkoutIssues.filter((issue) =>
+    planFilter === "all" || issue.planKey === planFilter
+  ).length;
+
   const planCount = (planKey: PlanFilter) => {
     if (summary) {
       if (planKey === "all") return summary.openSubscriptions;
@@ -563,6 +599,33 @@ export default function AdminMemberships() {
     }
   };
 
+  const releaseCheckout = async (issue: AdminCheckoutIssue) => {
+    const names = issue.participantFullNames.join(", ") || "this customer";
+    const confirmed = window.confirm(
+      `Verify and release the interrupted checkout for ${names}?\n\n` +
+      "Stripe will be checked first. A completed, paid or uncertain checkout will stay locked."
+    );
+    if (!confirmed) return;
+
+    try {
+      setBusyCheckoutIntentId(issue.intentId);
+      setCheckoutRecoveryMessage("");
+      setError("");
+      const result = await releaseAbandonedMembershipCheckout(issue.intentId);
+      setCheckoutRecoveryMessage(result.outcome === "already_released" ?
+        `${names}’s checkout was already released.` :
+        `${names}’s unpaid checkout was released. They can now start again.`);
+      await load();
+    } catch (releaseError: unknown) {
+      const releaseMessage = releaseError instanceof Error ?
+        releaseError.message : "Could not safely release this checkout.";
+      await load();
+      setError(releaseMessage);
+    } finally {
+      setBusyCheckoutIntentId("");
+    }
+  };
+
   return (
     <div className="px-3 pb-36 pt-5 sm:px-6 lg:px-8">
       <main className="mx-auto max-w-7xl">
@@ -584,7 +647,7 @@ export default function AdminMemberships() {
               className="inline-flex min-h-11 items-center justify-center gap-2 self-start rounded-xl border border-white/12 bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-white/80 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white focus:outline-none focus:ring-2 focus:ring-white/20 disabled:cursor-not-allowed disabled:opacity-50 lg:self-auto"
             >
               <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
-              {refreshing ? "Refreshing" : "Refresh Stripe view"}
+              {refreshing ? "Refreshing" : "Refresh billing records"}
             </button>
           </div>
 
@@ -623,6 +686,13 @@ export default function AdminMemberships() {
           </div>
         ) : null}
 
+        {checkoutRecoveryMessage ? (
+          <div role="status" className="mt-5 flex items-start gap-3 rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.08] px-4 py-4 text-sm text-emerald-100">
+            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+            <p>{checkoutRecoveryMessage}</p>
+          </div>
+        ) : null}
+
         {summary && !summary.isComplete ? (
           <div className="mt-5 rounded-2xl border border-amber-400/20 bg-amber-400/[0.08] px-4 py-4 text-sm leading-6 text-amber-100">
             This report reached its {summary.reportingLimit}-membership safety limit.
@@ -637,6 +707,102 @@ export default function AdminMemberships() {
           </div>
         ) : (
           <>
+            {planCheckoutIssueCount > 0 ? (
+              <section
+                aria-labelledby="checkout-recovery-title"
+                className="mt-6 overflow-hidden rounded-2xl border border-amber-300/20 bg-[#11100f]"
+              >
+                <div className="flex flex-col gap-3 border-b border-white/8 px-4 py-5 sm:px-5 lg:flex-row lg:items-start lg:justify-between lg:px-6">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 id="checkout-recovery-title" className="text-xl font-semibold tracking-[-0.02em] text-white">
+                        Interrupted checkouts
+                      </h2>
+                      <span className="rounded-full border border-amber-300/20 bg-amber-300/[0.08] px-2.5 py-1 text-xs font-semibold text-amber-100">
+                        {search.trim() ?
+                          `${filteredCheckoutIssues.length} of ${planCheckoutIssueCount}` :
+                          `${planCheckoutIssueCount} open`}
+                      </span>
+                    </div>
+                    <p className="mt-2 max-w-[70ch] text-sm leading-6 text-white/52">
+                      These are Stripe checkout reservations, not completed memberships.
+                      Release one only after the customer confirms they were knocked out
+                      of checkout. The server will recheck Stripe and refuse any completed,
+                      paid or uncertain Session.
+                    </p>
+                  </div>
+                  <label className="relative block w-full lg:w-72">
+                    <span className="sr-only">Search interrupted checkouts</span>
+                    <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-white/35" />
+                    <input
+                      type="search"
+                      value={search}
+                      onChange={(event) => setSearch(event.target.value)}
+                      placeholder="Search interrupted checkout"
+                      className="min-h-11 w-full rounded-xl border border-white/10 bg-white/[0.035] py-2.5 pl-10 pr-4 text-sm text-white outline-none placeholder:text-white/32 focus:border-white/22 focus:ring-2 focus:ring-white/10"
+                    />
+                  </label>
+                </div>
+
+                <div className="divide-y divide-white/8">
+                  {filteredCheckoutIssues.length === 0 ? (
+                    <div className="px-5 py-8 text-center text-sm text-white/48">
+                      No interrupted checkout matches this search.
+                    </div>
+                  ) : filteredCheckoutIssues.map((issue) => {
+                    const names = issue.participantFullNames.join(", ") ||
+                      "Unnamed checkout";
+                    const busy = busyCheckoutIntentId === issue.intentId;
+                    const stateLabel = issue.status === "payment_pending" ?
+                      "Confirmation pending" : issue.status === "reserved" ?
+                        "Provider result unknown" : "Checkout interrupted";
+                    return (
+                      <article
+                        key={issue.intentId}
+                        className="grid gap-4 px-4 py-4 sm:px-5 lg:grid-cols-[minmax(14rem,1.2fr)_minmax(11rem,0.8fr)_minmax(11rem,0.8fr)_auto] lg:items-center lg:px-6"
+                      >
+                        <div className="min-w-0">
+                          <p className="break-words font-semibold text-white">{names}</p>
+                          <p className="mt-1 text-xs leading-5 text-white/45">
+                            {issue.planName} · {issue.participantCount} participant
+                            {issue.participantCount === 1 ? "" : "s"}
+                          </p>
+                        </div>
+                        <div className="min-w-0 text-sm">
+                          <p className="text-white/72">{stateLabel}</p>
+                          <p className="mt-1 break-all text-xs text-white/42">
+                            {issue.payerEmail ?? (issue.payerUid ?
+                              `Account ${issue.payerUid}` : "Anonymous checkout")}
+                          </p>
+                        </div>
+                        <div className="text-sm">
+                          <p className="text-white/72">
+                            {issue.createdAt ? new Date(issue.createdAt).toLocaleString("en-GB") :
+                              "Start time unavailable"}
+                          </p>
+                          <p className="mt-1 text-xs text-white/42">
+                            Stripe expiry {formatUnixDate(issue.checkoutExpiresAt)}
+                          </p>
+                        </div>
+                        <div className="lg:justify-self-end">
+                          <button
+                            type="button"
+                            onClick={() => void releaseCheckout(issue)}
+                            disabled={!issue.canRelease || busy}
+                            className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-amber-200/25 bg-amber-200/[0.08] px-4 py-2.5 text-sm font-semibold text-amber-50 transition hover:border-amber-200/45 hover:bg-amber-200/[0.12] focus:outline-none focus:ring-2 focus:ring-amber-200/25 disabled:cursor-not-allowed disabled:border-white/8 disabled:bg-white/[0.025] disabled:text-white/35 lg:w-auto"
+                          >
+                            <ShieldCheck className="h-4 w-4" />
+                            {busy ? "Checking Stripe…" : issue.canRelease ?
+                              "Verify and release" : "Billing review required"}
+                          </button>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              </section>
+            ) : null}
+
             <nav
               className="mt-6 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
               aria-label="Membership plans"

@@ -4,6 +4,7 @@ import AdminMemberships from "./AdminMemberships";
 
 const mockListMemberships = jest.fn();
 const mockLinkMembershipParticipant = jest.fn();
+const mockReleaseAbandonedMembershipCheckout = jest.fn();
 
 jest.mock("../../../components/layout/AppBottomNav", () => () => (
   <nav aria-label="Primary" />
@@ -24,6 +25,8 @@ jest.mock("../../memberships/services/membership", () => ({
   linkMembershipParticipant: (...args: unknown[]) =>
     mockLinkMembershipParticipant(...args),
   listMemberships: () => mockListMemberships(),
+  releaseAbandonedMembershipCheckout: (...args: unknown[]) =>
+    mockReleaseAbandonedMembershipCheckout(...args),
 }));
 
 jest.mock(
@@ -44,8 +47,13 @@ describe("AdminMemberships cancellation attention", () => {
       alreadyLinked: true,
       repaired: true,
     });
+    mockReleaseAbandonedMembershipCheckout.mockResolvedValue({
+      ok: true,
+      outcome: "released",
+    });
     mockListMemberships.mockResolvedValue({
       ok: true,
+      checkoutIssues: [],
       memberships: [{
         subscriptionId: "sub_cancel_review",
         payerUid: "payer-one",
@@ -114,6 +122,92 @@ describe("AdminMemberships cancellation attention", () => {
       .toBeInTheDocument();
     expect(screen.queryByRole("button", {name: "Repair Zero Alpha App access"}))
       .not.toBeInTheDocument();
+  });
+
+  it("lets an admin verify and release Stacey's interrupted unpaid checkout", async () => {
+    jest.spyOn(window, "confirm").mockReturnValue(true);
+    mockListMemberships.mockResolvedValue({
+      ok: true,
+      memberships: [],
+      checkoutIssues: [{
+        intentId: `attempt_${"a".repeat(64)}`,
+        planKey: "adult_unlimited",
+        planName: "Adult Unlimited Membership",
+        participantFullNames: ["Stacey Example"],
+        participantCount: 1,
+        payerUid: null,
+        payerEmail: null,
+        status: "created",
+        createdAt: Date.parse("2026-08-24T09:00:00.000Z"),
+        checkoutExpiresAt: 1_788_227_200,
+        canRelease: true,
+      }],
+    });
+
+    render(<AdminMemberships />);
+
+    expect(await screen.findByText("Stacey Example")).toBeInTheDocument();
+    expect(screen.getByRole("heading", {name: "Interrupted checkouts"}))
+      .toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Filter by membership status"), {
+      target: {value: "issues"},
+    });
+    expect(screen.getByText("Stacey Example")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", {name: "Verify and release"}));
+
+    await waitFor(() => expect(mockReleaseAbandonedMembershipCheckout)
+      .toHaveBeenCalledWith(`attempt_${"a".repeat(64)}`));
+    expect(await screen.findByText(
+      "Stacey Example’s unpaid checkout was released. They can now start again."
+    )).toBeInTheDocument();
+  });
+
+  it("warns when an older billing service omits interrupted checkout data", async () => {
+    mockListMemberships.mockResolvedValue({
+      ok: true,
+      memberships: [],
+      summary: null,
+    });
+
+    render(<AdminMemberships />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Interrupted checkout data is unavailable because the billing admin service is out of date."
+    );
+    expect(screen.queryByRole("heading", {name: "Interrupted checkouts"}))
+      .not.toBeInTheDocument();
+  });
+
+  it("refreshes an interrupted checkout after a provider-side release refusal", async () => {
+    jest.spyOn(window, "confirm").mockReturnValue(true);
+    const checkoutIssue = {
+      intentId: `attempt_${"b".repeat(64)}`,
+      planKey: "youth_youngstars",
+      planName: "HYROX Youngstars U11",
+      participantFullNames: ["Stacey Example"],
+      participantCount: 1,
+      payerUid: null,
+      payerEmail: null,
+      status: "created",
+      createdAt: Date.parse("2026-08-24T09:00:00.000Z"),
+      checkoutExpiresAt: 1_788_227_200,
+      canRelease: true,
+    };
+    mockListMemberships
+      .mockResolvedValueOnce({ok: true, memberships: [], checkoutIssues: [checkoutIssue]})
+      .mockResolvedValueOnce({ok: true, memberships: [], checkoutIssues: []});
+    mockReleaseAbandonedMembershipCheckout.mockRejectedValueOnce(
+      new Error("Stripe now reports this checkout is processing.")
+    );
+
+    render(<AdminMemberships />);
+    fireEvent.click(await screen.findByRole("button", {name: "Verify and release"}));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Stripe now reports this checkout is processing."
+    );
+    expect(mockListMemberships).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText("Stacey Example")).not.toBeInTheDocument();
   });
 
   it("keeps a healthy presale membership out of attention and shows its schedule", async () => {

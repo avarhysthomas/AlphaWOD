@@ -81,7 +81,11 @@ const createCustomerPortalSession = functionsTest.wrap(
 );
 const requestMembershipCancellation = functionsTest.wrap(functions.requestMembershipCancellation);
 const getMyMemberships = functionsTest.wrap(functions.getMyMemberships);
+const listMemberships = functionsTest.wrap(functions.listMemberships);
 const linkMembershipParticipant = functionsTest.wrap(functions.linkMembershipParticipant);
+const releaseAbandonedMembershipCheckout = functionsTest.wrap(
+  functions.releaseAbandonedMembershipCheckout
+);
 
 let fakeStripe;
 
@@ -5685,6 +5689,188 @@ test("session claim does not grant when Stripe has already canceled", async () =
     .doc("sub_canceled_session_claim").get();
   assert.equal(membership.get("state"), "cancelled");
   assert.equal(membership.get("entitlementTargetUid"), null);
+});
+
+test("admin recovery expires only a verified open unpaid checkout and releases its locks", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  try {
+    await createMember("checkoutreleaseadmin", {
+      profile: {
+        role: "admin",
+        approvalStatus: "approved",
+        entitlementStatus: "active",
+        entitlementSource: "staff",
+        alphaWodAccess: true,
+      },
+    });
+    const checkout = await handler(request(
+      validCheckoutData("attempt_staff_release_open_unpaid_123456")
+    ));
+    const intents = await db.collection("membershipIntents").get();
+    assert.equal(intents.size, 1);
+    const intent = intents.docs[0];
+    const checkoutSessionUrl = intent.get("checkoutSessionUrl");
+    await intent.ref.update({
+      createdAt: admin.firestore.Timestamp.fromMillis(
+        Date.now() - 20 * 60 * 1000
+      ),
+    });
+
+    await intent.ref.update({checkoutSessionUrl: admin.firestore.FieldValue.delete()});
+    const withoutSessionUrl = await listMemberships(request(
+      {},
+      "checkoutreleaseadmin"
+    ));
+    assert.equal(withoutSessionUrl.checkoutIssues[0].canRelease, false);
+    await intent.ref.update({checkoutSessionUrl});
+
+    const beforeRelease = await listMemberships(request(
+      {},
+      "checkoutreleaseadmin"
+    ));
+    assert.equal(beforeRelease.checkoutIssues.length, 1);
+    assert.equal(beforeRelease.checkoutIssues[0].intentId, intent.id);
+    assert.deepEqual(
+      beforeRelease.checkoutIssues[0].participantFullNames,
+      ["Checkout Athlete"]
+    );
+    assert.equal(beforeRelease.checkoutIssues[0].canRelease, true);
+
+    const result = await releaseAbandonedMembershipCheckout(request(
+      {intentId: intent.id},
+      "checkoutreleaseadmin"
+    ));
+
+    assert.equal(result.outcome, "released");
+    assert.equal(
+      fakeStripe.state.checkoutSessions.get(checkout.sessionId).status,
+      "expired"
+    );
+    const released = await intent.ref.get();
+    assert.equal(released.get("status"), "expired");
+    assert.equal(released.get("manualRecoveryBy"), "checkoutreleaseadmin");
+    assert.equal(
+      released.get("manualRecoveryReason"),
+      "staff_verified_open_unpaid"
+    );
+    assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 0);
+    const audits = await db.collection("membershipAudit")
+      .where("type", "==", "abandoned_checkout_released").get();
+    assert.equal(audits.size, 1);
+    assert.equal(audits.docs[0].get("releasedBy"), "checkoutreleaseadmin");
+    const afterRelease = await listMemberships(request(
+      {},
+      "checkoutreleaseadmin"
+    ));
+    assert.equal(afterRelease.checkoutIssues.length, 0);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("admin recovery keeps a completed checkout locked for fulfilment", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  try {
+    await createMember("checkoutprocessingadmin", {
+      profile: {
+        role: "admin",
+        approvalStatus: "approved",
+        entitlementStatus: "active",
+        entitlementSource: "staff",
+        alphaWodAccess: true,
+      },
+    });
+    const checkout = await handler(request(
+      validCheckoutData("attempt_staff_release_complete_123456")
+    ));
+    const intents = await db.collection("membershipIntents").get();
+    const intent = intents.docs[0];
+    await intent.ref.update({
+      createdAt: admin.firestore.Timestamp.fromMillis(
+        Date.now() - 20 * 60 * 1000
+      ),
+    });
+    const session = fakeStripe.state.checkoutSessions.get(checkout.sessionId);
+    session.status = "complete";
+    session.payment_status = "no_payment_required";
+    fakeStripe.state.checkoutSessions.set(checkout.sessionId, session);
+
+    await assert.rejects(
+      () => releaseAbandonedMembershipCheckout(request(
+        {intentId: intent.id},
+        "checkoutprocessingadmin"
+      )),
+      (error) => {
+        assert.equal(error.code, "failed-precondition");
+        assert.equal(error.details?.reason, "checkout_processing");
+        return true;
+      }
+    );
+    assert.equal((await intent.ref.get()).get("status"), "payment_pending");
+    assert.ok((await db.collection("membershipCheckoutLocks").get()).size > 0);
+    assert.equal(
+      fakeStripe.state.checkoutSessions.get(checkout.sessionId).status,
+      "complete"
+    );
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("admin recovery cannot release a checkout during its ten-minute safety window", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  try {
+    await createMember("checkoutrecentadmin", {
+      profile: {
+        role: "admin",
+        approvalStatus: "approved",
+        entitlementStatus: "active",
+        entitlementSource: "staff",
+        alphaWodAccess: true,
+      },
+    });
+    const checkout = await handler(request(
+      validCheckoutData("attempt_staff_release_recent_123456")
+    ));
+    const intent = (await db.collection("membershipIntents").get()).docs[0];
+    await intent.ref.update({
+      createdAt: admin.firestore.Timestamp.fromMillis(
+        Date.now() - 5 * 60 * 1000
+      ),
+    });
+
+    await assert.rejects(
+      () => releaseAbandonedMembershipCheckout(request(
+        {intentId: intent.id},
+        "checkoutrecentadmin"
+      )),
+      (error) => {
+        assert.equal(error.code, "failed-precondition");
+        assert.equal(error.details?.reason, "checkout_still_recent");
+        return true;
+      }
+    );
+    assert.equal((await intent.ref.get()).get("status"), "created");
+    assert.ok((await db.collection("membershipCheckoutLocks").get()).size > 0);
+    assert.equal(
+      fakeStripe.state.checkoutSessions.get(checkout.sessionId).status,
+      "open"
+    );
+  } finally {
+    Date.now = realNow;
+  }
 });
 
 test("admin participant linking grants and converges access immediately", async () => {

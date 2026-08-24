@@ -3,7 +3,7 @@
 Status: implemented locally on 18 August 2026 and updated for the youth-family
 release on 23 August 2026. Final release results and test counts are not frozen
 here. The only new production service deployed is the public `stripeWebhook`
-receiver; the eight callables, four scheduled workers and customer frontend
+receiver; the nine callables, four scheduled workers and customer frontend
 remain undeployed. The five live Price/Product pairs, original Adult Unlimited
 Coupon and Promotion Code, locked-down Portal, 14-event webhook destination and
 the existence of the three billing secrets were verified as described in
@@ -32,11 +32,12 @@ alone.
 | Membership reconciliation query index | `firestore.indexes.json` |
 | Runtime configuration template | `functions/.env.example` |
 
-New function definitions: eight currently undeployed callables — the retained
+New function definitions: nine currently undeployed callables — the retained
 legacy `createMembershipCheckoutSession`, the versioned
 `createMembershipCheckoutSessionV2`, `createCustomerPortalSession`,
 `getMyMemberships`, `requestMembershipCancellation`, `claimMembership`,
-`listMemberships`, and `linkMembershipParticipant` — plus the deployed public
+`listMemberships`, `linkMembershipParticipant`, and the admin-only
+`releaseAbandonedMembershipCheckout` — plus the deployed public
 `stripeWebhook` HTTP endpoint and four currently undeployed scheduled functions:
 `recoverStripeEvents`, `recoverMembershipCancellations`,
 `reconcilePastDueMemberships`, and
@@ -655,7 +656,7 @@ apply to any deployment that touches the existing functions.
   It is not a callable and must not be given the callable IAM lockdown. Its
   security is the Stripe signature check, which runs against the raw body before
   anything else, plus the recoverable `stripeEvents` lease ledger.
-- The eight callables must be created and then re-blocked in the same way
+- The nine callables must be created and then re-blocked in the same way
   Phase 0 step 7 describes for its four new callables: the Firebase CLI makes
   newly created callables public on creation. Keep them blocked through the
   migration/final-rules work and until the compatible frontend is live. The
@@ -743,7 +744,7 @@ npm run verify:stripe-live-config --prefix functions
 ```
 
 Only after those checks pass and every required secret exists, deploy exactly
-the thirteen membership services in two batches. Keeping each batch at ten or
+the fourteen membership services in two batches. Keeping each batch at ten or
 fewer follows Firebase's deployment quota guidance. Deploy the signed public
 webhook and four non-callable workers first:
 
@@ -753,17 +754,17 @@ firebase deploy --only functions:stripeWebhook,functions:recoverStripeEvents,fun
 
 Verify that the webhook is public, each worker has only its expected scheduler
 invocation path and all five schedules/triggers are correct. Then deploy the
-eight client callables as the second batch:
+nine client callables as the second batch:
 
 ```sh
-firebase deploy --only functions:createMembershipCheckoutSession,functions:createMembershipCheckoutSessionV2,functions:createCustomerPortalSession,functions:getMyMemberships,functions:requestMembershipCancellation,functions:claimMembership,functions:listMemberships,functions:linkMembershipParticipant --project alphawod-d1f2f
+firebase deploy --only functions:createMembershipCheckoutSession,functions:createMembershipCheckoutSessionV2,functions:createCustomerPortalSession,functions:getMyMemberships,functions:requestMembershipCancellation,functions:claimMembership,functions:listMemberships,functions:linkMembershipParticipant,functions:releaseAbandonedMembershipCheckout --project alphawod-d1f2f
 ```
 
-Immediately inventory and re-block those eight callable services using the
+Immediately inventory and re-block those nine callable services using the
 Phase 0 service-level IAM procedure before any other rollout step. Do not apply
 that callable IAM block to `stripeWebhook` or the scheduled workers. Once the
 closed compatible frontend is confirmed, restore only the reviewed
-service-level transport for V2 and the six non-checkout callables; keep V1
+service-level transport for V2 and the seven non-checkout callables; keep V1
 blocked. V2 checkout with `checkoutSchemaVersion: 2` must reach its handler but
 fail at the still-closed runtime gate; it must not create a Stripe Session. This
 order makes a new frontend fail safely if it arrives before V2 and prevents a

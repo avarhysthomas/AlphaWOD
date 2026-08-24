@@ -7,6 +7,7 @@ import {
   readCheckoutAttemptId,
   readPendingClaim,
   readPendingClaimVerifier,
+  releaseAbandonedMembershipCheckout,
   rememberPendingClaim,
   requestMembershipCancellation,
   resolveCheckoutAttempt,
@@ -112,6 +113,25 @@ describe("checkout attempt identifiers", () => {
       {limitedUseAppCheckTokens: true}
     );
     expect(invoke).toHaveBeenCalledWith(checkout);
+  });
+
+  it("sends only the selected intent id to the admin checkout recovery callable", async () => {
+    const invoke = jest.fn().mockResolvedValue({
+      data: {
+        ok: true,
+        intentId: `attempt_${"a".repeat(64)}`,
+        outcome: "released",
+      },
+    });
+    (httpsCallable as jest.Mock).mockReturnValue(invoke);
+
+    await releaseAbandonedMembershipCheckout(`attempt_${"a".repeat(64)}`);
+
+    expect(httpsCallable).toHaveBeenCalledWith(
+      expect.anything(),
+      "releaseAbandonedMembershipCheckout"
+    );
+    expect(invoke).toHaveBeenCalledWith({intentId: `attempt_${"a".repeat(64)}`});
   });
 
   it("creates unique opaque UUID-shaped values for Stripe idempotency", () => {

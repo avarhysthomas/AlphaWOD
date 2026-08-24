@@ -1762,6 +1762,7 @@ const CHECKOUT_LOCK_COLLECTION = "membershipCheckoutLocks";
 const ENTITLEMENT_OWNER_COLLECTION = "membershipEntitlementOwners";
 const CHECKOUT_SETTLEMENT_GRACE_SECONDS = 60 * 60;
 const ASYNC_PAYMENT_RESERVATION_MS = 7 * 24 * 60 * 60 * 1000;
+const CHECKOUT_MANUAL_RELEASE_MIN_AGE_MS = 10 * 60 * 1000;
 
 type CheckoutLockKind = "participant" | "alpha_wod_payer";
 
@@ -7251,6 +7252,20 @@ type AdminMembershipSummaryBucket = {
   atRiskMonthlyPence: number;
 };
 
+type AdminCheckoutIssue = {
+  intentId: string;
+  planKey: PlanKey;
+  planName: string;
+  participantFullNames: string[];
+  participantCount: number;
+  payerUid: string | null;
+  payerEmail: string | null;
+  status: "reserved" | "created" | "payment_pending";
+  createdAt: number | null;
+  checkoutExpiresAt: number;
+  canRelease: boolean;
+};
+
 function emptyAdminMembershipSummaryBucket(): AdminMembershipSummaryBucket {
   return {
     totalSubscriptions: 0,
@@ -7375,7 +7390,13 @@ export function buildListMemberships(requireAdmin: (request: any) => Promise<voi
     requireAuthUid(request);
     await requireAdmin(request);
 
-    const snap = await db().collection("memberships").orderBy("createdAt", "desc").limit(500).get();
+    const [snap, checkoutIssueSnap] = await Promise.all([
+      db().collection("memberships").orderBy("createdAt", "desc").limit(500).get(),
+      db().collection("membershipIntents")
+        .orderBy("createdAt", "desc")
+        .limit(500)
+        .get(),
+    ]);
     const receiptIds = Array.from(new Set(snap.docs.flatMap((doc) => {
       const receiptId = (doc.data() as MembershipDoc).cancellationRequest?.receiptId;
       return typeof receiptId === "string" && receiptId ? [receiptId] : [];
@@ -7389,6 +7410,33 @@ export function buildListMemberships(requireAdmin: (request: any) => Promise<voi
       .map((receipt) => [receipt.id, receipt.data()]));
     const asOfUnixSeconds = Math.floor(Date.now() / 1000);
     const storedMemberships = snap.docs.map((doc) => doc.data() as MembershipDoc);
+    const checkoutIssues = checkoutIssueSnap.docs.filter((doc) =>
+      doc.get("status") === "reserved" || doc.get("status") === "created" ||
+      doc.get("status") === "payment_pending"
+    ).map((doc): AdminCheckoutIssue => {
+      const intent = doc.data() as MembershipIntentDoc;
+      const participants = participantsFor(intent);
+      const createdAt = timestampMillis(intent.createdAt);
+      return {
+        intentId: doc.id,
+        planKey: intent.planKey,
+        planName: intent.commercialTerms?.planName ?? getPlan(intent.planKey).name,
+        participantFullNames: participants.map(({fullName}) => fullName),
+        participantCount: participantCountFor(intent),
+        payerUid: intent.payerUid ?? null,
+        payerEmail: intent.payerEmail ?? null,
+        status: intent.status as AdminCheckoutIssue["status"],
+        createdAt,
+        checkoutExpiresAt: intent.checkoutExpiresAt,
+        canRelease: intent.status === "created" &&
+          typeof intent.checkoutSessionId === "string" &&
+          Boolean(intent.checkoutSessionId) &&
+          typeof intent.checkoutSessionUrl === "string" &&
+          Boolean(intent.checkoutSessionUrl) &&
+          createdAt !== null &&
+          createdAt <= Date.now() - CHECKOUT_MANUAL_RELEASE_MIN_AGE_MS,
+      };
+    }).sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0));
     const memberships = snap.docs.map((doc) => {
       const membership = doc.data() as MembershipDoc;
       const participants = participantsFor(membership);
@@ -7473,6 +7521,7 @@ export function buildListMemberships(requireAdmin: (request: any) => Promise<voi
     return {
       ok: true,
       memberships,
+      checkoutIssues,
       planKeys: PLAN_KEYS,
       summary: {
         ...buildAdminMembershipFinancialSummary(
@@ -7484,6 +7533,189 @@ export function buildListMemberships(requireAdmin: (request: any) => Promise<voi
       },
     };
   });
+}
+
+function requireMembershipIntentId(value: unknown): string {
+  const intentId = requireBoundedString(value, "intentId", 72, 72);
+  if (!/^attempt_[a-f0-9]{64}$/.test(intentId)) {
+    throw new HttpsError("invalid-argument", "intentId is not a checkout intent.");
+  }
+  return intentId;
+}
+
+function buildReleaseAbandonedCheckoutHandler(
+  requireAdmin: (request: any) => Promise<void>
+) {
+  return async (request: any) => {
+    const staffUid = requireAuthUid(request);
+    await requireAdmin(request);
+    const intentId = requireMembershipIntentId(request.data?.intentId);
+    const intentRef = db().collection("membershipIntents").doc(intentId);
+    const intentSnap = await intentRef.get();
+    if (!intentSnap.exists) {
+      throw new HttpsError("not-found", "Checkout reservation not found.");
+    }
+    const intent = intentSnap.data() as MembershipIntentDoc;
+    if (intent.stripeMode !== assertBillingEnvironment().stripeMode) {
+      throw new HttpsError(
+        "failed-precondition",
+        "This checkout belongs to another Stripe environment."
+      );
+    }
+    if (intent.status === "expired" || intent.status === "failed") {
+      await transitionCheckoutReservation(intentRef, intent.status);
+      return {ok: true, intentId, outcome: "already_released" as const};
+    }
+    if (intent.status === "payment_pending" || intent.status === "fulfilled") {
+      throw checkoutProcessingError();
+    }
+    if (intent.status !== "created" ||
+      typeof intent.checkoutSessionId !== "string" ||
+      !intent.checkoutSessionId ||
+      typeof intent.checkoutSessionUrl !== "string" ||
+      !intent.checkoutSessionUrl) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Stripe has not recorded a verifiable Checkout Session for this reservation. Keep it locked for billing review.",
+        {reason: "checkout_recovery_review"}
+      );
+    }
+    const createdAtMillis = timestampMillis(intent.createdAt);
+    if (createdAtMillis === null ||
+      createdAtMillis > Date.now() - CHECKOUT_MANUAL_RELEASE_MIN_AGE_MS) {
+      throw new HttpsError(
+        "failed-precondition",
+        "This checkout is too recent to release. Let the customer finish or wait ten minutes before support recovery.",
+        {reason: "checkout_still_recent"}
+      );
+    }
+
+    let expectedStripeCustomerId: string | null = null;
+    if (intent.payerUid) {
+      const profile = await db().collection("users").doc(intent.payerUid).get();
+      const storedCustomerId = profile.exists ? profile.get("stripeCustomerId") : null;
+      expectedStripeCustomerId = typeof storedCustomerId === "string" &&
+          storedCustomerId ? storedCustomerId : null;
+    }
+    const reservation: CheckoutReservationResult = {
+      created: false,
+      intent,
+      intentRef,
+      disposition: "same_attempt",
+    };
+    const verified = await verifyCheckoutSessionCandidate(
+      reservation,
+      intent.payerUid ?? null,
+      expectedStripeCustomerId,
+      "same_attempt"
+    );
+
+    if (verified.kind === "expired") {
+      await intentRef.set({
+        manualRecoveryAt: serverTimestamp(),
+        manualRecoveryBy: staffUid,
+        manualRecoveryReason: "staff_verified_provider_expired",
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+      await writeAudit({
+        type: "abandoned_checkout_released",
+        intentId,
+        checkoutSessionId: intent.checkoutSessionId,
+        releasedBy: staffUid,
+        providerStatus: "expired",
+      });
+      return {ok: true, intentId, outcome: "released" as const};
+    }
+    if (verified.session.payment_status !== "unpaid") {
+      throw checkoutProcessingError();
+    }
+
+    let expired: Stripe.Checkout.Session;
+    try {
+      expired = await stripe().checkout.sessions.expire(verified.session.id);
+    } catch (expireError) {
+      try {
+        const current = await stripe().checkout.sessions.retrieve(
+          verified.session.id
+        );
+        assertStripeObjectMode("Checkout Session", current.id, current.livemode);
+        if (current.status === "complete") {
+          await extendCheckoutReservationForAsyncPayment(intentRef);
+          throw checkoutProcessingError();
+        }
+        if (current.status === "expired") {
+          expired = current;
+        } else {
+          throw expireError;
+        }
+      } catch (refreshError) {
+        if (refreshError instanceof HttpsError) throw refreshError;
+        console.error("Staff checkout release could not verify Stripe", {
+          intentIdHash: sha256(intentId),
+          checkoutSessionIdHash: sha256(verified.session.id),
+          provider: checkoutRecoveryProviderDiagnostic(expireError),
+        });
+        throw checkoutRecoveryUnavailableError();
+      }
+    }
+
+    assertStripeObjectMode("Checkout Session", expired.id, expired.livemode);
+    const mismatch = checkoutSessionCommonBindingMismatch(
+      expired,
+      intentRef,
+      intent
+    ) || (intent.payerUid ? checkoutAuthenticatedBindingMismatch(
+      expired,
+      intent.payerUid,
+      expectedStripeCustomerId
+    ) : checkoutAnonymousBindingMismatch(expired));
+    if (expired.status !== "expired" || mismatch) {
+      console.error("Staff checkout release binding mismatch", {
+        intentIdHash: sha256(intentId),
+        checkoutSessionIdHash: sha256(verified.session.id),
+        status: expired.status ?? null,
+        mismatch,
+      });
+      throw checkoutRecoveryReviewError();
+    }
+
+    const transitioned = await transitionCheckoutReservation(
+      intentRef,
+      "expired",
+      {
+        verifiedTerminalAt: serverTimestamp(),
+        manualRecoveryAt: serverTimestamp(),
+        manualRecoveryBy: staffUid,
+        manualRecoveryReason: "staff_verified_open_unpaid",
+      },
+      true,
+      {
+        sessionId: expired.id,
+        mode: expired.mode,
+        planKey: expired.metadata?.planKey ?? null,
+      }
+    );
+    if (!transitioned) throw checkoutProcessingError();
+
+    await writeAudit({
+      type: "abandoned_checkout_released",
+      intentId,
+      checkoutSessionId: expired.id,
+      releasedBy: staffUid,
+      providerStatus: expired.status,
+    });
+    return {ok: true, intentId, outcome: "released" as const};
+  };
+}
+
+export function buildReleaseAbandonedMembershipCheckout(
+  requireAdmin: (request: any) => Promise<void>
+) {
+  return onCall({
+    region: REGION,
+    secrets: MEMBERSHIP_SECRETS,
+    timeoutSeconds: MEMBERSHIP_INTERACTIVE_TIMEOUT_SECONDS,
+  }, buildReleaseAbandonedCheckoutHandler(requireAdmin));
 }
 
 /**
@@ -7717,6 +7949,7 @@ export const __testing = {
   resolveApprovedCheckoutDiscount,
   adminMembershipFinancialProjectionFor,
   buildAdminMembershipFinancialSummary,
+  buildReleaseAbandonedCheckoutHandler,
 };
 
 /** ---------------------------------------------------------------
