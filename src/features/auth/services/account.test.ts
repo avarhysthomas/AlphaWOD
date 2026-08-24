@@ -1,4 +1,5 @@
 import { acceptCurrentWaiver, bootstrapUserProfile } from "./account";
+import { CHECKOUT_DOCUMENTS } from "../../../lib/membershipPlans";
 
 jest.mock("firebase/functions", () => ({
   getFunctions: jest.fn(() => ({})),
@@ -37,7 +38,7 @@ describe("account callables", () => {
 
     await acceptCurrentWaiver({
       acceptedName: "Member A",
-      waiverVersion: "2026-30-05",
+      waiverVersion: CHECKOUT_DOCUMENTS.adultWaiver.version,
       acknowledgements: ["Acknowledged"],
       mediaConsent: false,
     });
@@ -48,7 +49,7 @@ describe("account callables", () => {
     );
     expect(invoke).toHaveBeenCalledWith({
       signedName: "Member A",
-      version: "2026-30-05",
+      version: CHECKOUT_DOCUMENTS.adultWaiver.version,
       acknowledgements: ["Acknowledged"],
       mediaConsent: false,
     });
