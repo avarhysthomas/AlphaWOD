@@ -1,24 +1,35 @@
 # Phase 1: public membership purchase and Stripe Billing
 
 Status: implemented locally on 18 August 2026 and updated for the youth programme
-release on 25 August 2026. Final release results and test counts are not frozen
-here. The only new production service deployed is the public `stripeWebhook`
-receiver; the nine callables, four scheduled workers and customer frontend
-remain undeployed. The five live Price/Product pairs, original Adult Unlimited
-Coupon and Promotion Code, locked-down Portal, 14-event webhook destination and
-the existence of the three billing secrets were verified as described in
-section 7. That historical evidence predates the current youth catalogue and
-non-blocking age-guidance correction.
-The new live youth-family Coupon was created and verified in Stripe Dashboard
-on 23 August as described in section 7. No signed live webhook delivery or live
+release on 25 August 2026. Final release test counts are not frozen here. The
+closed-gate rollout has deployed all fourteen membership services: the public
+`stripeWebhook`, nine callables and four scheduled workers are `ACTIVE` on
+Node.js 24. Both selective Functions batches succeeded, the backend runtime gate
+remains `false`, the reviewed IAM boundaries were preserved and the Stripe event
+ledger is healthy. Closed Vercel Production deployment
+`Hizg4XZi7Fhft77QPEvSrE5s9aLu` is `Ready`, owns `alpha-wod.vercel.app`, and has
+made the frontend purchase gate `false` effective. The public DOM shows “Not
+open yet” and “Online purchase closed”, and all purchase controls are disabled.
+That deployment used the prior `main` SHA and old legal bundle, so the final
+release frontend and its legal-byte verification remain outstanding. The five
+live Price/Product pairs, original Adult
+Unlimited Coupon and Promotion Code, locked-down Portal, 14-event webhook
+destination and the existence of the three billing secrets were verified as
+described in section 7. That historical evidence predates the current youth
+catalogue and non-blocking age-guidance correction.
+The superseded 15% youth-family Coupon was created and verified in Stripe
+Dashboard on 23 August; the current 10% Coupon was created and API-verified on
+25 August as described in section 7. Five existing family memberships retain
+their frozen 15% terms, while the deployed configuration uses the 10% Coupon for
+new eligible checkouts. No old Checkout Session or Stripe event was in flight at
+cutover. No signed live webhook delivery or live
 payment journey has passed. The business owner explicitly approved the current
 mixed publication bundle on 25 August: revised Membership Terms, Privacy Notice
 and Guardian Addendum dated 25 August, with the unchanged Cancellation Policy
 and Adult Waiver dated 23 August. Earlier versions remain historical evidence. The
-approved bundle's exact production bytes and the Stripe youth configuration
-must still be verified before launch. Both backend and frontend environment
-purchase gates remain `false` and cannot be opened by provider configuration
-alone.
+approved bundle's exact production bytes must still be verified after the final
+release frontend is deployed. Both the deployed backend gate and the deployed
+customer-visible gate are currently proven closed.
 
 ## 1. What was built
 
@@ -35,13 +46,13 @@ alone.
 | Membership reconciliation query index | `firestore.indexes.json` |
 | Runtime configuration template | `functions/.env.example` |
 
-New function definitions: nine currently undeployed callables — the retained
+Deployed function definitions: nine callables — the retained
 legacy `createMembershipCheckoutSession`, the versioned
 `createMembershipCheckoutSessionV2`, `createCustomerPortalSession`,
 `getMyMemberships`, `requestMembershipCancellation`, `claimMembership`,
 `listMemberships`, `linkMembershipParticipant`, and the admin-only
-`releaseAbandonedMembershipCheckout` — plus the deployed public
-`stripeWebhook` HTTP endpoint and four currently undeployed scheduled functions:
+`releaseAbandonedMembershipCheckout` — plus the public `stripeWebhook` HTTP
+endpoint and four scheduled functions:
 `recoverStripeEvents`, `recoverMembershipCancellations`,
 `reconcilePastDueMemberships`, and
 `retryMembershipConfirmations`. The new frontend calls only the V2 intake and
@@ -649,8 +660,8 @@ objects. It does not change the production publication or runtime gates.
    `europe-west1`. A public GET returned the expected `405`, and an unsigned POST
    returned the expected `400`. Those checks prove routing and unsigned-request
    rejection only; no signed Stripe delivery, durable event processing or live
-   payment has been smoke-tested. All other membership functions and workers
-   remain undeployed.
+   payment has been smoke-tested. At that time, all other membership functions
+   and workers were undeployed; their closed rollout completed on 25 August.
 10. **Configure Firebase Auth recovery email routing.** Add the staging and final
    app origins to Firebase Auth's authorised domains/action settings, then prove
    that a buyer can close the Checkout tab, follow the confirmation's sign-up or
@@ -659,9 +670,11 @@ objects. It does not change the production publication or runtime gates.
 
 ## 8. Deployment notes that inherit Phase 0 constraints
 
-**Launch deployment remains closed.** The public `stripeWebhook` prerequisite is
-the only new live service; the items below are not authorisation to deploy or
-open any other membership surface.
+**Purchase launch remains closed.** All fourteen membership services are active,
+the backend runtime gate is false, and closed Vercel Production deployment
+`Hizg4XZi7Fhft77QPEvSrE5s9aLu` has made the frontend false gate effective on
+`alpha-wod.vercel.app`. The items below remain the rules for the final release
+frontend and any repeat deployment; they are not authorisation to open purchase.
 
 The Phase 0 runbook's callable-freeze and identity-admin-freeze rules still
 apply to any deployment that touches the existing functions.
@@ -670,18 +683,17 @@ apply to any deployment that touches the existing functions.
   It is not a callable and must not be given the callable IAM lockdown. Its
   security is the Stripe signature check, which runs against the raw body before
   anything else, plus the recoverable `stripeEvents` lease ledger.
-- The nine callables must be created and then re-blocked in the same way
-  Phase 0 step 7 describes for its four new callables: the Firebase CLI makes
-  newly created callables public on creation. Keep them blocked through the
-  migration/final-rules work and until the compatible frontend is live. The
-  compatible frontend calls only `createMembershipCheckoutSessionV2` with
-  `checkoutSchemaVersion: 3`; keep the legacy
-  `createMembershipCheckoutSession` transport blocked throughout and do not
-  restore it as part of opening.
+- The nine callables were created and re-blocked in the same way Phase 0 step 7
+  describes for its four new callables: the Firebase CLI makes newly created
+  callables public on creation. Post-deployment IAM restored only the reviewed
+  service-level transport for `createMembershipCheckoutSessionV2` and the seven
+  non-checkout callables. The backend gate remains false, and legacy
+  `createMembershipCheckoutSession` remains blocked. Preserve that split on
+  every repeat deployment and opening.
 - The four scheduled functions — `recoverStripeEvents`,
   `recoverMembershipCancellations`, `reconcilePastDueMemberships`, and
-  `retryMembershipConfirmations` — must be
-  included in the selective deployment and their UTC schedules verified. They
+  `retryMembershipConfirmations` — were included in the selective deployment
+  and their UTC schedules were verified. They
   are workers, not public callables or the public webhook, so do not apply either
   of those IAM patterns to them.
 - Deploy selectively. Do not use `--only functions`.
@@ -692,22 +704,20 @@ apply to any deployment that touches the existing functions.
   rule was modified.
 - Deploy the `memberships` composite index on `state` and
   `nextReconcileAt` before the grace-reconciliation worker is enabled.
-- Schema version 3 is acceptable for this first rollout only if all ten billing
-  collections are empty. The receiver deployment and unsigned probes do not
-  prove that assumption; preflight must prove they are clean. If any
-  billing documents exist, stop and design a version bump/migration/backfill;
-  this code is not a dual-read migration for unknown data. Retaining the V1
-  callable export is a transport rollout boundary, not a schema migration or
-  permission to accept old checkout requests.
-- After final rules and backend contracts are ready and the approved documents
-  are in the release commit, confirm the external Vercel project, Production
-  branch, domain and complete Production environment. Deploy that exact commit
-  with `REACT_APP_MEMBERSHIP_PURCHASE_ENABLED=false`, then verify the published
-  document bytes and SPA rewrites before deploying the membership Functions.
-  Repository configuration cannot prove the external Vercel linkage. Only after
-  the closed frontend and callable batch are live may the exact reviewed
-  service-level client-callable transport be restored, following the Phase 0
-  restoration manifest; never use a project-level invoker grant. Keep the
+- Stored membership records now use schema version 4; the browser-to-callable
+  checkout request contract remains version 3. The cutover audit found existing
+  billing records, including five active or scheduled family memberships frozen
+  on their original 15% terms. The release deliberately dual-reads those frozen
+  discount policies while writing the current 10% policy. Retaining the V1
+  callable export is a transport rollout boundary, not permission to accept an
+  old checkout request or to rewrite historical commercial terms.
+- The closed Functions rollout and service-level IAM restoration are complete.
+  Confirm the external Vercel project, Production branch, domain and complete
+  Production environment, then deploy the exact final release commit with
+  `REACT_APP_MEMBERSHIP_PURCHASE_ENABLED=false` and verify its published legal
+  bytes and SPA rewrites. Publishing that frontend does not require an unchanged
+  Functions redeployment. On any later Functions deployment, preserve the Phase
+  0 restoration manifest, never use a project-level invoker grant, and keep the
   webhook's public HTTP IAM and scheduler identities separate.
 - Before maintenance ends, inspect IAM and smoke-test each restored callable
   through the real Firebase client transport. V2 checkout with schema version 3
@@ -757,10 +767,13 @@ npm run verify:production-armed-config --prefix functions
 npm run verify:stripe-live-config --prefix functions
 ```
 
-Only after those checks pass and every required secret exists, deploy exactly
-the fourteen membership services in two batches. Keeping each batch at ten or
-fewer follows Firebase's deployment quota guidance. Deploy the signed public
-webhook and four non-callable workers first:
+The 25 August closed rollout already deployed the fourteen membership services
+in the following two batches and restored their reviewed IAM boundaries. These
+commands are the recorded target manifest and the required order for a future
+Functions change; do not redeploy unchanged Functions merely because the final
+frontend is published. When a repeat deployment is required, keep each batch at
+ten or fewer targets and deploy the signed public webhook and four non-callable
+workers first:
 
 ```sh
 firebase deploy --only functions:stripeWebhook,functions:recoverStripeEvents,functions:recoverMembershipCancellations,functions:reconcilePastDueMemberships,functions:retryMembershipConfirmations --project alphawod-d1f2f
@@ -800,10 +813,6 @@ These are the remaining release blockers, not optional future enhancements:
   versions, URLs and SHA-256 digests are already synchronized in both source
   registries. Keep both environment purchase gates closed until the production
   bytes and remaining blockers pass.
-- Pass the read-only live Stripe configuration preflight over the newly created
-  youth-family Coupon and all five Price/Product pairs. The 23 August Dashboard
-  verification records the superseded 15% object; it does not prove the current
-  10% Coupon and does not substitute for the API-backed release check.
 - Establish the staffed human cooling-off refund operation before purchase
   opens. The member callable now freezes an immutable receipt before Stripe,
   immediately stops
@@ -840,9 +849,10 @@ These are the remaining release blockers, not optional future enhancements:
   review, not disappear under a blind TTL. Preserve the final membership,
   audit, acceptance and immutable confirmation evidence that lawfully requires
   retention.
-- Complete the ordered backend/rules/frontend deployment, restore callable
-  client transport only after the frontend is in place, and pass the per-service
-  IAM and Firebase-client smoke checks in section 8.
+- Deploy the final release frontend and complete its deployed-byte legal
+  verification. The current closed Vercel deployment uses the prior `main` SHA
+  and old legal bundle; the Functions batches and per-service IAM checks passed.
+  Preserve that state while both gates remain false.
 - Run both real isolated Stripe test-mode presale journeys (without a code and
   with the shared Adult Unlimited code) through hosted Checkout and
   Stripe-delivered webhooks. Use a Test Clock to prove the three discounted
@@ -980,12 +990,12 @@ expired Checkout Session or attaches membership agreements.
 1. Staff and document the human late-notice and cooling-off refund operation
    required by the approved Cancellation, Refund and Cooling-off Policy,
    including decision, execution and audit ownership.
-2. Complete the closed, read-only live API preflight after the controlled youth
-   Product rename, then confirm hosted Checkout displays
-   MINI ALPHAS - 10 & Under and TEEN ALPHAS - 11 & UP exactly. The exact Stripe
-   Product names are runtime-bound. Their age descriptions remain non-blocking:
-   checkout still requires a valid date of birth, and staff manage programme
-   placement internally.
+2. The closed, read-only live API preflight passed after the controlled youth
+   Product rename. In the remaining isolated hosted Checkout journey, confirm it
+   displays MINI ALPHAS - 10 & Under and TEEN ALPHAS - 11 & UP exactly. The
+   exact Stripe Product names are runtime-bound. Their age descriptions remain
+   non-blocking: checkout still requires a valid date of birth, and staff manage
+   programme placement internally.
 3. Decide whether a member on Ladies Only or Gym Only should be able to sign in
    at all. Today they get an account with no AlphaWOD access, which correctly
    lands on `/access-restricted`, and they can still reach
@@ -1087,10 +1097,12 @@ local run in `local-stripe-test-journey.md` did open real hosted test Checkout,
 settle a test payment, receive Stripe-delivered events, fulfil the local intent
 and membership, and return through the success route on 19 August 2026. It did
 not exercise real Resend delivery, a deployed staging boundary, anonymous claim
-or production. The revised youth-aware source and published legal bytes, plus
-the API-backed verification of the Stripe family Coupon and corrected youth
-catalogue, remain release gates;
-both production environment purchase gates remain `false`. The emulator-bound
+or production. The API-backed verification of the Stripe family Coupon and
+corrected youth catalogue passed on 25 August; the revised published legal bytes
+remain a release gate after the final release frontend deploy. Closed Vercel
+deployment `Hizg4XZi7Fhft77QPEvSrE5s9aLu` made the configured false frontend
+gate effective, but it used the prior `main` SHA and old legal bundle. The
+emulator-bound
 test journey used its explicit isolated test-mode path and did not open
 production.
 

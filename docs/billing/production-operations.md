@@ -23,9 +23,26 @@ the Adult Unlimited Product and have no automatic expiry; Portal configuration
 Enabled Secret Manager versions exist for the Stripe API, webhook-signing and
 checkout-rate-limit secrets. The public `stripeWebhook` receiver is active on
 Node.js 24 in `europe-west1`; GET `405` and unsigned POST `400` probes passed.
-These probes do not prove a signed delivery or payment journey. Both environment
-purchase gates remain closed and all eight membership callables and four workers
-remain undeployed. The live youth Price/Product bindings were read back
+These probes do not prove a signed delivery or payment journey. On 25 August,
+the closed-gate rollout deployed all fourteen membership services and Firebase
+reported every service `ACTIVE` on Node.js 24. Both selective Functions batches
+succeeded with `MEMBERSHIP_PURCHASE_ENABLED=false` and
+`STRIPE_YOUTH_FAMILY_COUPON_ID=zaf_youth_family_10pct_2026`. Post-deployment IAM
+inspection preserved the reviewed boundaries: the webhook is public, scheduled
+workers retain only their scheduler paths, legacy V1 checkout remains blocked,
+and V2 plus the seven non-checkout callables have only the reviewed
+service-level client transport. The Stripe event ledger was healthy. Five
+existing family memberships remain frozen on their original 15% terms; no old
+Checkout Session or Stripe event was in flight at cutover.
+
+Vercel Production deployment `Hizg4XZi7Fhft77QPEvSrE5s9aLu` is `Ready`, owns
+`alpha-wod.vercel.app`, and has made
+`REACT_APP_MEMBERSHIP_PURCHASE_ENABLED=false` effective. Public DOM verification
+showed “Not open yet” and “Online purchase closed”, with every purchase control
+disabled. That deployment used the prior `main` SHA and therefore serves the old
+legal bundle: it proves the customer-visible gate is closed, but it is not the
+final youth release frontend or evidence for the new release's legal bytes. The
+live youth Price/Product bindings were read back
 successfully on 23 August 2026 under their former provider names. On 25 August,
 the two existing live Products were deliberately renamed to
 MINI ALPHAS - 10 & Under and TEEN ALPHAS - 11 & UP and read back through the
@@ -37,7 +54,8 @@ Promotion Code, and restricted exactly to those two youth Products. That
 historical object is superseded. Current live Coupon
 `zaf_youth_family_10pct_2026` was created and read-only API-verified on 25 August as
 10% off forever and restricted to the same two Products. The closed API-backed
-live preflight and production legal-byte verification remain required.
+live preflight passed; production legal-byte verification remains required after
+the final release frontend is deployed.
 
 The operational commercial contract for this release is:
 
@@ -241,11 +259,11 @@ frozen outbox/audit identity.
 
 Monitoring, live-object verification and a deployed staging run are necessary
 but not sufficient. Production deployed-byte verification for the revised
-legal bundle, read-only verification of the corrected youth Prices and family
-Coupon, the staffed cooling-off refund and inbound-email cancellation
-operations, and every open launch blocker in `phase-1-rollout.md` remain
-mandatory. Publish and deploy the revised document registry and compatible
-frontend first while
+legal bundle, a fresh read-only pre-opening revalidation of the corrected youth
+Prices and family Coupon, the staffed cooling-off refund and inbound-email
+cancellation operations, and every open launch blocker in
+`phase-1-rollout.md` remain mandatory. Deploy the final release's revised
+document registry and compatible frontend while
 `MEMBERSHIP_PURCHASE_ENABLED=false` and
 `REACT_APP_MEMBERSHIP_PURCHASE_ENABLED=false`, then run:
 
@@ -255,10 +273,13 @@ npm run verify:production-armed-config --prefix functions
 npm run verify:stripe-live-config --prefix functions
 ```
 
-Deploy the webhook, workers and callables in the rollout guide's closed-state
-batches, including both checkout exports. Immediately re-block all eight
-callables, then restore only `createMembershipCheckoutSessionV2` and the six
-non-checkout callables; keep legacy `createMembershipCheckoutSession` blocked.
+The closed-state Functions deployment has completed: the webhook, four workers
+and nine callables, including both checkout exports, are active on Node.js 24.
+The nine callables were re-blocked after creation, then only
+`createMembershipCheckoutSessionV2` and the seven non-checkout callables regained
+the reviewed service-level transport; legacy
+`createMembershipCheckoutSession` remains blocked. Preserve those IAM boundaries
+on every future selective redeployment.
 The compatible frontend calls V2 with `checkoutSchemaVersion: 3`, so a frontend
 deployed before V2 fails safely and a cached V1 client cannot cross the new
 schema boundary. Complete the closed-state smoke tests: V2 must reach its handler
