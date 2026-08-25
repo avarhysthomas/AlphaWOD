@@ -24,8 +24,8 @@ function createFakeStripe() {
     ["price_unlimited", {amount: 6000, name: "Adult Unlimited Membership"}],
     ["price_ladies", {amount: 5000, name: "Adult Ladies Only Membership"}],
     ["price_gym", {amount: 4500, name: "Adult Gym Only"}],
-    ["price_youngstars", {amount: 3000, name: "Mini Alphas"}],
-    ["price_teenstars", {amount: 3500, name: "Teen Alphas"}],
+    ["price_youngstars", {amount: 3000, name: "MINI ALPHAS - 10 & Under"}],
+    ["price_teenstars", {amount: 3500, name: "TEEN ALPHAS - 11 & UP"}],
   ].map(([id, value]) => [id, {
     id,
     object: "price",

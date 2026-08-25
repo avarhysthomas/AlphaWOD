@@ -307,7 +307,7 @@ describe("MembershipSuccess claim persistence", () => {
       memberships: [{
         ...activeMembership,
         planKey: "youth_youngstars",
-        planName: "Mini Alphas",
+        planName: "MINI ALPHAS - 10 & Under",
         grantsAlphaWodAccess: false,
         participantFullName: "Alex Child",
         participantFullNames: ["Alex Child", "Sam Child"],
@@ -339,6 +339,11 @@ describe("MembershipSuccess claim persistence", () => {
 
     render(<MembershipSuccess />);
 
+    const planHeading = await screen.findByRole("heading", {
+      level: 1,
+      name: "MINI ALPHAS - 10 & Under",
+    });
+    expect(planHeading).not.toHaveClass("uppercase");
     expect(await screen.findByText("Participants: Alex Child, Sam Child"))
       .toBeInTheDocument();
     expect(screen.getByText("Family discount applied")).toBeInTheDocument();

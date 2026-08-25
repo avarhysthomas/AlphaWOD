@@ -56,7 +56,7 @@ describe("resolveDisplayAge", () => {
 });
 
 describe("plan eligibility", () => {
-  it("recommends Mini Alphas through age 10 and Teen Alphas from age 11", () => {
+  it("recommends MINI ALPHAS - 10 & Under through age 10 and TEEN ALPHAS - 11 & UP from age 11", () => {
     expect(resolveYouthPlanForAge(0)).toBe("youth_youngstars");
     expect(resolveYouthPlanForAge(10)).toBe("youth_youngstars");
     expect(resolveYouthPlanForAge(11)).toBe("youth_teenstars");
@@ -96,7 +96,7 @@ describe("youth catalogue", () => {
     expect(MEMBERSHIP_SCHEMA_VERSION).toBe(4);
     expect(MEMBERSHIP_PLANS.youth_youngstars).toMatchObject({
       key: "youth_youngstars",
-      name: "Mini Alphas",
+      name: "MINI ALPHAS - 10 & Under",
       amountPence: 3000,
       minAge: 0,
       maxAge: 10,
@@ -104,7 +104,7 @@ describe("youth catalogue", () => {
     });
     expect(MEMBERSHIP_PLANS.youth_teenstars).toMatchObject({
       key: "youth_teenstars",
-      name: "Teen Alphas",
+      name: "TEEN ALPHAS - 11 & UP",
       amountPence: 3500,
       minAge: 11,
       maxAge: null,

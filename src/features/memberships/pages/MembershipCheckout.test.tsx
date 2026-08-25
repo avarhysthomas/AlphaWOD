@@ -233,6 +233,11 @@ describe("MembershipCheckout", () => {
   it("uses the guardian addendum instead of an adult waiver for youth checkout", () => {
     renderCheckout("youth_youngstars");
 
+    const planHeading = screen.getByRole("heading", {
+      level: 1,
+      name: "MINI ALPHAS - 10 & Under",
+    });
+    expect(planHeading).not.toHaveClass("uppercase");
     expect(screen.getByText("Parent/Guardian Consent and Youth Membership Addendum"))
       .toBeInTheDocument();
     expect(screen.queryByText("Adult Participant Waiver and Risk Acknowledgement"))
@@ -243,7 +248,7 @@ describe("MembershipCheckout", () => {
       .not.toBeChecked();
   });
 
-  it("accepts a six-year-old on Teen Alphas without an age-band gate", async () => {
+  it("accepts a six-year-old on TEEN ALPHAS - 11 & UP without an age-band gate", async () => {
     renderCheckout("youth_teenstars");
 
     const sixYearsAgo = new Date();
@@ -255,7 +260,7 @@ describe("MembershipCheckout", () => {
 
     expect(dateInput).not.toHaveAttribute("aria-invalid", "true");
     expect(screen.getByText("Child 1 age 6")).toBeInTheDocument();
-    expect(screen.queryByText(/eligible for Teen Alphas|Teen Alphas is for ages/i))
+    expect(screen.queryByText(/eligible for TEEN ALPHAS - 11 & UP|TEEN ALPHAS - 11 & UP is for ages/i))
       .not.toBeInTheDocument();
     expect(screen.queryByRole("link", {name: /Switch to/i})).not.toBeInTheDocument();
   });
@@ -298,7 +303,7 @@ describe("MembershipCheckout", () => {
     }
   );
 
-  it("accepts a Mini-recommended additional child on Teen Alphas", async () => {
+  it("accepts a Mini-recommended additional child on TEEN ALPHAS - 11 & UP", async () => {
     mockLocalJourneyEnabled = true;
     renderCheckout("youth_teenstars");
 
@@ -317,7 +322,7 @@ describe("MembershipCheckout", () => {
 
     expect(childTwoDate).not.toHaveAttribute("aria-invalid", "true");
     expect(screen.getByText("Child 2 age 6")).toBeInTheDocument();
-    expect(screen.queryByText(/eligible for Teen Alphas|Teen Alphas is for ages/i))
+    expect(screen.queryByText(/eligible for TEEN ALPHAS - 11 & UP|TEEN ALPHAS - 11 & UP is for ages/i))
       .not.toBeInTheDocument();
     expect(screen.queryByRole("link", {name: /Switch to/i})).not.toBeInTheDocument();
   });
@@ -348,7 +353,7 @@ describe("MembershipCheckout", () => {
     expect(screen.getAllByRole("checkbox").every((checkbox) =>
       !(checkbox as HTMLInputElement).checked
     )).toBe(true);
-    expect(screen.getByLabelText(/future recurring monthly payments for 2 Mini Alphas participants/i))
+    expect(screen.getByLabelText(/future recurring monthly payments for 2 MINI ALPHAS - 10 & Under participants/i))
       .not.toBeChecked();
   });
 
@@ -479,7 +484,7 @@ describe("MembershipCheckout", () => {
     );
   });
 
-  it("submits an additional six-year-old on Teen Alphas", async () => {
+  it("submits an additional six-year-old on TEEN ALPHAS - 11 & UP", async () => {
     mockLocalJourneyEnabled = true;
     mockSignedIn = false;
     mockCreateCheckout.mockResolvedValue({sessionUrl: ""});

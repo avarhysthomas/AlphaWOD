@@ -70,8 +70,8 @@ publication checks before purchase can open.
 | `adult_unlimited` | Adult Unlimited Membership | £60/mo | 18+ | **Yes** |
 | `adult_ladies` | Adult Ladies Only Membership | £50/mo | 18+ | No |
 | `adult_gym` | Adult Gym Only | £45/mo | 18+ | No |
-| `youth_youngstars` | Mini Alphas | £30/mo | Designed for ages 10 and under | No |
-| `youth_teenstars` | Teen Alphas | £35/mo | Designed for ages 11 and up | No |
+| `youth_youngstars` | MINI ALPHAS - 10 & Under | £30/mo | Designed for ages 10 and under | No |
+| `youth_teenstars` | TEEN ALPHAS - 11 & UP | £35/mo | Designed for ages 11 and up | No |
 
 The handover's three plan keys (`commercial`, `youngstars`, `teenstars`) did not
 match the real catalogue. "Commercial" resolves to the three adult plans, and
@@ -85,8 +85,8 @@ internally. A single subscription cannot mix programmes. Stripe receives one
 subscription item at the canonical per-child Price with `quantity` equal to the
 number of children. One child pays the standard monthly price. At two or more
 children, the approved youth-family Coupon applies 10% off the whole monthly
-subtotal forever. For example, two Mini Alphas cost £60 before discount and £54
-per month after discount; two Teen Alphas cost £70 before discount and £63
+subtotal forever. For example, two MINI ALPHAS - 10 & Under cost £60 before discount and £54
+per month after discount; two TEEN ALPHAS - 11 & UP cost £70 before discount and £63
 per month after discount.
 
 ## 3. Policy decisions encoded in code
@@ -121,7 +121,7 @@ per month after discount.
   when the campaign is finished. The base Price remains £60:
   discounted members pay £55 on the September, October and November invoices,
   then £60 from 1 December. Unknown or malformed discounts fail closed.
-- **Youth-family discount.** Mini Alphas and Teen Alphas accept 1–10 children in
+- **Youth-family discount.** MINI ALPHAS - 10 & Under and TEEN ALPHAS - 11 & UP accept 1–10 children in
   one subscription for the same selected programme. Every child is separately
   named and supplies a valid, non-future date of birth; age guidance does not
   block the selected programme, and staff manage placement internally. Stripe
@@ -459,8 +459,8 @@ objects. It does not change the production publication or runtime gates.
 2. **Verify the live catalogue.** The business supplied Dashboard Product and
    Price exports dated 17 August 2026 and all five pairs were independently
    re-read from Stripe's live API on 19 August. The two youth pairs were read
-   again on 23 August and confirmed at £30 for the current Mini Alphas offering
-   and £35 for the current Teen Alphas offering, with the exact legacy-named
+   again on 23 August and confirmed at £30 for the current MINI ALPHAS - 10 & Under offering
+   and £35 for the current TEEN ALPHAS - 11 & UP offering, with the exact legacy-named
    Product and Price IDs below. Before release, run the full
    preflight again while both purchase gates remain closed and require active,
    live, monthly GBP objects with the following canonical
@@ -472,8 +472,8 @@ objects. It does not change the production publication or runtime gates.
    | Adult Unlimited | `prod_V5VhTEmyekcpY4` | `price_1U5KgYFzNDZoGGA0jGftxyZH` | £60 |
    | Adult Ladies Only | `prod_V5VkRs10lzG989` | `price_1U5KjOFzNDZoGGA0j3qcds5p` | £50 |
    | Adult Gym Only | `prod_V5VlQAfdAYSb0G` | `price_1U5Kk9FzNDZoGGA0dQ61G49d` | £45 |
-   | Mini Alphas (legacy Stripe provider name: `HYROX Youngstars U11`) | `prod_V5Vq0l9VAaPox9` | `price_1U5KoQFzNDZoGGA0s4t806bH` | £30 |
-   | Teen Alphas (legacy Stripe provider name: `HYROX Teenstars 12+`) | `prod_V5VumrjZl1bWV1` | `price_1U5Kt8FzNDZoGGA0ogq41DEw` | £35 |
+   | MINI ALPHAS - 10 & Under (legacy Stripe provider name: `HYROX Youngstars U11`) | `prod_V5Vq0l9VAaPox9` | `price_1U5KoQFzNDZoGGA0s4t806bH` | £30 |
+   | TEEN ALPHAS - 11 & UP (legacy Stripe provider name: `HYROX Teenstars 12+`) | `prod_V5VumrjZl1bWV1` | `price_1U5Kt8FzNDZoGGA0ogq41DEw` | £35 |
 
    The `price_1U5K...` mapping is live; the `price_1U5P...` mapping in
    `functions/.env.example` is the verified sandbox catalogue. Products,
@@ -847,10 +847,10 @@ These are the remaining release blockers, not optional future enhancements:
   Resend test delivery before considering either purchase gate. Nothing in the
   emulator suite substitutes for this.
 - Run controlled one-child and two-child hosted Checkout journeys for both
-  Mini Alphas and Teen Alphas. Verify the exact Price, item quantities, participant
+  MINI ALPHAS - 10 & Under and TEEN ALPHAS - 11 & UP. Verify the exact Price, item quantities, participant
   projections, durable acceptance/confirmation evidence and automatic
-  youth-family Coupon: two Mini Alphas must recur at £54 from a £60 subtotal and
-  two Teen Alphas at £63 from a £70 subtotal. The existing post-payment journey
+  youth-family Coupon: two MINI ALPHAS - 10 & Under must recur at £54 from a £60 subtotal and
+  two TEEN ALPHAS - 11 & UP at £63 from a £70 subtotal. The existing post-payment journey
   verifier does not yet assert the family Coupon, so retain independent Stripe
   and Firestore evidence rather than treating that command as proof.
 
@@ -977,10 +977,10 @@ expired Checkout Session or attaches membership agreements.
 1. Staff and document the human late-notice and cooling-off refund operation
    required by the approved Cancellation, Refund and Cooling-off Policy,
    including decision, execution and audit ownership.
-2. Stripe retains the legacy provider names `HYROX Youngstars U11` for Mini
-   Alphas and `HYROX Teenstars 12+` for Teen Alphas. The customer catalogue is
-   Mini Alphas at £30 per child per month, designed for ages 10 and under, and
-   Teen Alphas at £35, designed for ages 11 and up. Those age descriptions do
+2. Stripe retains the legacy provider names `HYROX Youngstars U11` for
+   MINI ALPHAS - 10 & Under and `HYROX Teenstars 12+` for TEEN ALPHAS - 11 & UP. The customer catalogue is
+   MINI ALPHAS - 10 & Under at £30 per child per month, designed for ages 10 and under, and
+   TEEN ALPHAS - 11 & UP at £35, designed for ages 11 and up. Those age descriptions do
    not block checkout: a valid date of birth is still required, and staff manage
    programme placement internally. Before opening, verify that hosted Checkout
    and customer-visible copy are not contradictory. Rename either Stripe

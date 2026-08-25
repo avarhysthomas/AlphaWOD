@@ -157,6 +157,8 @@ export default function MembershipSuccess() {
       membership.grantsAlphaWodAccess &&
       membership.participantIsPayer
     : returnedPlanKey === "adult_unlimited";
+  const membershipIsYouth = membership ?
+    MEMBERSHIP_PLANS[membership.planKey]?.audience === "youth" : false;
 
   // Held locally so the buyer can create an account now and claim from the
   // membership page, without the checkout session id being lost on the way.
@@ -254,7 +256,7 @@ export default function MembershipSuccess() {
           <p className={EYEBROW}>
             {presentation?.eyebrow ?? (sessionId ? "Checkout received" : "Checkout link unavailable")}
           </p>
-          <h1 className="mt-4 font-heading text-3xl uppercase tracking-[0.06em] text-white sm:text-4xl">
+          <h1 className={`mt-4 font-heading text-3xl tracking-[0.06em] text-white sm:text-4xl ${membershipIsYouth ? "" : "uppercase"}`}>
             {membership?.planName ?? (sessionId ? "Thank you" : "We need the checkout link")}
           </h1>
 

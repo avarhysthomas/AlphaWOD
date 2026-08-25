@@ -96,7 +96,7 @@ const multiChildTeenAlphasMembership = {
   ...activeMembership,
   subscriptionId: "sub_teenstars_family",
   planKey: "youth_teenstars",
-  planName: "Teen Alphas",
+  planName: "TEEN ALPHAS - 11 & UP",
   grantsAlphaWodAccess: false,
   participantFullName: "Alex Child",
   participantFullNames: ["Alex Child", "Sam Child"],
@@ -246,7 +246,7 @@ describe("MembershipManage cancellation confirmation", () => {
     render(<MembershipManage />);
     fireEvent.click(await screen.findByRole("button", {name: "Request cancellation"}));
 
-    expect(screen.getByText(/Submitting this request cancels the whole Teen Alphas/))
+    expect(screen.getByText(/Submitting this request cancels the whole TEEN ALPHAS - 11 & UP/))
       .toHaveTextContent(
         "The places for Alex Child and Sam Child will all end with it. " +
         "Individual children cannot be removed online."
@@ -303,13 +303,13 @@ describe("MembershipManage cancellation confirmation", () => {
       .toBeInTheDocument();
   });
 
-  it("shows every Teen Alphas child with its frozen legacy family discount", async () => {
+  it("shows every TEEN ALPHAS - 11 & UP child with its frozen legacy family discount", async () => {
     mockGetMyMemberships.mockResolvedValue({
       ok: true,
       memberships: [{
         ...activeMembership,
         planKey: "youth_teenstars",
-        planName: "Teen Alphas",
+        planName: "TEEN ALPHAS - 11 & UP",
         grantsAlphaWodAccess: false,
         participantFullName: "Alex Child",
         participantFullNames: ["Alex Child", "Sam Child"],
@@ -341,6 +341,11 @@ describe("MembershipManage cancellation confirmation", () => {
 
     render(<MembershipManage />);
 
+    const planHeading = await screen.findByRole("heading", {
+      level: 2,
+      name: "TEEN ALPHAS - 11 & UP",
+    });
+    expect(planHeading).not.toHaveClass("uppercase");
     expect(await screen.findByText("Participants: Alex Child, Sam Child"))
       .toBeInTheDocument();
     expect(screen.getByText("Family discount applied")).toBeInTheDocument();
@@ -398,7 +403,7 @@ describe("MembershipManage cancellation confirmation", () => {
     fireEvent.click(screen.getByRole("button", {
       name: "Cancel during cooling-off period",
     }));
-    expect(screen.getByText(/Submitting this request cancels the whole Teen Alphas/))
+    expect(screen.getByText(/Submitting this request cancels the whole TEEN ALPHAS - 11 & UP/))
       .toHaveTextContent(
         "The places for Alex Child and Sam Child will all end with it. " +
         "Individual children cannot be removed online."
@@ -600,7 +605,7 @@ describe("MembershipManage cancellation confirmation", () => {
 
     render(<MembershipManage />);
 
-    expect(await screen.findByText(/This cancellation applies to the whole Teen Alphas/))
+    expect(await screen.findByText(/This cancellation applies to the whole TEEN ALPHAS - 11 & UP/))
       .toHaveTextContent("The places for Alex Child and Sam Child all end with it.");
   });
 

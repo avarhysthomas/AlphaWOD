@@ -14,10 +14,10 @@ service deployed is the public `stripeWebhook` receiver; the customer frontend,
 eight callables and four scheduled workers remain undeployed.
 The five live Stripe Price/Product pairs were supplied from Dashboard exports
 and independently re-read from Stripe's live API on 19 August 2026. The two
-youth pairs were read again on 23 August: the current Mini Alphas offering uses
+youth pairs were read again on 23 August: the current MINI ALPHAS - 10 & Under offering uses
 `price_1U5KoQFzNDZoGGA0s4t806bH` at £30 GBP monthly on Product
 `prod_V5Vq0l9VAaPox9` (legacy Stripe provider name `HYROX Youngstars U11`), and
-the current Teen Alphas offering uses `price_1U5Kt8FzNDZoGGA0ogq41DEw` at £35
+the current TEEN ALPHAS - 11 & UP offering uses `price_1U5Kt8FzNDZoGGA0ogq41DEw` at £35
 GBP monthly on Product `prod_V5VumrjZl1bWV1` (legacy Stripe provider name
 `HYROX Teenstars 12+`). Live Coupon
 `zaf_youth_family_15pct_2026` was then created and verified in Stripe Dashboard
@@ -39,15 +39,15 @@ outbox, and returned through the local success route. That is a historical seam
 baseline, not proof of the newly implemented £0 presale or discount. Those paths,
 real Resend delivery and deployed staging remain untested.
 
-The canonical youth release catalogue is Mini Alphas at £30 per child per month,
-designed for ages 10 and under, and Teen Alphas at £35 per child per month,
+The canonical youth release catalogue is MINI ALPHAS - 10 & Under at £30 per child per month,
+designed for ages 10 and under, and TEEN ALPHAS - 11 & UP at £35 per child per month,
 designed for ages 11 and up. Those age descriptions are non-blocking guidance:
 checkout still requires a valid, non-future date of birth, and staff manage
 programme placement internally. Each youth subscription may contain 1–10
 children in the same selected programme. One child pays the standard per-child
 price; at 2–10 children an automatic 10%-forever Coupon applies to the whole
-monthly subtotal. A single subscription cannot mix programmes. Two Mini Alphas
-therefore recur at £54 and two Teen Alphas at £63.
+monthly subtotal. A single subscription cannot mix programmes. Two MINI ALPHAS - 10 & Under
+therefore recur at £54 and two TEEN ALPHAS - 11 & UP at £63.
 
 The business owner explicitly approved the current mixed publication bundle on
 25 August 2026: revised Membership Terms, Privacy Notice and Guardian Addendum
@@ -434,7 +434,7 @@ operational, abuse and data-lifecycle work, then follow this order:
    configured Resend test sender/recipient and actual Resend delivery. Run one-
    and two-child journeys for both youth plans and independently verify Stripe
    item quantities, every Firestore participant, the family Coupon and recurring
-   totals (£54 for two Mini Alphas; £63 for two Teen Alphas). The existing
+   totals (£54 for two MINI ALPHAS - 10 & Under; £63 for two TEEN ALPHAS - 11 & UP). The existing
    post-payment verifier does not yet prove the family Coupon.
 7. The live catalogue, £5/repeating-three-month Product-restricted no-expiry
    Coupon `zaf_existing_member_5off_3mo_2026`, shared no-expiry Promotion Code

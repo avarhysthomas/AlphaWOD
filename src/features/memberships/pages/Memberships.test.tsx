@@ -57,8 +57,12 @@ describe("Memberships presale presentation", () => {
 
     const logoLink = screen.getByRole("link", {name: "Zero Alpha home"});
     expect(logoLink).toHaveAttribute("href", "/");
-    expect(screen.getByText("Mini Alphas")).toBeInTheDocument();
-    expect(screen.getByText("Teen Alphas")).toBeInTheDocument();
+    const miniAlphasName = screen.getByText("MINI ALPHAS - 10 & Under");
+    const teenAlphasName = screen.getByText("TEEN ALPHAS - 11 & UP");
+    expect(miniAlphasName).toBeInTheDocument();
+    expect(teenAlphasName).toBeInTheDocument();
+    expect(miniAlphasName).not.toHaveClass("uppercase");
+    expect(teenAlphasName).not.toHaveClass("uppercase");
     expect(screen.getByText(
       "A strength and conditioning class for 10 and under! Fun, progressive, and challenging."
     )).toBeInTheDocument();

@@ -60,7 +60,7 @@ and checks test mode, active state, Product name, GBP amount and monthly
 recurrence. It also verifies the test Portal keeps cancellation and subscription
 updates disabled and the youth-family Coupon is exactly 10% off forever, has no
 redemption deadline or cap, and applies to exactly the two youth Products
-backing Mini Alphas and Teen Alphas. It prints object IDs but makes no Stripe
+backing MINI ALPHAS - 10 & Under and TEEN ALPHAS - 11 & UP. It prints object IDs but makes no Stripe
 changes.
 
 Open `http://localhost:3002/memberships`, choose a plan and complete hosted
@@ -72,15 +72,15 @@ shows a prominent test-only notice and presents the same approved, versioned
 legal documents used by the release.
 
 The current frontend calls only `createMembershipCheckoutSessionV2` and sends
-`checkoutSchemaVersion: 3`. Mini Alphas costs £30 per child per month and is
-designed for ages 10 and under; Teen Alphas costs £35 per child per month and is
+`checkoutSchemaVersion: 3`. MINI ALPHAS - 10 & Under costs £30 per child per month and is
+designed for ages 10 and under; TEEN ALPHAS - 11 & UP costs £35 per child per month and is
 designed for ages 11 and up. These age descriptions are non-blocking guidance:
 checkout still requires a valid, non-future date of birth, but staff manage
 programme placement internally. Use “Add another child” to register 1–10
 children in the same selected programme.
 One child pays the standard price. From two children, the family Coupon applies
-10% off the whole monthly subtotal forever: two Mini Alphas are £60 less £6 =
-£54 per month, and two Teen Alphas are £70 less £7 = £63 per month. Hosted
+10% off the whole monthly subtotal forever: two MINI ALPHAS - 10 & Under are £60 less £6 =
+£54 per month, and two TEEN ALPHAS - 11 & UP are £70 less £7 = £63 per month. Hosted
 Checkout should show one subscription item whose quantity equals the number of
 children. A single subscription cannot mix the two selected programmes.
 
@@ -203,7 +203,7 @@ changing the Product/Price mapping:
 - the production app origin;
 - a live `sk_live_...` or restricted `rk_live_...` key;
 - five live Price ids (each is preflighted with its expanded Product);
-- the canonical Mini Alphas Price at £30 and Teen Alphas Price at £35, with
+- the canonical MINI ALPHAS - 10 & Under Price at £30 and TEEN ALPHAS - 11 & UP Price at £35, with
   non-blocking age guidance and the valid-date-of-birth requirement;
 - a separate live £5/repeating-three-month Adult Unlimited Coupon and one
   allowlisted shared reusable live Promotion Code;

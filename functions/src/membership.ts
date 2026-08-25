@@ -8589,7 +8589,7 @@ const WELCOME_EMAIL_VARIANTS: Record<PlanKey, WelcomeEmailVariant> = {
     accessNote: "This membership does not include coached sessions or Zero Alpha App access.",
   },
   youth_youngstars: {
-    eyebrow: "MINI ALPHAS",
+    eyebrow: "MINI ALPHAS - 10 & Under",
     headline: "A strong start begins here.",
     summary: "A strength and conditioning class for 10 and under! Fun, progressive, and challenging.",
     inclusions: [
@@ -8599,7 +8599,7 @@ const WELCOME_EMAIL_VARIANTS: Record<PlanKey, WelcomeEmailVariant> = {
     accessNote: "Youth memberships do not include Zero Alpha App access.",
   },
   youth_teenstars: {
-    eyebrow: "TEEN ALPHAS",
+    eyebrow: "TEEN ALPHAS - 11 & UP",
     headline: "Their next level starts here.",
     summary: "Strength and conditioning for 11 and up! Develop athletic qualities in a supportive environment.",
     inclusions: [

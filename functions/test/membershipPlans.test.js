@@ -76,7 +76,7 @@ test("schema v4 catalogue keeps the youth keys, new copy, and approved prices", 
     },
     {
       key: "youth_youngstars",
-      name: "Mini Alphas",
+      name: "MINI ALPHAS - 10 & Under",
       amountPence: 3000,
       minAge: 0,
       maxAge: 10,
@@ -94,7 +94,7 @@ test("schema v4 catalogue keeps the youth keys, new copy, and approved prices", 
     },
     {
       key: "youth_teenstars",
-      name: "Teen Alphas",
+      name: "TEEN ALPHAS - 11 & UP",
       amountPence: 3500,
       minAge: 11,
       maxAge: null,
@@ -115,11 +115,11 @@ test("registry freezes the approved mixed checkout document bundle", () => {
       ([key, document]) => [key, [document.version, document.effectiveDate]]
     )),
     {
-      membershipTerms: ["ZAF-TERMS-2026-08-25-02", "2026-08-25"],
+      membershipTerms: ["ZAF-TERMS-2026-08-25-03", "2026-08-25"],
       cancellationPolicy: ["ZAF-CANCEL-2026-08-23-01", "2026-08-23"],
-      privacyNotice: ["ZAF-PRIVACY-2026-08-25-01", "2026-08-25"],
+      privacyNotice: ["ZAF-PRIVACY-2026-08-25-02", "2026-08-25"],
       adultWaiver: ["ZAF-ADULT-WAIVER-2026-08-23-01", "2026-08-23"],
-      guardianAddendum: ["ZAF-GUARDIAN-2026-08-25-02", "2026-08-25"],
+      guardianAddendum: ["ZAF-GUARDIAN-2026-08-25-03", "2026-08-25"],
     }
   );
   for (const document of Object.values(CHECKOUT_DOCUMENTS)) {
@@ -209,7 +209,7 @@ test("past-due grace persists an exact London-calendar deadline across DST", () 
   assert.equal(isWithinPastDueGrace(failedAt, graceEnd + 1), false);
 });
 
-test("youth routing recommends Mini Alphas through 10 and Teen Alphas from 11", () => {
+test("youth routing recommends MINI ALPHAS through 10 and TEEN ALPHAS from 11", () => {
   assert.equal(resolveYouthPlanForAge(-1), null);
   assert.equal(resolveYouthPlanForAge(0), "youth_youngstars");
   assert.equal(resolveYouthPlanForAge(10), "youth_youngstars");
@@ -226,9 +226,11 @@ test("multi-child youth acceptance freezes the full recurring family price", () 
     .find(({id}) => id === "recurring_payment_authority").statement;
   const teenstars = resolveCheckoutAcceptanceStatements("youth_teenstars", 3)
     .find(({id}) => id === "recurring_payment_authority").statement;
+  assert.match(youngstars, /2 MINI ALPHAS - 10 & Under participants/);
   assert.match(youngstars, /standard total is £60\.00 per month/i);
   assert.match(youngstars, /automatic 10% family discount/i);
   assert.match(youngstars, /recurring total £54\.00/i);
+  assert.match(teenstars, /3 TEEN ALPHAS - 11 & UP participants/);
   assert.match(teenstars, /standard total is £105\.00 per month/i);
   assert.match(teenstars, /recurring total £94\.50/i);
 });

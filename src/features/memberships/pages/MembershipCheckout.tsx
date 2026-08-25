@@ -320,7 +320,7 @@ export default function MembershipCheckout() {
         </Link>
 
         <p className={`mt-7 ${EYEBROW}`}>Join</p>
-        <h1 className="mt-3 font-heading text-[2.5rem] uppercase leading-[1] tracking-[0.02em] text-white sm:text-[3rem]">
+        <h1 className={`mt-3 font-heading text-[2.5rem] leading-[1] tracking-[0.02em] text-white sm:text-[3rem] ${isYouth ? "" : "uppercase"}`}>
           {plan.name}
         </h1>
         {isYouth && (

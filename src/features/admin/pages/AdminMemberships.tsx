@@ -46,8 +46,8 @@ const PLAN_TABS: Array<{key: PlanFilter; label: string}> = [
   {key: "adult_unlimited", label: "Adult Unlimited"},
   {key: "adult_gym", label: "Adult Gym Only"},
   {key: "adult_ladies", label: "Ladies Only"},
-  {key: "youth_youngstars", label: "Mini Alphas"},
-  {key: "youth_teenstars", label: "Teen Alphas"},
+  {key: "youth_youngstars", label: "MINI ALPHAS - 10 & Under"},
+  {key: "youth_teenstars", label: "TEEN ALPHAS - 11 & UP"},
 ];
 
 const STATUS_OPTIONS: Array<{key: StatusFilter; label: string}> = [

@@ -313,7 +313,7 @@ describe("AdminMemberships cancellation attention", () => {
     const checkoutIssue = {
       intentId: `attempt_${"b".repeat(64)}`,
       planKey: "youth_youngstars",
-      planName: "Mini Alphas",
+      planName: "MINI ALPHAS - 10 & Under",
       participantFullNames: ["Stacey Example"],
       participantCount: 1,
       payerUid: null,
@@ -465,7 +465,7 @@ describe("AdminMemberships cancellation attention", () => {
         payerUid: "payer-family",
         payerEmail: "family@example.test",
         planKey: "youth_teenstars",
-        planName: "Teen Alphas",
+        planName: "TEEN ALPHAS - 11 & UP",
         state: "past_due_grace",
         stripeStatus: "past_due",
         grantsAlphaWodAccess: false,
@@ -521,6 +521,8 @@ describe("AdminMemberships cancellation attention", () => {
     expect(await screen.findByText("Alex Child")).toBeInTheDocument();
     expect(screen.getByText("Sam Child")).toBeInTheDocument();
     expect(screen.getByText("Guardian Ava Parent")).toBeInTheDocument();
+    expect(screen.getByRole("tab", {name: /TEEN ALPHAS - 11 & UP/}))
+      .toHaveTextContent("TEEN ALPHAS - 11 & UP");
     expect(screen.getByText("£63")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", {
       name: "View details for Alex Child, Sam Child",

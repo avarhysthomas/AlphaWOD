@@ -466,7 +466,7 @@ export default function MembershipManage() {
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div>
                     <p className={EYEBROW}>{MEMBERSHIP_STATE_LABEL[membership.state]}</p>
-                    <h2 className="mt-2 font-heading text-2xl uppercase tracking-[0.08em] text-white">
+                    <h2 className={`mt-2 font-heading text-2xl tracking-[0.08em] text-white ${membership.planKey === "youth_youngstars" || membership.planKey === "youth_teenstars" ? "" : "uppercase"}`}>
                       {membership.planName}
                     </h2>
                     <p className="mt-2 text-sm text-white/50">

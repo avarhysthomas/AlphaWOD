@@ -112,7 +112,7 @@ function YouthCard({
           const content = (
             <>
             <span className="min-w-0 sm:max-w-[70%]">
-              <span className="block text-sm font-bold uppercase tracking-[0.12em] text-white">
+              <span className="block text-sm font-bold tracking-[0.12em] text-white">
                 {plan.name}
               </span>
               <span className="mt-1 block text-xs leading-5 text-white/55">
