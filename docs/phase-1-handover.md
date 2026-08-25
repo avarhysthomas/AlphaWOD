@@ -14,16 +14,21 @@ service deployed is the public `stripeWebhook` receiver; the customer frontend,
 eight callables and four scheduled workers remain undeployed.
 The five live Stripe Price/Product pairs were supplied from Dashboard exports
 and independently re-read from Stripe's live API on 19 August 2026. The two
-youth pairs were read again on 23 August: the current MINI ALPHAS - 10 & Under offering uses
-`price_1U5KoQFzNDZoGGA0s4t806bH` at £30 GBP monthly on Product
-`prod_V5Vq0l9VAaPox9` (legacy Stripe provider name `HYROX Youngstars U11`), and
-the current TEEN ALPHAS - 11 & UP offering uses `price_1U5Kt8FzNDZoGGA0ogq41DEw` at £35
-GBP monthly on Product `prod_V5VumrjZl1bWV1` (legacy Stripe provider name
-`HYROX Teenstars 12+`). Live Coupon
+youth pairs were read again on 23 August under their former provider names. On
+25 August, the same live Products were deliberately renamed and read back
+through the live API: the current
+MINI ALPHAS - 10 & Under offering uses `price_1U5KoQFzNDZoGGA0s4t806bH` at £30
+GBP monthly on Product `prod_V5Vq0l9VAaPox9`, and the current
+TEEN ALPHAS - 11 & UP offering uses `price_1U5Kt8FzNDZoGGA0ogq41DEw` at £35 GBP
+monthly on Product `prod_V5VumrjZl1bWV1`. The Product IDs, Price IDs and amounts
+were unchanged. Live Coupon
 `zaf_youth_family_15pct_2026` was then created and verified in Stripe Dashboard
 on 23 August: valid, 15% off forever, no expiry, redemption cap or Promotion
 Code, and restricted exactly to those two youth Products. This is historical
-evidence for the superseded 15% offer, not the Coupon for the current release.
+evidence for the superseded 15% offer. Current live Coupon
+`zaf_youth_family_10pct_2026` was created and read-only API-verified on 25 August as
+10% off forever and restricted exactly to those two Products; the closed live
+API preflight is still required before release.
 On 20 August the live Product-scoped no-expiry Coupon and Promotion Code,
 locked-down Portal `bpc_1U6SIkFzNDZoGGA0mSE5EepR`, active 14-event webhook
 `we_1U6SObFzNDZoGGA0cw5Yyqth`, and the existence of the Stripe API,

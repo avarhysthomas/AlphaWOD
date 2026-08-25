@@ -61,8 +61,12 @@ export function matchesApprovedLiveStripeCatalogueEntry(
 }
 
 /**
- * Exact LIVE Stripe catalogue supplied in the 17 August 2026 Dashboard exports
- * and independently re-read from Stripe's live API on 19 August 2026.
+ * Exact LIVE Stripe catalogue. Its identifiers and commercial fields were
+ * supplied in the 17 August 2026 Dashboard exports and independently re-read
+ * from Stripe's live API on 19 August 2026. The two existing youth Products
+ * were deliberately renamed in the live Dashboard and read back from Stripe's
+ * live API on 25 August 2026. Their exact current names are frozen below; the
+ * release's full read-only live API preflight is still required.
  *
  * Source export SHA-256:
  * - products.csv: 4a6e974595c45a4fba5cd4f175eb9de61f335200a1f03b8653401e62a498570c
@@ -124,7 +128,7 @@ export const APPROVED_LIVE_STRIPE_CATALOGUE = {
   youth_youngstars: {
     priceEnvKey: "STRIPE_PRICE_YOUTH_YOUNGSTARS",
     productId: "prod_V5Vq0l9VAaPox9",
-    productName: "HYROX Youngstars U11",
+    productName: "MINI ALPHAS - 10 & Under",
     priceId: "price_1U5KoQFzNDZoGGA0s4t806bH",
     amountPence: 3000,
     currency: "gbp",
@@ -140,7 +144,7 @@ export const APPROVED_LIVE_STRIPE_CATALOGUE = {
   youth_teenstars: {
     priceEnvKey: "STRIPE_PRICE_YOUTH_TEENSTARS",
     productId: "prod_V5VumrjZl1bWV1",
-    productName: "HYROX Teenstars 12+",
+    productName: "TEEN ALPHAS - 11 & UP",
     priceId: "price_1U5Kt8FzNDZoGGA0ogq41DEw",
     amountPence: 3500,
     currency: "gbp",

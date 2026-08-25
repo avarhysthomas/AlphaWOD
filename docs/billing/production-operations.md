@@ -26,15 +26,18 @@ Node.js 24 in `europe-west1`; GET `405` and unsigned POST `400` probes passed.
 These probes do not prove a signed delivery or payment journey. Both environment
 purchase gates remain closed and all eight membership callables and four workers
 remain undeployed. The live youth Price/Product bindings were read back
-successfully on 23 August 2026: MINI ALPHAS - 10 & Under at £30 under the legacy Stripe
-provider name `HYROX Youngstars U11`, and TEEN ALPHAS - 11 & UP at £35 under the legacy
-Stripe provider name `HYROX Teenstars 12+`. Live Coupon
-`zaf_youth_family_15pct_2026` was created and verified in Stripe Dashboard the
-same day as valid, 15% off forever, without an expiry, redemption cap or
-Promotion Code, and restricted exactly to those two youth Products. The closed
-API-backed live preflight and production legal-byte verification remain required.
-This is historical provider evidence for the superseded 15% offer; the current
-release requires a separately verified 10% Coupon.
+successfully on 23 August 2026 under their former provider names. On 25 August,
+the two existing live Products were deliberately renamed to
+MINI ALPHAS - 10 & Under and TEEN ALPHAS - 11 & UP and read back through the
+live API; their Product IDs, Price IDs and £30/£35 monthly prices were left
+unchanged. Live Coupon
+`zaf_youth_family_15pct_2026` was created and verified in Stripe Dashboard on
+23 August as valid, 15% off forever, without an expiry, redemption cap or
+Promotion Code, and restricted exactly to those two youth Products. That
+historical object is superseded. Current live Coupon
+`zaf_youth_family_10pct_2026` was created and read-only API-verified on 25 August as
+10% off forever and restricted to the same two Products. The closed API-backed
+live preflight and production legal-byte verification remain required.
 
 The operational commercial contract for this release is:
 
@@ -99,8 +102,8 @@ product-scoped three-month Coupon, the one active shared Promotion Code and the
 locked-down Customer Portal configuration. It also retrieves the youth-family
 Coupon and requires exactly 10% off forever, no amount/currency, redemption
 deadline or cap, and an `applies_to` set containing exactly the two youth
-Products with the approved legacy Stripe provider names `HYROX Youngstars U11`
-and `HYROX Teenstars 12+`. It exits before reporting success
+Products named MINI ALPHAS - 10 & Under and TEEN ALPHAS - 11 & UP. It exits
+before reporting success
 if any object is inactive, in test mode, has the wrong commercial terms or
 enables subscription changes. Both campaign objects must have no automatic
 expiry; the application cutoff remains fixed and staff deactivate the exact

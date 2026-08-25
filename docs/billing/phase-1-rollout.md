@@ -459,9 +459,11 @@ objects. It does not change the production publication or runtime gates.
 2. **Verify the live catalogue.** The business supplied Dashboard Product and
    Price exports dated 17 August 2026 and all five pairs were independently
    re-read from Stripe's live API on 19 August. The two youth pairs were read
-   again on 23 August and confirmed at £30 for the current MINI ALPHAS - 10 & Under offering
-   and £35 for the current TEEN ALPHAS - 11 & UP offering, with the exact legacy-named
-   Product and Price IDs below. Before release, run the full
+   again on 23 August under their former provider names and confirmed at £30
+   for MINI ALPHAS - 10 & Under and £35 for TEEN ALPHAS - 11 & UP. On
+   25 August, those two existing live Products were deliberately renamed to the
+   exact customer-facing names below and read back through the live API without
+   changing either Product ID, Price ID or amount. Before release, run the full
    preflight again while both purchase gates remain closed and require active,
    live, monthly GBP objects with the following canonical
    amounts, `per_unit`/`licensed` billing, `tax_behavior=unspecified` and Product
@@ -472,19 +474,18 @@ objects. It does not change the production publication or runtime gates.
    | Adult Unlimited | `prod_V5VhTEmyekcpY4` | `price_1U5KgYFzNDZoGGA0jGftxyZH` | £60 |
    | Adult Ladies Only | `prod_V5VkRs10lzG989` | `price_1U5KjOFzNDZoGGA0j3qcds5p` | £50 |
    | Adult Gym Only | `prod_V5VlQAfdAYSb0G` | `price_1U5Kk9FzNDZoGGA0dQ61G49d` | £45 |
-   | MINI ALPHAS - 10 & Under (legacy Stripe provider name: `HYROX Youngstars U11`) | `prod_V5Vq0l9VAaPox9` | `price_1U5KoQFzNDZoGGA0s4t806bH` | £30 |
-   | TEEN ALPHAS - 11 & UP (legacy Stripe provider name: `HYROX Teenstars 12+`) | `prod_V5VumrjZl1bWV1` | `price_1U5Kt8FzNDZoGGA0ogq41DEw` | £35 |
+   | MINI ALPHAS - 10 & Under | `prod_V5Vq0l9VAaPox9` | `price_1U5KoQFzNDZoGGA0s4t806bH` | £30 |
+   | TEEN ALPHAS - 11 & UP | `prod_V5VumrjZl1bWV1` | `price_1U5Kt8FzNDZoGGA0ogq41DEw` | £35 |
 
    The `price_1U5K...` mapping is live; the `price_1U5P...` mapping in
    `functions/.env.example` is the verified sandbox catalogue. Products,
    prices, the portal configuration, and the webhook endpoint/signing secret
-   remain mode-specific and never carry across. The two live youth Products use
-   longer provider labels than the customer-facing app catalogue; their exact
-   expected names and IDs are deliberately bound in the live source manifest.
-   Customer-facing age descriptions are non-blocking guidance, not eligibility
-   inferred from Stripe. The legacy `U11` provider label must not impose an age
-   gate: checkout still requires a valid date of birth, and staff manage
-   programme placement internally.
+   remain mode-specific and never carry across. The two live youth Product names
+   now exactly match the customer-facing app catalogue; their expected names and
+   IDs are deliberately bound in the live source manifest. The age descriptions
+   are non-blocking guidance, not eligibility inferred from Stripe: checkout
+   still requires a valid date of birth, and staff manage programme placement
+   internally.
 
    The corrected test IDs in `functions/.env.example` are correct for the dry
    run and a test-mode deployment. The checkout preflight retrieves the configured Price
@@ -494,8 +495,8 @@ objects. It does not change the production publication or runtime gates.
    any unreviewed live Price alongside a live key.
 
    The source manifest is `functions/src/stripeLiveCatalog.ts`; update it only
-   after a deliberate Price/Product rotation and another read-only live API
-   verification.
+   after a deliberate live catalogue change and require another read-only live
+   API verification before deployment.
 3. **Confirm tax presentation.** The exported prices have
    `tax_behavior: unspecified` and the business is not VAT registered. Automatic
    tax is disabled in code. Confirm this matches the Stripe Dashboard so the
@@ -562,10 +563,12 @@ objects. It does not change the production publication or runtime gates.
    2026 as `zaf_youth_family_15pct_2026`: valid, 15% off forever, no expiry,
    redemption cap or Promotion Code, and restricted exactly to Products
    `prod_V5Vq0l9VAaPox9` and `prod_V5VumrjZl1bWV1`. That historical object is
-   superseded and must not be configured for the current release. Create and
-   verify the current 10% live object, record its exact id in the git-ignored
-   production Functions configuration and pass the read-only live API
-   configuration preflight while both purchase gates remain closed.
+   superseded and must not be configured for the current release. Current live
+   Coupon `zaf_youth_family_10pct_2026` was created and read-only API-verified on
+   25 August as 10% off forever and restricted to the same two Products. Record
+   that exact id in the git-ignored production Functions configuration and pass
+   the read-only live API configuration preflight while both purchase gates
+   remain closed.
 6. **Create the Customer Portal configuration** (one per mode) and put its
    `bpc_...` ID in `STRIPE_PORTAL_CONFIGURATION_ID`.
 
@@ -977,15 +980,12 @@ expired Checkout Session or attaches membership agreements.
 1. Staff and document the human late-notice and cooling-off refund operation
    required by the approved Cancellation, Refund and Cooling-off Policy,
    including decision, execution and audit ownership.
-2. Stripe retains the legacy provider names `HYROX Youngstars U11` for
-   MINI ALPHAS - 10 & Under and `HYROX Teenstars 12+` for TEEN ALPHAS - 11 & UP. The customer catalogue is
-   MINI ALPHAS - 10 & Under at £30 per child per month, designed for ages 10 and under, and
-   TEEN ALPHAS - 11 & UP at £35, designed for ages 11 and up. Those age descriptions do
-   not block checkout: a valid date of birth is still required, and staff manage
-   programme placement internally. Before opening, verify that hosted Checkout
-   and customer-visible copy are not contradictory. Rename either Stripe
-   Product only through a controlled catalogue rotation because its exact
-   legacy name is runtime-bound.
+2. Complete the closed, read-only live API preflight after the controlled youth
+   Product rename, then confirm hosted Checkout displays
+   MINI ALPHAS - 10 & Under and TEEN ALPHAS - 11 & UP exactly. The exact Stripe
+   Product names are runtime-bound. Their age descriptions remain non-blocking:
+   checkout still requires a valid date of birth, and staff manage programme
+   placement internally.
 3. Decide whether a member on Ladies Only or Gym Only should be able to sign in
    at all. Today they get an account with no AlphaWOD access, which correctly
    lands on `/access-restricted`, and they can still reach

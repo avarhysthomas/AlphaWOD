@@ -24,6 +24,7 @@ test("approved LIVE Stripe catalogue matches every plan", () => {
     assert.equal(approved.priceEnvKey, plan.stripePriceEnvKey);
     assert.equal(approved.amountPence, plan.amountPence);
     assert.equal(approved.currency, plan.currency);
+    assert.equal(approved.productName, plan.name);
     assert.equal(approved.interval, "month");
     assert.equal(approved.intervalCount, 1);
     assert.equal(approved.transformQuantity, null);
