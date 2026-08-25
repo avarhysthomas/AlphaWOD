@@ -303,7 +303,7 @@ describe("MembershipManage cancellation confirmation", () => {
       .toBeInTheDocument();
   });
 
-  it("shows every Teen Alphas child with the ongoing family discount", async () => {
+  it("shows every Teen Alphas child with its frozen legacy family discount", async () => {
     mockGetMyMemberships.mockResolvedValue({
       ok: true,
       memberships: [{
@@ -344,6 +344,7 @@ describe("MembershipManage cancellation confirmation", () => {
     expect(await screen.findByText("Participants: Alex Child, Sam Child"))
       .toBeInTheDocument();
     expect(screen.getByText("Family discount applied")).toBeInTheDocument();
+    expect(screen.getByText(/15% off the full monthly total/i)).toBeInTheDocument();
     expect(screen.getByText(/pay £59.50 per month instead of £70/i))
       .toBeInTheDocument();
   });

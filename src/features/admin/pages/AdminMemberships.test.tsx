@@ -492,7 +492,7 @@ describe("AdminMemberships cancellation attention", () => {
         entitlementProjectionStatus: null,
         entitlementProjectionError: null,
         discount: {
-          couponId: "coupon_family_15",
+          couponId: "coupon_family_10",
           promotionCodeId: null,
           amountOffPence: null,
           currency: null,
@@ -500,18 +500,18 @@ describe("AdminMemberships cancellation attention", () => {
           startsAt: 1787149200,
           endsAt: null,
           kind: "youth_family",
-          percentOff: 15,
+          percentOff: 10,
           duration: "forever",
         },
         paymentSchedule: {
           amountDueTodayPence: 0,
           firstPaymentAt: 1788220800,
           standardMonthlyPence: 7000,
-          discountedMonthlyPence: 5950,
+          discountedMonthlyPence: 6300,
           discountedPaymentCount: null,
           fullPriceFrom: null,
         },
-        monthlyRecurringPence: 5950,
+        monthlyRecurringPence: 6300,
         revenueState: "at_risk",
       }],
     });
@@ -521,12 +521,13 @@ describe("AdminMemberships cancellation attention", () => {
     expect(await screen.findByText("Alex Child")).toBeInTheDocument();
     expect(screen.getByText("Sam Child")).toBeInTheDocument();
     expect(screen.getByText("Guardian Ava Parent")).toBeInTheDocument();
-    expect(screen.getByText("£59.50")).toBeInTheDocument();
+    expect(screen.getByText("£63")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", {
       name: "View details for Alex Child, Sam Child",
     }));
     expect(screen.getByText("Family discount applied")).toBeInTheDocument();
-    expect(screen.getByText(/pay £59.50 per month instead of £70/i))
+    expect(screen.getByText(/10% off the full monthly total/i)).toBeInTheDocument();
+    expect(screen.getByText(/pay £63 per month instead of £70/i))
       .toBeInTheDocument();
   });
 

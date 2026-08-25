@@ -1,0 +1,199 @@
+Membership Terms
+
+Public membership purchase and ongoing membership
+
+VERSION DATE
+25 August 2026
+
+DOCUMENT ID
+ZAF-TERMS-2026-08-25-02
+
+CONTRACTING ENTITY
+ZERO ALPHA FITNESS LTD · 15978998
+
+TRADING NAME
+Zero Alpha Fitness
+
+PUBLIC CONTACT
+support@zeroalphafitness.co.uk
+
+WEBSITE
+https://alpha-wod.vercel.app/
+
+1. About these Terms
+
+These Membership Terms form the contract for a Zero Alpha Fitness membership purchased online from ZERO ALPHA FITNESS LTD, a company registered in England and Wales under company number 15978998, trading as Zero Alpha Fitness (we, us or our). Our registered office is 18 Bryngwyn Bach, Llanelli, United Kingdom, SA14 8SH. Our public trading and contact address is Unit 3, Felinfoel Business Hub, Llanelli, SA14 8BE. Contact us at support@zeroalphafitness.co.uk.
+
+For an adult membership, the named participant must buy the membership for themselves and is also the payer and signer. For one or more participants under 18, the payer and signer must be their parent or legal guardian, or another adult with lawful authority to enrol every named child.
+
+These Terms should be read with the Cancellation, Refund and Cooling-off Policy, the Privacy Notice, and the applicable Adult Participant Waiver or Parent/Guardian Consent and Youth Membership Addendum. Those documents are presented before purchase and form part of the membership arrangement where stated.
+
+2. Eligibility and who must accept what
+
+• An adult participant must be aged 18 or over and must personally accept the Adult Participant Waiver and Risk Acknowledgement before taking part.
+
+• Mini Alphas is designed for children aged 10 and under. Teen Alphas is designed for young people aged 11 and over. These descriptions are programme guidance, not an automated Checkout restriction. Zero Alpha Fitness may contact the guardian before onboarding to confirm or adjust the most suitable class internally.
+
+• A youth participant’s guardian must be the payer, confirm their relationship and lawful authority for each named child, and accept the Parent/Guardian Consent and Youth Membership Addendum for each child.
+
+• An adult participant accepts these Terms, the payment obligation and the Adult Participant Waiver for their own membership. Third-party purchase of an adult membership is not supported.
+
+• You must give accurate, complete and current information and must not misrepresent authority to act for another person.
+
+3. Membership options and prices
+
+The initial public catalogue is:
+
+• Adult Unlimited Membership — £60 per month. This is the only paid membership that grants eligible AlphaWOD access after the first required payment succeeds.
+
+• Adult Ladies Only Membership — £50 per month.
+
+• Adult Gym Only — £45 per month.
+
+• Youth Membership — Mini Alphas, designed for ages 10 and under, at £30 per child per month; or Teen Alphas, designed for ages 11 and over, at £35 per child per month.
+
+There is no joining fee, free trial or minimum term. Each membership is a rolling monthly contract until cancelled under section 9. We are not currently VAT registered. The price displayed at checkout is the total customer price; no VAT invoice or VAT breakdown is offered. If our tax status changes, we will update the presentation and notices before applying any change.
+
+One youth Checkout may cover between one and ten children in the same selected programme. Mini Alphas and Teen Alphas cannot be combined in one Checkout. The contracted quantity is the number of children confirmed at Checkout or in a later written change confirmed by us.
+
+When the contracted quantity is two or more children, a recurring 10% multi-child discount applies to the full undiscounted monthly subtotal (the price per child multiplied by the contracted quantity). It does not apply at quantity one and does not combine with another promotion unless Stripe explicitly shows both before confirmation. Non-attendance does not change the contracted quantity, recurring total or discount.
+
+We may offer promotion codes subject to their stated eligibility, duration and limits. The automatic youth multi-child discount does not combine with another promotion unless Stripe explicitly shows both before confirmation. A promotion does not change the underlying rolling nature of the contract unless its terms expressly say so. A code has no cash value and cannot be applied retrospectively unless required by law or expressly agreed.
+
+4. How the contract is made
+
+1. Choose the membership and, for youth membership, one plan and the number of children in that plan.
+
+2. Provide the required details for every named participant and the payer or guardian, review the documents, and complete each required acceptance or signature.
+
+3. Review the amount due today, the first payment or billing date and, for a youth membership, the quantity, price per child, undiscounted subtotal, multi-child discount and resulting recurring total shown by Stripe. During the founding presale, Checkout must show £0 due today and the first monthly payment on 1 September 2026; after opening, Stripe may show an immediate prorated charge to the next first of the month.
+
+4. Complete Stripe Checkout. Available payment methods are those Stripe displays for that transaction and may vary by device, location, currency and eligibility.
+
+5. The contract is formed when Stripe confirms completion of Checkout and we issue an on-screen or email confirmation, unless we promptly tell you that a clear pricing, eligibility or technical error prevented acceptance and refund any amount taken.
+
+Stripe will present an unambiguous final confirmation control and summary. Before service begins, we will email a durable confirmation containing the agreed plan, every named participant, contracted quantity, price per child, undiscounted subtotal, discount, resulting recurring total, next payment date, accepted document versions, cancellation information and signed acceptance evidence; a changeable website link alone is not the durable copy. During the founding presale, nothing is charged today; membership starts and the first monthly payment is taken on 1 September 2026. For a youth membership, Checkout completion does not itself book a first session. We will contact the guardian by email to arrange onboarding and the first session.
+
+Founding presale youth confirmation: You’re signed up. Nothing has been charged today. This membership starts and the first monthly payment is taken on 1 September 2026. Zero Alpha Fitness will contact you by email to arrange onboarding and the first session.
+
+5. Presale, billing date, proration and recurring authority
+
+All memberships use the first day of each calendar month as the regular billing date, interpreted in Europe/London time. During the founding presale, nothing is charged today. Stripe securely saves the payment method; membership starts and the first monthly payment is taken on 1 September 2026. After opening, memberships start immediately and, if Checkout occurs after the first, Stripe calculates and displays an immediate prorated charge until the next first. The full monthly price is then charged on each first while membership continues.
+
+The amount Stripe displays before confirmation is authoritative for that Checkout. A presale Checkout must show £0 due today and a first payment date of 1 September 2026. We do not calculate a separate charge in the browser. If the displayed amount or billing date appears wrong, do not confirm; contact us first.
+
+By completing Checkout, the payer authorises Stripe and us to store the selected payment method as permitted by that payment method and to collect the amount shown today, which is £0 during the founding presale, and future recurring amounts without the payer being present. For a youth family subscription, that authority covers the displayed contracted quantity, price per child, subtotal, recurring 10% discount at quantity two or more, and resulting recurring total. The payer must keep the payment method valid and may update it through the secure Customer Portal.
+
+6. Price changes
+
+We may change a recurring price only prospectively. We will give clear advance notice of the new amount and the date it would first apply, using the payer’s recorded email and any legally required method. The payer may cancel before the change takes effect. A price change will not alter amounts already paid or due for a completed billing event. Any legally required notice or cancellation right overrides this paragraph.
+
+7. What the membership provides
+
+The selected membership provides access to the facilities, sessions or services described for that plan at the time of purchase, subject to opening hours, capacity, timetables, coaching instructions, reasonable safety rules and temporary closures. Each membership or youth place is personal to its named participant and cannot be sold, shared or transferred without our written agreement.
+
+We may make reasonable operational changes to timetables, instructors, equipment, class formats or facilities. We will not use this clause to remove the essential benefit of the membership without a fair remedy. If a change is material and adverse, we will give reasonable notice where practicable and any cancellation or refund rights required by law.
+
+The programme age descriptions are guidance only. A child’s date of birth does not automatically move them, remove a place or change the recurring total. We may contact the payer to manage programme placement internally. No plan, contracted-quantity, price or discount change takes effect until we confirm it in writing, including the effective date and resulting recurring total, and a new Checkout may be required.
+
+8. AlphaWOD access
+
+• Adult Unlimited Membership qualifies the participant for AlphaWOD access only after the first required payment succeeds and while the subscription and payment status remain eligible.
+
+• An existing AlphaWOD account holder should sign in and claim the purchase. Creating or paying for a duplicate active subscription may be blocked.
+
+• Existing users whose AlphaWOD access was already approved before this purchase flow launches remain grandfathered unless their independent eligibility is later removed under a lawful policy.
+
+• Administrators and SGPT staff may retain access through their role independently of a consumer membership.
+
+• Youth memberships, Adult Ladies Only and Adult Gym Only do not automatically include AlphaWOD access.
+
+AlphaWOD access may be suspended or removed when the related entitlement is past due beyond the grace period, unpaid, fully refunded, subject to a lost payment dispute, cancelled or otherwise ineligible. A scheduled cancellation continues only through the paid access period. App availability also depends on compatible technology, internet service, security and maintenance.
+
+9. Ordinary cancellation of the rolling membership
+
+PROMINENT RENEWAL RULE
+
+To avoid the next first-of-month payment, a cancellation request must reach us at least 14 calendar days before that billing date. If it reaches us less than 14 days before the next first, that next monthly payment remains due and the membership ends at the end of the additional paid month.
+
+A payer may request cancellation through the signed-in cancellation-request flow or by emailing support@zeroalphafitness.co.uk. The online flow records and acknowledges the outcome automatically. Email requests are handled manually using the time the message reaches the support inbox. The request should identify the payer, every participant and the membership. We will send an acknowledgement showing the effective end date and any remaining scheduled charge.
+
+• If the request is received at least 14 calendar days before the next first, no payment is taken on that first and access ends at the end of the preceding day.
+
+• If the request is received less than 14 calendar days before the next first, the payment on that first remains due; access continues for that paid month and ends at the end of the day before the following first.
+
+• A cancellation request stops later renewals; it does not create a refund for time already supplied or an amount already due, except where the law requires one.
+
+• Membership cannot be paused. A request to pause will not be treated as a cancellation unless the payer clearly asks to cancel.
+
+The statutory cooling-off right for a newly formed distance contract is separate and is explained in section 10 and the Cancellation, Refund and Cooling-off Policy. It is not restricted by the ordinary renewal-notice rule above.
+
+A youth Checkout creates one subscription covering every child listed in that Checkout. An ordinary or cooling-off cancellation ends the whole subscription and all listed children’s places; the online flow does not cancel one child separately. Contact us about any requested change to the listed children. No addition, removal, plan, price or discount change takes effect unless and until we confirm it in writing, including the effective date and resulting recurring total. We may require cancellation and a new Checkout. Stopping attendance or asking to remove one child is not by itself a contract change.
+
+10. Cooling-off and refunds
+
+Where the Consumer Contracts (Information, Cancellation and Additional Charges) Regulations 2013 apply, a consumer generally may cancel until the end of 14 days after the day the online service contract is made. If the payer expressly requests that service begin on the service start date shown, even if that is before the cooling-off period ends, and then cancels within that period, we may deduct only a proportionate amount for services actually supplied, where the law allows. If that express request was not made, different refund consequences may apply. Any statutory refund will be made within 14 days where that is the legal deadline, to the original payment method unless the consumer expressly agrees otherwise, and without a refund fee.
+
+Outside a statutory or other mandatory right, payments are non-refundable. Nothing in these Terms excludes remedies for services not provided with reasonable care and skill, misdescription, breach of contract, or any other right that cannot lawfully be excluded.
+
+11. Failed payments, grace period and disputes
+
+After a membership has started, if a recurring payment fails, Stripe may retry it and we may ask the payer to update the payment method. We allow a three-calendar-day past-due grace period from the failed due date, during which existing related access continues while payment is recovered. If the subscription remains past due after the grace period, access may be suspended until payment succeeds or the membership ends. If the first scheduled payment fails, the membership and AlphaWOD access do not start. We do not add an undisclosed late fee or accelerate future monthly payments.
+
+When a payment dispute is opened, related access is suspended while the dispute is investigated. If the dispute is resolved in our favour, access may be restored promptly, subject to current membership status, and we will fairly assess any credit or extension needed for paid access that was unavailable. If the dispute is lost or the payment is fully refunded, related access is revoked. This does not remove the payer’s right to raise a genuine complaint, use an applicable chargeback right, or exercise a statutory remedy. Contacting us first may allow a billing error to be resolved more quickly.
+
+12. Conduct, safety and use of facilities
+
+• Participants must follow staff instructions, posted rules, equipment guidance and reasonable safeguarding measures.
+
+• Participants must use equipment only as instructed, wear suitable clothing and footwear, and behave safely and respectfully.
+
+• A participant should stop immediately and tell a member of staff if they feel unwell, unsafe or unable to continue.
+
+• Violence, harassment, deliberate damage, dangerous conduct, unauthorised commercial activity or misuse of another person’s membership may result in proportionate restriction or termination after fair consideration of the circumstances.
+
+• A guardian must comply with youth arrival, handover, collection and supervision arrangements communicated during onboarding.
+
+We may take immediate, proportionate action where reasonably necessary to protect a person, property, safeguarding or service security. Where appropriate, we will explain the decision and offer a review route.
+
+13. Health and participation
+
+Physical training carries inherent risks. The participant or guardian is responsible for deciding whether to seek medical advice before participation and for following professional advice. The public purchase form does not request medical details. If information is necessary for safe participation, do not place it in a signature or general support field; use the separate secure onboarding route we provide. The applicable waiver or guardian addendum contains the detailed participation acknowledgement.
+
+14. Our responsibility
+
+We must provide services with reasonable care and skill. Nothing in these Terms excludes or limits liability for death or personal injury caused by negligence, fraud or fraudulent misrepresentation, breach of statutory rights, or any liability that cannot lawfully be excluded or limited.
+
+Subject to that protection, we are not responsible for loss caused by the participant’s deliberate or unsafe misuse of facilities, breach of clear safety instructions, or an event outside our reasonable control where we took reasonable steps to reduce the effect. We are not responsible for business losses arising from a consumer membership. Any limitation will apply only so far as fair and lawful in the circumstances.
+
+15. Customer Portal and account security
+
+The Stripe Customer Portal may allow the payer to update a payment method and view invoices. Pause and Stripe’s standard cancellation control are disabled because cancellation uses the notice process in section 9. The payer may open the Customer Portal only from the signed-in account that owns the membership. A purchaser who checked out while signed out must first claim the purchase from the Checkout return flow or from a signed-in account whose verified email matches the payer email. The recipient must keep account credentials secure and tell us promptly about suspected unauthorised use.
+
+16. Ending or restricting a membership by us
+
+We may suspend or end a membership for non-payment, serious or repeated breach, fraud, misuse, safety or safeguarding risk, or where continuing the service is unlawful or no longer reasonably possible. Except where immediate action is reasonably necessary, we will give notice, explain the reason and allow a reasonable opportunity to put a remediable breach right. Any refund or continuing charge will be assessed fairly and in accordance with the law.
+
+17. Changes to these Terms
+
+We may update these Terms for legal, regulatory, security or reasonable service reasons. We will not impose a material adverse change retrospectively. Where a change materially affects an active membership, we will give clear advance notice and any fair cancellation right required by law. The version accepted at checkout and any later version lawfully notified will be retained with the acceptance evidence.
+
+18. Communications, complaints and governing law
+
+We send service, billing and legal communications to the payer’s recorded email. The payer must keep it current. Complaints should be sent to support@zeroalphafitness.co.uk or by post to Unit 3, Felinfoel Business Hub, Llanelli, SA14 8BE. We will investigate and respond within a reasonable time.
+
+These Terms are governed by the law of England and Wales. A consumer living elsewhere in the UK retains any mandatory protection of the part of the UK where they live and may bring proceedings in any court available under applicable consumer law. Nothing in these Terms prevents either party from using another lawful dispute-resolution route.
+
+Checkout acceptance text
+
+The checkout should show each required statement beside its own unticked control. Acceptance must be affirmative; do not pre-tick, infer or bundle optional marketing consent.
+
+☐ I have read and agree to the Membership Terms and the Cancellation, Refund and Cooling-off Policy. I confirm that all participant and payer or guardian details I supplied are accurate.
+
+☐ I acknowledge that I have received and read the Privacy Notice explaining how personal information is used.
+
+☐ I authorise the amount Stripe shows today and future recurring monthly payments for the selected membership on the billing schedule shown at Checkout. For a youth membership, Stripe will show the plan, quantity, price per child, undiscounted subtotal, recurring 10% discount when the quantity is two or more, and resulting recurring total. For another verified promotion, Stripe will show its effect and when the standard price resumes. This authority is subject to my cancellation and statutory rights.
+
+☐ I expressly request that the membership and any eligible AlphaWOD access begin on the service start date shown, even if that is before the 14-day cooling-off period ends. I understand that, if I cancel during that period, Zero Alpha Fitness may retain or charge only the proportionate amount permitted by law for services supplied before cancellation.
+
+Evidence to retain: payer name and verified payer email; the exact document version(s); the exact statement(s) displayed; typed name where required; UTC timestamp plus Europe/London display time; authenticated account or verified-email context; Stripe Checkout/subscription identifiers where relevant; and only the technical audit data disclosed in the Privacy Notice.

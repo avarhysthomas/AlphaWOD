@@ -68,6 +68,7 @@ import {
   isAgeEligibleForPlan,
   isMembershipStateBlockingDuplicate,
   isPlanKey,
+  isSupportedYouthFamilyDiscountPercent,
   resolveAgeFromDateOfBirth,
   resolveCancellationOutcome,
   resolveCheckoutBillingPolicy,
@@ -127,7 +128,7 @@ import {
  * snapshot it accepts. Keep this independent from the stored document schema:
  * a Firestore migration must not invalidate an otherwise exact Stripe retry.
  */
-export const MEMBERSHIP_CHECKOUT_SCHEMA_VERSION = 2;
+export const MEMBERSHIP_CHECKOUT_SCHEMA_VERSION = 3;
 
 const REGION = "europe-west1";
 
@@ -799,15 +800,23 @@ function orderFor(
   return createOrderSnapshot(commercialTerms, participantCount);
 }
 
+function youthFamilyDiscountPercentFor(
+  discount: MembershipDiscount | null | undefined
+): number | null {
+  return discount?.kind === "youth_family" &&
+    isSupportedYouthFamilyDiscountPercent(discount.percentOff) ?
+    discount.percentOff : null;
+}
+
 function discountedMonthlyPenceFor(
   standardMonthlyPence: number,
   discount: MembershipDiscount | null
 ): number | null {
   if (!discount) return null;
-  if (discount.kind === "youth_family" &&
-    discount.percentOff === YOUTH_FAMILY_OFFER.percentOff) {
+  const familyPercentOff = youthFamilyDiscountPercentFor(discount);
+  if (familyPercentOff !== null) {
     return Math.round(
-      standardMonthlyPence * (100 - discount.percentOff) / 100
+      standardMonthlyPence * (100 - familyPercentOff) / 100
     );
   }
   return typeof discount.amountOffPence === "number" ?
@@ -896,17 +905,19 @@ async function resolveApprovedYouthProductIds(
   }));
 }
 
-/** Validates the server-only 15%-forever Coupon against both youth Products. */
+/** Validates a current or frozen historical family Coupon against both youth Products. */
 async function retrieveApprovedYouthFamilyCoupon(
   billingStripe: Stripe,
   couponId: string,
   expectedProductIds: readonly string[],
+  expectedPercentOff: number,
   requireCurrentlyRedeemable = true
 ): Promise<Stripe.Coupon> {
-  if (!couponId) {
+  if (!couponId ||
+    !isSupportedYouthFamilyDiscountPercent(expectedPercentOff)) {
     throw new HttpsError(
       "failed-precondition",
-      "The youth family-discount Coupon allowlist is not configured."
+      "The youth family-discount Coupon allowlist or percentage is not configured."
     );
   }
   const coupon = await billingStripe.coupons.retrieve(couponId, {
@@ -919,14 +930,14 @@ async function retrieveApprovedYouthFamilyCoupon(
     applicableProducts.every((id, index) => id === expectedProducts[index]);
   if (coupon.id !== couponId || coupon.deleted ||
     (requireCurrentlyRedeemable && coupon.valid !== true) ||
-    coupon.percent_off !== YOUTH_FAMILY_OFFER.percentOff ||
+    coupon.percent_off !== expectedPercentOff ||
     coupon.amount_off !== null || coupon.currency !== null ||
     coupon.duration !== "forever" || coupon.duration_in_months !== null ||
     coupon.redeem_by !== null || coupon.max_redemptions !== null ||
     !exactProducts) {
     throw new HttpsError(
       "failed-precondition",
-      "The youth family Coupon does not match the approved 15% offer."
+      `The youth family Coupon does not match the approved ${expectedPercentOff}% offer.`
     );
   }
   return coupon;
@@ -1036,10 +1047,21 @@ async function resolveApprovedCheckoutDiscount(
 
     const billingStripe = stripe();
     const expectedProductIds = await resolveApprovedYouthProductIds(billingStripe);
+    const frozenOrder = orderFor(intent);
+    const frozenPercentOff = frozenOrder.familyDiscountPercent;
+    if (!isSupportedYouthFamilyDiscountPercent(frozenPercentOff) ||
+      frozenOrder.recurringMonthlyPence !== Math.round(
+        frozenOrder.standardMonthlyPence * (100 - frozenPercentOff) / 100
+      )) {
+      throw new Error(
+        `Checkout intent for ${session.id} has an invalid frozen family discount.`
+      );
+    }
     const coupon = await retrieveApprovedYouthFamilyCoupon(
       billingStripe,
       frozenCouponId,
       expectedProductIds,
+      frozenPercentOff,
       false
     );
     const subscriptionDiscounts = (subscription.discounts ?? []).filter(
@@ -1069,7 +1091,7 @@ async function resolveApprovedCheckoutDiscount(
       couponId: coupon.id,
       promotionCodeId: null,
       amountOffPence: null,
-      percentOff: YOUTH_FAMILY_OFFER.percentOff,
+      percentOff: frozenPercentOff,
       currency: null,
       duration: "forever",
       durationInMonths: null,
@@ -4468,7 +4490,8 @@ function buildCreateMembershipCheckoutHandler(
         const coupon = await retrieveApprovedYouthFamilyCoupon(
           client,
           configuredCouponId,
-          youthProductIds
+          youthProductIds,
+          YOUTH_FAMILY_OFFER.percentOff
         );
         familyDiscountCouponId = coupon.id;
       }
@@ -8572,7 +8595,6 @@ const WELCOME_EMAIL_VARIANTS: Record<PlanKey, WelcomeEmailVariant> = {
     inclusions: [
       "Fun, progressive strength and conditioning",
       "A supportive introduction to movement and fitness",
-      "15% family discount while this subscription covers two or more children",
     ],
     accessNote: "Youth memberships do not include Zero Alpha App access.",
   },
@@ -8583,7 +8605,6 @@ const WELCOME_EMAIL_VARIANTS: Record<PlanKey, WelcomeEmailVariant> = {
     inclusions: [
       "Coached strength and conditioning sessions",
       "Training that develops athletic qualities and confidence",
-      "15% family discount while this subscription covers two or more children",
     ],
     accessNote: "Youth memberships do not include Zero Alpha App access.",
   },
@@ -8597,6 +8618,9 @@ function buildConfirmationHtml(details: ConfirmationDetails): string {
   const participants = participantsFor(membership);
   const participantCount = participantCountFor(membership);
   const order = orderFor(membership);
+  const frozenFamilyDiscountPercent = youthFamilyDiscountPercentFor(
+    membership.discount
+  );
   const isPresale = membership.billingMode === "presale_deferred";
   const firstFullCharge = formatUnixBillingDate(membership.billingCycleAnchor);
   const documents = membership.acceptances.documents
@@ -8639,7 +8663,7 @@ function buildConfirmationHtml(details: ConfirmationDetails): string {
       ] as [string, string],
     ] : []),
     [isYouthPlan ? "Recurring monthly total" : "Monthly price", `${formatPence(
-      membership.discount?.kind === "youth_family" ?
+      frozenFamilyDiscountPercent !== null ?
         order.recurringMonthlyPence : order.standardMonthlyPence
     )} per month`],
     [
@@ -8653,13 +8677,13 @@ function buildConfirmationHtml(details: ConfirmationDetails): string {
     ["Then", "The first of each month"],
   ];
 
-  if (membership.discount?.kind === "youth_family") {
+  if (frozenFamilyDiscountPercent !== null) {
     const recurringTotalIndex = rows.findIndex(([label]) =>
       label === "Recurring monthly total"
     );
     rows.splice(recurringTotalIndex, 0, [
       "Family discount",
-      `${YOUTH_FAMILY_OFFER.percentOff}% (−${formatPence(
+      `${frozenFamilyDiscountPercent}% (−${formatPence(
         order.standardMonthlyPence - order.recurringMonthlyPence
       )}) off the ${formatPence(order.standardMonthlyPence)} subtotal; ` +
       `${formatPence(order.recurringMonthlyPence)} per month while ` +
@@ -8786,11 +8810,18 @@ function buildWelcomeHtml(membership: MembershipDoc): string {
   const recipientName = isYouthPlan && membership.guardian?.fullName ?
     membership.guardian.fullName : participants[0]?.fullName ?? "there";
   const order = orderFor(membership);
-  const recurringMonthlyPence = membership.discount?.kind === "youth_family" ?
+  const frozenFamilyDiscountPercent = youthFamilyDiscountPercentFor(
+    membership.discount
+  );
+  const recurringMonthlyPence = frozenFamilyDiscountPercent !== null ?
     order.recurringMonthlyPence : order.standardMonthlyPence;
-  const inclusions = variant.inclusions
-    .filter((item) => !item.startsWith("15% family discount") ||
-      membership.discount?.kind === "youth_family")
+  const inclusions = [
+    ...variant.inclusions,
+    ...(frozenFamilyDiscountPercent === null ? [] : [
+      `${frozenFamilyDiscountPercent}% family discount while this subscription ` +
+        "covers two or more children",
+    ]),
+  ]
     .map((item) =>
       "<tr><td style=\"width:28px;padding:0 0 12px;vertical-align:top;" +
       "color:#8b6748;font-size:18px;line-height:20px;\">&#10003;</td>" +

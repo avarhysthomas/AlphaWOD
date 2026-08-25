@@ -71,6 +71,22 @@ function createFakeStripe() {
       applies_to: {products: ["prod_price_unlimited"]},
       deleted: false,
       valid: true,
+    }], ["coupon_youth_family_10pct", {
+      id: "coupon_youth_family_10pct",
+      object: "coupon",
+      livemode: false,
+      amount_off: null,
+      currency: null,
+      percent_off: 10,
+      duration: "forever",
+      duration_in_months: null,
+      max_redemptions: null,
+      redeem_by: null,
+      applies_to: {
+        products: ["prod_price_youngstars", "prod_price_teenstars"],
+      },
+      deleted: false,
+      valid: true,
     }], ["coupon_youth_family_15pct", {
       id: "coupon_youth_family_15pct",
       object: "coupon",

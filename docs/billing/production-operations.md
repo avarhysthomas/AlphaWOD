@@ -33,19 +33,21 @@ Stripe provider name `HYROX Teenstars 12+`. Live Coupon
 same day as valid, 15% off forever, without an expiry, redemption cap or
 Promotion Code, and restricted exactly to those two youth Products. The closed
 API-backed live preflight and production legal-byte verification remain required.
+This is historical provider evidence for the superseded 15% offer; the current
+release requires a separately verified 10% Coupon.
 
 The operational commercial contract for this release is:
 
 | Plan | Age guidance | Per-child monthly price | Family offer |
 | --- | --- | ---: | --- |
-| Mini Alphas | Designed for ages 10 and under | £30 | 15% off the whole subtotal forever at 2–10 children |
-| Teen Alphas | Designed for ages 11 and up | £35 | 15% off the whole subtotal forever at 2–10 children |
+| Mini Alphas | Designed for ages 10 and under | £30 | 10% off the whole subtotal forever at 2–10 children |
+| Teen Alphas | Designed for ages 11 and up | £35 | 10% off the whole subtotal forever at 2–10 children |
 
 Age guidance does not block checkout. Every child must still have a valid,
 non-future date of birth, and staff manage programme placement internally. Each
 checkout covers 1–10 children in the same selected programme; one subscription
-cannot mix programmes. One child pays full price. Two Mini Alphas recur at £51
-and two Teen Alphas at £59.50.
+cannot mix programmes. One child pays full price. Two Mini Alphas recur at £54
+and two Teen Alphas at £63.
 
 ## Release preflights
 
@@ -95,7 +97,7 @@ That command is read-only. It requires the exact reviewed mapping frozen in
 Mini Alphas Price at £30 and Teen Alphas Price at £35, the
 product-scoped three-month Coupon, the one active shared Promotion Code and the
 locked-down Customer Portal configuration. It also retrieves the youth-family
-Coupon and requires exactly 15% off forever, no amount/currency, redemption
+Coupon and requires exactly 10% off forever, no amount/currency, redemption
 deadline or cap, and an `applies_to` set containing exactly the two youth
 Products with the approved legacy Stripe provider names `HYROX Youngstars U11`
 and `HYROX Teenstars 12+`. It exits before reporting success
@@ -254,7 +256,7 @@ Deploy the webhook, workers and callables in the rollout guide's closed-state
 batches, including both checkout exports. Immediately re-block all eight
 callables, then restore only `createMembershipCheckoutSessionV2` and the six
 non-checkout callables; keep legacy `createMembershipCheckoutSession` blocked.
-The compatible frontend calls V2 with `checkoutSchemaVersion: 2`, so a frontend
+The compatible frontend calls V2 with `checkoutSchemaVersion: 3`, so a frontend
 deployed before V2 fails safely and a cached V1 client cannot cross the new
 schema boundary. Complete the closed-state smoke tests: V2 must reach its handler
 and fail at the runtime gate without creating a Stripe Session. Only after every

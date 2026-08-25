@@ -314,7 +314,7 @@ describe("MembershipSuccess claim persistence", () => {
         participantCount: 2,
         participantIsPayer: false,
         discount: {
-          couponId: "coupon_family_15",
+          couponId: "coupon_family_10",
           promotionCodeId: null,
           amountOffPence: null,
           currency: null,
@@ -322,14 +322,14 @@ describe("MembershipSuccess claim persistence", () => {
           startsAt: 1787149200,
           endsAt: null,
           kind: "youth_family",
-          percentOff: 15,
+          percentOff: 10,
           duration: "forever",
         },
         paymentSchedule: {
           amountDueTodayPence: 0,
           firstPaymentAt: 1788220800,
           standardMonthlyPence: 6000,
-          discountedMonthlyPence: 5100,
+          discountedMonthlyPence: 5400,
           discountedPaymentCount: null,
           fullPriceFrom: null,
         },
@@ -342,7 +342,8 @@ describe("MembershipSuccess claim persistence", () => {
     expect(await screen.findByText("Participants: Alex Child, Sam Child"))
       .toBeInTheDocument();
     expect(screen.getByText("Family discount applied")).toBeInTheDocument();
-    expect(screen.getByText(/pay £51 per month instead of £60/i)).toBeInTheDocument();
+    expect(screen.getByText(/10% off the full monthly total/i)).toBeInTheDocument();
+    expect(screen.getByText(/pay £54 per month instead of £60/i)).toBeInTheDocument();
   });
 
   it("keeps an existing member's app access available after presale checkout", async () => {

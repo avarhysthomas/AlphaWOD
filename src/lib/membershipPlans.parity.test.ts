@@ -100,6 +100,7 @@ describe("membership catalogue parity", () => {
     "PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS",
     "EXISTING_MEMBER_OFFER",
     "YOUTH_FAMILY_OFFER",
+    "SUPPORTED_YOUTH_FAMILY_DISCOUNT_PERCENTAGES",
     "MEMBERSHIP_SCHEMA_VERSION",
     "COMPANY",
     "PLAN_KEYS",
@@ -120,14 +121,14 @@ describe("membership catalogue parity", () => {
     }
   );
 
-  it("keeps schema v3 and the youth recommendation boundary identical", () => {
+  it("keeps schema v4 and the youth recommendation boundary identical", () => {
     const {
       MEMBERSHIP_SCHEMA_VERSION,
       MEMBERSHIP_PLANS,
       resolveYouthPlanForAge,
     } = require("./membershipPlans") as typeof import("./membershipPlans");
 
-    expect(MEMBERSHIP_SCHEMA_VERSION).toBe(3);
+    expect(MEMBERSHIP_SCHEMA_VERSION).toBe(4);
     expect(resolveYouthPlanForAge(-1)).toBeNull();
     expect(resolveYouthPlanForAge(0)).toBe("youth_youngstars");
     expect(resolveYouthPlanForAge(10)).toBe("youth_youngstars");
@@ -159,11 +160,11 @@ describe("membership catalogue parity", () => {
     expect(Object.fromEntries(Object.entries(CHECKOUT_DOCUMENTS).map(
       ([key, document]) => [key, [document.version, document.effectiveDate]]
     ))).toEqual({
-      membershipTerms: ["ZAF-TERMS-2026-08-25-01", "2026-08-25"],
+      membershipTerms: ["ZAF-TERMS-2026-08-25-02", "2026-08-25"],
       cancellationPolicy: ["ZAF-CANCEL-2026-08-23-01", "2026-08-23"],
       privacyNotice: ["ZAF-PRIVACY-2026-08-25-01", "2026-08-25"],
       adultWaiver: ["ZAF-ADULT-WAIVER-2026-08-23-01", "2026-08-23"],
-      guardianAddendum: ["ZAF-GUARDIAN-2026-08-25-01", "2026-08-25"],
+      guardianAddendum: ["ZAF-GUARDIAN-2026-08-25-02", "2026-08-25"],
     });
     Object.values(CHECKOUT_DOCUMENTS).forEach((document) => {
       expect(document.sha256).toMatch(/^[a-f0-9]{64}$/);

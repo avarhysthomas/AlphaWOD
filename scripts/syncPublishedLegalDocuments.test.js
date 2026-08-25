@@ -53,11 +53,11 @@ test("publication manifest fixes the mixed immutable document bundle", () => {
       effectiveDate,
     ]),
     [
-      ["membershipTerms", "ZAF-TERMS-2026-08-25-01", "2026-08-25"],
+      ["membershipTerms", "ZAF-TERMS-2026-08-25-02", "2026-08-25"],
       ["cancellationPolicy", "ZAF-CANCEL-2026-08-23-01", "2026-08-23"],
       ["privacyNotice", "ZAF-PRIVACY-2026-08-25-01", "2026-08-25"],
       ["adultWaiver", "ZAF-ADULT-WAIVER-2026-08-23-01", "2026-08-23"],
-      ["guardianAddendum", "ZAF-GUARDIAN-2026-08-25-01", "2026-08-25"],
+      ["guardianAddendum", "ZAF-GUARDIAN-2026-08-25-02", "2026-08-25"],
     ]
   );
 });

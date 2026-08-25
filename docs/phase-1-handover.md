@@ -22,7 +22,8 @@ GBP monthly on Product `prod_V5VumrjZl1bWV1` (legacy Stripe provider name
 `HYROX Teenstars 12+`). Live Coupon
 `zaf_youth_family_15pct_2026` was then created and verified in Stripe Dashboard
 on 23 August: valid, 15% off forever, no expiry, redemption cap or Promotion
-Code, and restricted exactly to those two youth Products.
+Code, and restricted exactly to those two youth Products. This is historical
+evidence for the superseded 15% offer, not the Coupon for the current release.
 On 20 August the live Product-scoped no-expiry Coupon and Promotion Code,
 locked-down Portal `bpc_1U6SIkFzNDZoGGA0mSE5EepR`, active 14-event webhook
 `we_1U6SObFzNDZoGGA0cw5Yyqth`, and the existence of the Stripe API,
@@ -44,9 +45,9 @@ designed for ages 11 and up. Those age descriptions are non-blocking guidance:
 checkout still requires a valid, non-future date of birth, and staff manage
 programme placement internally. Each youth subscription may contain 1–10
 children in the same selected programme. One child pays the standard per-child
-price; at 2–10 children an automatic 15%-forever Coupon applies to the whole
+price; at 2–10 children an automatic 10%-forever Coupon applies to the whole
 monthly subtotal. A single subscription cannot mix programmes. Two Mini Alphas
-therefore recur at £51 and two Teen Alphas at £59.50.
+therefore recur at £54 and two Teen Alphas at £63.
 
 The business owner explicitly approved the current mixed publication bundle on
 25 August 2026: revised Membership Terms, Privacy Notice and Guardian Addendum
@@ -84,7 +85,7 @@ The new Functions surface is:
   `createMembershipCheckoutSessionV2`, `createCustomerPortalSession`, `getMyMemberships`,
   `requestMembershipCancellation`, `claimMembership`, `listMemberships`, and
   `linkMembershipParticipant`. The compatible frontend calls only V2 with
-  `checkoutSchemaVersion: 2`; V1 remains for stale-client fail-safe rollout and
+  `checkoutSchemaVersion: 3`; V1 remains for stale-client fail-safe rollout and
   is not an opening target;
 - one deployed public HTTP endpoint: `stripeWebhook`;
 - four scheduled workers: `recoverStripeEvents`,
@@ -108,7 +109,7 @@ Every one is denied to clients in `firestore.rules`. The memberships
 reconciler also requires the composite index in `firestore.indexes.json` on
 `state` and `nextReconcileAt`.
 
-The current billing schema version 2 is acceptable only if all ten collections
+The current billing schema version 3 is acceptable only if all ten collections
 are empty. Deploying the receiver and running unsigned probes do not prove that
 assumption; release preflight must. Existing billing documents
 mean stop and design a version bump/migration/backfill; this implementation is
@@ -173,7 +174,7 @@ checkout; staff manage placement internally. Stripe receives one subscription
 item at the canonical per-child Price with quantity equal to that frozen
 participant count.
 At quantity 2–10 the server automatically applies the allowlisted youth-family
-Coupon to the entire subtotal; fulfilment requires exactly 15% off forever, no
+Coupon to the entire subtotal; fulfilment requires exactly 10% off forever, no
 redemption deadline or cap, and `applies_to` containing exactly both youth
 Products. There is no customer-entered family Promotion Code. Every child's
 identity lock, valid date of birth, quantity, Price and discount must agree
@@ -360,8 +361,8 @@ It also covers the £0/no-proration presale contract, scheduled access and first
 invoice activation/failure, the allowlisted three-payment discount, UTC day-1
 anchor regression, terminal Session-to-intent binding, frozen Price rotation,
 1–10-child youth quantities within the same selected programme, valid
-date-of-birth handling without a programme age gate, 15%-forever
-whole-subtotal pricing and schema-version-2 V2 intake boundary,
+date-of-birth handling without a programme age gate, 10%-forever
+whole-subtotal pricing and schema-version-3 V2 intake boundary,
 healable subscription-contract drift restriction, overdue immediate
 cancellation/refund review, current-state success copy and verified-email resend
 recovery; App Check replay/app binding and privacy-safe checkout throttling; exact
@@ -433,7 +434,7 @@ operational, abuse and data-lifecycle work, then follow this order:
    configured Resend test sender/recipient and actual Resend delivery. Run one-
    and two-child journeys for both youth plans and independently verify Stripe
    item quantities, every Firestore participant, the family Coupon and recurring
-   totals (£51 for two Mini Alphas; £59.50 for two Teen Alphas). The existing
+   totals (£54 for two Mini Alphas; £63 for two Teen Alphas). The existing
    post-payment verifier does not yet prove the family Coupon.
 7. The live catalogue, £5/repeating-three-month Product-restricted no-expiry
    Coupon `zaf_existing_member_5off_3mo_2026`, shared no-expiry Promotion Code
@@ -441,8 +442,8 @@ operational, abuse and data-lifecycle work, then follow this order:
    required Stripe secrets were verified without enabling purchase. Record
    those exact provider ids in the git-ignored production configuration and
    verify the Resend domain and delivery; never reuse test objects. Re-read the
-   five live Price/Product pairs and live youth-family Coupon
-   `zaf_youth_family_15pct_2026`; confirm it remains exactly 15% off forever,
+   five live Price/Product pairs and the current live youth-family Coupon
+   `zaf_youth_family_10pct_2026`; confirm it is exactly 10% off forever,
    without a redemption deadline/cap or Promotion Code and restricted to
    exactly both youth Products. Put its id in
    `STRIPE_YOUTH_FAMILY_COUPON_ID` and pass
@@ -450,7 +451,7 @@ operational, abuse and data-lifecycle work, then follow this order:
    gates remain closed. The Dashboard verification does not replace this
    API-backed preflight.
 8. Prove all ten production billing collections are empty before accepting
-   schema version 2. If they are not, stop for a migration/version plan. The V1
+   schema version 3. If they are not, stop for a migration/version plan. The V1
    callable is a stale-client safety boundary, not an old-schema compatibility
    path. Then
    enter the Phase 0 maintenance, callable-transport and identity-admin freezes
@@ -478,7 +479,7 @@ operational, abuse and data-lifecycle work, then follow this order:
     `createMembershipCheckoutSessionV2` and the six non-checkout callables—
     never a project-wide invoker grant—and keep legacy
     `createMembershipCheckoutSession` blocked. Verify IAM and schedules.
-    Schema-version-2 anonymous checkout must reach the V2 handler and fail at
+    Schema-version-3 anonymous checkout must reach the V2 handler and fail at
     the closed runtime gate without creating a Stripe Session, while signed-in,
     ownership and admin paths must enforce their handler boundaries.
 13. Record final release results and counts. Only after every blocker and

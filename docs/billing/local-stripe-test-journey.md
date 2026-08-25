@@ -58,7 +58,7 @@ once to stop the whole stack.
 The preflight retrieves every configured Price and expanded Product from Stripe
 and checks test mode, active state, Product name, GBP amount and monthly
 recurrence. It also verifies the test Portal keeps cancellation and subscription
-updates disabled and the youth-family Coupon is exactly 15% off forever, has no
+updates disabled and the youth-family Coupon is exactly 10% off forever, has no
 redemption deadline or cap, and applies to exactly the two youth Products
 backing Mini Alphas and Teen Alphas. It prints object IDs but makes no Stripe
 changes.
@@ -72,20 +72,20 @@ shows a prominent test-only notice and presents the same approved, versioned
 legal documents used by the release.
 
 The current frontend calls only `createMembershipCheckoutSessionV2` and sends
-`checkoutSchemaVersion: 2`. Mini Alphas costs £30 per child per month and is
+`checkoutSchemaVersion: 3`. Mini Alphas costs £30 per child per month and is
 designed for ages 10 and under; Teen Alphas costs £35 per child per month and is
 designed for ages 11 and up. These age descriptions are non-blocking guidance:
 checkout still requires a valid, non-future date of birth, but staff manage
 programme placement internally. Use “Add another child” to register 1–10
 children in the same selected programme.
 One child pays the standard price. From two children, the family Coupon applies
-15% off the whole monthly subtotal forever: two Mini Alphas are £60 less £9 =
-£51 per month, and two Teen Alphas are £70 less £10.50 = £59.50 per month. Hosted
+10% off the whole monthly subtotal forever: two Mini Alphas are £60 less £6 =
+£54 per month, and two Teen Alphas are £70 less £7 = £63 per month. Hosted
 Checkout should show one subscription item whose quantity equals the number of
 children. A single subscription cannot mix the two selected programmes.
 
 `STRIPE_YOUTH_FAMILY_COUPON_ID` is the exact provider-side allowlist. The test
-configuration uses `zaf_youth_family_15pct_2026_test`. It is applied
+configuration uses `zaf_youth_family_10pct_2026_test`. It is applied
 automatically only at quantity 2–10; there is no family Promotion Code and no
 customer-entered code field for this offer.
 
@@ -143,7 +143,7 @@ the Adult Unlimited fixed/repeating Promotion Code. It does **not** yet prove
 the youth-family Coupon. For each youth plan, retain controlled one-child and
 two-child runs and record the exact Session id. Independently re-read the Stripe
 Session and Subscription and verify the selected Price, a single item whose
-quantity equals the child count, and—for two children—the allowlisted 15%-off
+quantity equals the child count, and—for two children—the allowlisted 10%-off
 forever family Coupon and expected recurring total. Also inspect the emulator
 intent, membership and confirmation outbox for every participant name, the
 matching count, frozen discount schedule and accepted statements. Do not cite
@@ -207,7 +207,7 @@ changing the Product/Price mapping:
   non-blocking age guidance and the valid-date-of-birth requirement;
 - a separate live £5/repeating-three-month Adult Unlimited Coupon and one
   allowlisted shared reusable live Promotion Code;
-- a separate live youth-family Coupon that is exactly 15% off forever, applies
+- a separate live youth-family Coupon that is exactly 10% off forever, applies
   to exactly both youth Products, has no redemption deadline or cap, and has no
   Promotion Code;
 - a locked-down live Customer Portal configuration;

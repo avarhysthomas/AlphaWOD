@@ -2,6 +2,7 @@ import React from "react";
 import {
   MEMBERSHIP_PLANS,
   YOUTH_FAMILY_OFFER,
+  isSupportedYouthFamilyDiscountPercent,
   type PlanKey,
 } from "../../../lib/membershipPlans";
 import {
@@ -80,14 +81,17 @@ export default function MembershipDiscountSummary({
     standardPrice / plan.amountPence : null;
   const familyParticipantCount = isPositiveInteger(participantCount) ?
     participantCount : inferredParticipantCount;
-  const expectedFamilyPrice = Math.round(
-    standardPrice * (100 - YOUTH_FAMILY_OFFER.percentOff) / 100
+  const familyDiscountPercent = isSupportedYouthFamilyDiscountPercent(
+    discount.percentOff
+  ) ? discount.percentOff : null;
+  const expectedFamilyPrice = familyDiscountPercent === null ? null : Math.round(
+    standardPrice * (100 - familyDiscountPercent) / 100
   );
   const familyDiscountIsDisplayable =
     discount.kind === "youth_family" &&
     plan.audience === "youth" &&
     (YOUTH_FAMILY_OFFER.eligiblePlanKeys as readonly PlanKey[]).includes(planKey) &&
-    discount.percentOff === YOUTH_FAMILY_OFFER.percentOff &&
+    familyDiscountPercent !== null &&
     discount.duration === "forever" &&
     discount.amountOffPence === null &&
     discount.durationInMonths === null &&
@@ -108,7 +112,7 @@ export default function MembershipDiscountSummary({
           Family discount applied
         </p>
         <p className="mt-3">
-          {YOUTH_FAMILY_OFFER.percentOff}% off the full monthly total for{" "}
+          {familyDiscountPercent}% off the full monthly total for{" "}
           {familyParticipantCount} children. You&rsquo;ll pay{" "}
           {formatGbp(scheduledDiscountedPrice)} per month instead of{" "}
           {formatGbp(standardPrice)} while this membership includes at least two children.

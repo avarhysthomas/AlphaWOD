@@ -125,7 +125,7 @@ export type MyMembership = {
 
 export type CheckoutRequest = {
   /** Versioned request contract for the multi-participant checkout implementation. */
-  checkoutSchemaVersion: 2;
+  checkoutSchemaVersion: 3;
   /** Stable across retries of the same form submission for Stripe idempotency. */
   checkoutAttemptId: string;
   /**

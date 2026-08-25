@@ -11,6 +11,7 @@ const {
   CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION,
   CHECKOUT_DOCUMENTS,
   EXISTING_MEMBER_OFFER,
+  SUPPORTED_YOUTH_FAMILY_DISCOUNT_PERCENTAGES,
   YOUTH_FAMILY_OFFER,
   MEMBERSHIP_SCHEMA_VERSION,
   MEMBERSHIP_PLANS,
@@ -24,6 +25,7 @@ const {
   isMembershipStateBlockingDuplicate,
   isMembershipStateEntitled,
   isPlanKey,
+  isSupportedYouthFamilyDiscountPercent,
   isWithinPastDueGrace,
   resolveAgeFromDateOfBirth,
   resolveBillingCycleAnchor,
@@ -50,8 +52,8 @@ function londonMillis(iso) {
   return new Date(iso).getTime();
 }
 
-test("schema v3 catalogue keeps the youth keys, new copy, and approved prices", () => {
-  assert.equal(MEMBERSHIP_SCHEMA_VERSION, 3);
+test("schema v4 catalogue keeps the youth keys, new copy, and approved prices", () => {
+  assert.equal(MEMBERSHIP_SCHEMA_VERSION, 4);
   assert.deepEqual([...PLAN_KEYS], [
     "adult_unlimited",
     "adult_ladies",
@@ -113,11 +115,11 @@ test("registry freezes the approved mixed checkout document bundle", () => {
       ([key, document]) => [key, [document.version, document.effectiveDate]]
     )),
     {
-      membershipTerms: ["ZAF-TERMS-2026-08-25-01", "2026-08-25"],
+      membershipTerms: ["ZAF-TERMS-2026-08-25-02", "2026-08-25"],
       cancellationPolicy: ["ZAF-CANCEL-2026-08-23-01", "2026-08-23"],
       privacyNotice: ["ZAF-PRIVACY-2026-08-25-01", "2026-08-25"],
       adultWaiver: ["ZAF-ADULT-WAIVER-2026-08-23-01", "2026-08-23"],
-      guardianAddendum: ["ZAF-GUARDIAN-2026-08-25-01", "2026-08-25"],
+      guardianAddendum: ["ZAF-GUARDIAN-2026-08-25-02", "2026-08-25"],
     }
   );
   for (const document of Object.values(CHECKOUT_DOCUMENTS)) {
@@ -170,7 +172,7 @@ test("checkout legal requirements are exact for adult self-signers and youth gua
 
 test("commercial snapshots contain the complete customer-facing plan contract", () => {
   assert.deepEqual(createCommercialPlanSnapshot("adult_unlimited"), {
-    catalogueSchemaVersion: 3,
+    catalogueSchemaVersion: 4,
     planKey: "adult_unlimited",
     planName: "Adult Unlimited Membership",
     audience: "adult",
@@ -218,16 +220,25 @@ test("youth routing recommends Mini Alphas through 10 and Teen Alphas from 11", 
 
 test("multi-child youth acceptance freezes the full recurring family price", () => {
   assert.equal(YOUTH_FAMILY_OFFER.minimumParticipants, 2);
-  assert.equal(YOUTH_FAMILY_OFFER.percentOff, 15);
+  assert.equal(YOUTH_FAMILY_OFFER.percentOff, 10);
   assert.equal(YOUTH_FAMILY_OFFER.maximumParticipants, 10);
   const youngstars = resolveCheckoutAcceptanceStatements("youth_youngstars", 2)
     .find(({id}) => id === "recurring_payment_authority").statement;
   const teenstars = resolveCheckoutAcceptanceStatements("youth_teenstars", 3)
     .find(({id}) => id === "recurring_payment_authority").statement;
   assert.match(youngstars, /standard total is £60\.00 per month/i);
-  assert.match(youngstars, /recurring total £51\.00/i);
+  assert.match(youngstars, /automatic 10% family discount/i);
+  assert.match(youngstars, /recurring total £54\.00/i);
   assert.match(teenstars, /standard total is £105\.00 per month/i);
-  assert.match(teenstars, /recurring total £89\.25/i);
+  assert.match(teenstars, /recurring total £94\.50/i);
+});
+
+test("only the current 10% and frozen legacy 15% family policies are supported", () => {
+  assert.deepEqual([...SUPPORTED_YOUTH_FAMILY_DISCOUNT_PERCENTAGES], [10, 15]);
+  assert.equal(isSupportedYouthFamilyDiscountPercent(10), true);
+  assert.equal(isSupportedYouthFamilyDiscountPercent(15), true);
+  assert.equal(isSupportedYouthFamilyDiscountPercent(12), false);
+  assert.equal(isSupportedYouthFamilyDiscountPercent("15"), false);
 });
 
 test("adult plans require 18 while youth plans accept any valid nonnegative age", () => {
