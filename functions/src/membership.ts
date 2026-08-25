@@ -275,11 +275,11 @@ function isIsolatedLocalTestEmulatorProcess(): boolean {
 }
 
 /**
- * Binds one Firebase data plane to one explicit Stripe mode before any Stripe
- * network call. This prevents a test key being aimed at production Firestore,
- * or a live key being used from the isolated test project.
+ * Binds one Firebase data plane to one explicit Stripe mode without requiring
+ * a Stripe credential. Firestore-only workers use this guard so they can
+ * validate frozen billing evidence while retaining least-privilege secrets.
  */
-function assertBillingEnvironment(): BillingEnvironment {
+function assertBillingDataPlaneEnvironment(): BillingEnvironment {
   const expectedProjectId = membershipFirebaseProjectId.value().trim();
   const projectId = runtimeFirebaseProjectId();
   if (!expectedProjectId || !projectId || expectedProjectId !== projectId) {
@@ -297,16 +297,6 @@ function assertBillingEnvironment(): BillingEnvironment {
     );
   }
   const stripeMode = rawMode as StripeMode;
-  const key = stripeSecretKey.value().trim();
-  const keyMode: StripeMode | null =
-    key.startsWith("sk_test_") || key.startsWith("rk_test_") ? "test" :
-      key.startsWith("sk_live_") || key.startsWith("rk_live_") ? "live" : null;
-  if (keyMode !== stripeMode) {
-    throw new HttpsError(
-      "failed-precondition",
-      "Billing is disabled because the Stripe key does not match the configured mode."
-    );
-  }
   if (projectId === PRODUCTION_FIREBASE_PROJECT_ID && stripeMode === "test") {
     throw new HttpsError(
       "failed-precondition",
@@ -331,6 +321,26 @@ function assertBillingEnvironment(): BillingEnvironment {
     stripeMode,
     expectedLivemode: stripeMode === "live",
   };
+}
+
+/**
+ * Binds one Firebase data plane to one explicit Stripe mode before any Stripe
+ * network call. This prevents a test key being aimed at production Firestore,
+ * or a live key being used from the isolated test project.
+ */
+function assertBillingEnvironment(): BillingEnvironment {
+  const environment = assertBillingDataPlaneEnvironment();
+  const key = stripeSecretKey.value().trim();
+  const keyMode: StripeMode | null =
+    key.startsWith("sk_test_") || key.startsWith("rk_test_") ? "test" :
+      key.startsWith("sk_live_") || key.startsWith("rk_live_") ? "live" : null;
+  if (keyMode !== environment.stripeMode) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Billing is disabled because the Stripe key does not match the configured mode."
+    );
+  }
+  return environment;
 }
 
 /** Refuses a provider object from the other half of Stripe's test/live split. */
@@ -9336,7 +9346,8 @@ function checkoutRecoveryRoutingMismatch(
     return "session_binding";
   }
   if (outbox.get("stripeMode") !== intent.get("stripeMode") ||
-    intent.get("stripeMode") !== assertBillingEnvironment().stripeMode) {
+    intent.get("stripeMode") !==
+      assertBillingDataPlaneEnvironment().stripeMode) {
     return "stripe_mode";
   }
   if (outbox.get("providerSessionStatus") !== "expired" ||

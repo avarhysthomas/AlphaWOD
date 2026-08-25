@@ -5868,19 +5868,29 @@ test("admin recovery expires only a verified open unpaid checkout and releases i
 
     const sends = [];
     const dispatchNow = queuedOutbox.get("nextAttemptAt").toMillis() + 1000;
-    assert.equal(
-      await membershipTesting.processMembershipConfirmationOutbox(
-        outboxId,
-        dispatchNow,
-        async (payload, idempotencyKey) => {
-          sends.push({payload, idempotencyKey});
-          throw new Error(
-            "provider response for recovery.buyer@example.test was lost"
-          );
-        }
-      ),
-      "failed"
-    );
+    const workerStripeSecret = process.env.STRIPE_SECRET_KEY;
+    delete process.env.STRIPE_SECRET_KEY;
+    try {
+      assert.equal(
+        await membershipTesting.processMembershipConfirmationOutbox(
+          outboxId,
+          dispatchNow,
+          async (payload, idempotencyKey) => {
+            sends.push({payload, idempotencyKey});
+            throw new Error(
+              "provider response for recovery.buyer@example.test was lost"
+            );
+          }
+        ),
+        "failed"
+      );
+    } finally {
+      if (workerStripeSecret === undefined) {
+        delete process.env.STRIPE_SECRET_KEY;
+      } else {
+        process.env.STRIPE_SECRET_KEY = workerStripeSecret;
+      }
+    }
     const failedOutbox = await db.collection("membershipEmailOutbox")
       .doc(outboxId).get();
     assert.match(failedOutbox.get("lastError"), /\[redacted-email\]/);
