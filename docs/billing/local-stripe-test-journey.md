@@ -5,9 +5,10 @@ Firebase state stays inside local emulators under `demo-alphawod-stripe`. It
 does not deploy anything, touch production Firebase data, take real money or
 open the normal purchase gates.
 
-The five-document approval recorded on 20 August is historical. The business
-owner separately approved the revised youth-family bundle dated 23 August 2026.
-The local UI must render those exact approved bytes, but this journey does not
+The five-document approvals recorded on 20 and 23 August are historical. The
+current mixed publication bundle retains the 23 August Cancellation Policy and
+Adult Waiver, and uses the revised 25 August Membership Terms, Privacy Notice
+and Guardian Addendum. The local UI must render those exact approved bytes, but this journey does not
 prove production publication or provider configuration. Both production
 environment purchase gates remain `false` until the approved legal bytes and
 Stripe youth configuration are independently verified. The narrow test-mode
@@ -58,8 +59,9 @@ The preflight retrieves every configured Price and expanded Product from Stripe
 and checks test mode, active state, Product name, GBP amount and monthly
 recurrence. It also verifies the test Portal keeps cancellation and subscription
 updates disabled and the youth-family Coupon is exactly 15% off forever, has no
-redemption deadline or cap, and applies to exactly the Youngstars and Teenstars
-Products. It prints object IDs but makes no Stripe changes.
+redemption deadline or cap, and applies to exactly the two youth Products
+backing Mini Alphas and Teen Alphas. It prints object IDs but makes no Stripe
+changes.
 
 Open `http://localhost:3002/memberships`, choose a plan and complete hosted
 Checkout with a Stripe test card such as `4242 4242 4242 4242`, any future
@@ -70,14 +72,17 @@ shows a prominent test-only notice and presents the same approved, versioned
 legal documents used by the release.
 
 The current frontend calls only `createMembershipCheckoutSessionV2` and sends
-`checkoutSchemaVersion: 2`. For Youngstars, each child must be 6–11 and costs
-£30 per month; for Teenstars, each child must be 12–16 and costs £35 per month.
-Use “Add another child” to register 1–10 children on the selected same plan.
+`checkoutSchemaVersion: 2`. Mini Alphas costs £30 per child per month and is
+designed for ages 10 and under; Teen Alphas costs £35 per child per month and is
+designed for ages 11 and up. These age descriptions are non-blocking guidance:
+checkout still requires a valid, non-future date of birth, but staff manage
+programme placement internally. Use “Add another child” to register 1–10
+children in the same selected programme.
 One child pays the standard price. From two children, the family Coupon applies
-15% off the whole monthly subtotal forever: two Youngstars are £60 less £9 =
-£51 per month, and two Teenstars are £70 less £10.50 = £59.50 per month. Hosted
+15% off the whole monthly subtotal forever: two Mini Alphas are £60 less £9 =
+£51 per month, and two Teen Alphas are £70 less £10.50 = £59.50 per month. Hosted
 Checkout should show one subscription item whose quantity equals the number of
-children. A mixed Youngstars/Teenstars subscription is not supported.
+children. A single subscription cannot mix the two selected programmes.
 
 `STRIPE_YOUTH_FAMILY_COUPON_ID` is the exact provider-side allowlist. The test
 configuration uses `zaf_youth_family_15pct_2026_test`. It is applied
@@ -198,8 +203,8 @@ changing the Product/Price mapping:
 - the production app origin;
 - a live `sk_live_...` or restricted `rk_live_...` key;
 - five live Price ids (each is preflighted with its expanded Product);
-- the canonical Youngstars Price at £30 for ages 6–11 and Teenstars Price at £35
-  for ages 12–16;
+- the canonical Mini Alphas Price at £30 and Teen Alphas Price at £35, with
+  non-blocking age guidance and the valid-date-of-birth requirement;
 - a separate live £5/repeating-three-month Adult Unlimited Coupon and one
   allowlisted shared reusable live Promotion Code;
 - a separate live youth-family Coupon that is exactly 15% off forever, applies

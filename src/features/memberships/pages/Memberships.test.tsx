@@ -57,8 +57,16 @@ describe("Memberships presale presentation", () => {
 
     const logoLink = screen.getByRole("link", {name: "Zero Alpha home"});
     expect(logoLink).toHaveAttribute("href", "/");
-    expect(screen.getByText("Ages 6 to 11")).toBeInTheDocument();
+    expect(screen.getByText("Mini Alphas")).toBeInTheDocument();
+    expect(screen.getByText("Teen Alphas")).toBeInTheDocument();
+    expect(screen.getByText(
+      "A strength and conditioning class for 10 and under! Fun, progressive, and challenging."
+    )).toBeInTheDocument();
+    expect(screen.getByText(
+      "Strength and conditioning for 11 and up! Develop athletic qualities in a supportive environment."
+    )).toBeInTheDocument();
     expect(screen.getByText("£30")).toBeInTheDocument();
+    expect(screen.getByText("£35")).toBeInTheDocument();
     expect(screen.getByText(/Register 2 or more children.*automatic 15% discount/i))
       .toBeInTheDocument();
     expect(screen.getAllByText("/child/mo")).toHaveLength(2);

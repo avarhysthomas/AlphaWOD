@@ -120,18 +120,19 @@ describe("membership catalogue parity", () => {
     }
   );
 
-  it("keeps the youth routing boundary identical in both copies", () => {
+  it("keeps schema v3 and the youth recommendation boundary identical", () => {
     const {
+      MEMBERSHIP_SCHEMA_VERSION,
       MEMBERSHIP_PLANS,
       resolveYouthPlanForAge,
     } = require("./membershipPlans") as typeof import("./membershipPlans");
 
-    expect(resolveYouthPlanForAge(5)).toBeNull();
-    expect(resolveYouthPlanForAge(6)).toBe("youth_youngstars");
-    expect(resolveYouthPlanForAge(11)).toBe("youth_youngstars");
-    expect(resolveYouthPlanForAge(12)).toBe("youth_teenstars");
-    expect(resolveYouthPlanForAge(16)).toBe("youth_teenstars");
-    expect(resolveYouthPlanForAge(17)).toBeNull();
+    expect(MEMBERSHIP_SCHEMA_VERSION).toBe(3);
+    expect(resolveYouthPlanForAge(-1)).toBeNull();
+    expect(resolveYouthPlanForAge(0)).toBe("youth_youngstars");
+    expect(resolveYouthPlanForAge(10)).toBe("youth_youngstars");
+    expect(resolveYouthPlanForAge(11)).toBe("youth_teenstars");
+    expect(resolveYouthPlanForAge(120)).toBe("youth_teenstars");
 
     expect(MEMBERSHIP_PLANS.youth_youngstars.maxAge).toBe(
       MEMBERSHIP_PLANS.youth_teenstars.minAge - 1
@@ -148,16 +149,23 @@ describe("membership catalogue parity", () => {
     expect(granting).toEqual(["adult_unlimited"]);
   });
 
-  it("freezes the approved 23 August checkout documents", () => {
+  it("freezes the approved version of every checkout document", () => {
     const {
       CHECKOUT_DOCUMENTS,
       CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION,
     } = require("./membershipPlans") as typeof import("./membershipPlans");
 
     expect(CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION).toBe(true);
+    expect(Object.fromEntries(Object.entries(CHECKOUT_DOCUMENTS).map(
+      ([key, document]) => [key, [document.version, document.effectiveDate]]
+    ))).toEqual({
+      membershipTerms: ["ZAF-TERMS-2026-08-25-01", "2026-08-25"],
+      cancellationPolicy: ["ZAF-CANCEL-2026-08-23-01", "2026-08-23"],
+      privacyNotice: ["ZAF-PRIVACY-2026-08-25-01", "2026-08-25"],
+      adultWaiver: ["ZAF-ADULT-WAIVER-2026-08-23-01", "2026-08-23"],
+      guardianAddendum: ["ZAF-GUARDIAN-2026-08-25-01", "2026-08-25"],
+    });
     Object.values(CHECKOUT_DOCUMENTS).forEach((document) => {
-      expect(document.version).toMatch(/^ZAF-[A-Z-]+-2026-08-23-01$/);
-      expect(document.effectiveDate).toBe("2026-08-23");
       expect(document.sha256).toMatch(/^[a-f0-9]{64}$/);
       expect(JSON.stringify(document)).not.toMatch(/\b(?:DRAFT|PENDING)\b/i);
     });

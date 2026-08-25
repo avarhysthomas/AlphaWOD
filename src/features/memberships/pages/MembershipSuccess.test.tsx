@@ -307,7 +307,7 @@ describe("MembershipSuccess claim persistence", () => {
       memberships: [{
         ...activeMembership,
         planKey: "youth_youngstars",
-        planName: "HYROX Youngstars",
+        planName: "Mini Alphas",
         grantsAlphaWodAccess: false,
         participantFullName: "Alex Child",
         participantFullNames: ["Alex Child", "Sam Child"],

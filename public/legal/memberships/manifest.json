@@ -1,22 +1,22 @@
 {
-  "effectiveDate": "2026-08-23",
+  "effectiveDate": "2026-08-25",
   "hashCovers": "UTF-8 bytes of content",
   "documents": {
     "membershipTerms": {
       "title": "Membership Terms",
-      "version": "ZAF-TERMS-2026-08-23-01",
-      "effectiveDate": "2026-08-23",
-      "filename": "ZAF-TERMS-2026-08-23-01.txt",
-      "sha256": "2f540a5037cc9d6423e206c9bac324f764e8ad84ae1aacd5aacffa282c490a00",
-      "bytes": 21634
+      "version": "ZAF-TERMS-2026-08-25-01",
+      "effectiveDate": "2026-08-25",
+      "filename": "ZAF-TERMS-2026-08-25-01.txt",
+      "sha256": "8208a6f73b2197371bf22d039a11e4114a79dc7d8b2891cecf64de20234b6e79",
+      "bytes": 21796
     },
     "privacyNotice": {
       "title": "Privacy Notice",
-      "version": "ZAF-PRIVACY-2026-08-23-01",
-      "effectiveDate": "2026-08-23",
-      "filename": "ZAF-PRIVACY-2026-08-23-01.txt",
-      "sha256": "34a614aea5d63191994bb85d053f926c047e2a1a1908897ba63796312a5ac6ee",
-      "bytes": 15004
+      "version": "ZAF-PRIVACY-2026-08-25-01",
+      "effectiveDate": "2026-08-25",
+      "filename": "ZAF-PRIVACY-2026-08-25-01.txt",
+      "sha256": "b6be4d3758f105cae3bea4bf3b459e5d2fcd67c79208b684405cc06c778f3023",
+      "bytes": 15167
     },
     "cancellationPolicy": {
       "title": "Cancellation, Refund and Cooling-off Policy",
@@ -36,11 +36,11 @@
     },
     "guardianAddendum": {
       "title": "Parent/Guardian Consent and Youth Membership Addendum",
-      "version": "ZAF-GUARDIAN-2026-08-23-01",
-      "effectiveDate": "2026-08-23",
-      "filename": "ZAF-GUARDIAN-2026-08-23-01.txt",
-      "sha256": "72d460bb827622c6ef98438b0c356275b1f4c67c60306078a4718578635f40f6",
-      "bytes": 10593
+      "version": "ZAF-GUARDIAN-2026-08-25-01",
+      "effectiveDate": "2026-08-25",
+      "filename": "ZAF-GUARDIAN-2026-08-25-01.txt",
+      "sha256": "ba59e57261ed2e41c68ceb45c656d8ea78d3926cbeed914727157b22adf746f4",
+      "bytes": 10863
     }
   }
 }

@@ -76,11 +76,7 @@ function PlanCard({
   );
 }
 
-/**
- * Youth options share one catalogue card, as approved. The age bands are shown
- * so a guardian picks the right option before reaching the checkout form,
- * which re-derives the band from the participant's date of birth.
- */
+/** Youth options share one catalogue card while retaining separate pricing. */
 function YouthCard({
   presale,
   checkoutEnabled,
@@ -88,8 +84,8 @@ function YouthCard({
   presale: boolean;
   checkoutEnabled: boolean;
 }) {
-  const youngstars = MEMBERSHIP_PLANS.youth_youngstars;
-  const teenstars = MEMBERSHIP_PLANS.youth_teenstars;
+  const miniAlphas = MEMBERSHIP_PLANS.youth_youngstars;
+  const teenAlphas = MEMBERSHIP_PLANS.youth_teenstars;
 
   return (
     <div className={CARD}>
@@ -98,7 +94,7 @@ function YouthCard({
         Youth Membership
       </h2>
       <p className="mt-4 text-sm leading-7 text-white/70">
-        Coached HYROX training for young athletes. A parent or legal guardian must be the
+        Strength and conditioning for young athletes. A parent or legal guardian must be
         payer and complete checkout.
       </p>
       <p className="mt-3 text-sm font-semibold leading-7 text-emerald-100">
@@ -112,18 +108,18 @@ function YouthCard({
       )}
 
       <div className="mt-6 space-y-3">
-        {[youngstars, teenstars].map((plan) => {
+        {[miniAlphas, teenAlphas].map((plan) => {
           const content = (
             <>
-            <span>
+            <span className="min-w-0 sm:max-w-[70%]">
               <span className="block text-sm font-bold uppercase tracking-[0.12em] text-white">
                 {plan.name}
               </span>
-              <span className="block text-xs text-white/50">
-                Ages {plan.minAge} to {plan.maxAge}
+              <span className="mt-1 block text-xs leading-5 text-white/55">
+                {plan.summary}
               </span>
             </span>
-            <span className="font-heading text-xl text-white">
+            <span className="shrink-0 font-heading text-xl text-white">
               {formatPlanPrice(plan)}
               <span className="ml-1 text-xs font-normal text-white/45">/child/mo</span>
             </span>
@@ -134,7 +130,7 @@ function YouthCard({
             <Link
               key={plan.key}
               to={`/memberships/checkout/${plan.key}`}
-              className="flex items-center justify-between rounded-2xl border border-white/10 bg-black/30 px-5 py-4 transition hover:border-white/25"
+              className="flex flex-col items-start justify-between gap-4 rounded-2xl border border-white/10 bg-black/30 px-5 py-4 transition hover:border-white/25 sm:flex-row sm:items-center"
             >
               {content}
             </Link>
@@ -144,7 +140,7 @@ function YouthCard({
               type="button"
               disabled
               aria-label={`${plan.name} — online purchase closed`}
-              className="flex w-full cursor-not-allowed items-center justify-between rounded-2xl border border-white/10 bg-black/20 px-5 py-4 text-left opacity-50"
+              className="flex w-full cursor-not-allowed flex-col items-start justify-between gap-4 rounded-2xl border border-white/10 bg-black/20 px-5 py-4 text-left opacity-50 sm:flex-row sm:items-center"
             >
               {content}
             </button>

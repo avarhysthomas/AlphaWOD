@@ -313,7 +313,7 @@ describe("AdminMemberships cancellation attention", () => {
     const checkoutIssue = {
       intentId: `attempt_${"b".repeat(64)}`,
       planKey: "youth_youngstars",
-      planName: "HYROX Youngstars U11",
+      planName: "Mini Alphas",
       participantFullNames: ["Stacey Example"],
       participantCount: 1,
       payerUid: null,
@@ -465,7 +465,7 @@ describe("AdminMemberships cancellation attention", () => {
         payerUid: "payer-family",
         payerEmail: "family@example.test",
         planKey: "youth_teenstars",
-        planName: "HYROX Teenstars",
+        planName: "Teen Alphas",
         state: "past_due_grace",
         stripeStatus: "past_due",
         grantsAlphaWodAccess: false,

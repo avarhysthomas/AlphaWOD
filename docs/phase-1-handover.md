@@ -1,6 +1,6 @@
 # Phase 1 Handover: Public Membership Purchase & Stripe Billing
 
-Date: 2026-08-18 (youth-family release status updated 2026-08-23)
+Date: 2026-08-18 (youth programme release status updated 2026-08-25)
 
 This is the current implementation handover. The detailed operating and
 deployment runbook is
@@ -14,10 +14,12 @@ service deployed is the public `stripeWebhook` receiver; the customer frontend,
 eight callables and four scheduled workers remain undeployed.
 The five live Stripe Price/Product pairs were supplied from Dashboard exports
 and independently re-read from Stripe's live API on 19 August 2026. The two
-youth pairs were read again on 23 August: Youngstars
-`price_1U5KoQFzNDZoGGA0s4t806bH` is £30 GBP monthly on
-`prod_V5Vq0l9VAaPox9`, and Teenstars `price_1U5Kt8FzNDZoGGA0ogq41DEw` is £35
-GBP monthly on `prod_V5VumrjZl1bWV1`. Live Coupon
+youth pairs were read again on 23 August: the current Mini Alphas offering uses
+`price_1U5KoQFzNDZoGGA0s4t806bH` at £30 GBP monthly on Product
+`prod_V5Vq0l9VAaPox9` (legacy Stripe provider name `HYROX Youngstars U11`), and
+the current Teen Alphas offering uses `price_1U5Kt8FzNDZoGGA0ogq41DEw` at £35
+GBP monthly on Product `prod_V5VumrjZl1bWV1` (legacy Stripe provider name
+`HYROX Teenstars 12+`). Live Coupon
 `zaf_youth_family_15pct_2026` was then created and verified in Stripe Dashboard
 on 23 August: valid, 15% off forever, no expiry, redemption cap or Promotion
 Code, and restricted exactly to those two youth Products.
@@ -36,19 +38,23 @@ outbox, and returned through the local success route. That is a historical seam
 baseline, not proof of the newly implemented £0 presale or discount. Those paths,
 real Resend delivery and deployed staging remain untested.
 
-The canonical youth release catalogue is Youngstars ages 6–11 at £30 per child
-per month and Teenstars ages 12–16 at £35 per child per month. Each youth
-subscription may contain 1–10 children on the selected same plan. One child pays
-the standard per-child price; at 2–10 children an automatic 15%-forever Coupon
-applies to the whole monthly subtotal. A mixed Youngstars/Teenstars bundle is
-not supported. Two Youngstars therefore recur at £51 and two Teenstars at
-£59.50.
+The canonical youth release catalogue is Mini Alphas at £30 per child per month,
+designed for ages 10 and under, and Teen Alphas at £35 per child per month,
+designed for ages 11 and up. Those age descriptions are non-blocking guidance:
+checkout still requires a valid, non-future date of birth, and staff manage
+programme placement internally. Each youth subscription may contain 1–10
+children in the same selected programme. One child pays the standard per-child
+price; at 2–10 children an automatic 15%-forever Coupon applies to the whole
+monthly subtotal. A single subscription cannot mix programmes. Two Mini Alphas
+therefore recur at £51 and two Teen Alphas at £59.50.
 
-The business owner explicitly approved the frozen five-document 23 August 2026
-youth-family bundle on 23 August. Its stable public `.txt` files and both source
-registries are synchronized with matching effective dates and SHA-256 digests,
-and the source publication gate is `true`. The earlier 20 August bundle remains
-historical evidence for checkouts that accepted it.
+The business owner explicitly approved the current mixed publication bundle on
+25 August 2026: revised Membership Terms, Privacy Notice and Guardian Addendum
+dated 25 August, with the Cancellation Policy and Adult Waiver dated 23 August
+retained unchanged. Its stable public `.txt` files, per-document effective dates
+and SHA-256 digests are frozen by the publication manifest. The earlier 20 and
+23 August versions remain immutable historical evidence for checkouts that
+accepted them.
 
 Purchase remains closed by two separately deployed environment controls:
 
@@ -161,14 +167,17 @@ Price from 1 December. Staff manually moderate redemptions against the small
 eligible cohort. Test and live Coupon/Code objects are separate provider
 configuration.
 
-Youth checkout freezes 1–10 separately named and dated children, all eligible
-for the selected same plan. Stripe receives one subscription item at the
-canonical per-child Price with quantity equal to that frozen participant count.
+Youth checkout freezes 1–10 separately named children with valid, non-future
+dates of birth in the same selected programme. The age descriptions do not gate
+checkout; staff manage placement internally. Stripe receives one subscription
+item at the canonical per-child Price with quantity equal to that frozen
+participant count.
 At quantity 2–10 the server automatically applies the allowlisted youth-family
 Coupon to the entire subtotal; fulfilment requires exactly 15% off forever, no
 redemption deadline or cap, and `applies_to` containing exactly both youth
 Products. There is no customer-entered family Promotion Code. Every child's
-identity lock, age, quantity, Price and discount must agree before fulfilment;
+identity lock, valid date of birth, quantity, Price and discount must agree
+before fulfilment;
 unknown or malformed provider state fails closed.
 
 Final AlphaWOD ownership is also recorded in a deterministic
@@ -350,7 +359,8 @@ orphan-outbox manual review.
 It also covers the £0/no-proration presale contract, scheduled access and first-
 invoice activation/failure, the allowlisted three-payment discount, UTC day-1
 anchor regression, terminal Session-to-intent binding, frozen Price rotation,
-same-plan 1–10-child youth quantities, per-child age validation, 15%-forever
+1–10-child youth quantities within the same selected programme, valid
+date-of-birth handling without a programme age gate, 15%-forever
 whole-subtotal pricing and schema-version-2 V2 intake boundary,
 healable subscription-contract drift restriction, overdue immediate
 cancellation/refund review, current-state success copy and verified-email resend
@@ -381,8 +391,9 @@ Stripe family configuration and production verification remain release
 blockers; keep both purchase controls false while completing the remaining
 operational, abuse and data-lifecycle work, then follow this order:
 
-1. Deploy the explicitly approved, byte-identical 23 August customer text at
-   its stable public URLs in the closed frontend release and run
+1. Deploy the explicitly approved mixed bundle—25 August Membership Terms,
+   Privacy Notice and Guardian Addendum plus the unchanged 23 August
+   Cancellation Policy and Adult Waiver—at its stable public URLs and run
    `npm run verify:published-legal`; do not deploy the backend Phase 1 services
    if the production bytes differ. Separately staff the cooling-off
    proportionate-service/refund decision, execution and audit SLA. The online
@@ -422,7 +433,7 @@ operational, abuse and data-lifecycle work, then follow this order:
    configured Resend test sender/recipient and actual Resend delivery. Run one-
    and two-child journeys for both youth plans and independently verify Stripe
    item quantities, every Firestore participant, the family Coupon and recurring
-   totals (£51 for two Youngstars; £59.50 for two Teenstars). The existing
+   totals (£51 for two Mini Alphas; £59.50 for two Teen Alphas). The existing
    post-payment verifier does not yet prove the family Coupon.
 7. The live catalogue, £5/repeating-three-month Product-restricted no-expiry
    Coupon `zaf_existing_member_5off_3mo_2026`, shared no-expiry Promotion Code

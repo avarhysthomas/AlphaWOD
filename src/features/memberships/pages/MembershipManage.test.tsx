@@ -92,11 +92,11 @@ const activeMembership = {
   coolingOffActive: false,
 };
 
-const multiChildTeenstarsMembership = {
+const multiChildTeenAlphasMembership = {
   ...activeMembership,
   subscriptionId: "sub_teenstars_family",
   planKey: "youth_teenstars",
-  planName: "HYROX Teenstars",
+  planName: "Teen Alphas",
   grantsAlphaWodAccess: false,
   participantFullName: "Alex Child",
   participantFullNames: ["Alex Child", "Sam Child"],
@@ -228,9 +228,9 @@ describe("MembershipManage cancellation confirmation", () => {
   });
 
   it.each([
-    ["standard", multiChildTeenstarsMembership],
+    ["standard", multiChildTeenAlphasMembership],
     ["presale", {
-      ...multiChildTeenstarsMembership,
+      ...multiChildTeenAlphasMembership,
       state: "scheduled",
       billingMode: "presale_deferred",
       cancellationMode: "cancel_before_start",
@@ -246,7 +246,7 @@ describe("MembershipManage cancellation confirmation", () => {
     render(<MembershipManage />);
     fireEvent.click(await screen.findByRole("button", {name: "Request cancellation"}));
 
-    expect(screen.getByText(/Submitting this request cancels the whole HYROX Teenstars/))
+    expect(screen.getByText(/Submitting this request cancels the whole Teen Alphas/))
       .toHaveTextContent(
         "The places for Alex Child and Sam Child will all end with it. " +
         "Individual children cannot be removed online."
@@ -303,13 +303,13 @@ describe("MembershipManage cancellation confirmation", () => {
       .toBeInTheDocument();
   });
 
-  it("shows every Teenstars child with the ongoing family discount", async () => {
+  it("shows every Teen Alphas child with the ongoing family discount", async () => {
     mockGetMyMemberships.mockResolvedValue({
       ok: true,
       memberships: [{
         ...activeMembership,
         planKey: "youth_teenstars",
-        planName: "HYROX Teenstars",
+        planName: "Teen Alphas",
         grantsAlphaWodAccess: false,
         participantFullName: "Alex Child",
         participantFullNames: ["Alex Child", "Sam Child"],
@@ -386,7 +386,7 @@ describe("MembershipManage cancellation confirmation", () => {
   it("keeps a cooling-off cancellation action available and marks its request kind", async () => {
     mockGetMyMemberships.mockResolvedValue({
       ok: true,
-      memberships: [{...multiChildTeenstarsMembership, coolingOffActive: true}],
+      memberships: [{...multiChildTeenAlphasMembership, coolingOffActive: true}],
       cancellationPreview,
     });
 
@@ -397,7 +397,7 @@ describe("MembershipManage cancellation confirmation", () => {
     fireEvent.click(screen.getByRole("button", {
       name: "Cancel during cooling-off period",
     }));
-    expect(screen.getByText(/Submitting this request cancels the whole HYROX Teenstars/))
+    expect(screen.getByText(/Submitting this request cancels the whole Teen Alphas/))
       .toHaveTextContent(
         "The places for Alex Child and Sam Child will all end with it. " +
         "Individual children cannot be removed online."
@@ -590,7 +590,7 @@ describe("MembershipManage cancellation confirmation", () => {
     mockGetMyMemberships.mockResolvedValue({
       ok: true,
       memberships: [{
-        ...multiChildTeenstarsMembership,
+        ...multiChildTeenAlphasMembership,
         state: "cancelled",
         cancellationOutcome: cancellationPreview,
       }],
@@ -599,7 +599,7 @@ describe("MembershipManage cancellation confirmation", () => {
 
     render(<MembershipManage />);
 
-    expect(await screen.findByText(/This cancellation applies to the whole HYROX Teenstars/))
+    expect(await screen.findByText(/This cancellation applies to the whole Teen Alphas/))
       .toHaveTextContent("The places for Alex Child and Sam Child all end with it.");
   });
 

@@ -16,7 +16,12 @@ const {
 function withPublicationDirectory(run) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "zaf-published-legal-"));
   try {
-    const publicationManifest = PUBLICATION_MANIFEST.map(({key, title, version}) => {
+    const publicationManifest = PUBLICATION_MANIFEST.map(({
+      key,
+      title,
+      version,
+      effectiveDate,
+    }) => {
       const content = `${version}\n\nApproved customer text for ${key}.\n`;
       fs.writeFileSync(
         path.join(directory, `${version}.txt`),
@@ -27,6 +32,7 @@ function withPublicationDirectory(run) {
         key,
         title,
         version,
+        effectiveDate,
         approvedBytes: Buffer.byteLength(content, "utf8"),
         approvedSha256: createHash("sha256")
           .update(content, "utf8")
@@ -39,34 +45,42 @@ function withPublicationDirectory(run) {
   }
 }
 
-test("publication manifest fixes the five immutable 23 August document IDs", () => {
+test("publication manifest fixes the mixed immutable document bundle", () => {
   assert.deepEqual(
-    PUBLICATION_MANIFEST.map(({key, version}) => [key, version]),
+    PUBLICATION_MANIFEST.map(({key, version, effectiveDate}) => [
+      key,
+      version,
+      effectiveDate,
+    ]),
     [
-      ["membershipTerms", "ZAF-TERMS-2026-08-23-01"],
-      ["cancellationPolicy", "ZAF-CANCEL-2026-08-23-01"],
-      ["privacyNotice", "ZAF-PRIVACY-2026-08-23-01"],
-      ["adultWaiver", "ZAF-ADULT-WAIVER-2026-08-23-01"],
-      ["guardianAddendum", "ZAF-GUARDIAN-2026-08-23-01"],
+      ["membershipTerms", "ZAF-TERMS-2026-08-25-01", "2026-08-25"],
+      ["cancellationPolicy", "ZAF-CANCEL-2026-08-23-01", "2026-08-23"],
+      ["privacyNotice", "ZAF-PRIVACY-2026-08-25-01", "2026-08-25"],
+      ["adultWaiver", "ZAF-ADULT-WAIVER-2026-08-23-01", "2026-08-23"],
+      ["guardianAddendum", "ZAF-GUARDIAN-2026-08-25-01", "2026-08-25"],
     ]
   );
 });
 
-test("registry rendering freezes the exact public UTF-8 bytes and digest", () => {
+test("registry rendering freezes bytes, digests, and per-entry effective dates", () => {
   withPublicationDirectory((directory, publicationManifest) => {
     const documents = readPublicationDocuments(directory, publicationManifest);
     const registry = renderDocumentRegistry(documents);
 
     assert.equal(documents.length, 5);
-    for (const document of documents) {
+    for (const [index, document] of documents.entries()) {
       assert.match(document.sha256, /^[a-f0-9]{64}$/);
-      assert.equal(document.effectiveDate, "2026-08-23");
+      assert.equal(
+        document.effectiveDate,
+        publicationManifest[index].effectiveDate
+      );
       assert.equal(
         document.publicUrl,
         `/legal/memberships/${document.version}.txt`
       );
       assert.ok(registry.includes(JSON.stringify(document.content)));
       assert.ok(registry.includes(JSON.stringify(document.sha256)));
+      assert.ok(registry.includes(JSON.stringify(document.effectiveDate)));
     }
   });
 });

@@ -2421,7 +2421,54 @@ test("adult checkout rejects additional participants before Stripe", async () =>
   assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 0);
 });
 
-test("every child must be inside the selected youth plan age band", async () => {
+test("Teen Alphas accepts a six-year-old as either primary or additional child", async () => {
+  const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
+    () => undefined
+  );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  const sessionsBefore = fakeStripe.state.checkoutSessions.size;
+  const crossProgrammeCases = [
+    youthCheckoutData({
+      planKey: "youth_teenstars",
+      attemptId: "attempt_teen_alphas_primary_age_six",
+      children: [
+        {fullName: "Six Year Old Primary", dateOfBirth: "2020-08-18"},
+        {fullName: "Teen Additional", dateOfBirth: "2012-05-05"},
+      ],
+    }),
+    youthCheckoutData({
+      planKey: "youth_teenstars",
+      attemptId: "attempt_teen_alphas_additional_age_six",
+      children: [
+        {fullName: "Teen Primary", dateOfBirth: "2011-06-06"},
+        {fullName: "Six Year Old Additional", dateOfBirth: "2020-08-18"},
+      ],
+    }),
+  ];
+
+  try {
+    for (const data of crossProgrammeCases) {
+      const result = await handler(request(data));
+      assert.ok(result.sessionId);
+    }
+
+    assert.equal(fakeStripe.state.checkoutSessions.size, sessionsBefore + 2);
+    const intents = await db.collection("membershipIntents").get();
+    assert.equal(intents.size, 2);
+    for (const intent of intents.docs) {
+      assert.equal(intent.get("planKey"), "youth_teenstars");
+      assert.equal(intent.get("commercialTerms.planName"), "Teen Alphas");
+      assert.equal(intent.get("commercialTerms.amountPence"), 3500);
+      assert.equal(intent.get("participantCount"), 2);
+      assert.ok(intent.get("participants").some(({age}) => age === 6));
+    }
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("youth checkout still rejects future and malformed dates of birth", async () => {
   const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
     () => undefined
   );
@@ -2429,40 +2476,30 @@ test("every child must be inside the selected youth plan age band", async () => 
   Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
   const sessionsBefore = fakeStripe.state.checkoutSessions.size;
   const invalidCases = [
-    youthCheckoutData({
-      planKey: "youth_youngstars",
-      attemptId: "attempt_youngstars_primary_age_five",
-      children: [{fullName: "Too Young", dateOfBirth: "2020-08-19"}],
-    }),
-    youthCheckoutData({
-      planKey: "youth_youngstars",
-      attemptId: "attempt_youngstars_mixed_age_group",
-      children: [
-        {fullName: "Youngstar", dateOfBirth: "2018-05-05"},
-        {fullName: "Teenstar", dateOfBirth: "2013-05-05"},
-      ],
-    }),
-    youthCheckoutData({
-      planKey: "youth_teenstars",
-      attemptId: "attempt_teenstars_primary_age_seventeen",
-      children: [{fullName: "Too Old", dateOfBirth: "2009-08-18"}],
-    }),
-    youthCheckoutData({
-      planKey: "youth_teenstars",
-      attemptId: "attempt_teenstars_mixed_age_group",
-      children: [
-        {fullName: "Teenstar", dateOfBirth: "2012-05-05"},
-        {fullName: "Youngstar", dateOfBirth: "2018-05-05"},
-      ],
-    }),
+    {
+      data: youthCheckoutData({
+        planKey: "youth_teenstars",
+        attemptId: "attempt_teen_alphas_future_primary_dob",
+        children: [{fullName: "Future Child", dateOfBirth: "2026-08-19"}],
+      }),
+      message: /valid participant date of birth/i,
+    },
+    {
+      data: youthCheckoutData({
+        planKey: "youth_teenstars",
+        attemptId: "attempt_teen_alphas_malformed_additional_dob",
+        children: [
+          {fullName: "Valid Primary", dateOfBirth: "2012-05-05"},
+          {fullName: "Invalid Additional", dateOfBirth: "2020-02-30"},
+        ],
+      }),
+      message: /valid date of birth for child 2/i,
+    },
   ];
 
   try {
-    for (const data of invalidCases) {
-      await assert.rejects(
-        () => handler(request(data)),
-        /age \(\d+\) is not eligible/i
-      );
+    for (const {data, message} of invalidCases) {
+      await assert.rejects(() => handler(request(data)), message);
     }
     assert.equal(fakeStripe.state.checkoutSessions.size, sessionsBefore);
     assert.equal((await db.collection("membershipIntents").get()).size, 0);
@@ -4255,7 +4292,7 @@ test("plans without app access never move a member's entitlement", async () => {
   await createMember("youthpayer", {email: "buyer@example.test", emailVerified: true});
   await seedMembership("sub_youth", {
     planKey: "youth_teenstars",
-    planName: "HYROX Teenstars",
+    planName: "Teen Alphas",
     grantsAlphaWodAccess: false,
     participant: {
       fullName: "Young Athlete",
@@ -7765,8 +7802,8 @@ test("welcome email uses one branded shell with membership-specific variants", a
     ["adult_unlimited", "You’re in. Let’s get to work.", /Zero Alpha App access included/],
     ["adult_ladies", "Welcome to Ladies Only.", /Ladies-only coached sessions/],
     ["adult_gym", "Your gym membership is ready.", /Independent gym-floor training/],
-    ["youth_youngstars", "A strong start begins here.", /aged 6 to 11/],
-    ["youth_teenstars", "Their next level starts here.", /aged 12 to 16/],
+    ["youth_youngstars", "A strong start begins here.", /strength and conditioning class for 10 and under/i],
+    ["youth_teenstars", "Their next level starts here.", /Strength and conditioning for 11 and up/i],
   ];
 
   for (const [planKey, headline, inclusion] of variants) {
@@ -7825,7 +7862,7 @@ test("welcome email uses one branded shell with membership-specific variants", a
 test("a youth confirmation clearly labels the child and paying adult", async () => {
   await seedMembership("sub_youth_confirmation_labels", {
     planKey: "youth_teenstars",
-    planName: "HYROX Teenstars",
+    planName: "Teen Alphas",
     stripePriceId: "price_teenstars",
     grantsAlphaWodAccess: false,
     participant: {

@@ -16,7 +16,6 @@ import {
   isPlanKey,
   resolveDisplayAge,
   resolveYouthMonthlyPricing,
-  resolveYouthPlanForAge,
   type CheckoutAcceptanceId,
 } from "../../../lib/membershipPlans";
 import {
@@ -136,20 +135,12 @@ export default function MembershipCheckout() {
     [participantDateOfBirth]
   );
 
-  // The server re-derives the age and rejects a mismatch. This only steers the
-  // form so a guardian is not sent to Stripe with the wrong youth band.
-  const suggestedYouthPlan = age === null ? null : resolveYouthPlanForAge(age);
   const ageMismatch =
-    plan !== null && age !== null && !isAgeEligibleForPlan(plan, age);
+    plan?.audience === "adult" && age !== null && !isAgeEligibleForPlan(plan, age);
   const additionalParticipantAges = useMemo(
-    () => additionalParticipants.map((participant) => {
-      const participantAge = resolveDisplayAge(participant.dateOfBirth);
-      return {
-        age: participantAge,
-        suggestedYouthPlan: participantAge === null ?
-          null : resolveYouthPlanForAge(participantAge),
-      };
-    }),
+    () => additionalParticipants.map((participant) =>
+      resolveDisplayAge(participant.dateOfBirth)
+    ),
     [additionalParticipants]
   );
 
@@ -205,10 +196,9 @@ export default function MembershipCheckout() {
   );
   const additionalParticipantsReady = !isYouth || additionalParticipants.every(
     (participant, index) => {
-      const participantAge = additionalParticipantAges[index]?.age ?? null;
+      const participantAge = additionalParticipantAges[index] ?? null;
       return participant.fullName.trim().length >= 2 &&
-        participantAge !== null &&
-        isAgeEligibleForPlan(plan, participantAge);
+        participantAge !== null;
     }
   );
   const allStatementsAccepted = checkoutStatements.every(({id}) =>
@@ -333,6 +323,9 @@ export default function MembershipCheckout() {
         <h1 className="mt-3 font-heading text-[2.5rem] uppercase leading-[1] tracking-[0.02em] text-white sm:text-[3rem]">
           {plan.name}
         </h1>
+        {isYouth && (
+          <p className="mt-4 text-sm leading-7 text-white/70">{plan.summary}</p>
+        )}
         <p className="mt-4 text-sm leading-7 text-white/70">
           {isYouth
             ? `${formatPlanPrice(plan)} per child, per month. `
@@ -499,7 +492,7 @@ export default function MembershipCheckout() {
               <>
                 <p className="mt-4 text-sm leading-7 text-white/70">
                   Add up to {YOUTH_FAMILY_OFFER.maximumParticipants} children from the same
-                  age band. The {YOUTH_FAMILY_OFFER.percentOff}% family discount is applied
+                  programme. The {YOUTH_FAMILY_OFFER.percentOff}% family discount is applied
                   automatically when you register 2 or more children.
                 </p>
 
@@ -513,9 +506,6 @@ export default function MembershipCheckout() {
                       >
                         Child 1
                       </p>
-                      <span className="text-xs text-white/45">
-                        Ages {plan.minAge} to {plan.maxAge}
-                      </span>
                     </div>
 
                     <label className="mt-5 block">
@@ -545,7 +535,7 @@ export default function MembershipCheckout() {
                         }}
                         aria-describedby={participantDateOfBirth ? "child-1-age-status" : undefined}
                         aria-invalid={participantDateOfBirth.length > 0 &&
-                          (age === null || ageMismatch)}
+                          age === null}
                         required
                       />
                     </label>
@@ -555,42 +545,16 @@ export default function MembershipCheckout() {
                         Enter a valid date of birth that is not in the future.
                       </p>
                     )}
-                    {age !== null && !ageMismatch && (
+                    {age !== null && (
                       <p id="child-1-age-status" className="mt-3 text-xs text-white/45">
-                        Child 1 age {age} · eligible for {plan.name}
+                        Child 1 age {age}
                       </p>
-                    )}
-                    {ageMismatch && (
-                      <div
-                        id="child-1-age-status"
-                        className="mt-4 rounded-2xl border border-red-500/25 bg-red-500/10 p-4 text-sm leading-6 text-red-100"
-                      >
-                        {plan.name} is for ages {plan.minAge}
-                        {plan.maxAge ? ` to ${plan.maxAge}` : " and over"}, and this date of
-                        birth gives age {age}.
-                        {suggestedYouthPlan && suggestedYouthPlan !== plan.key && (
-                          <>
-                            {" "}
-                            <Link
-                              to={`/memberships/checkout/${suggestedYouthPlan}`}
-                              className="underline underline-offset-4"
-                            >
-                              Switch to {MEMBERSHIP_PLANS[suggestedYouthPlan].name}
-                            </Link>
-                            .
-                          </>
-                        )}
-                      </div>
                     )}
                   </fieldset>
 
                   {additionalParticipants.map((participant, index) => {
                     const childNumber = index + 2;
-                    const participantAge = additionalParticipantAges[index]?.age ?? null;
-                    const participantAgeMismatch = participantAge !== null &&
-                      !isAgeEligibleForPlan(plan, participantAge);
-                    const participantSuggestedPlan =
-                      additionalParticipantAges[index]?.suggestedYouthPlan ?? null;
+                    const participantAge = additionalParticipantAges[index] ?? null;
                     const ageStatusId = `child-${participant.id}-age-status`;
 
                     return (
@@ -645,7 +609,7 @@ export default function MembershipCheckout() {
                             )}
                             aria-describedby={participant.dateOfBirth ? ageStatusId : undefined}
                             aria-invalid={participant.dateOfBirth.length > 0 &&
-                              (participantAge === null || participantAgeMismatch)}
+                              participantAge === null}
                             required
                           />
                         </label>
@@ -655,32 +619,10 @@ export default function MembershipCheckout() {
                             Enter a valid date of birth that is not in the future.
                           </p>
                         )}
-                        {participantAge !== null && !participantAgeMismatch && (
+                        {participantAge !== null && (
                           <p id={ageStatusId} className="mt-3 text-xs text-white/45">
-                            Child {childNumber} age {participantAge} · eligible for {plan.name}
+                            Child {childNumber} age {participantAge}
                           </p>
-                        )}
-                        {participantAgeMismatch && (
-                          <div
-                            id={ageStatusId}
-                            className="mt-4 rounded-2xl border border-red-500/25 bg-red-500/10 p-4 text-sm leading-6 text-red-100"
-                          >
-                            {plan.name} is for ages {plan.minAge}
-                            {plan.maxAge ? ` to ${plan.maxAge}` : " and over"}, and this date
-                            of birth gives age {participantAge}.
-                            {participantSuggestedPlan && participantSuggestedPlan !== plan.key && (
-                              <>
-                                {" "}
-                                <Link
-                                  to={`/memberships/checkout/${participantSuggestedPlan}`}
-                                  className="underline underline-offset-4"
-                                >
-                                  Switch to {MEMBERSHIP_PLANS[participantSuggestedPlan].name}
-                                </Link>
-                                .
-                              </>
-                            )}
-                          </div>
                         )}
                       </fieldset>
                     );
@@ -733,7 +675,7 @@ export default function MembershipCheckout() {
                     <p className="mt-4 text-xs leading-6 text-white/50">
                       {youthPricing.familyDiscountApplies
                         ? `The automatic ${YOUTH_FAMILY_OFFER.percentOff}% family discount applies to the full monthly subtotal while this membership includes 2 or more children.`
-                        : `Add a second child in the same age band to receive ${YOUTH_FAMILY_OFFER.percentOff}% off the full monthly total.`}
+                        : `Add a second child in the same programme to receive ${YOUTH_FAMILY_OFFER.percentOff}% off the full monthly total.`}
                     </p>
                   </section>
                 )}

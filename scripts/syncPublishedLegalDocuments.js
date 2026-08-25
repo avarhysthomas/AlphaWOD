@@ -20,46 +20,50 @@ const PUBLICATION_MANIFEST = [
   {
     key: "membershipTerms",
     title: "Membership Terms",
-    version: "ZAF-TERMS-2026-08-23-01",
-    approvedBytes: 21634,
-    approvedSha256: "2f540a5037cc9d6423e206c9bac324f764e8ad84ae1aacd5aacffa282c490a00",
+    version: "ZAF-TERMS-2026-08-25-01",
+    effectiveDate: "2026-08-25",
+    approvedBytes: 21796,
+    approvedSha256: "8208a6f73b2197371bf22d039a11e4114a79dc7d8b2891cecf64de20234b6e79",
   },
   {
     key: "cancellationPolicy",
     title: "Cancellation, Refund and Cooling-off Policy",
     version: "ZAF-CANCEL-2026-08-23-01",
+    effectiveDate: "2026-08-23",
     approvedBytes: 9255,
     approvedSha256: "80030b930615839db1b5116e5cf9b4231acb4c3036df6ab9909642bc02efd413",
   },
   {
     key: "privacyNotice",
     title: "Privacy Notice",
-    version: "ZAF-PRIVACY-2026-08-23-01",
-    approvedBytes: 15004,
-    approvedSha256: "34a614aea5d63191994bb85d053f926c047e2a1a1908897ba63796312a5ac6ee",
+    version: "ZAF-PRIVACY-2026-08-25-01",
+    effectiveDate: "2026-08-25",
+    approvedBytes: 15167,
+    approvedSha256: "b6be4d3758f105cae3bea4bf3b459e5d2fcd67c79208b684405cc06c778f3023",
   },
   {
     key: "adultWaiver",
     title: "Adult Participant Waiver and Risk Acknowledgement",
     version: "ZAF-ADULT-WAIVER-2026-08-23-01",
+    effectiveDate: "2026-08-23",
     approvedBytes: 7144,
     approvedSha256: "84a520cbd72ac416183788c000c6e869dd1fd2bb0461abd60088cc36b355635f",
   },
   {
     key: "guardianAddendum",
     title: "Parent/Guardian Consent and Youth Membership Addendum",
-    version: "ZAF-GUARDIAN-2026-08-23-01",
-    approvedBytes: 10593,
-    approvedSha256: "72d460bb827622c6ef98438b0c356275b1f4c67c60306078a4718578635f40f6",
+    version: "ZAF-GUARDIAN-2026-08-25-01",
+    effectiveDate: "2026-08-25",
+    approvedBytes: 10863,
+    approvedSha256: "ba59e57261ed2e41c68ceb45c656d8ea78d3926cbeed914727157b22adf746f4",
   },
 ];
 
-const EFFECTIVE_DATE = "2026-08-23";
 const CONTENT_TYPE = "text/plain; charset=utf-8";
 const HASH_COVERS = "UTF-8 bytes of content";
-// The business owner explicitly approved the frozen 23 August 2026 bundle on
-// 23 August 2026. Runtime checkout remains separately controlled by the
-// Functions and frontend environment purchase gates.
+// Each manifest entry freezes the approved version, effective date, bytes and
+// digest. Runtime checkout remains separately controlled by the Functions and
+// frontend environment purchase gates.
 const PUBLICATION_APPROVED = true;
 
 function sha256(bytes) {
@@ -110,7 +114,7 @@ function readPublicationDocuments(
       key: manifestEntry.key,
       title: manifestEntry.title,
       version: manifestEntry.version,
-      effectiveDate: EFFECTIVE_DATE,
+      effectiveDate: manifestEntry.effectiveDate,
       publicUrl: `/legal/memberships/${filename}`,
       contentType: CONTENT_TYPE,
       hashCovers: HASH_COVERS,

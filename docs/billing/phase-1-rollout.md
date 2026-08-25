@@ -1,17 +1,20 @@
 # Phase 1: public membership purchase and Stripe Billing
 
-Status: implemented locally on 18 August 2026 and updated for the youth-family
-release on 23 August 2026. Final release results and test counts are not frozen
+Status: implemented locally on 18 August 2026 and updated for the youth programme
+release on 25 August 2026. Final release results and test counts are not frozen
 here. The only new production service deployed is the public `stripeWebhook`
 receiver; the nine callables, four scheduled workers and customer frontend
 remain undeployed. The five live Price/Product pairs, original Adult Unlimited
 Coupon and Promotion Code, locked-down Portal, 14-event webhook destination and
 the existence of the three billing secrets were verified as described in
-section 7. That historical evidence predates the Youngstars price/age correction.
+section 7. That historical evidence predates the current youth catalogue and
+non-blocking age-guidance correction.
 The new live youth-family Coupon was created and verified in Stripe Dashboard
 on 23 August as described in section 7. No signed live webhook delivery or live
-payment journey has passed. The business owner explicitly approved the frozen 23 August legal
-bundle on 23 August; the 20 August bundle remains historical evidence. The
+payment journey has passed. The business owner explicitly approved the current
+mixed publication bundle on 25 August: revised Membership Terms, Privacy Notice
+and Guardian Addendum dated 25 August, with the unchanged Cancellation Policy
+and Adult Waiver dated 23 August. Earlier versions remain historical evidence. The
 approved bundle's exact production bytes and the Stripe youth configuration
 must still be verified before launch. Both backend and frontend environment
 purchase gates remain `false` and cannot be opened by provider configuration
@@ -62,27 +65,29 @@ The youth-family release uses the following canonical commercial catalogue.
 The revised legal bundle must carry these same terms and pass the closed-gate
 publication checks before purchase can open.
 
-| Plan key | Name | Price | Ages | AlphaWOD access |
+| Plan key | Name | Price | Age guidance | AlphaWOD access |
 | --- | --- | --- | --- | --- |
 | `adult_unlimited` | Adult Unlimited Membership | £60/mo | 18+ | **Yes** |
 | `adult_ladies` | Adult Ladies Only Membership | £50/mo | 18+ | No |
 | `adult_gym` | Adult Gym Only | £45/mo | 18+ | No |
-| `youth_youngstars` | HYROX Youngstars | £30/mo | 6–11 | No |
-| `youth_teenstars` | HYROX Teenstars | £35/mo | 12–16 | No |
+| `youth_youngstars` | Mini Alphas | £30/mo | Designed for ages 10 and under | No |
+| `youth_teenstars` | Teen Alphas | £35/mo | Designed for ages 11 and up | No |
 
 The handover's three plan keys (`commercial`, `youngstars`, `teenstars`) did not
 match the real catalogue. "Commercial" resolves to the three adult plans, and
 only Adult Unlimited automatically includes AlphaWOD access. A test asserts that
 exactly one plan carries that flag.
 
-A youth checkout contains between 1 and 10 children on the selected plan. All
-children must satisfy that plan's age band; a Youngstars/Teenstars mixed-plan
-bundle is not supported. Stripe receives one subscription item at the canonical
-per-child Price with `quantity` equal to the number of children. One child pays
-the standard monthly price. At two or more children, the approved youth-family
-Coupon applies 15% off the whole monthly subtotal forever. For example, two
-Youngstars cost £60 before discount and £51 per month after discount; two
-Teenstars cost £70 before discount and £59.50 per month after discount.
+A youth checkout contains between 1 and 10 children in the same selected
+programme. Every child must have a valid, non-future date of birth, but the age
+descriptions are non-blocking guidance and staff manage programme placement
+internally. A single subscription cannot mix programmes. Stripe receives one
+subscription item at the canonical per-child Price with `quantity` equal to the
+number of children. One child pays the standard monthly price. At two or more
+children, the approved youth-family Coupon applies 15% off the whole monthly
+subtotal forever. For example, two Mini Alphas cost £60 before discount and £51
+per month after discount; two Teen Alphas cost £70 before discount and £59.50
+per month after discount.
 
 ## 3. Policy decisions encoded in code
 
@@ -116,14 +121,16 @@ Teenstars cost £70 before discount and £59.50 per month after discount.
   when the campaign is finished. The base Price remains £60:
   discounted members pay £55 on the September, October and November invoices,
   then £60 from 1 December. Unknown or malformed discounts fail closed.
-- **Youth-family discount.** Youngstars and Teenstars accept 1–10 children in a
-  single same-plan subscription. Every child is separately named, dated and
-  age-validated. Stripe receives one item whose Price is the selected plan and
+- **Youth-family discount.** Mini Alphas and Teen Alphas accept 1–10 children in
+  one subscription for the same selected programme. Every child is separately
+  named and supplies a valid, non-future date of birth; age guidance does not
+  block the selected programme, and staff manage placement internally. Stripe
+  receives one item whose Price is the selected programme and
   whose quantity exactly equals the frozen participant count. A single child
   pays the undiscounted per-child price. At quantity 2–10 the server applies the
   allowlisted youth-family Coupon to the entire subtotal and fulfilment requires
   exactly 15% off, duration `forever`, no `redeem_by`, no maximum redemptions,
-  and `applies_to` containing exactly the Youngstars and Teenstars Products.
+  and `applies_to` containing exactly the two youth Products.
   There is no customer-entered Promotion Code. Unknown or malformed pricing,
   quantity or discount data fails closed.
 - **Checkout session expiry** never outlives the anchor it was created against,
@@ -359,8 +366,8 @@ only `createMembershipCheckoutSessionV2`, which additionally requires
 
 1. `CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION` is `true` in
    `functions/src/membershipPlans.ts`. Backend/frontend parity and publication
-   tests enforce the synchronized value. The business owner approved the exact
-   frozen 23 August bundle on 23 August 2026.
+   tests enforce the synchronized value. The publication manifest freezes the
+   mixed 25/23 August bundle approved on 25 August 2026.
 2. `MEMBERSHIP_PURCHASE_ENABLED=true` in the Functions environment.
 
 The browser adds a separately deployed customer-visible control:
@@ -369,13 +376,12 @@ stay closed unless the revised source gate and this frontend gate are both
 true. It is a rollout/kill-switch control, not a security boundary; the two
 server checks above remain authoritative for creating a Stripe Session.
 
-The business owner explicitly approved the revised Membership Terms, Privacy
-Notice, Cancellation, Refund and Cooling-off Policy, Adult Participant Waiver
-and Parent/Guardian Addendum under `docs/legal-review/2026-08-23/` on 23 August
-2026. Their canonical text, stable versioned URLs, effective dates and SHA-256
-digests are synchronized between the public `.txt` files and both
-`CHECKOUT_DOCUMENTS` registries. The 20 August bundle remains immutable
-historical evidence.
+The business owner explicitly approved revised Membership Terms, Privacy Notice
+and Parent/Guardian Addendum dated 25 August 2026, while retaining the unchanged
+23 August Cancellation, Refund and Cooling-off Policy and Adult Participant
+Waiver. Their canonical text, stable versioned URLs, per-document effective
+dates and SHA-256 digests are frozen by the publication manifest. The earlier
+20 and 23 August versions remain immutable historical evidence.
 
 The code resolves an exact plan/signer-specific immutable document set, renders
 its canonical content and byte-identical versioned plain-text link, requires
@@ -453,8 +459,9 @@ objects. It does not change the production publication or runtime gates.
 2. **Verify the live catalogue.** The business supplied Dashboard Product and
    Price exports dated 17 August 2026 and all five pairs were independently
    re-read from Stripe's live API on 19 August. The two youth pairs were read
-   again on 23 August and confirmed at £30 for Youngstars and £35 for Teenstars
-   with the exact Product and Price IDs below. Before release, run the full
+   again on 23 August and confirmed at £30 for the current Mini Alphas offering
+   and £35 for the current Teen Alphas offering, with the exact legacy-named
+   Product and Price IDs below. Before release, run the full
    preflight again while both purchase gates remain closed and require active,
    live, monthly GBP objects with the following canonical
    amounts, `per_unit`/`licensed` billing, `tax_behavior=unspecified` and Product
@@ -465,8 +472,8 @@ objects. It does not change the production publication or runtime gates.
    | Adult Unlimited | `prod_V5VhTEmyekcpY4` | `price_1U5KgYFzNDZoGGA0jGftxyZH` | £60 |
    | Adult Ladies Only | `prod_V5VkRs10lzG989` | `price_1U5KjOFzNDZoGGA0j3qcds5p` | £50 |
    | Adult Gym Only | `prod_V5VlQAfdAYSb0G` | `price_1U5Kk9FzNDZoGGA0dQ61G49d` | £45 |
-   | HYROX Youngstars (`HYROX Youngstars U11` in Stripe) | `prod_V5Vq0l9VAaPox9` | `price_1U5KoQFzNDZoGGA0s4t806bH` | £30 |
-   | HYROX Teenstars (`HYROX Teenstars 12+` in Stripe) | `prod_V5VumrjZl1bWV1` | `price_1U5Kt8FzNDZoGGA0ogq41DEw` | £35 |
+   | Mini Alphas (legacy Stripe provider name: `HYROX Youngstars U11`) | `prod_V5Vq0l9VAaPox9` | `price_1U5KoQFzNDZoGGA0s4t806bH` | £30 |
+   | Teen Alphas (legacy Stripe provider name: `HYROX Teenstars 12+`) | `prod_V5VumrjZl1bWV1` | `price_1U5Kt8FzNDZoGGA0ogq41DEw` | £35 |
 
    The `price_1U5K...` mapping is live; the `price_1U5P...` mapping in
    `functions/.env.example` is the verified sandbox catalogue. Products,
@@ -474,8 +481,10 @@ objects. It does not change the production publication or runtime gates.
    remain mode-specific and never carry across. The two live youth Products use
    longer provider labels than the customer-facing app catalogue; their exact
    expected names and IDs are deliberately bound in the live source manifest.
-   Eligibility is canonical application/legal data: the legacy `U11` provider
-   label must not be used to infer or override the Youngstars age band of 6–11.
+   Customer-facing age descriptions are non-blocking guidance, not eligibility
+   inferred from Stripe. The legacy `U11` provider label must not impose an age
+   gate: checkout still requires a valid date of birth, and staff manage
+   programme placement internally.
 
    The corrected test IDs in `functions/.env.example` are correct for the dry
    run and a test-mode deployment. The checkout preflight retrieves the configured Price
@@ -542,7 +551,7 @@ objects. It does not change the production publication or runtime gates.
    `STRIPE_YOUTH_FAMILY_COUPON_ID`. It must be exactly 15% off, duration
    `forever`, with no fixed amount/currency, `redeem_by`, duration-month count or
    maximum redemptions. Its `applies_to` Product set must contain exactly the
-   Youngstars and Teenstars Products. Do not create or expose a customer-entered
+   two youth Products listed above. Do not create or expose a customer-entered
    Promotion Code: the server applies the allowlisted Coupon automatically only
    when the participant quantity is 2–10.
 
@@ -837,10 +846,10 @@ These are the remaining release blockers, not optional future enhancements:
   Resend test delivery before considering either purchase gate. Nothing in the
   emulator suite substitutes for this.
 - Run controlled one-child and two-child hosted Checkout journeys for both
-  Youngstars and Teenstars. Verify the exact Price, item quantities, participant
+  Mini Alphas and Teen Alphas. Verify the exact Price, item quantities, participant
   projections, durable acceptance/confirmation evidence and automatic
-  youth-family Coupon: two Youngstars must recur at £51 from a £60 subtotal and
-  two Teenstars at £59.50 from a £70 subtotal. The existing post-payment journey
+  youth-family Coupon: two Mini Alphas must recur at £51 from a £60 subtotal and
+  two Teen Alphas at £59.50 from a £70 subtotal. The existing post-payment journey
   verifier does not yet assert the family Coupon, so retain independent Stripe
   and Firestore evidence rather than treating that command as proof.
 
@@ -967,13 +976,15 @@ expired Checkout Session or attaches membership agreements.
 1. Staff and document the human late-notice and cooling-off refund operation
    required by the approved Cancellation, Refund and Cooling-off Policy,
    including decision, execution and audit ownership.
-2. Stripe still calls the junior Product "HYROX Youngstars U11". The canonical
-   release eligibility is ages 6–11 inclusive and the price is £30 per child per
-   month; the application and revised legal bundle must follow those terms, not
-   infer eligibility from the provider label. Before opening, verify that hosted
-   Checkout and customer-visible copy are not contradictory. Rename the Stripe
-   Product only through a controlled catalogue rotation because its exact name
-   is runtime-bound.
+2. Stripe retains the legacy provider names `HYROX Youngstars U11` for Mini
+   Alphas and `HYROX Teenstars 12+` for Teen Alphas. The customer catalogue is
+   Mini Alphas at £30 per child per month, designed for ages 10 and under, and
+   Teen Alphas at £35, designed for ages 11 and up. Those age descriptions do
+   not block checkout: a valid date of birth is still required, and staff manage
+   programme placement internally. Before opening, verify that hosted Checkout
+   and customer-visible copy are not contradictory. Rename either Stripe
+   Product only through a controlled catalogue rotation because its exact
+   legacy name is runtime-bound.
 3. Decide whether a member on Ladies Only or Gym Only should be able to sign in
    at all. Today they get an account with no AlphaWOD access, which correctly
    lands on `/access-restricted`, and they can still reach
@@ -992,7 +1003,8 @@ It covers:
 
 - the checkout core's Stripe request, stable retry, billing anchor and atomic
   participant/payer reservations, including multi-participant youth quantity,
-  per-child age validation, the 1–10 limit and 15%-forever family pricing, plus
+  valid date-of-birth handling without a programme age gate, the 1–10 limit and
+  15%-forever family pricing, plus
   authoritative terminal-state checks
   before an elapsed reservation can be reclaimed, source-document approval
   validation and closed-runtime rejection at the exported handler boundary;

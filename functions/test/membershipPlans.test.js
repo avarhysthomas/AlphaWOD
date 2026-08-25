@@ -12,6 +12,7 @@ const {
   CHECKOUT_DOCUMENTS,
   EXISTING_MEMBER_OFFER,
   YOUTH_FAMILY_OFFER,
+  MEMBERSHIP_SCHEMA_VERSION,
   MEMBERSHIP_PLANS,
   PLAN_KEYS,
   PRESALE_CHECKOUT_ANCHOR_MARGIN_SECONDS,
@@ -49,7 +50,8 @@ function londonMillis(iso) {
   return new Date(iso).getTime();
 }
 
-test("catalogue matches the approved public price list", () => {
+test("schema v3 catalogue keeps the youth keys, new copy, and approved prices", () => {
+  assert.equal(MEMBERSHIP_SCHEMA_VERSION, 3);
   assert.deepEqual([...PLAN_KEYS], [
     "adult_unlimited",
     "adult_ladies",
@@ -61,8 +63,42 @@ test("catalogue matches the approved public price list", () => {
   assert.equal(MEMBERSHIP_PLANS.adult_unlimited.amountPence, 6000);
   assert.equal(MEMBERSHIP_PLANS.adult_ladies.amountPence, 5000);
   assert.equal(MEMBERSHIP_PLANS.adult_gym.amountPence, 4500);
-  assert.equal(MEMBERSHIP_PLANS.youth_youngstars.amountPence, 3000);
-  assert.equal(MEMBERSHIP_PLANS.youth_teenstars.amountPence, 3500);
+  assert.deepEqual(
+    {
+      key: MEMBERSHIP_PLANS.youth_youngstars.key,
+      name: MEMBERSHIP_PLANS.youth_youngstars.name,
+      amountPence: MEMBERSHIP_PLANS.youth_youngstars.amountPence,
+      minAge: MEMBERSHIP_PLANS.youth_youngstars.minAge,
+      maxAge: MEMBERSHIP_PLANS.youth_youngstars.maxAge,
+      summary: MEMBERSHIP_PLANS.youth_youngstars.summary,
+    },
+    {
+      key: "youth_youngstars",
+      name: "Mini Alphas",
+      amountPence: 3000,
+      minAge: 0,
+      maxAge: 10,
+      summary: "A strength and conditioning class for 10 and under! Fun, progressive, and challenging.",
+    }
+  );
+  assert.deepEqual(
+    {
+      key: MEMBERSHIP_PLANS.youth_teenstars.key,
+      name: MEMBERSHIP_PLANS.youth_teenstars.name,
+      amountPence: MEMBERSHIP_PLANS.youth_teenstars.amountPence,
+      minAge: MEMBERSHIP_PLANS.youth_teenstars.minAge,
+      maxAge: MEMBERSHIP_PLANS.youth_teenstars.maxAge,
+      summary: MEMBERSHIP_PLANS.youth_teenstars.summary,
+    },
+    {
+      key: "youth_teenstars",
+      name: "Teen Alphas",
+      amountPence: 3500,
+      minAge: 11,
+      maxAge: null,
+      summary: "Strength and conditioning for 11 and up! Develop athletic qualities in a supportive environment.",
+    }
+  );
 });
 
 test("only Adult Unlimited automatically includes AlphaWOD access", () => {
@@ -70,11 +106,21 @@ test("only Adult Unlimited automatically includes AlphaWOD access", () => {
   assert.deepEqual(granting, ["adult_unlimited"]);
 });
 
-test("registry freezes the approved 23 August checkout documents", () => {
+test("registry freezes the approved mixed checkout document bundle", () => {
   assert.equal(CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION, true);
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(CHECKOUT_DOCUMENTS).map(
+      ([key, document]) => [key, [document.version, document.effectiveDate]]
+    )),
+    {
+      membershipTerms: ["ZAF-TERMS-2026-08-25-01", "2026-08-25"],
+      cancellationPolicy: ["ZAF-CANCEL-2026-08-23-01", "2026-08-23"],
+      privacyNotice: ["ZAF-PRIVACY-2026-08-25-01", "2026-08-25"],
+      adultWaiver: ["ZAF-ADULT-WAIVER-2026-08-23-01", "2026-08-23"],
+      guardianAddendum: ["ZAF-GUARDIAN-2026-08-25-01", "2026-08-25"],
+    }
+  );
   for (const document of Object.values(CHECKOUT_DOCUMENTS)) {
-    assert.match(document.version, /^ZAF-[A-Z-]+-2026-08-23-01$/);
-    assert.equal(document.effectiveDate, "2026-08-23");
     assert.match(document.sha256, /^[a-f0-9]{64}$/);
     assert.doesNotMatch(JSON.stringify(document), /\b(?:DRAFT|PENDING)\b/i);
   }
@@ -124,7 +170,7 @@ test("checkout legal requirements are exact for adult self-signers and youth gua
 
 test("commercial snapshots contain the complete customer-facing plan contract", () => {
   assert.deepEqual(createCommercialPlanSnapshot("adult_unlimited"), {
-    catalogueSchemaVersion: 2,
+    catalogueSchemaVersion: 3,
     planKey: "adult_unlimited",
     planName: "Adult Unlimited Membership",
     audience: "adult",
@@ -161,13 +207,13 @@ test("past-due grace persists an exact London-calendar deadline across DST", () 
   assert.equal(isWithinPastDueGrace(failedAt, graceEnd + 1), false);
 });
 
-test("youth age routing follows the approved boundaries", () => {
-  assert.equal(resolveYouthPlanForAge(5), null);
-  assert.equal(resolveYouthPlanForAge(6), "youth_youngstars");
-  assert.equal(resolveYouthPlanForAge(11), "youth_youngstars");
-  assert.equal(resolveYouthPlanForAge(12), "youth_teenstars");
-  assert.equal(resolveYouthPlanForAge(16), "youth_teenstars");
-  assert.equal(resolveYouthPlanForAge(17), null);
+test("youth routing recommends Mini Alphas through 10 and Teen Alphas from 11", () => {
+  assert.equal(resolveYouthPlanForAge(-1), null);
+  assert.equal(resolveYouthPlanForAge(0), "youth_youngstars");
+  assert.equal(resolveYouthPlanForAge(10), "youth_youngstars");
+  assert.equal(resolveYouthPlanForAge(11), "youth_teenstars");
+  assert.equal(resolveYouthPlanForAge(120), "youth_teenstars");
+  assert.equal(resolveYouthPlanForAge(10.5), null);
 });
 
 test("multi-child youth acceptance freezes the full recurring family price", () => {
@@ -184,11 +230,14 @@ test("multi-child youth acceptance freezes the full recurring family price", () 
   assert.match(teenstars, /recurring total £89\.25/i);
 });
 
-test("adult plans require 18 and youth plans are bounded at both ends", () => {
+test("adult plans require 18 while youth plans accept any valid nonnegative age", () => {
   assert.equal(isAgeEligibleForPlan(MEMBERSHIP_PLANS.adult_unlimited, 17), false);
   assert.equal(isAgeEligibleForPlan(MEMBERSHIP_PLANS.adult_unlimited, 18), true);
-  assert.equal(isAgeEligibleForPlan(MEMBERSHIP_PLANS.youth_youngstars, 12), false);
-  assert.equal(isAgeEligibleForPlan(MEMBERSHIP_PLANS.youth_teenstars, 17), false);
+  assert.equal(isAgeEligibleForPlan(MEMBERSHIP_PLANS.adult_unlimited, 92), true);
+  assert.equal(isAgeEligibleForPlan(MEMBERSHIP_PLANS.youth_youngstars, 17), true);
+  assert.equal(isAgeEligibleForPlan(MEMBERSHIP_PLANS.youth_teenstars, 6), true);
+  assert.equal(isAgeEligibleForPlan(MEMBERSHIP_PLANS.youth_youngstars, -1), false);
+  assert.equal(isAgeEligibleForPlan(MEMBERSHIP_PLANS.youth_teenstars, 6.5), false);
   assert.equal(isPlanKey("commercial"), false);
 });
 

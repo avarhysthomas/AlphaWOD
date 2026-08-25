@@ -243,33 +243,34 @@ describe("MembershipCheckout", () => {
       .not.toBeChecked();
   });
 
-  it("warns when the date of birth falls outside the plan's age band", async () => {
+  it("accepts a six-year-old on Teen Alphas without an age-band gate", async () => {
     renderCheckout("youth_teenstars");
 
-    // Age 8 against the Teenstars 12-16 band.
-    const eightYearsAgo = new Date();
-    eightYearsAgo.setFullYear(eightYearsAgo.getFullYear() - 8);
-    const iso = eightYearsAgo.toISOString().slice(0, 10);
+    const sixYearsAgo = new Date();
+    sixYearsAgo.setFullYear(sixYearsAgo.getFullYear() - 6);
+    const dateOfBirth = sixYearsAgo.toISOString().slice(0, 10);
+    const dateInput = screen.getByLabelText(/Child 1 date of birth/i);
 
-    await userEvent.type(screen.getByLabelText(/Child 1 date of birth/i), iso);
+    await userEvent.type(dateInput, dateOfBirth);
 
-    expect(screen.getByText(/is for ages 12 to 16/i)).toBeInTheDocument();
-    expect(
-      screen.getByRole("link", { name: /Switch to HYROX Youngstars/i })
-    ).toHaveAttribute("href", "/memberships/checkout/youth_youngstars");
+    expect(dateInput).not.toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText("Child 1 age 6")).toBeInTheDocument();
+    expect(screen.queryByText(/eligible for Teen Alphas|Teen Alphas is for ages/i))
+      .not.toBeInTheDocument();
+    expect(screen.queryByRole("link", {name: /Switch to/i})).not.toBeInTheDocument();
   });
 
-  it("accepts a date of birth inside the plan's age band", async () => {
+  it("continues to reject a future youth date of birth", async () => {
     renderCheckout("youth_teenstars");
 
-    const fourteenYearsAgo = new Date();
-    fourteenYearsAgo.setFullYear(fourteenYearsAgo.getFullYear() - 14);
-    const iso = fourteenYearsAgo.toISOString().slice(0, 10);
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const dateInput = screen.getByLabelText(/Child 1 date of birth/i);
 
-    await userEvent.type(screen.getByLabelText(/Child 1 date of birth/i), iso);
+    await userEvent.type(dateInput, tomorrow.toISOString().slice(0, 10));
 
-    expect(screen.queryByText(/is for ages 12 to 16/i)).not.toBeInTheDocument();
-    expect(screen.getByText(/Child 1 age 14.*eligible for HYROX Teenstars/i))
+    expect(dateInput).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText(/Enter a valid date of birth that is not in the future/i))
       .toBeInTheDocument();
   });
 
@@ -297,14 +298,14 @@ describe("MembershipCheckout", () => {
     }
   );
 
-  it("validates every child's age against the selected programme", async () => {
+  it("accepts a Mini-recommended additional child on Teen Alphas", async () => {
     mockLocalJourneyEnabled = true;
     renderCheckout("youth_teenstars");
 
     const fourteenYearsAgo = new Date();
     fourteenYearsAgo.setFullYear(fourteenYearsAgo.getFullYear() - 14);
-    const eightYearsAgo = new Date();
-    eightYearsAgo.setFullYear(eightYearsAgo.getFullYear() - 8);
+    const sixYearsAgo = new Date();
+    sixYearsAgo.setFullYear(sixYearsAgo.getFullYear() - 6);
 
     await userEvent.type(
       screen.getByLabelText(/Child 1 date of birth/i),
@@ -312,14 +313,13 @@ describe("MembershipCheckout", () => {
     );
     await userEvent.click(screen.getByRole("button", {name: "Add another child"}));
     const childTwoDate = screen.getByLabelText(/Child 2 date of birth/i);
-    await userEvent.type(childTwoDate, eightYearsAgo.toISOString().slice(0, 10));
+    await userEvent.type(childTwoDate, sixYearsAgo.toISOString().slice(0, 10));
 
-    expect(childTwoDate).toHaveAttribute("aria-invalid", "true");
-    expect(screen.getByText(/HYROX Teenstars is for ages 12 to 16.*gives age 8/i))
-      .toBeInTheDocument();
-    expect(screen.getByRole("button", {name: "Continue to Stripe — £0 today"}))
-      .toBeDisabled();
-    expect(mockCreateCheckout).not.toHaveBeenCalled();
+    expect(childTwoDate).not.toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText("Child 2 age 6")).toBeInTheDocument();
+    expect(screen.queryByText(/eligible for Teen Alphas|Teen Alphas is for ages/i))
+      .not.toBeInTheDocument();
+    expect(screen.queryByRole("link", {name: /Switch to/i})).not.toBeInTheDocument();
   });
 
   it("caps one youth checkout at ten children", async () => {
@@ -348,7 +348,7 @@ describe("MembershipCheckout", () => {
     expect(screen.getAllByRole("checkbox").every((checkbox) =>
       !(checkbox as HTMLInputElement).checked
     )).toBe(true);
-    expect(screen.getByLabelText(/future recurring monthly payments for 2 HYROX Youngstars participants/i))
+    expect(screen.getByLabelText(/future recurring monthly payments for 2 Mini Alphas participants/i))
       .not.toBeChecked();
   });
 
@@ -434,9 +434,9 @@ describe("MembershipCheckout", () => {
     mockCreateCheckout.mockResolvedValue({sessionUrl: ""});
     renderCheckout("youth_teenstars");
 
-    const fourteenYearsAgo = new Date();
-    fourteenYearsAgo.setFullYear(fourteenYearsAgo.getFullYear() - 14);
-    const dateOfBirth = fourteenYearsAgo.toISOString().slice(0, 10);
+    const sixYearsAgo = new Date();
+    sixYearsAgo.setFullYear(sixYearsAgo.getFullYear() - 6);
+    const dateOfBirth = sixYearsAgo.toISOString().slice(0, 10);
 
     await userEvent.type(
       screen.getByLabelText(/^Paying adult’s full name$/i),
@@ -479,7 +479,7 @@ describe("MembershipCheckout", () => {
     );
   });
 
-  it("submits additional Teenstars children under one versioned checkout", async () => {
+  it("submits an additional six-year-old on Teen Alphas", async () => {
     mockLocalJourneyEnabled = true;
     mockSignedIn = false;
     mockCreateCheckout.mockResolvedValue({sessionUrl: ""});
@@ -487,10 +487,10 @@ describe("MembershipCheckout", () => {
 
     const fourteenYearsAgo = new Date();
     fourteenYearsAgo.setFullYear(fourteenYearsAgo.getFullYear() - 14);
-    const thirteenYearsAgo = new Date();
-    thirteenYearsAgo.setFullYear(thirteenYearsAgo.getFullYear() - 13);
+    const sixYearsAgo = new Date();
+    sixYearsAgo.setFullYear(sixYearsAgo.getFullYear() - 6);
     const firstDateOfBirth = fourteenYearsAgo.toISOString().slice(0, 10);
-    const secondDateOfBirth = thirteenYearsAgo.toISOString().slice(0, 10);
+    const secondDateOfBirth = sixYearsAgo.toISOString().slice(0, 10);
 
     await userEvent.click(screen.getByRole("button", {name: "Add another child"}));
     await userEvent.type(

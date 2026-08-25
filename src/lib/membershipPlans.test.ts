@@ -1,6 +1,7 @@
 import {
   EXISTING_MEMBER_OFFER,
   YOUTH_FAMILY_OFFER,
+  MEMBERSHIP_SCHEMA_VERSION,
   MEMBERSHIP_PLANS,
   POLICY_TEXT,
   PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
@@ -52,17 +53,16 @@ describe("resolveDisplayAge", () => {
 });
 
 describe("plan eligibility", () => {
-  it("routes youth ages to the approved plan", () => {
-    expect(resolveYouthPlanForAge(6)).toBe("youth_youngstars");
-    expect(resolveYouthPlanForAge(11)).toBe("youth_youngstars");
-    expect(resolveYouthPlanForAge(12)).toBe("youth_teenstars");
-    expect(resolveYouthPlanForAge(16)).toBe("youth_teenstars");
+  it("recommends Mini Alphas through age 10 and Teen Alphas from age 11", () => {
+    expect(resolveYouthPlanForAge(0)).toBe("youth_youngstars");
+    expect(resolveYouthPlanForAge(10)).toBe("youth_youngstars");
+    expect(resolveYouthPlanForAge(11)).toBe("youth_teenstars");
+    expect(resolveYouthPlanForAge(92)).toBe("youth_teenstars");
   });
 
-  it("has no youth plan outside 6 to 16", () => {
-    expect(resolveYouthPlanForAge(5)).toBeNull();
-    expect(resolveYouthPlanForAge(17)).toBeNull();
-    expect(resolveYouthPlanForAge(0)).toBeNull();
+  it("does not recommend a youth plan for invalid ages", () => {
+    expect(resolveYouthPlanForAge(-1)).toBeNull();
+    expect(resolveYouthPlanForAge(10.5)).toBeNull();
   });
 
   it("keeps adult plans at 18 and over with no upper bound", () => {
@@ -72,17 +72,41 @@ describe("plan eligibility", () => {
     expect(isAgeEligibleForPlan(plan, 92)).toBe(true);
   });
 
-  it("bounds youth plans on both ends", () => {
-    expect(isAgeEligibleForPlan(MEMBERSHIP_PLANS.youth_youngstars, 5)).toBe(false);
-    expect(isAgeEligibleForPlan(MEMBERSHIP_PLANS.youth_youngstars, 12)).toBe(false);
-    expect(isAgeEligibleForPlan(MEMBERSHIP_PLANS.youth_teenstars, 11)).toBe(false);
-    expect(isAgeEligibleForPlan(MEMBERSHIP_PLANS.youth_teenstars, 17)).toBe(false);
+  it("accepts every valid nonnegative age on either youth plan", () => {
+    expect(isAgeEligibleForPlan(MEMBERSHIP_PLANS.youth_youngstars, 0)).toBe(true);
+    expect(isAgeEligibleForPlan(MEMBERSHIP_PLANS.youth_youngstars, 17)).toBe(true);
+    expect(isAgeEligibleForPlan(MEMBERSHIP_PLANS.youth_teenstars, 6)).toBe(true);
+    expect(isAgeEligibleForPlan(MEMBERSHIP_PLANS.youth_teenstars, 92)).toBe(true);
+    expect(isAgeEligibleForPlan(MEMBERSHIP_PLANS.youth_teenstars, -1)).toBe(false);
+    expect(isAgeEligibleForPlan(MEMBERSHIP_PLANS.youth_teenstars, 6.5)).toBe(false);
   });
 
   it("validates plan keys", () => {
     expect(isPlanKey("adult_unlimited")).toBe(true);
     expect(isPlanKey("commercial")).toBe(false);
     expect(isPlanKey(null)).toBe(false);
+  });
+});
+
+describe("youth catalogue", () => {
+  it("keeps schema v3, the new names and descriptions, and the existing prices", () => {
+    expect(MEMBERSHIP_SCHEMA_VERSION).toBe(3);
+    expect(MEMBERSHIP_PLANS.youth_youngstars).toMatchObject({
+      key: "youth_youngstars",
+      name: "Mini Alphas",
+      amountPence: 3000,
+      minAge: 0,
+      maxAge: 10,
+      summary: "A strength and conditioning class for 10 and under! Fun, progressive, and challenging.",
+    });
+    expect(MEMBERSHIP_PLANS.youth_teenstars).toMatchObject({
+      key: "youth_teenstars",
+      name: "Teen Alphas",
+      amountPence: 3500,
+      minAge: 11,
+      maxAge: null,
+      summary: "Strength and conditioning for 11 and up! Develop athletic qualities in a supportive environment.",
+    });
   });
 });
 

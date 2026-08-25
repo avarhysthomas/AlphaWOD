@@ -3,8 +3,10 @@
 This is a preparation runbook, not deployment authorisation. The checked-in
 production examples keep both `MEMBERSHIP_PURCHASE_ENABLED=false` and
 `REACT_APP_MEMBERSHIP_PURCHASE_ENABLED=false`. The business owner explicitly
-approved the frozen five-document youth-family bundle on 23 August 2026, and
-both source registries are synchronized with their publication gate `true`.
+approved the current mixed publication bundle: revised Membership Terms,
+Privacy Notice and Guardian Addendum dated 25 August 2026, with the unchanged
+Cancellation Policy and Adult Waiver dated 23 August. Both source registries
+must remain synchronized with their publication gate `true`.
 The exact production bytes must still pass their checks in a closed Vercel
 deployment, including `npm run verify:published-legal`, before either
 environment gate can open.
@@ -23,8 +25,10 @@ checkout-rate-limit secrets. The public `stripeWebhook` receiver is active on
 Node.js 24 in `europe-west1`; GET `405` and unsigned POST `400` probes passed.
 These probes do not prove a signed delivery or payment journey. Both environment
 purchase gates remain closed and all eight membership callables and four workers
-remain undeployed. The live Youngstars £30 and Teenstars £35 Price/Product
-bindings were read back successfully on 23 August 2026. Live Coupon
+remain undeployed. The live youth Price/Product bindings were read back
+successfully on 23 August 2026: Mini Alphas at £30 under the legacy Stripe
+provider name `HYROX Youngstars U11`, and Teen Alphas at £35 under the legacy
+Stripe provider name `HYROX Teenstars 12+`. Live Coupon
 `zaf_youth_family_15pct_2026` was created and verified in Stripe Dashboard the
 same day as valid, 15% off forever, without an expiry, redemption cap or
 Promotion Code, and restricted exactly to those two youth Products. The closed
@@ -32,14 +36,16 @@ API-backed live preflight and production legal-byte verification remain required
 
 The operational commercial contract for this release is:
 
-| Plan | Eligibility | Per-child monthly price | Family offer |
+| Plan | Age guidance | Per-child monthly price | Family offer |
 | --- | --- | ---: | --- |
-| Youngstars | Ages 6–11 | £30 | 15% off the whole subtotal forever at 2–10 children |
-| Teenstars | Ages 12–16 | £35 | 15% off the whole subtotal forever at 2–10 children |
+| Mini Alphas | Designed for ages 10 and under | £30 | 15% off the whole subtotal forever at 2–10 children |
+| Teen Alphas | Designed for ages 11 and up | £35 | 15% off the whole subtotal forever at 2–10 children |
 
-Each checkout is one selected youth plan with 1–10 children; mixed-plan bundles
-are not supported. One child pays full price. Two Youngstars recur at £51 and
-two Teenstars at £59.50.
+Age guidance does not block checkout. Every child must still have a valid,
+non-future date of birth, and staff manage programme placement internally. Each
+checkout covers 1–10 children in the same selected programme; one subscription
+cannot mix programmes. One child pays full price. Two Mini Alphas recur at £51
+and two Teen Alphas at £59.50.
 
 ## Release preflights
 
@@ -86,12 +92,13 @@ npm run verify:stripe-live-config --prefix functions
 
 That command is read-only. It requires the exact reviewed mapping frozen in
 `functions/src/stripeLiveCatalog.ts`, retrieves every live Price and Product, the
-Youngstars Price at £30 and Teenstars Price at £35, the
+Mini Alphas Price at £30 and Teen Alphas Price at £35, the
 product-scoped three-month Coupon, the one active shared Promotion Code and the
 locked-down Customer Portal configuration. It also retrieves the youth-family
 Coupon and requires exactly 15% off forever, no amount/currency, redemption
-deadline or cap, and an `applies_to` set containing exactly the Youngstars and
-Teenstars Products. It exits before reporting success
+deadline or cap, and an `applies_to` set containing exactly the two youth
+Products with the approved legacy Stripe provider names `HYROX Youngstars U11`
+and `HYROX Teenstars 12+`. It exits before reporting success
 if any object is inactive, in test mode, has the wrong commercial terms or
 enables subscription changes. Both campaign objects must have no automatic
 expiry; the application cutoff remains fixed and staff deactivate the exact
