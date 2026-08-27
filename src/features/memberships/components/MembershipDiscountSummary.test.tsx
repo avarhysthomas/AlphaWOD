@@ -43,52 +43,10 @@ describe("MembershipDiscountSummary", () => {
   });
 
   it.each([
-    ["youth_youngstars" as const, 6000, 5400, "£54", "£60"],
-    ["youth_teenstars" as const, 7000, 6300, "£63", "£70"],
-  ])(
-    "renders the current 10% forever family discount for %s",
-    (planKey, standardMonthlyPence, discountedMonthlyPence, discounted, standard) => {
-      render(
-        <MembershipDiscountSummary
-          planKey={planKey}
-          participantCount={2}
-          discount={{
-            couponId: "coupon_family_10",
-            promotionCodeId: null,
-            amountOffPence: null,
-            currency: null,
-            durationInMonths: null,
-            startsAt: 1_787_149_200,
-            endsAt: null,
-            kind: "youth_family",
-            percentOff: 10,
-            duration: "forever",
-          }}
-          paymentSchedule={{
-            amountDueTodayPence: 0,
-            firstPaymentAt: 1_788_217_200,
-            standardMonthlyPence,
-            discountedMonthlyPence,
-            discountedPaymentCount: null,
-            fullPriceFrom: null,
-          }}
-        />
-      );
-
-      expect(screen.getByText("Family discount applied")).toBeInTheDocument();
-      expect(screen.getByText(new RegExp(
-        `10% off the full monthly total for 2 children.*${discounted}.*instead of ${standard}`,
-        "i"
-      ))).toBeInTheDocument();
-      expect(screen.queryByText(/standard price resumes/i)).not.toBeInTheDocument();
-    }
-  );
-
-  it.each([
     ["youth_youngstars" as const, 6000, 5100, "£51", "£60"],
     ["youth_teenstars" as const, 7000, 5950, "£59.50", "£70"],
   ])(
-    "preserves a frozen legacy 15% family discount for %s",
+    "renders the current 15% forever family discount for %s",
     (planKey, standardMonthlyPence, discountedMonthlyPence, discounted, standard) => {
       render(
         <MembershipDiscountSummary
@@ -120,6 +78,48 @@ describe("MembershipDiscountSummary", () => {
       expect(screen.getByText("Family discount applied")).toBeInTheDocument();
       expect(screen.getByText(new RegExp(
         `15% off the full monthly total for 2 children.*${discounted}.*instead of ${standard}`,
+        "i"
+      ))).toBeInTheDocument();
+      expect(screen.queryByText(/standard price resumes/i)).not.toBeInTheDocument();
+    }
+  );
+
+  it.each([
+    ["youth_youngstars" as const, 6000, 5400, "£54", "£60"],
+    ["youth_teenstars" as const, 7000, 6300, "£63", "£70"],
+  ])(
+    "preserves a frozen 10% family discount for %s",
+    (planKey, standardMonthlyPence, discountedMonthlyPence, discounted, standard) => {
+      render(
+        <MembershipDiscountSummary
+          planKey={planKey}
+          participantCount={2}
+          discount={{
+            couponId: "coupon_family_10",
+            promotionCodeId: null,
+            amountOffPence: null,
+            currency: null,
+            durationInMonths: null,
+            startsAt: 1_787_149_200,
+            endsAt: null,
+            kind: "youth_family",
+            percentOff: 10,
+            duration: "forever",
+          }}
+          paymentSchedule={{
+            amountDueTodayPence: 0,
+            firstPaymentAt: 1_788_217_200,
+            standardMonthlyPence,
+            discountedMonthlyPence,
+            discountedPaymentCount: null,
+            fullPriceFrom: null,
+          }}
+        />
+      );
+
+      expect(screen.getByText("Family discount applied")).toBeInTheDocument();
+      expect(screen.getByText(new RegExp(
+        `10% off the full monthly total for 2 children.*${discounted}.*instead of ${standard}`,
         "i"
       ))).toBeInTheDocument();
     }

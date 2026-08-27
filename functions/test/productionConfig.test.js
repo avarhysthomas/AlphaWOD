@@ -36,7 +36,7 @@ function validEnvironment() {
       APPROVED_LIVE_STRIPE_CATALOGUE.youth_teenstars.priceId,
     STRIPE_EXISTING_MEMBER_COUPON_ID: "zaf_existing_member_live_2026",
     STRIPE_EXISTING_MEMBER_PROMOTION_CODE_ID: "promo_LiveSharedCode",
-    STRIPE_YOUTH_FAMILY_COUPON_ID: "zaf_youth_family_10pct_2026",
+    STRIPE_YOUTH_FAMILY_COUPON_ID: "zaf_youth_family_15pct_2026",
   };
 }
 

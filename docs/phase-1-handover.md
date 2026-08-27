@@ -28,13 +28,14 @@ monthly on Product `prod_V5VumrjZl1bWV1`. The Product IDs, Price IDs and amounts
 were unchanged. Live Coupon
 `zaf_youth_family_15pct_2026` was then created and verified in Stripe Dashboard
 on 23 August: valid, 15% off forever, no expiry, redemption cap or Promotion
-Code, and restricted exactly to those two youth Products. This is historical
-evidence for the superseded 15% offer. Current live Coupon
-`zaf_youth_family_10pct_2026` was created and read-only API-verified on 25 August as
-10% off forever and restricted exactly to those two Products; the closed live
-API preflight passed. Five existing family memberships remain frozen on their
-original 15% terms, and no old Checkout Session or Stripe event was in flight at
-cutover.
+Code, and restricted exactly to those two youth Products. It is current again
+from the 27 August release. The intervening live Coupon
+`zaf_youth_family_10pct_2026` was created and read-only API-verified on 25 August
+as 10% off forever and restricted exactly to those two Products. A 27 August
+audit found zero 10% redemptions, zero open Checkout Sessions and zero in-flight
+membership intents. Five existing family memberships remain frozen on their
+original 15% terms. Both Coupons remain available for backward-compatible
+verification; no subscription is rewritten.
 On 20 August the live Product-scoped no-expiry Coupon and Promotion Code,
 locked-down Portal `bpc_1U6SIkFzNDZoGGA0mSE5EepR`, active 14-event webhook
 `we_1U6SObFzNDZoGGA0cw5Yyqth`, and the existence of the Stripe API,
@@ -56,14 +57,14 @@ designed for ages 11 and up. Those age descriptions are non-blocking guidance:
 checkout still requires a valid, non-future date of birth, and staff manage
 programme placement internally. Each youth subscription may contain 1–10
 children in the same selected programme. One child pays the standard per-child
-price; at 2–10 children an automatic 10%-forever Coupon applies to the whole
+price; at 2–10 children an automatic 15%-forever Coupon applies to the whole
 monthly subtotal. A single subscription cannot mix programmes. Two MINI ALPHAS - 10 & Under
-therefore recur at £54 and two TEEN ALPHAS - 11 & UP at £63.
+therefore recur at £51 and two TEEN ALPHAS - 11 & UP at £59.50.
 
 The business owner explicitly approved the current mixed publication bundle on
-25 August 2026: revised Membership Terms, Privacy Notice and Guardian Addendum
-dated 25 August, with the Cancellation Policy and Adult Waiver dated 23 August
-retained unchanged. Its stable public `.txt` files, per-document effective dates
+27 August 2026: revised Membership Terms and Guardian Addendum dated 27 August,
+the Privacy Notice dated 25 August, and the Cancellation Policy and Adult Waiver
+dated 23 August retained unchanged. Its stable public `.txt` files, per-document effective dates
 and SHA-256 digests are frozen by the publication manifest. The earlier 20 and
 23 August versions remain immutable historical evidence for checkouts that
 accepted them.
@@ -100,7 +101,7 @@ The new Functions surface is:
   `requestMembershipCancellation`, `claimMembership`, `listMemberships`,
   `linkMembershipParticipant`, and admin-only
   `releaseAbandonedMembershipCheckout`. The compatible frontend calls only V2 with
-  `checkoutSchemaVersion: 3`; V1 remains for stale-client fail-safe rollout and
+  `checkoutSchemaVersion: 4`; V1 remains for stale-client fail-safe rollout and
   is not an opening target;
 - one public HTTP endpoint: `stripeWebhook`;
 - four scheduled workers: `recoverStripeEvents`,
@@ -124,11 +125,12 @@ Every one is denied to clients in `firestore.rules`. The memberships
 reconciler also requires the composite index in `firestore.indexes.json` on
 `state` and `nextReconcileAt`.
 
-Stored membership records now use schema version 4; the browser-to-callable
-checkout request contract remains version 3. The cutover audit found existing
+Stored membership records now use schema version 5; the browser-to-callable
+checkout request contract uses version 4. The cutover audit found existing
 billing records, including five active or scheduled family memberships frozen
 on their original 15% terms. The implementation preserves and renders those
-frozen discount policies while writing the current 10% policy. Retaining the V1
+frozen 15% policies and defensively supports frozen 10% policies while writing
+the current 15% policy. Retaining the V1
 callable export is a transport rollout boundary, not permission to accept an old
 checkout request or rewrite historical commercial terms.
 
@@ -190,7 +192,7 @@ checkout; staff manage placement internally. Stripe receives one subscription
 item at the canonical per-child Price with quantity equal to that frozen
 participant count.
 At quantity 2–10 the server automatically applies the allowlisted youth-family
-Coupon to the entire subtotal; fulfilment requires exactly 10% off forever, no
+Coupon to the entire subtotal; fulfilment requires exactly 15% off forever, no
 redemption deadline or cap, and `applies_to` containing exactly both youth
 Products. There is no customer-entered family Promotion Code. Every child's
 identity lock, valid date of birth, quantity, Price and discount must agree
@@ -377,8 +379,8 @@ It also covers the £0/no-proration presale contract, scheduled access and first
 invoice activation/failure, the allowlisted three-payment discount, UTC day-1
 anchor regression, terminal Session-to-intent binding, frozen Price rotation,
 1–10-child youth quantities within the same selected programme, valid
-date-of-birth handling without a programme age gate, 10%-forever
-whole-subtotal pricing and schema-version-3 V2 intake boundary,
+date-of-birth handling without a programme age gate, 15%-forever
+whole-subtotal pricing and schema-version-4 V2 intake boundary,
 healable subscription-contract drift restriction, overdue immediate
 cancellation/refund review, current-state success copy and verified-email resend
 recovery; App Check replay/app binding and privacy-safe checkout throttling; exact
@@ -410,8 +412,8 @@ remaining operational, abuse and data-lifecycle work are still blockers. Keep
 both deployed controls false while completing them.
 The sequence below records completed steps as well as the work still required:
 
-1. Deploy the explicitly approved mixed bundle—25 August Membership Terms,
-   Privacy Notice and Guardian Addendum plus the unchanged 23 August
+1. Deploy the explicitly approved mixed bundle—27 August Membership Terms and
+   Guardian Addendum, 25 August Privacy Notice, plus the unchanged 23 August
    Cancellation Policy and Adult Waiver—at its stable public URLs and run
    `npm run verify:published-legal`; do not open purchase if the production bytes
    differ. Separately staff the cooling-off
@@ -452,7 +454,7 @@ The sequence below records completed steps as well as the work still required:
    configured Resend test sender/recipient and actual Resend delivery. Run one-
    and two-child journeys for both youth plans and independently verify Stripe
    item quantities, every Firestore participant, the family Coupon and recurring
-   totals (£54 for two MINI ALPHAS - 10 & Under; £63 for two TEEN ALPHAS - 11 & UP). The existing
+   totals (£51 for two MINI ALPHAS - 10 & Under; £59.50 for two TEEN ALPHAS - 11 & UP). The existing
    post-payment verifier does not yet prove the family Coupon.
 7. **Completed 25 August:** the live catalogue, £5/repeating-three-month
    Product-restricted no-expiry Coupon
@@ -463,7 +465,7 @@ The sequence below records completed steps as well as the work still required:
    in the git-ignored production configuration, while the Resend domain and
    delivery remain a separate opening check. The operator re-read all five live
    Price/Product pairs and confirmed that youth-family Coupon
-   `zaf_youth_family_10pct_2026` is exactly 10% off forever, has no redemption
+   `zaf_youth_family_15pct_2026` is exactly 15% off forever, has no redemption
    deadline, cap or Promotion Code, and applies only to the two youth Products.
    Its id was recorded in `STRIPE_YOUTH_FAMILY_COUPON_ID`, and
    `npm run verify:stripe-live-config --prefix functions` passed with purchasing
@@ -471,7 +473,8 @@ The sequence below records completed steps as well as the work still required:
 8. **Completed cutover audit:** five existing family memberships remain frozen
    on their original 15% terms, while no old Checkout Session or Stripe event
    was in flight. The release preserves those historical commercial terms and
-   applies the new 10% Coupon only to new eligible checkouts. The V1 callable
+   applies the 15% Coupon only to new eligible checkouts. The unused 10% Coupon
+   remains available for historical verification. The V1 callable
    remains a stale-client safety boundary, not an opening target.
 9. Deploy the `state`/`nextReconcileAt` index and reviewed final deny-all rules.
    Keep the backend runtime purchase parameter false. Confirm the external

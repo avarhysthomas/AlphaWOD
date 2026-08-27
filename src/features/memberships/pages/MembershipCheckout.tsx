@@ -229,7 +229,7 @@ export default function MembershipCheckout() {
       setBillingPolicyChanged(false);
 
       const checkoutDetails: CheckoutDetails = {
-        checkoutSchemaVersion: 3,
+        checkoutSchemaVersion: 4,
         // This is deliberately the same snapshot that chose every price/date
         // shown on this render. The callable fails closed if the cutoff moved.
         expectedBillingMode: presale ? "presale_deferred" : "standard",

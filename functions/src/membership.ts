@@ -128,7 +128,7 @@ import {
  * snapshot it accepts. Keep this independent from the stored document schema:
  * a Firestore migration must not invalidate an otherwise exact Stripe retry.
  */
-export const MEMBERSHIP_CHECKOUT_SCHEMA_VERSION = 3;
+export const MEMBERSHIP_CHECKOUT_SCHEMA_VERSION = 4;
 
 const REGION = "europe-west1";
 

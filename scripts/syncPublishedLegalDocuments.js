@@ -20,10 +20,10 @@ const PUBLICATION_MANIFEST = [
   {
     key: "membershipTerms",
     title: "Membership Terms",
-    version: "ZAF-TERMS-2026-08-25-03",
-    effectiveDate: "2026-08-25",
+    version: "ZAF-TERMS-2026-08-27-01",
+    effectiveDate: "2026-08-27",
     approvedBytes: 21865,
-    approvedSha256: "e9bb03df7489cce2267e23317b3ba67ed133c709ec1957b92f25fde386a67e61",
+    approvedSha256: "0a1888bd8990071a92d09cf5f94f671ce37a714f21f4b2d5718bf74ffd65d39b",
   },
   {
     key: "cancellationPolicy",
@@ -52,10 +52,10 @@ const PUBLICATION_MANIFEST = [
   {
     key: "guardianAddendum",
     title: "Parent/Guardian Consent and Youth Membership Addendum",
-    version: "ZAF-GUARDIAN-2026-08-25-03",
-    effectiveDate: "2026-08-25",
+    version: "ZAF-GUARDIAN-2026-08-27-01",
+    effectiveDate: "2026-08-27",
     approvedBytes: 10978,
-    approvedSha256: "5d11170208579af3ddb729b3561e61aadd81cc133c66a7a66cb0f7d6ed39ba5d",
+    approvedSha256: "3628a34258a331e61408989d511a3a36d956742b689037dfebe77efb94795925",
   },
 ];
 

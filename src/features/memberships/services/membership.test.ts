@@ -88,7 +88,7 @@ describe("checkout attempt identifiers", () => {
     });
     (httpsCallable as jest.Mock).mockReturnValue(invoke);
     const checkout: Parameters<typeof createMembershipCheckoutSession>[0] = {
-      checkoutSchemaVersion: 3,
+      checkoutSchemaVersion: 4,
       checkoutAttemptId: "attempt_app_check_123456",
       expectedBillingMode: "presale_deferred",
       planKey: "adult_unlimited",
@@ -176,7 +176,7 @@ describe("checkout attempt identifiers", () => {
 
   it("reuses an attempt after reload or a bank-app tab switch without persisting checkout PII", async () => {
     const details: CheckoutDetails = {
-      checkoutSchemaVersion: 3,
+      checkoutSchemaVersion: 4,
       expectedBillingMode: "presale_deferred",
       planKey: "adult_unlimited",
       participantFullName: "Private Person",
@@ -231,7 +231,7 @@ describe("checkout attempt identifiers", () => {
   it("expires a cross-tab checkout verifier after 24 hours", async () => {
     const now = jest.spyOn(Date, "now").mockReturnValue(1_000_000);
     const details: CheckoutDetails = {
-      checkoutSchemaVersion: 3,
+      checkoutSchemaVersion: 4,
       expectedBillingMode: "presale_deferred",
       planKey: "adult_unlimited",
       participantFullName: "Short Lived Attempt",
@@ -260,7 +260,7 @@ describe("checkout attempt identifiers", () => {
 
   it("rotates the attempt when chargeable details change", async () => {
     const base: CheckoutDetails = {
-      checkoutSchemaVersion: 3,
+      checkoutSchemaVersion: 4,
       expectedBillingMode: "presale_deferred",
       planKey: "adult_unlimited",
       participantFullName: "First Athlete",
@@ -288,7 +288,7 @@ describe("checkout attempt identifiers", () => {
 
   it("rotates the opaque attempt when the shared code changes", async () => {
     const base: CheckoutDetails = {
-      checkoutSchemaVersion: 3,
+      checkoutSchemaVersion: 4,
       expectedBillingMode: "presale_deferred",
       planKey: "adult_unlimited",
       participantFullName: "Discounted Athlete",
@@ -319,7 +319,7 @@ describe("checkout attempt identifiers", () => {
 
   it("rotates the attempt when another youth participant is added", async () => {
     const base: CheckoutDetails = {
-      checkoutSchemaVersion: 3,
+      checkoutSchemaVersion: 4,
       expectedBillingMode: "presale_deferred",
       planKey: "youth_teenstars",
       participantFullName: "First Child",
@@ -355,7 +355,7 @@ describe("checkout attempt identifiers", () => {
 
   it("rotates an anonymous attempt when the payer signs in or changes account", async () => {
     const details: CheckoutDetails = {
-      checkoutSchemaVersion: 3,
+      checkoutSchemaVersion: 4,
       expectedBillingMode: "presale_deferred",
       planKey: "adult_unlimited",
       participantFullName: "Identity Change",

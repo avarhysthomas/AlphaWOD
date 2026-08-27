@@ -34,7 +34,7 @@ process.env.STRIPE_PRICE_YOUTH_TEENSTARS = "price_teenstars";
 process.env.STRIPE_EXISTING_MEMBER_COUPON_ID = "coupon_existing_member_5x3";
 process.env.STRIPE_EXISTING_MEMBER_PROMOTION_CODE_ID =
   "promo_existing_member_shared";
-process.env.STRIPE_YOUTH_FAMILY_COUPON_ID = "coupon_youth_family_10pct";
+process.env.STRIPE_YOUTH_FAMILY_COUPON_ID = "coupon_youth_family_15pct";
 
 const functionsTest = require("firebase-functions-test")();
 // firebase-functions-test installs its own synthetic runtime project id. Bind
@@ -383,7 +383,7 @@ test.beforeEach(clearEmulators);
 function validCheckoutData(attemptId = "attempt_checkout_test_123456") {
   return {
     checkoutAttemptId: attemptId,
-    checkoutSchemaVersion: 3,
+    checkoutSchemaVersion: 4,
     expectedBillingMode: "presale_deferred",
     planKey: "adult_unlimited",
     participantFullName: "Checkout Athlete",
@@ -420,7 +420,7 @@ function legacyParticipantKeyFor(fullName, dateOfBirth) {
     .digest("hex");
 }
 
-test("both deployed checkout exports require the version 3 request contract", async () => {
+test("both deployed checkout exports require the version 4 request contract", async () => {
   const originalPurchaseEnabled = process.env.MEMBERSHIP_PURCHASE_ENABLED;
   const sessionsBefore = fakeStripe.state.checkoutSessions.size;
   process.env.MEMBERSHIP_PURCHASE_ENABLED = "false";
@@ -429,7 +429,7 @@ test("both deployed checkout exports require the version 3 request contract", as
       createMembershipCheckoutSession,
       createMembershipCheckoutSessionV2,
     ].entries()) {
-      for (const checkoutSchemaVersion of [undefined, 1, 2, 4]) {
+      for (const checkoutSchemaVersion of [undefined, 1, 2, 3]) {
         const data = validCheckoutData(
           `attempt_schema_${handlerIndex}_${checkoutSchemaVersion ?? "missing"}`
         );
@@ -2097,7 +2097,7 @@ test("youth q1, q2, and q3 checkout derives exact quantity, subtotal, and family
         const standardMonthlyPence =
           planCase.unitAmountPence * participantCount;
         const recurringMonthlyPence = familyDiscountApplies ?
-          Math.round(standardMonthlyPence * 0.9) : standardMonthlyPence;
+          Math.round(standardMonthlyPence * 0.85) : standardMonthlyPence;
 
         assert.equal(intent.get("participantCount"), participantCount);
         assert.equal(intent.get("participants").length, participantCount);
@@ -2107,12 +2107,12 @@ test("youth q1, q2, and q3 checkout derives exact quantity, subtotal, and family
           participantCount,
           unitAmountPence: planCase.unitAmountPence,
           standardMonthlyPence,
-          familyDiscountPercent: familyDiscountApplies ? 10 : null,
+          familyDiscountPercent: familyDiscountApplies ? 15 : null,
           recurringMonthlyPence,
         });
         assert.equal(
           intent.get("familyDiscountCouponId"),
-          familyDiscountApplies ? "coupon_youth_family_10pct" : null
+          familyDiscountApplies ? "coupon_youth_family_15pct" : null
         );
 
         const sent = fakeStripe.lastUpdateTo("/v1/checkout/sessions");
@@ -2123,7 +2123,7 @@ test("youth q1, q2, and q3 checkout derives exact quantity, subtotal, and family
         );
         assert.equal(
           sent.payload["discounts[0][coupon]"],
-          familyDiscountApplies ? "coupon_youth_family_10pct" : undefined
+          familyDiscountApplies ? "coupon_youth_family_15pct" : undefined
         );
         assert.equal(sent.payload["discounts[0][promotion_code]"], undefined);
         assert.equal(sent.payload.allow_promotion_codes, undefined);
@@ -2140,7 +2140,7 @@ test("youth q1, q2, and q3 checkout derives exact quantity, subtotal, and family
           quantity: participantCount,
         }]);
         assert.deepEqual(providerSession.discounts, familyDiscountApplies ? [{
-          coupon: "coupon_youth_family_10pct",
+          coupon: "coupon_youth_family_15pct",
           promotion_code: null,
         }] : []);
 
@@ -2201,7 +2201,7 @@ test("the backend accepts ten youth participants and rejects eleven", async () =
   }
 });
 
-test("q2 MINI ALPHAS and TEEN ALPHAS fulfil with a forever 10% recurring schedule", async () => {
+test("q2 MINI ALPHAS and TEEN ALPHAS fulfil with a forever 15% recurring schedule", async () => {
   const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
     () => undefined
   );
@@ -2215,7 +2215,7 @@ test("q2 MINI ALPHAS and TEEN ALPHAS fulfil with a forever 10% recurring schedul
       planName: "MINI ALPHAS - 10 & Under",
       unitAmountPence: 3000,
       standardMonthlyPence: 6000,
-      recurringMonthlyPence: 5400,
+      recurringMonthlyPence: 5100,
       datesOfBirth: ["2017-05-05", "2018-06-06"],
     },
     {
@@ -2224,7 +2224,7 @@ test("q2 MINI ALPHAS and TEEN ALPHAS fulfil with a forever 10% recurring schedul
       planName: "TEEN ALPHAS - 11 & UP",
       unitAmountPence: 3500,
       standardMonthlyPence: 7000,
-      recurringMonthlyPence: 6300,
+      recurringMonthlyPence: 5950,
       datesOfBirth: ["2012-05-05", "2011-06-06"],
     },
   ];
@@ -2260,7 +2260,7 @@ test("q2 MINI ALPHAS and TEEN ALPHAS fulfil with a forever 10% recurring schedul
         discounts: [{
           id: `di_${planCase.planKey}_q2_family`,
           object: "discount",
-          source: {type: "coupon", coupon: "coupon_youth_family_10pct"},
+          source: {type: "coupon", coupon: "coupon_youth_family_15pct"},
           promotion_code: null,
           start: completedAt,
           end: null,
@@ -2313,15 +2313,15 @@ test("q2 MINI ALPHAS and TEEN ALPHAS fulfil with a forever 10% recurring schedul
         participantCount: 2,
         unitAmountPence: planCase.unitAmountPence,
         standardMonthlyPence: planCase.standardMonthlyPence,
-        familyDiscountPercent: 10,
+        familyDiscountPercent: 15,
         recurringMonthlyPence: planCase.recurringMonthlyPence,
       });
       assert.deepEqual(membership.get("discount"), {
         kind: "youth_family",
-        couponId: "coupon_youth_family_10pct",
+        couponId: "coupon_youth_family_15pct",
         promotionCodeId: null,
         amountOffPence: null,
-        percentOff: 10,
+        percentOff: 15,
         currency: null,
         duration: "forever",
         durationInMonths: null,
@@ -2370,7 +2370,7 @@ test("q2 MINI ALPHAS and TEEN ALPHAS fulfil with a forever 10% recurring schedul
       ));
       assert.match(confirmationHtml, />Family discount<\/td>/);
       assert.ok(confirmationHtml.includes(
-        `<strong>10% (−${discountAmount}) off the ${standardTotal} subtotal; ` +
+        `<strong>15% (−${discountAmount}) off the ${standardTotal} subtotal; ` +
         `${recurringTotal} per month while this subscription covers at least two children</strong>`
       ));
       assert.match(
@@ -2384,15 +2384,15 @@ test("q2 MINI ALPHAS and TEEN ALPHAS fulfil with a forever 10% recurring schedul
         membership.data()
       );
       assert.ok(welcomePayload);
-      assert.match(welcomePayload.html, /10% family discount/i);
-      assert.doesNotMatch(welcomePayload.html, /15% family discount/i);
+      assert.match(welcomePayload.html, /15% family discount/i);
+      assert.doesNotMatch(welcomePayload.html, /10% family discount/i);
     }
   } finally {
     Date.now = realNow;
   }
 });
 
-test("fulfilment preserves a frozen in-flight 15% youth family checkout", async () => {
+test("fulfilment preserves a frozen in-flight 10% youth family checkout", async () => {
   const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
     () => undefined
   );
@@ -2403,7 +2403,7 @@ test("fulfilment preserves a frozen in-flight 15% youth family checkout", async 
   try {
     const checkout = await handler(request(youthCheckoutData({
       planKey: "youth_youngstars",
-      attemptId: "attempt_legacy_15pct_q2_fulfil",
+      attemptId: "attempt_frozen_10pct_q2_fulfil",
       children: [
         {fullName: "Legacy Child One", dateOfBirth: "2017-05-05"},
         {fullName: "Legacy Child Two", dateOfBirth: "2018-06-06"},
@@ -2416,13 +2416,13 @@ test("fulfilment preserves a frozen in-flight 15% youth family checkout", async 
     const intentRef = intentQuery.docs[0].ref;
     await intentRef.update({
       "schemaVersion": 3,
-      "familyDiscountCouponId": "coupon_youth_family_15pct",
-      "order.familyDiscountPercent": 15,
-      "order.recurringMonthlyPence": 5100,
+      "familyDiscountCouponId": "coupon_youth_family_10pct",
+      "order.familyDiscountPercent": 10,
+      "order.recurringMonthlyPence": 5400,
     });
     const intent = await intentRef.get();
-    const subscriptionId = "sub_legacy_youth_family_15pct";
-    const customerId = "cus_legacy_youth_family_15pct";
+    const subscriptionId = "sub_frozen_youth_family_10pct";
+    const customerId = "cus_frozen_youth_family_10pct";
     const completedAt = Math.floor(fixedNow / 1000);
     fakeStripe.setSubscription(subscriptionId, {
       status: "active",
@@ -2434,9 +2434,9 @@ test("fulfilment preserves a frozen in-flight 15% youth family checkout", async 
         participantCount: "2",
       },
       discounts: [{
-        id: "di_legacy_youth_family_15pct",
+        id: "di_frozen_youth_family_10pct",
         object: "discount",
-        source: {type: "coupon", coupon: "coupon_youth_family_15pct"},
+        source: {type: "coupon", coupon: "coupon_youth_family_10pct"},
         promotion_code: null,
         start: completedAt,
         end: null,
@@ -2444,7 +2444,7 @@ test("fulfilment preserves a frozen in-flight 15% youth family checkout", async 
       items: {
         object: "list",
         data: [{
-          id: "si_legacy_youth_family_15pct",
+          id: "si_frozen_youth_family_10pct",
           current_period_end: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
           price: "price_youngstars",
           quantity: 2,
@@ -2460,17 +2460,17 @@ test("fulfilment preserves a frozen in-flight 15% youth family checkout", async 
       payment_method_collection: "always",
       subscription: subscriptionId,
       customer: customerId,
-      customer_details: {email: "legacy-family@example.test"},
+      customer_details: {email: "frozen-family@example.test"},
       amount_total: 0,
       discounts: [{
-        coupon: "coupon_youth_family_15pct",
+        coupon: "coupon_youth_family_10pct",
         promotion_code: null,
       }],
     });
     fakeStripe.state.checkoutSessions.set(checkout.sessionId, providerSession);
 
     await handleStripeEvent({
-      id: "evt_legacy_youth_family_15pct",
+      id: "evt_frozen_youth_family_10pct",
       type: "checkout.session.completed",
       created: completedAt,
       data: {object: {id: checkout.sessionId}},
@@ -2484,15 +2484,15 @@ test("fulfilment preserves a frozen in-flight 15% youth family checkout", async 
       participantCount: 2,
       unitAmountPence: 3000,
       standardMonthlyPence: 6000,
-      familyDiscountPercent: 15,
-      recurringMonthlyPence: 5100,
+      familyDiscountPercent: 10,
+      recurringMonthlyPence: 5400,
     });
     assert.deepEqual(membershipSnapshot.get("discount"), {
       kind: "youth_family",
-      couponId: "coupon_youth_family_15pct",
+      couponId: "coupon_youth_family_10pct",
       promotionCodeId: null,
       amountOffPence: null,
-      percentOff: 15,
+      percentOff: 10,
       currency: null,
       duration: "forever",
       durationInMonths: null,
@@ -2503,7 +2503,7 @@ test("fulfilment preserves a frozen in-flight 15% youth family checkout", async 
       amountDueTodayPence: 0,
       firstPaymentAt: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
       standardMonthlyPence: 6000,
-      discountedMonthlyPence: 5100,
+      discountedMonthlyPence: 5400,
       discountedPaymentCount: null,
       fullPriceFrom: null,
     });
@@ -2516,15 +2516,15 @@ test("fulfilment preserves a frozen in-flight 15% youth family checkout", async 
       agreementAttachment.content,
       "base64"
     ).toString("utf8");
-    assert.match(confirmationHtml, /15% \(−£9\.00\).*£51\.00 per month/i);
-    assert.doesNotMatch(confirmationHtml, /10% \(−£6\.00\)/i);
+    assert.match(confirmationHtml, /10% \(−£6\.00\).*£54\.00 per month/i);
+    assert.doesNotMatch(confirmationHtml, /15% \(−£9\.00\)/i);
 
     const welcomePayload = membershipTesting.buildWelcomePayload(
       membershipSnapshot.data()
     );
     assert.ok(welcomePayload);
-    assert.match(welcomePayload.html, /15% family discount/i);
-    assert.doesNotMatch(welcomePayload.html, /10% family discount/i);
+    assert.match(welcomePayload.html, /10% family discount/i);
+    assert.doesNotMatch(welcomePayload.html, /15% family discount/i);
   } finally {
     Date.now = realNow;
   }

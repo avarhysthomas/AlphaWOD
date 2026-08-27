@@ -92,8 +92,8 @@ describe("plan eligibility", () => {
 });
 
 describe("youth catalogue", () => {
-  it("keeps schema v4, the current names and descriptions, and the existing prices", () => {
-    expect(MEMBERSHIP_SCHEMA_VERSION).toBe(4);
+  it("keeps schema v5, the current names and descriptions, and the existing prices", () => {
+    expect(MEMBERSHIP_SCHEMA_VERSION).toBe(5);
     expect(MEMBERSHIP_PLANS.youth_youngstars).toMatchObject({
       key: "youth_youngstars",
       name: "MINI ALPHAS - 10 & Under",
@@ -122,13 +122,13 @@ describe("formatPlanPrice", () => {
 });
 
 describe("youth family pricing", () => {
-  it("discounts the full same-plan subtotal by 10% from two children", () => {
+  it("discounts the full same-plan subtotal by 15% from two children", () => {
     expect(YOUTH_FAMILY_OFFER).toMatchObject({
       minimumParticipants: 2,
-      percentOff: 10,
+      percentOff: 15,
       maximumParticipants: 10,
     });
-    expect(POLICY_TEXT.youthFamilyOffer).toContain("receive 10% off");
+    expect(POLICY_TEXT.youthFamilyOffer).toContain("receive 15% off");
     expect(resolveYouthMonthlyPricing(MEMBERSHIP_PLANS.youth_youngstars, 1))
       .toEqual({
         standardMonthlyPence: 3000,
@@ -138,31 +138,31 @@ describe("youth family pricing", () => {
     expect(resolveYouthMonthlyPricing(MEMBERSHIP_PLANS.youth_youngstars, 3))
       .toEqual({
         standardMonthlyPence: 9000,
-        recurringMonthlyPence: 8100,
+        recurringMonthlyPence: 7650,
         familyDiscountApplies: true,
       });
     expect(resolveYouthMonthlyPricing(MEMBERSHIP_PLANS.youth_teenstars, 2))
       .toEqual({
         standardMonthlyPence: 7000,
-        recurringMonthlyPence: 6300,
+        recurringMonthlyPence: 5950,
         familyDiscountApplies: true,
       });
   });
 
-  it("keeps legacy 15% records explicitly supported without making them current", () => {
-    expect(SUPPORTED_YOUTH_FAMILY_DISCOUNT_PERCENTAGES).toEqual([10, 15]);
+  it("keeps frozen 10% records explicitly supported without making them current", () => {
+    expect(SUPPORTED_YOUTH_FAMILY_DISCOUNT_PERCENTAGES).toEqual([15, 10]);
     expect(isSupportedYouthFamilyDiscountPercent(10)).toBe(true);
     expect(isSupportedYouthFamilyDiscountPercent(15)).toBe(true);
     expect(isSupportedYouthFamilyDiscountPercent(12)).toBe(false);
     expect(isSupportedYouthFamilyDiscountPercent("15")).toBe(false);
   });
 
-  it("freezes the current 10% total in a multi-child payment authority", () => {
+  it("freezes the current 15% total in a multi-child payment authority", () => {
     const authority = resolveCheckoutAcceptanceStatements("youth_youngstars", 2)
       .find(({id}) => id === "recurring_payment_authority");
 
-    expect(authority?.statement).toContain("automatic 10% family discount");
-    expect(authority?.statement).toContain("recurring total £54.00");
+    expect(authority?.statement).toContain("automatic 15% family discount");
+    expect(authority?.statement).toContain("recurring total £51.00");
   });
 });
 

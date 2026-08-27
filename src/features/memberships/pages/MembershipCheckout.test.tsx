@@ -280,15 +280,15 @@ describe("MembershipCheckout", () => {
   });
 
   it.each([
-    ["youth_youngstars", "£60.00", "£6.00", "£54.00"],
-    ["youth_teenstars", "£70.00", "£7.00", "£63.00"],
+    ["youth_youngstars", "£60.00", "£9.00", "£51.00"],
+    ["youth_teenstars", "£70.00", "£10.50", "£59.50"],
   ])(
     "applies the automatic family discount to two children on %s",
     async (planKey, standardTotal, saving, discountedTotal) => {
       renderCheckout(planKey);
 
       expect(screen.getByRole("region", {name: "Monthly price for 1 child"}))
-        .toHaveTextContent(/Add a second child.*10% off/i);
+        .toHaveTextContent(/Add a second child.*15% off/i);
       await userEvent.click(screen.getByRole("button", {name: "Add another child"}));
 
       const summary = screen.getByRole("region", {
@@ -297,7 +297,7 @@ describe("MembershipCheckout", () => {
       expect(within(summary).getByText(standardTotal)).toBeInTheDocument();
       expect(within(summary).getByText(`−${saving}`)).toBeInTheDocument();
       expect(within(summary).getByText(discountedTotal)).toBeInTheDocument();
-      expect(summary).toHaveTextContent(/automatic 10% family discount.*full monthly subtotal/i);
+      expect(summary).toHaveTextContent(/automatic 15% family discount.*full monthly subtotal/i);
       expect(screen.getByLabelText(/Relationship to children/i)).toBeInTheDocument();
       expect(screen.getByLabelText(/each named child.*each of them/i)).toBeInTheDocument();
     }
@@ -463,7 +463,7 @@ describe("MembershipCheckout", () => {
     await waitFor(() => expect(mockCreateCheckout).toHaveBeenCalledTimes(1));
     expect(mockCreateCheckout).toHaveBeenCalledWith(expect.objectContaining({
       planKey: "youth_teenstars",
-      checkoutSchemaVersion: 3,
+      checkoutSchemaVersion: 4,
       participantFullName: "Alex Child",
       participantDateOfBirth: dateOfBirth,
       participantIsPayer: false,
@@ -517,7 +517,7 @@ describe("MembershipCheckout", () => {
     await waitFor(() => expect(mockCreateCheckout).toHaveBeenCalledTimes(1));
     expect(mockResolveCheckoutAttempt).toHaveBeenCalledWith(
       expect.objectContaining({
-        checkoutSchemaVersion: 3,
+        checkoutSchemaVersion: 4,
         planKey: "youth_teenstars",
         participantFullName: "Alex Child",
         participantDateOfBirth: firstDateOfBirth,
@@ -530,7 +530,7 @@ describe("MembershipCheckout", () => {
       {payerUid: null}
     );
     expect(mockCreateCheckout).toHaveBeenCalledWith(expect.objectContaining({
-      checkoutSchemaVersion: 3,
+      checkoutSchemaVersion: 4,
       checkoutAttemptId: "attempt_test",
       participantFullName: "Alex Child",
       additionalParticipants: [{

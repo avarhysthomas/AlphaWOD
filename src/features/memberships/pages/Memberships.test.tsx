@@ -71,7 +71,7 @@ describe("Memberships presale presentation", () => {
     )).toBeInTheDocument();
     expect(screen.getByText("£30")).toBeInTheDocument();
     expect(screen.getByText("£35")).toBeInTheDocument();
-    expect(screen.getByText(/Register 2 or more children.*automatic 10% discount/i))
+    expect(screen.getByText(/Register 2 or more children.*automatic 15% discount/i))
       .toBeInTheDocument();
     expect(screen.getAllByText("/child/mo")).toHaveLength(2);
     expect(screen.getByText("£0 charged")).toBeInTheDocument();

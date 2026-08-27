@@ -3,9 +3,9 @@
 This is a preparation runbook, not deployment authorisation. The checked-in
 production examples keep both `MEMBERSHIP_PURCHASE_ENABLED=false` and
 `REACT_APP_MEMBERSHIP_PURCHASE_ENABLED=false`. The business owner explicitly
-approved the current mixed publication bundle: revised Membership Terms,
-Privacy Notice and Guardian Addendum dated 25 August 2026, with the unchanged
-Cancellation Policy and Adult Waiver dated 23 August. Both source registries
+approved the current mixed publication bundle: revised Membership Terms and
+Guardian Addendum dated 27 August 2026, the Privacy Notice dated 25 August,
+and the unchanged Cancellation Policy and Adult Waiver dated 23 August. Both source registries
 must remain synchronized with their publication gate `true`.
 The exact production bytes must still pass their checks in a closed Vercel
 deployment, including `npm run verify:published-legal`, before either
@@ -50,25 +50,26 @@ live API; their Product IDs, Price IDs and £30/£35 monthly prices were left
 unchanged. Live Coupon
 `zaf_youth_family_15pct_2026` was created and verified in Stripe Dashboard on
 23 August as valid, 15% off forever, without an expiry, redemption cap or
-Promotion Code, and restricted exactly to those two youth Products. That
-historical object is superseded. Current live Coupon
-`zaf_youth_family_10pct_2026` was created and read-only API-verified on 25 August as
-10% off forever and restricted to the same two Products. The closed API-backed
-live preflight passed; production legal-byte verification remains required after
-the final release frontend is deployed.
+Promotion Code, and restricted exactly to those two youth Products. It is the
+current Coupon again from the 27 August release. The intervening Coupon
+`zaf_youth_family_10pct_2026` was created and read-only API-verified on 25 August
+as 10% off forever and restricted to the same two Products. A 27 August cutover
+audit found it had never been redeemed, with no open Checkout Session or
+in-flight membership intent. Both Coupons must be retained so frozen provider
+contracts and recovery checks remain backward compatible.
 
 The operational commercial contract for this release is:
 
 | Plan | Age guidance | Per-child monthly price | Family offer |
 | --- | --- | ---: | --- |
-| MINI ALPHAS - 10 & Under | Designed for ages 10 and under | £30 | 10% off the whole subtotal forever at 2–10 children |
-| TEEN ALPHAS - 11 & UP | Designed for ages 11 and up | £35 | 10% off the whole subtotal forever at 2–10 children |
+| MINI ALPHAS - 10 & Under | Designed for ages 10 and under | £30 | 15% off the whole subtotal forever at 2–10 children |
+| TEEN ALPHAS - 11 & UP | Designed for ages 11 and up | £35 | 15% off the whole subtotal forever at 2–10 children |
 
 Age guidance does not block checkout. Every child must still have a valid,
 non-future date of birth, and staff manage programme placement internally. Each
 checkout covers 1–10 children in the same selected programme; one subscription
-cannot mix programmes. One child pays full price. Two MINI ALPHAS - 10 & Under recur at £54
-and two TEEN ALPHAS - 11 & UP at £63.
+cannot mix programmes. One child pays full price. Two MINI ALPHAS - 10 & Under recur at £51
+and two TEEN ALPHAS - 11 & UP at £59.50.
 
 ## Release preflights
 
@@ -118,7 +119,7 @@ That command is read-only. It requires the exact reviewed mapping frozen in
 MINI ALPHAS - 10 & Under Price at £30 and TEEN ALPHAS - 11 & UP Price at £35, the
 product-scoped three-month Coupon, the one active shared Promotion Code and the
 locked-down Customer Portal configuration. It also retrieves the youth-family
-Coupon and requires exactly 10% off forever, no amount/currency, redemption
+Coupon and requires exactly 15% off forever, no amount/currency, redemption
 deadline or cap, and an `applies_to` set containing exactly the two youth
 Products named MINI ALPHAS - 10 & Under and TEEN ALPHAS - 11 & UP. It exits
 before reporting success
@@ -280,7 +281,7 @@ The nine callables were re-blocked after creation, then only
 the reviewed service-level transport; legacy
 `createMembershipCheckoutSession` remains blocked. Preserve those IAM boundaries
 on every future selective redeployment.
-The compatible frontend calls V2 with `checkoutSchemaVersion: 3`, so a frontend
+The compatible frontend calls V2 with `checkoutSchemaVersion: 4`, so a frontend
 deployed before V2 fails safely and a cached V1 client cannot cross the new
 schema boundary. Complete the closed-state smoke tests: V2 must reach its handler
 and fail at the runtime gate without creating a Stripe Session. Only after every
