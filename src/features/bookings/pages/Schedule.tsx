@@ -14,6 +14,7 @@ import {
 import { db } from "../../../firebase";
 import { useAuth } from "../../../context/AuthContext";
 import { getUserNavItems } from "../../../components/layout/UserTopNav";
+import UserAvatar from "../../../components/ui/UserAvatar";
 import { Flame, Dumbbell, PersonStanding, Award, Activity, Bell, Search } from "lucide-react";
 import { bookClass as bookClassCallable, cancelBooking as cancelBookingCallable } from "../services/bookings";
 
@@ -566,15 +567,13 @@ export default function Schedule() {
               aria-label="Profile"
               className="grid h-12 w-12 overflow-hidden rounded-full border border-[#8b725b]/60 bg-[#765f4b] text-sm font-bold uppercase text-[#f8efe5]"
             >
-              {profilePhotoURL ? (
-                <img
-                  src={profilePhotoURL}
-                  alt={appUser?.name ? `${appUser.name}'s profile` : "Profile"}
-                  className="h-full w-full object-cover"
-                />
-              ) : (
-                <span className="grid h-full w-full place-items-center">{firstName.slice(0, 1)}</span>
-              )}
+              <UserAvatar
+                appearance="plain"
+                name={appUser?.name}
+                photoURL={profilePhotoURL}
+                size={48}
+                fallback={firstName.slice(0, 1)}
+              />
             </Link>
           </div>
         </header>

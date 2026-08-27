@@ -12,6 +12,7 @@ import { getDownloadURL, getStorage, ref, uploadBytes } from "firebase/storage";
 import { db } from "../../../firebase";
 import { AlertTriangle, Bell, Plus, Save } from "lucide-react";
 import { getUserNavItems } from "../../../components/layout/UserTopNav";
+import UserAvatar from "../../../components/ui/UserAvatar";
 import { useAuth } from "../../../context/AuthContext";
 import { bootstrapUserProfile } from "../../auth/services/account";
 
@@ -317,15 +318,13 @@ export default function Profile() {
               aria-label="Profile"
               className="grid h-12 w-12 overflow-hidden rounded-full border border-[#8b725b]/60 bg-[#765f4b] text-sm font-bold uppercase text-[#f8efe5]"
             >
-              {photoURL || previewURL ? (
-                <img
-                  src={previewURL || photoURL}
-                  alt={displayName ? `${displayName}'s profile` : "Profile"}
-                  className="h-full w-full object-cover"
-                />
-              ) : (
-                <span className="grid h-full w-full place-items-center">{firstName.slice(0, 1)}</span>
-              )}
+              <UserAvatar
+                appearance="plain"
+                name={displayName}
+                photoURL={previewURL || photoURL}
+                size={48}
+                fallback={firstName.slice(0, 1)}
+              />
             </Link>
           </div>
         </header>
@@ -342,18 +341,14 @@ export default function Profile() {
         <section className="mt-8 overflow-hidden rounded-[28px] border border-white/10 bg-[#151311] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.35)]">
           <div className="grid grid-cols-[128px_1fr] items-center gap-5">
             <div className="relative">
-              <div className="h-28 w-28 overflow-hidden rounded-full border-2 border-[#8b725b]/80 bg-[#765f4b] shadow-[0_14px_45px_rgba(0,0,0,0.36)]">
-                {previewURL || photoURL ? (
-                  <img
-                    src={previewURL || photoURL}
-                    alt={displayName ? `${displayName}'s profile picture` : "Profile"}
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  <div className="grid h-full w-full place-items-center text-4xl font-black text-white">
-                    {initials}
-                  </div>
-                )}
+              <div className="h-28 w-28 overflow-hidden rounded-full border-2 border-[#8b725b]/80 bg-[#765f4b] text-4xl font-black text-white shadow-[0_14px_45px_rgba(0,0,0,0.36)]">
+                <UserAvatar
+                  appearance="plain"
+                  name={displayName}
+                  photoURL={previewURL || photoURL}
+                  size={112}
+                  fallback={initials}
+                />
               </div>
               <label className="absolute bottom-0 right-4 grid h-10 w-10 cursor-pointer place-items-center rounded-full bg-[#f6dd62] text-black shadow-[0_8px_24px_rgba(0,0,0,0.35)]">
                 <Plus className="h-5 w-5" />
