@@ -196,4 +196,63 @@ describe("AuthProvider", () => {
     expect(screen.getByTestId("approval")).toHaveTextContent("approved");
     expect(screen.getByTestId("role")).toHaveTextContent("user");
   });
+
+  it("keeps a confirmed admin profile through an offline cache snapshot", async () => {
+    render(
+      <AuthProvider>
+        <Probe />
+      </AuthProvider>
+    );
+
+    const user = makeUser("gym-display");
+    act(() => {
+      mockAuth.currentUser = user;
+      authStateCallbacks[0](user);
+    });
+    await waitFor(() => expect(profileSubscriptions).toHaveLength(1));
+
+    act(() => {
+      profileSubscriptions[0].next({
+        exists: () => true,
+        data: () => ({
+          role: "admin",
+          approvalStatus: "approved",
+          entitlementStatus: "active",
+          entitlementSource: "staff",
+          alphaWodAccess: true,
+        }),
+        metadata: { fromCache: false },
+      });
+    });
+
+    expect(screen.getByTestId("loading")).toHaveTextContent("false");
+    expect(screen.getByTestId("approval")).toHaveTextContent("approved");
+    expect(screen.getByTestId("role")).toHaveTextContent("admin");
+
+    // Firestore reports cached state while the gym Wi-Fi is unavailable. The
+    // verified admin session must stay intact so /display is not redirected.
+    act(() => {
+      profileSubscriptions[0].next({
+        exists: () => true,
+        data: () => ({ role: "user", approvalStatus: "pending" }),
+        metadata: { fromCache: true },
+      });
+    });
+
+    expect(screen.getByTestId("approval")).toHaveTextContent("approved");
+    expect(screen.getByTestId("role")).toHaveTextContent("admin");
+
+    // A genuine server-side revocation still replaces the retained profile as
+    // soon as Firestore reconnects.
+    act(() => {
+      profileSubscriptions[0].next({
+        exists: () => true,
+        data: () => ({ role: "user", approvalStatus: "pending" }),
+        metadata: { fromCache: false },
+      });
+    });
+
+    expect(screen.getByTestId("approval")).toHaveTextContent("pending");
+    expect(screen.getByTestId("role")).toHaveTextContent("user");
+  });
 });

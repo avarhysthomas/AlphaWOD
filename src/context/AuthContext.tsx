@@ -58,10 +58,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let profileUnsubscribe: Unsubscribe | null = null;
     let authVersion = 0;
+    let hasAuthoritativeProfile = false;
 
     const authUnsubscribe = onAuthStateChanged(auth, (u) => {
       authVersion += 1;
       const currentVersion = authVersion;
+      hasAuthoritativeProfile = false;
 
       profileUnsubscribe?.();
       profileUnsubscribe = null;
@@ -88,6 +90,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           }) => {
             if (currentVersion !== authVersion || auth.currentUser?.uid !== u.uid) return;
 
+            hasAuthoritativeProfile = true;
             setAppUser(
               snap.exists()
                 ? buildAppUser({ uid: u.uid, email: u.email }, snap.data() as any)
@@ -105,11 +108,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             (snap) => {
               if (currentVersion !== authVersion || auth.currentUser?.uid !== u.uid) return;
 
-              // Never elevate from an offline or persisted cache snapshot. If
-              // a confirmed session loses its server source, revoke the local
-              // route gate immediately until Firestore confirms access again.
+              // Never elevate from an offline or persisted cache snapshot.
+              // Once this session has already been confirmed by the server,
+              // though, keep that last authoritative profile while Firestore
+              // reconnects. Replacing it with the safe pending profile here
+              // would eject a gym TV from /display during a brief Wi-Fi dip.
+              // A later server snapshot still applies role/access revocations.
               if (snap.metadata.fromCache) {
-                setAppUser(buildSafePendingAppUser({ uid: u.uid, email: u.email }));
+                if (!hasAuthoritativeProfile) {
+                  setAppUser(buildSafePendingAppUser({ uid: u.uid, email: u.email }));
+                }
                 return;
               }
 
@@ -138,8 +146,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               if (currentVersion !== authVersion || auth.currentUser?.uid !== u.uid) return;
 
               console.error("Failed to confirm app user profile with the server:", error);
-              setAppUser(buildSafePendingAppUser({ uid: u.uid, email: u.email }));
-              setLoading(false);
+              // The live listener may have delivered an authoritative server
+              // snapshot before this one-off read failed. Do not downgrade a
+              // confirmed session in that race (or during a reconnect).
+              if (!hasAuthoritativeProfile) {
+                setAppUser(buildSafePendingAppUser({ uid: u.uid, email: u.email }));
+                setLoading(false);
+              }
             });
         })
         .catch((error) => {
