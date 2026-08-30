@@ -94,8 +94,8 @@ describe("plan eligibility", () => {
 });
 
 describe("youth catalogue", () => {
-  it("keeps schema v6, the current names and descriptions, and the existing prices", () => {
-    expect(MEMBERSHIP_SCHEMA_VERSION).toBe(6);
+  it("keeps schema v7, the current names and descriptions, and the existing prices", () => {
+    expect(MEMBERSHIP_SCHEMA_VERSION).toBe(7);
     expect(MEMBERSHIP_PLANS.youth_youngstars).toMatchObject({
       key: "youth_youngstars",
       name: "MINI ALPHAS - 10 & Under",
@@ -124,7 +124,7 @@ describe("formatPlanPrice", () => {
 });
 
 describe("Adult Conditioning Only", () => {
-  it("freezes the £30 limited-access plan and exactly two canonical slots", () => {
+  it("freezes the £30 limited-access plan and flexible weekly booking policy", () => {
     expect(MEMBERSHIP_PLANS.adult_conditioning).toMatchObject({
       name: "Adult Conditioning Only Membership",
       amountPence: 3000,
@@ -135,13 +135,23 @@ describe("Adult Conditioning Only", () => {
       .toEqual(["monday_0600", "thursday_1800"]);
     expect(canonicalConditioningSlots(["monday_0600", "monday_0600"]))
       .toBeNull();
-    expect(createCommercialPlanSnapshot("adult_conditioning", [
-      "friday_0530",
-      "tuesday_1800",
-    ])).toMatchObject({
+    expect(createCommercialPlanSnapshot("adult_conditioning")).toMatchObject({
       appAccessTier: "limited",
-      selectedConditioningSlots: ["tuesday_1800", "friday_0530"],
+      conditioningBookingPolicy: {
+        version: 1,
+        timezone: "Europe/London",
+        weekStartsOn: "monday",
+        weeklyBookingLimit: 2,
+        eligibleSlotKeys: [
+          "monday_0600",
+          "tuesday_1800",
+          "thursday_1800",
+          "friday_0530",
+        ],
+      },
     });
+    expect(createCommercialPlanSnapshot("adult_unlimited"))
+      .toHaveProperty("conditioningBookingPolicy", null);
   });
 });
 

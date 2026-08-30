@@ -54,6 +54,7 @@ const {
 const {
   PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
   PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
+  MEMBERSHIP_SCHEMA_VERSION,
   createCommercialPlanSnapshot,
   resolveCheckoutAcceptanceStatements,
   resolveCheckoutDocuments,
@@ -209,13 +210,10 @@ async function createMember(uid, {email = `${uid}@example.test`, emailVerified =
 async function seedMembership(subscriptionId, overrides = {}) {
   const checkoutSessionId = overrides.checkoutSessionId ?? `cs_${subscriptionId}`;
   const planKey = overrides.planKey ?? "adult_unlimited";
+  const commercialTerms = overrides.commercialTerms ??
+    createCommercialPlanSnapshot(planKey);
   const selectedConditioningSlots = overrides.selectedConditioningSlots ??
-    (planKey === "adult_conditioning" ?
-      ["monday_0600", "tuesday_1800"] : []);
-  const commercialTerms = createCommercialPlanSnapshot(
-    planKey,
-    selectedConditioningSlots
-  );
+    commercialTerms.selectedConditioningSlots;
   const stripePriceId = overrides.stripePriceId ?? {
     adult_unlimited: "price_unlimited",
     adult_conditioning: "price_conditioning",
@@ -225,7 +223,7 @@ async function seedMembership(subscriptionId, overrides = {}) {
     youth_teenstars: "price_teenstars",
   }[planKey];
   const doc = {
-    schemaVersion: 1,
+    schemaVersion: commercialTerms.catalogueSchemaVersion,
     subscriptionId,
     stripeCustomerId: "cus_fake_1",
     checkoutSessionId,
@@ -239,7 +237,7 @@ async function seedMembership(subscriptionId, overrides = {}) {
     planKey,
     stripePriceId,
     commercialTerms,
-    selectedConditioningSlots,
+    ...(selectedConditioningSlots ? {selectedConditioningSlots} : {}),
     planName: commercialTerms.planName,
     grantsAlphaWodAccess: commercialTerms.grantsAlphaWodAccess,
     participant: {
@@ -284,9 +282,20 @@ async function seedMembership(subscriptionId, overrides = {}) {
     billing_cycle_anchor: doc.billingCycleAnchor,
     metadata: {
       planKey: doc.planKey,
-      ...(doc.planKey === "adult_conditioning" ? {
-        conditioningSlots: doc.selectedConditioningSlots.join(","),
-      } : {}),
+      appAccessTier: doc.commercialTerms.appAccessTier,
+      ...(doc.planKey === "adult_conditioning" &&
+        doc.commercialTerms.conditioningBookingPolicy ? {
+          conditioningPolicyVersion: String(
+            doc.commercialTerms.conditioningBookingPolicy.version
+          ),
+          conditioningWeeklyLimit: String(
+            doc.commercialTerms.conditioningBookingPolicy.weeklyBookingLimit
+          ),
+          conditioningEligibleSlots:
+            doc.commercialTerms.conditioningBookingPolicy.eligibleSlotKeys.join(","),
+        } : doc.planKey === "adult_conditioning" ? {
+          conditioningSlots: doc.selectedConditioningSlots.join(","),
+        } : {}),
     },
     items: {
       object: "list",
@@ -316,16 +325,14 @@ function reservationIntent(id, overrides = {}) {
     youth_teenstars: "price_teenstars",
   }[planKey];
   const participantKey = overrides.participantKey ?? `participant_${id}`;
-  const selectedConditioningSlots = overrides.selectedConditioningSlots ??
-    (planKey === "adult_conditioning" ?
-      ["monday_0600", "tuesday_1800"] : []);
+  const selectedConditioningSlots = overrides.selectedConditioningSlots;
   const reservationLockIds = membershipTesting.checkoutLockSpecs(
     payerUid,
     planKey,
     participantKey
   ).map((spec) => spec.id);
   return {
-    schemaVersion: 1,
+    schemaVersion: MEMBERSHIP_SCHEMA_VERSION,
     checkoutAttemptHash: `attempt_hash_${id}`,
     requestFingerprint: overrides.requestFingerprint ?? `fingerprint_${id}`,
     payerUid,
@@ -333,8 +340,8 @@ function reservationIntent(id, overrides = {}) {
     planKey,
     stripeMode: "test",
     stripePriceId,
-    commercialTerms: createCommercialPlanSnapshot(planKey, selectedConditioningSlots),
-    selectedConditioningSlots,
+    commercialTerms: createCommercialPlanSnapshot(planKey),
+    ...(selectedConditioningSlots ? {selectedConditioningSlots} : {}),
     participant: {
       fullName: overrides.participantName ?? "Reserved Athlete",
       dateOfBirth: "1990-01-01",
@@ -419,7 +426,7 @@ test.beforeEach(clearEmulators);
 function validCheckoutData(attemptId = "attempt_checkout_test_123456") {
   return {
     checkoutAttemptId: attemptId,
-    checkoutSchemaVersion: 5,
+    checkoutSchemaVersion: 6,
     expectedBillingMode: "presale_deferred",
     planKey: "adult_unlimited",
     participantFullName: "Checkout Athlete",
@@ -432,13 +439,11 @@ function validCheckoutData(attemptId = "attempt_checkout_test_123456") {
 }
 
 function conditioningCheckoutData(
-  attemptId = "attempt_conditioning_checkout_123456",
-  selectedConditioningSlots = ["monday_0600", "thursday_1800"]
+  attemptId = "attempt_conditioning_checkout_123456"
 ) {
   return {
     ...validCheckoutData(attemptId),
     planKey: "adult_conditioning",
-    selectedConditioningSlots,
     acceptedStatementIds: resolveCheckoutAcceptanceStatements(
       "adult_conditioning"
     ).map(({id}) => id),
@@ -470,7 +475,7 @@ function legacyParticipantKeyFor(fullName, dateOfBirth) {
     .digest("hex");
 }
 
-test("both deployed checkout exports require the version 5 request contract", async () => {
+test("both deployed checkout exports require the version 6 request contract", async () => {
   const originalPurchaseEnabled = process.env.MEMBERSHIP_PURCHASE_ENABLED;
   const sessionsBefore = fakeStripe.state.checkoutSessions.size;
   process.env.MEMBERSHIP_PURCHASE_ENABLED = "false";
@@ -479,7 +484,7 @@ test("both deployed checkout exports require the version 5 request contract", as
       createMembershipCheckoutSession,
       createMembershipCheckoutSessionV2,
     ].entries()) {
-      for (const checkoutSchemaVersion of [undefined, 1, 2, 3, 4]) {
+      for (const checkoutSchemaVersion of [undefined, 1, 2, 3, 4, 5]) {
         const data = validCheckoutData(
           `attempt_schema_${handlerIndex}_${checkoutSchemaVersion ?? "missing"}`
         );
@@ -739,7 +744,7 @@ test("the checkout core creates one Stripe session and reuses it on retry", asyn
   }
 });
 
-test("Adult Conditioning checkout freezes exactly two slots into intent and Stripe metadata", async () => {
+test("Adult Conditioning checkout freezes the flexible weekly policy into intent and Stripe metadata", async () => {
   const original = {
     ADULT_CONDITIONING_PURCHASE_ENABLED:
       process.env.ADULT_CONDITIONING_PURCHASE_ENABLED,
@@ -755,33 +760,38 @@ test("Adult Conditioning checkout freezes exactly two slots into intent and Stri
   process.env.ADULT_CONDITIONING_LEGAL_APPROVED = "true";
   try {
     await assert.rejects(
-      () => handler(request(conditioningCheckoutData(
-        "attempt_conditioning_missing_slots_123456",
-        []
-      ))),
-      (error) => error.details?.reason === "conditioning_slots_invalid"
-    );
-    await assert.rejects(
-      () => handler(request(conditioningCheckoutData(
-        "attempt_conditioning_duplicate_slots_123456",
-        ["monday_0600", "monday_0600"]
-      ))),
-      (error) => error.details?.reason === "conditioning_slots_invalid"
+      () => handler(request({
+        ...conditioningCheckoutData(
+          "attempt_conditioning_legacy_slots_123456"
+        ),
+        selectedConditioningSlots: ["monday_0600", "tuesday_1800"],
+      })),
+      (error) => error.details?.reason ===
+        "conditioning_slots_no_longer_supported"
     );
 
     const data = conditioningCheckoutData(
-      "attempt_conditioning_valid_slots_123456",
-      ["friday_0530", "monday_0600"]
+      "attempt_conditioning_flexible_policy_123456"
     );
     const result = await handler(request(data));
     const intentSnap = (await db.collection("membershipIntents").get()).docs[0];
-    assert.deepEqual(intentSnap.get("selectedConditioningSlots"), [
-      "monday_0600", "friday_0530",
-    ]);
-    assert.deepEqual(
+    assert.equal(intentSnap.get("selectedConditioningSlots"), undefined);
+    assert.equal(
       intentSnap.get("commercialTerms.selectedConditioningSlots"),
-      ["monday_0600", "friday_0530"]
+      undefined
     );
+    assert.deepEqual(intentSnap.get("commercialTerms.conditioningBookingPolicy"), {
+      version: 1,
+      timezone: "Europe/London",
+      weekStartsOn: "monday",
+      weeklyBookingLimit: 2,
+      eligibleSlotKeys: [
+        "monday_0600",
+        "tuesday_1800",
+        "thursday_1800",
+        "friday_0530",
+      ],
+    });
     assert.equal(intentSnap.get("commercialTerms.appAccessTier"), "limited");
     const sent = fakeStripe.lastUpdateTo("/v1/checkout/sessions");
     assert.equal(sent.payload["metadata[appAccessTier]"], "limited");
@@ -790,20 +800,22 @@ test("Adult Conditioning checkout freezes exactly two slots into intent and Stri
       "limited"
     );
     assert.equal(
-      sent.payload["metadata[conditioningSlots]"],
-      "monday_0600,friday_0530"
+      sent.payload["metadata[conditioningWeeklyLimit]"],
+      "2"
     );
     assert.equal(
-      sent.payload["subscription_data[metadata][conditioningSlots]"],
-      "monday_0600,friday_0530"
+      sent.payload["subscription_data[metadata][conditioningEligibleSlots]"],
+      "monday_0600,tuesday_1800,thursday_1800,friday_0530"
     );
+    assert.equal(sent.payload["metadata[conditioningSlots]"], undefined);
 
     await assert.rejects(
       () => handler(request({
         ...data,
         selectedConditioningSlots: ["tuesday_1800", "thursday_1800"],
       })),
-      /different membership details/i
+      (error) => error.details?.reason ===
+        "conditioning_slots_no_longer_supported"
     );
     assert.ok(result.sessionId);
   } finally {
@@ -4199,6 +4211,7 @@ test("an active real schema-v5 Adult Unlimited snapshot remains full access", as
   };
   delete legacyCommercialTerms.appAccessTier;
   delete legacyCommercialTerms.selectedConditioningSlots;
+  delete legacyCommercialTerms.conditioningBookingPolicy;
   await seedMembership("sub_legacy_v5_full", {
     payerUid: uid,
     payerEmail: "legacyv5full@example.test",
@@ -4218,7 +4231,7 @@ test("an active real schema-v5 Adult Unlimited snapshot remains full access", as
   assert.equal(profile.alphaWodAccess, true);
 });
 
-test("Adult Conditioning projects limited slots and restores the prior tier, plan, and slots", async () => {
+test("Adult Conditioning projects flexible quota and restores the prior fixed policy", async () => {
   const uid = "conditioningrestore";
   await createMember(uid, {
     email: "buyer@example.test",
@@ -4235,7 +4248,6 @@ test("Adult Conditioning projects limited slots and restores the prior tier, pla
   });
   await seedMembership("sub_conditioning_restore", {
     planKey: "adult_conditioning",
-    selectedConditioningSlots: ["monday_0600", "friday_0530"],
     payerUid: uid,
     entitlementTargetUid: uid,
   });
@@ -4249,8 +4261,9 @@ test("Adult Conditioning projects limited slots and restores the prior tier, pla
   assert.equal(profile.entitlementPlanKey, "adult_conditioning");
   assert.equal(profile.appAccessTier, "limited");
   assert.deepEqual(profile.entitlementClassSlots, [
-    "monday_0600", "friday_0530",
+    "monday_0600", "tuesday_1800", "thursday_1800", "friday_0530",
   ]);
+  assert.equal(profile.entitlementWeeklyBookingLimit, 2);
   assert.equal(profile.alphaWodAccess, true);
 
   const subscription = fakeStripe.state.subscriptions.get(
@@ -4272,6 +4285,7 @@ test("Adult Conditioning projects limited slots and restores the prior tier, pla
   assert.deepEqual(profile.entitlementClassSlots, [
     "tuesday_1800", "thursday_1800",
   ]);
+  assert.equal(profile.entitlementWeeklyBookingLimit, null);
   assert.equal(profile.alphaWodAccess, true);
   const cleanupJob = await db.collection("membershipBookingCleanupJobs")
     .doc("sub_conditioning_restore").get();

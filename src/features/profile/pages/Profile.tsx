@@ -388,9 +388,16 @@ export default function Profile() {
                   <span className="font-mono text-sm text-white/38">{totalCheckIns} lifetime</span>
                 </div>
               ) : (
-                <p className="mt-5 text-sm font-semibold text-white/44">
-                  Conditioning membership
-                </p>
+                <div className="mt-5">
+                  <p className="text-sm font-semibold text-white/58">
+                    Conditioning membership
+                  </p>
+                  {appUser?.entitlementWeeklyBookingLimit === 2 ? (
+                    <p className="mt-1 text-xs leading-5 text-white/38">
+                      Up to 2 eligible classes each Monday–Sunday week
+                    </p>
+                  ) : null}
+                </div>
               )}
             </div>
           </div>

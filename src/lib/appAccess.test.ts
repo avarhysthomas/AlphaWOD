@@ -10,7 +10,10 @@ const entitled: AppUser = {
   alphaWodAccess: true,
   appAccessTier: "limited",
   entitlementPlanKey: "adult_conditioning",
-  entitlementClassSlots: ["monday_0600", "thursday_1800"],
+  entitlementClassSlots: [
+    "monday_0600", "tuesday_1800", "thursday_1800", "friday_0530",
+  ],
+  entitlementWeeklyBookingLimit: 2,
 };
 
 describe("app capabilities", () => {
@@ -24,8 +27,8 @@ describe("app capabilities", () => {
     expect(hasAppCapability(entitled, "leaderboards")).toBe(false);
   });
 
-  it("fails closed when the limited slot projection is incomplete", () => {
-    expect(isLimitedAppUser({...entitled, entitlementClassSlots: ["monday_0600"]}))
+  it("fails closed when the limited booking policy is incomplete", () => {
+    expect(isLimitedAppUser({...entitled, entitlementWeeklyBookingLimit: 1}))
       .toBe(false);
     expect(hasAppCapability({...entitled, entitlementClassSlots: []}, "schedule"))
       .toBe(false);
@@ -37,6 +40,7 @@ describe("app capabilities", () => {
       entitlementSource: "legacy" as const,
       appAccessTier: undefined,
       entitlementClassSlots: undefined,
+      entitlementWeeklyBookingLimit: undefined,
     };
     expect(hasAppCapability(legacy, "dashboard")).toBe(true);
   });

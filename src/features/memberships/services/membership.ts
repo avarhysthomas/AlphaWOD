@@ -6,6 +6,7 @@ import {
   resolveCheckoutDocuments,
   resolveCheckoutSignerRole,
   type CheckoutAcceptanceId,
+  type ConditioningBookingPolicy,
   type ConditioningSlotKey,
   type PlanKey,
 } from "../../../lib/membershipPlans";
@@ -101,7 +102,10 @@ export type MyMembership = {
   paymentSchedule?: MembershipPaymentSchedule | null;
   grantsAlphaWodAccess: boolean;
   appAccessTier?: "none" | "limited" | "full";
+  conditioningBookingPolicy?: ConditioningBookingPolicy | null;
+  entitlementClassSlots?: ConditioningSlotKey[];
   selectedConditioningSlots?: ConditioningSlotKey[];
+  entitlementWeeklyBookingLimit?: number | null;
   participantFullName: string;
   participantFullNames?: string[];
   participantCount?: number;
@@ -128,7 +132,7 @@ export type MyMembership = {
 
 export type CheckoutRequest = {
   /** Versioned request contract for the multi-participant checkout implementation. */
-  checkoutSchemaVersion: 5;
+  checkoutSchemaVersion: 6;
   /** Stable across retries of the same form submission for Stripe idempotency. */
   checkoutAttemptId: string;
   /**
@@ -148,8 +152,6 @@ export type CheckoutRequest = {
   signedName: string;
   /** Exact ids checked individually; the server rejects any non-exact set. */
   acceptedStatementIds: CheckoutAcceptanceId[];
-  /** Exactly two canonical weekly slots for Adult Conditioning only. */
-  selectedConditioningSlots?: ConditioningSlotKey[];
   /** Optional shared campaign code. Included in the digest, never stored as plaintext. */
   promotionCode?: string;
   guardianFullName?: string;
@@ -276,10 +278,7 @@ async function fingerprintCheckoutDetails(
       payerUid: context.payerUid,
       details,
       legalAndCommercialSnapshot: {
-        commercialTerms: createCommercialPlanSnapshot(
-          details.planKey,
-          details.selectedConditioningSlots
-        ),
+        commercialTerms: createCommercialPlanSnapshot(details.planKey),
         signerRole: resolveCheckoutSignerRole(details.planKey),
         documents: resolveCheckoutDocuments(details.planKey),
         statements: resolveCheckoutAcceptanceStatements(
@@ -524,7 +523,10 @@ export type AdminMembership = {
   stripeStatus: string;
   grantsAlphaWodAccess: boolean;
   appAccessTier?: "none" | "limited" | "full";
+  conditioningBookingPolicy?: ConditioningBookingPolicy | null;
+  entitlementClassSlots?: ConditioningSlotKey[];
   selectedConditioningSlots?: ConditioningSlotKey[];
+  entitlementWeeklyBookingLimit?: number | null;
   entitlementTargetUid: string | null;
   participantFullName: string;
   participantFullNames?: string[];
@@ -586,6 +588,9 @@ export type AdminCheckoutIssue = {
   intentId: string;
   planKey: PlanKey;
   planName: string;
+  conditioningBookingPolicy?: ConditioningBookingPolicy | null;
+  entitlementClassSlots?: ConditioningSlotKey[];
+  entitlementWeeklyBookingLimit?: number | null;
   participantFullNames: string[];
   participantCount: number;
   payerUid: string | null;

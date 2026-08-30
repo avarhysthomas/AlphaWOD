@@ -16,7 +16,7 @@ import { useAuth } from "../../../context/AuthContext";
 import type { ConditioningSlotKey } from "../../../context/authUser";
 import { getUserNavItems } from "../../../components/layout/UserTopNav";
 import { isLimitedAppUser } from "../../../lib/appAccess";
-import { formatConditioningSlot } from "../../../lib/membershipPlans";
+import { CONDITIONING_SLOT_OPTIONS } from "../../../lib/membershipPlans";
 import { Flame, Dumbbell, PersonStanding, Award, Activity, Bell, Search } from "lucide-react";
 import { bookClass as bookClassCallable, cancelBooking as cancelBookingCallable } from "../services/bookings";
 
@@ -132,7 +132,7 @@ function getConditioningSlotForClass(classData: ClassDoc): ConditioningSlotKey |
 
 type ClassAccess = {
   allowed: boolean;
-  reason?: "not_conditioning_slot" | "conditioning_slot_not_selected" | "strength_block";
+  reason?: "not_conditioning_slot" | "conditioning_class_not_in_agreement" | "strength_block";
   message?: string;
 };
 
@@ -140,6 +140,7 @@ function resolveClassAccess({
   classData,
   limited,
   entitlementClassSlots,
+  entitlementWeeklyBookingLimit,
   strengthBlock,
   isAdmin,
   strengthBlocksEnabled,
@@ -147,6 +148,7 @@ function resolveClassAccess({
   classData: ClassDoc;
   limited: boolean;
   entitlementClassSlots: ConditioningSlotKey[];
+  entitlementWeeklyBookingLimit?: number;
   strengthBlock: StrengthBlock;
   isAdmin: boolean;
   strengthBlocksEnabled: boolean;
@@ -157,17 +159,18 @@ function resolveClassAccess({
       return {
         allowed: false,
         reason: "not_conditioning_slot",
-        message: "Conditioning Only covers the four recurring conditioning slots.",
+        message: "Conditioning Only covers the four eligible classes shown in your weekly allowance.",
       };
     }
-    if (!entitlementClassSlots.includes(conditioningSlot)) {
-      const selected = entitlementClassSlots.map(formatConditioningSlot).join(" and ");
+    // Current memberships can use any of the four eligible classes and are
+    // capped by the server across the Monday–Sunday week. Historical v6
+    // memberships retain their original fixed-slot eligibility.
+    if (entitlementWeeklyBookingLimit === undefined &&
+        !entitlementClassSlots.includes(conditioningSlot)) {
       return {
         allowed: false,
-        reason: "conditioning_slot_not_selected",
-        message: selected
-          ? `Your membership is set to ${selected}.`
-          : "This recurring slot is not selected on your membership.",
+        reason: "conditioning_class_not_in_agreement",
+        message: "This class is not included in your current Conditioning agreement.",
       };
     }
   }
@@ -497,6 +500,7 @@ export default function Schedule() {
     () => appUser?.entitlementClassSlots ?? [],
     [appUser?.entitlementClassSlots]
   );
+  const entitlementWeeklyBookingLimit = appUser?.entitlementWeeklyBookingLimit;
   const visibleClasses = useMemo(
     () =>
       limitedAccess ? classes : classes.filter(({ data }) =>
@@ -557,6 +561,7 @@ export default function Schedule() {
         classData: classRow.data,
         limited: limitedAccess,
         entitlementClassSlots,
+        entitlementWeeklyBookingLimit,
         strengthBlock: memberStrengthBlock,
         isAdmin,
         strengthBlocksEnabled,
@@ -585,10 +590,13 @@ export default function Schedule() {
       if (e?.code === "failed-precondition" && message.includes("Booking closed")) return alert("Booking closed for this class");
       const reason = e?.details?.reason;
       if (reason === "class_not_conditioning_membership_slot") {
-        return alert("Conditioning Only covers the four recurring conditioning slots.");
+        return alert("Conditioning Only covers the four eligible classes shown in your weekly allowance.");
       }
       if (reason === "conditioning_slot_not_selected") {
-        return alert("This recurring session is not one of the two selected for your membership.");
+        return alert("This class is not included in your current Conditioning agreement.");
+      }
+      if (reason === "conditioning_weekly_booking_limit_reached") {
+        return alert("You’ve used both Conditioning bookings for this Monday–Sunday week. Cancel an eligible booking before its cutoff to choose another class.");
       }
       if (e?.code === "permission-denied" || message.includes("strength block")) {
         return alert("You are not assigned to the strength block for this class.");
@@ -597,7 +605,7 @@ export default function Schedule() {
     } finally {
       setBusyClassId(null);
     }
-  }, [appUser?.name, classes, entitlementClassSlots, isAdmin, limitedAccess, memberStrengthBlock, strengthBlocksEnabled, user]);
+  }, [appUser?.name, classes, entitlementClassSlots, entitlementWeeklyBookingLimit, isAdmin, limitedAccess, memberStrengthBlock, strengthBlocksEnabled, user]);
 
   const handleCancel = useCallback(async (classId: string) => {
     if (!user) return alert("Log in first.");
@@ -688,6 +696,35 @@ export default function Schedule() {
             Schedule
           </h1>
         </section>
+
+        {limitedAccess && entitlementWeeklyBookingLimit === 2 ? (
+          <section
+            className="mt-7 rounded-2xl border border-amber-300/20 bg-amber-300/10 p-5"
+            aria-labelledby="conditioning-weekly-allowance-title"
+          >
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="max-w-lg">
+                <h2
+                  id="conditioning-weekly-allowance-title"
+                  className="font-heading text-2xl uppercase text-white"
+                >
+                  Your weekly allowance
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-amber-50/78">
+                  Book up to {entitlementWeeklyBookingLimit ?? 2} eligible Conditioning
+                  classes in each Monday–Sunday week. Your choices can change every week.
+                </p>
+              </div>
+              <p className="rounded-full border border-amber-200/25 bg-black/20 px-3 py-2 text-xs font-black uppercase tracking-[0.14em] text-amber-100">
+                Flexible weekly booking
+              </p>
+            </div>
+            <p className="mt-4 text-xs leading-5 text-amber-50/60">
+              Eligible: {CONDITIONING_SLOT_OPTIONS.map(({label}) => label).join(" · ")}.
+              Cancel before the class cutoff to free that booking and choose another.
+            </p>
+          </section>
+        ) : null}
 
         {searchOpen ? (
           <section className="mt-6">
@@ -782,6 +819,7 @@ export default function Schedule() {
                     classData: data,
                     limited: limitedAccess,
                     entitlementClassSlots,
+                    entitlementWeeklyBookingLimit,
                     strengthBlock: memberStrengthBlock,
                     isAdmin,
                     strengthBlocksEnabled,

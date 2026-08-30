@@ -106,6 +106,32 @@ describe("MembershipSuccess claim persistence", () => {
     expect(mockClearCheckoutAttempt).toHaveBeenCalled();
   });
 
+  it("confirms the flexible Conditioning allowance without fixed slot wording", async () => {
+    mockSearchParams = "plan=adult_conditioning&session_id=cs_signed_in";
+    mockGetMyMemberships.mockResolvedValue({
+      ok: true,
+      memberships: [{
+        ...activeMembership,
+        planKey: "adult_conditioning",
+        planName: "Adult Conditioning Only Membership",
+        appAccessTier: "limited",
+        entitlementWeeklyBookingLimit: 2,
+      }],
+      cancellationPreview: null,
+    });
+
+    render(<MembershipSuccess />);
+
+    expect(await screen.findByText(/up to two eligible Conditioning bookings/i))
+      .toBeInTheDocument();
+    expect(screen.getByText("2 Conditioning bookings each week"))
+      .toBeInTheDocument();
+    expect(screen.getByText(/choices can change.*Monday–Sunday week/i))
+      .toBeInTheDocument();
+    expect(screen.getByText("Friday · 05:30")).toBeInTheDocument();
+    expect(screen.queryByText(/recurring booking slots/i)).not.toBeInTheDocument();
+  });
+
   it("still preserves the checkout session for a signed-out buyer", () => {
     mockUser = null;
     render(<MembershipSuccess />);

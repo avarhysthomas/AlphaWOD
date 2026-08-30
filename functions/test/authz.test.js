@@ -63,6 +63,39 @@ test("Adult Conditioning derives limited base access only with two canonical slo
   assert.ok(malformed.issues.includes("app_access_policy_invalid"));
 });
 
+test("flexible Conditioning requires all four eligible slots and an exact weekly limit", () => {
+  const profile = {
+    role: "user",
+    approvalStatus: "approved",
+    entitlementStatus: "active",
+    entitlementSource: "stripe",
+    entitlementPlanKey: "adult_conditioning",
+    appAccessTier: "limited",
+    entitlementClassSlots: [
+      "monday_0600",
+      "tuesday_1800",
+      "thursday_1800",
+      "friday_0530",
+    ],
+    entitlementWeeklyBookingLimit: 2,
+  };
+  const access = resolveUserAuthorisation(profile);
+  assert.equal(access.valid, true);
+  assert.equal(access.entitlementPolicyWeeklyBookingLimit, 2);
+  assert.equal(access.entitlementWeeklyBookingLimit, 2);
+  assert.deepEqual(access.entitlementClassSlots, profile.entitlementClassSlots);
+  assert.equal(buildManagedClaims(profile).entitlementWeeklyBookingLimit, 2);
+
+  assert.equal(resolveUserAuthorisation({
+    ...profile,
+    entitlementWeeklyBookingLimit: 3,
+  }).valid, false);
+  assert.equal(resolveUserAuthorisation({
+    ...profile,
+    entitlementClassSlots: ["monday_0600", "tuesday_1800"],
+  }).valid, false);
+});
+
 test("gated Conditioning profiles preserve policy while claims stay effective", () => {
   const pendingProfile = {
     role: "user",

@@ -1,7 +1,7 @@
 /* eslint-disable require-jsdoc, max-len */
 
-export const ACCESS_SCHEMA_VERSION = 2;
-export const CLAIMS_VERSION = 3;
+export const ACCESS_SCHEMA_VERSION = 3;
+export const CLAIMS_VERSION = 4;
 
 export const USER_ROLES = ["admin", "user", "sgpt", "banned"] as const;
 export type UserRole = typeof USER_ROLES[number];
@@ -109,6 +109,7 @@ export type UserAuthorisationInput = {
   entitlementPlanKey?: unknown;
   appAccessTier?: unknown;
   entitlementClassSlots?: unknown;
+  entitlementWeeklyBookingLimit?: unknown;
 };
 
 export type ResolvedUserAuthorisation = {
@@ -120,10 +121,13 @@ export type ResolvedUserAuthorisation = {
   entitlementPolicyAppAccessTier: AppAccessTier;
   /** Frozen Conditioning slots stored on the profile, even while access is gated. */
   entitlementPolicyClassSlots: ConditioningSlotKey[];
+  /** Frozen weekly quota stored on the profile; null for non-quota access. */
+  entitlementPolicyWeeklyBookingLimit: number | null;
   /** Effective tier exposed to claims and runtime authorisation. */
   appAccessTier: AppAccessTier;
   /** Effective Conditioning slots exposed to claims and runtime authorisation. */
   entitlementClassSlots: ConditioningSlotKey[];
+  entitlementWeeklyBookingLimit: number | null;
   alphaWodAccess: boolean;
   disabled: boolean;
   restricted: boolean;
@@ -138,6 +142,7 @@ export type ManagedClaims = {
   entitlementSource: EntitlementSource;
   appAccessTier: AppAccessTier;
   entitlementClassSlots: ConditioningSlotKey[];
+  entitlementWeeklyBookingLimit: number | null;
   alphaWodAccess: boolean;
   disabled: boolean;
   restricted: boolean;
@@ -152,6 +157,7 @@ export const MANAGED_CLAIM_KEYS = [
   "entitlementSource",
   "appAccessTier",
   "entitlementClassSlots",
+  "entitlementWeeklyBookingLimit",
   "alphaWodAccess",
   "disabled",
   "restricted",
@@ -189,7 +195,9 @@ export function isConditioningSlotKey(value: unknown): value is ConditioningSlot
 }
 
 /**
- * Returns the two fixed Half-membership slots in canonical catalogue order.
+ * Returns the two fixed historical schema-v6 Half-membership slots in
+ * canonical catalogue order. Current schema-v7 memberships use
+ * canonicalConditioningEligibleSlots instead.
  * Any duplicate, unknown, missing, or additional value fails closed.
  * @param {unknown} value Candidate stored or submitted slot list.
  * @return {ConditioningSlotKey[] | null} Canonical slots, or null when invalid.
@@ -199,6 +207,21 @@ export function canonicalConditioningSlots(value: unknown): ConditioningSlotKey[
       !value.every(isConditioningSlotKey)) return null;
   const unique = new Set<ConditioningSlotKey>(value);
   if (unique.size !== 2) return null;
+  return CONDITIONING_SLOT_KEYS.filter((slot) => unique.has(slot));
+}
+
+/**
+ * Returns the complete canonical flexible Conditioning scope, or null.
+ * @param {unknown} value Candidate stored eligible-slot scope.
+ * @return {ConditioningSlotKey[] | null} Canonical complete scope or null.
+ */
+export function canonicalConditioningEligibleSlots(
+  value: unknown
+): ConditioningSlotKey[] | null {
+  if (!Array.isArray(value) || value.length !== CONDITIONING_SLOT_KEYS.length ||
+    !value.every(isConditioningSlotKey)) return null;
+  const unique = new Set<ConditioningSlotKey>(value);
+  if (unique.size !== CONDITIONING_SLOT_KEYS.length) return null;
   return CONDITIONING_SLOT_KEYS.filter((slot) => unique.has(slot));
 }
 
@@ -270,6 +293,7 @@ export function resolveUserAuthorisation(
   let accessPolicyValid = true;
   let entitlementPolicyAppAccessTier: AppAccessTier = "none";
   let entitlementPolicyClassSlots: ConditioningSlotKey[] = [];
+  let entitlementPolicyWeeklyBookingLimit: number | null = null;
   if (baseStaffAccess) {
     entitlementPolicyAppAccessTier = "full";
   } else if (role === "user" && entitlementSource === "stripe") {
@@ -280,20 +304,35 @@ export function resolveUserAuthorisation(
       input?.entitlementClassSlots === null ||
       (Array.isArray(input.entitlementClassSlots) &&
         input.entitlementClassSlots.length === 0);
+    const hasNoWeeklyLimit = input?.entitlementWeeklyBookingLimit ===
+      undefined || input?.entitlementWeeklyBookingLimit === null;
     if (entitlementStatus === "restricted" &&
-        input?.appAccessTier === "none" && hasNoPolicySlots) {
+        input?.appAccessTier === "none" && hasNoPolicySlots &&
+        hasNoWeeklyLimit) {
       // An invalid provider/commercial contract is projected as an explicit
       // fail-closed Stripe restriction. It carries no usable policy.
       entitlementPolicyAppAccessTier = "none";
     } else if (input?.entitlementPlanKey === "adult_unlimited" &&
-        (!appAccessTierPresent || input?.appAccessTier === "full")) {
+        (!appAccessTierPresent || input?.appAccessTier === "full") &&
+        hasNoPolicySlots && hasNoWeeklyLimit) {
       entitlementPolicyAppAccessTier = "full";
     } else if (input?.entitlementPlanKey === "adult_conditioning" &&
         (!appAccessTierPresent || input?.appAccessTier === "limited")) {
-      const slots = canonicalConditioningSlots(input?.entitlementClassSlots);
-      if (slots) {
+      const weeklyLimit = input?.entitlementWeeklyBookingLimit;
+      const flexibleSlots = canonicalConditioningEligibleSlots(
+        input?.entitlementClassSlots
+      );
+      const legacySlots = canonicalConditioningSlots(
+        input?.entitlementClassSlots
+      );
+      if (weeklyLimit === 2 && flexibleSlots) {
         entitlementPolicyAppAccessTier = "limited";
-        entitlementPolicyClassSlots = slots;
+        entitlementPolicyClassSlots = flexibleSlots;
+        entitlementPolicyWeeklyBookingLimit = 2;
+      } else if ((weeklyLimit === undefined || weeklyLimit === null) &&
+        legacySlots) {
+        entitlementPolicyAppAccessTier = "limited";
+        entitlementPolicyClassSlots = legacySlots;
       } else {
         accessPolicyValid = false;
       }
@@ -307,14 +346,25 @@ export function resolveUserAuthorisation(
       input?.appAccessTier as AppAccessTier : "full";
     if (requestedTier === "limited") {
       const slots = canonicalConditioningSlots(input?.entitlementClassSlots);
-      if (slots) {
+      if (slots && (input?.entitlementWeeklyBookingLimit === undefined ||
+        input?.entitlementWeeklyBookingLimit === null)) {
         entitlementPolicyAppAccessTier = "limited";
         entitlementPolicyClassSlots = slots;
       } else {
         accessPolicyValid = false;
       }
     } else {
-      entitlementPolicyAppAccessTier = requestedTier;
+      const hasNoPolicySlots = input?.entitlementClassSlots === undefined ||
+        input?.entitlementClassSlots === null ||
+        (Array.isArray(input.entitlementClassSlots) &&
+          input.entitlementClassSlots.length === 0);
+      if (hasNoPolicySlots &&
+        (input?.entitlementWeeklyBookingLimit === undefined ||
+          input?.entitlementWeeklyBookingLimit === null)) {
+        entitlementPolicyAppAccessTier = requestedTier;
+      } else {
+        accessPolicyValid = false;
+      }
     }
   }
   if (!accessPolicyValid) issues.push("app_access_policy_invalid");
@@ -332,10 +382,14 @@ export function resolveUserAuthorisation(
     entitlementSource,
     entitlementPolicyAppAccessTier,
     entitlementPolicyClassSlots,
+    entitlementPolicyWeeklyBookingLimit,
     appAccessTier: alphaWodAccess ? entitlementPolicyAppAccessTier : "none",
     entitlementClassSlots: alphaWodAccess &&
       entitlementPolicyAppAccessTier === "limited" ?
       entitlementPolicyClassSlots : [],
+    entitlementWeeklyBookingLimit: alphaWodAccess &&
+      entitlementPolicyAppAccessTier === "limited" ?
+      entitlementPolicyWeeklyBookingLimit : null,
     alphaWodAccess,
     disabled,
     restricted: !alphaWodAccess,
@@ -356,6 +410,7 @@ export function buildManagedClaims(
     entitlementSource: resolved.entitlementSource,
     appAccessTier: resolved.appAccessTier,
     entitlementClassSlots: resolved.entitlementClassSlots,
+    entitlementWeeklyBookingLimit: resolved.entitlementWeeklyBookingLimit,
     alphaWodAccess: resolved.alphaWodAccess,
     disabled: resolved.disabled,
     restricted: resolved.restricted,

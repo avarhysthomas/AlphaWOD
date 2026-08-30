@@ -69,6 +69,7 @@ const ACCESS_REVIEW_FIELDS = [
   "entitlementPlanKey",
   "appAccessTier",
   "entitlementClassSlots",
+  "entitlementWeeklyBookingLimit",
   "alphaWodAccess",
 ];
 
@@ -83,6 +84,8 @@ function accessReviewEntry(userId, patch) {
       patch.entitlementPlanKey : null,
     appAccessTier: patch.appAccessTier,
     entitlementClassSlots: patch.entitlementClassSlots,
+    entitlementWeeklyBookingLimit:
+      patch.entitlementWeeklyBookingLimit ?? null,
     alphaWodAccess: patch.alphaWodAccess,
   };
 }
@@ -113,6 +116,8 @@ function canonicalAccessReviewEntries(entries) {
         typeof entry.entitlementPlanKey === "string") ||
       !isAppAccessTier(entry.appAccessTier) ||
       !Array.isArray(entry.entitlementClassSlots) ||
+      !(entry.entitlementWeeklyBookingLimit === null ||
+        Number.isSafeInteger(entry.entitlementWeeklyBookingLimit)) ||
       entry.alphaWodAccess !== true) {
       throw new Error("The approved access report contains an invalid access grant.");
     }
@@ -120,7 +125,9 @@ function canonicalAccessReviewEntries(entries) {
     if (!resolved.valid || !resolved.alphaWodAccess ||
       resolved.appAccessTier !== entry.appAccessTier ||
       JSON.stringify(resolved.entitlementClassSlots) !==
-        JSON.stringify(entry.entitlementClassSlots)) {
+        JSON.stringify(entry.entitlementClassSlots) ||
+      resolved.entitlementWeeklyBookingLimit !==
+        entry.entitlementWeeklyBookingLimit) {
       throw new Error("The approved access report contains an invalid access policy.");
     }
     if (seen.has(entry.userId)) {
@@ -230,6 +237,9 @@ function desiredHistoricalAccess(data) {
     ...(data.entitlementClassSlots !== undefined ? {
       entitlementClassSlots: data.entitlementClassSlots,
     } : {}),
+    ...(data.entitlementWeeklyBookingLimit !== undefined ? {
+      entitlementWeeklyBookingLimit: data.entitlementWeeklyBookingLimit,
+    } : {}),
   };
   const access = resolveUserAuthorisation(next);
   if (!access.valid) return {error: "invalid_access_policy"};
@@ -244,6 +254,7 @@ function profileAccessStateForAuth(profile, authUser) {
     ...resolved,
     appAccessTier: "none",
     entitlementClassSlots: [],
+    entitlementWeeklyBookingLimit: null,
     alphaWodAccess: false,
     disabled: true,
     restricted: true,
@@ -255,6 +266,8 @@ function profileAccessStateForAuth(profile, authUser) {
       // Firestore. Only claims and alphaWodAccess represent effective access.
       appAccessTier: resolved.entitlementPolicyAppAccessTier,
       entitlementClassSlots: resolved.entitlementPolicyClassSlots,
+      entitlementWeeklyBookingLimit:
+        resolved.entitlementPolicyWeeklyBookingLimit,
       alphaWodAccess: access.alphaWodAccess,
     },
     access,
@@ -288,6 +301,9 @@ function privilegedClaimSnapshot(authUser) {
     appAccessTier: claims.appAccessTier ?? null,
     entitlementClassSlots: Array.isArray(claims.entitlementClassSlots) ?
       claims.entitlementClassSlots : null,
+    entitlementWeeklyBookingLimit:
+      Number.isSafeInteger(claims.entitlementWeeklyBookingLimit) ?
+        claims.entitlementWeeklyBookingLimit : null,
     alphaWodAccess: claims.alphaWodAccess === true,
     disabled: claims.disabled === true,
     restricted: claims.restricted === true,
@@ -328,6 +344,7 @@ function currentProfileApplyState(basePatch, authUser) {
   if (state.authDisabled) {
     managedClaims.appAccessTier = "none";
     managedClaims.entitlementClassSlots = [];
+    managedClaims.entitlementWeeklyBookingLimit = null;
     managedClaims.alphaWodAccess = false;
     managedClaims.disabled = true;
     managedClaims.restricted = true;
@@ -773,6 +790,8 @@ async function main() {
       entitlementPlanKey: patch.entitlementPlanKey ?? null,
       appAccessTier: patch.appAccessTier,
       entitlementClassSlots: patch.entitlementClassSlots,
+      entitlementWeeklyBookingLimit:
+        patch.entitlementWeeklyBookingLimit ?? null,
       alphaWodAccess: patch.alphaWodAccess,
       authDisabled: authAccess.authDisabled,
       implicitApproval: desired.implicitApproval,

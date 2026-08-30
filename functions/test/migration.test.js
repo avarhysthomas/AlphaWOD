@@ -142,6 +142,35 @@ test(
   }
 );
 
+test("flexible Conditioning quota survives profile and claim backfill", () => {
+  const slots = [
+    "monday_0600",
+    "tuesday_1800",
+    "thursday_1800",
+    "friday_0530",
+  ];
+  const state = currentProfileApplyState({
+    role: "user",
+    approvalStatus: "approved",
+    entitlementStatus: "active",
+    entitlementSource: "stripe",
+    entitlementPlanKey: "adult_conditioning",
+    appAccessTier: "limited",
+    entitlementClassSlots: slots,
+    entitlementWeeklyBookingLimit: 2,
+  }, {
+    disabled: false,
+    email: "flexible@example.test",
+    emailVerified: true,
+    customClaims: {},
+  });
+  assert.deepEqual(state.patch.entitlementClassSlots, slots);
+  assert.equal(state.patch.entitlementWeeklyBookingLimit, 2);
+  assert.deepEqual(state.nextClaims.entitlementClassSlots, slots);
+  assert.equal(state.nextClaims.entitlementWeeklyBookingLimit, 2);
+  assert.equal(state.nextClaims.alphaWodAccess, true);
+});
+
 test(
   "Conditioning policy survives repeated disabled backfills then re-enable",
   () => {
@@ -471,6 +500,7 @@ const reviewedGrant = {
   entitlementPlanKey: null,
   appAccessTier: "full",
   entitlementClassSlots: [],
+  entitlementWeeklyBookingLimit: null,
   alphaWodAccess: true,
 };
 
@@ -533,6 +563,7 @@ test("privileged legacy Auth claims are surfaced for the initial audit", () => {
     entitlementSource: null,
     appAccessTier: null,
     entitlementClassSlots: null,
+    entitlementWeeklyBookingLimit: null,
     alphaWodAccess: true,
     disabled: false,
     restricted: false,

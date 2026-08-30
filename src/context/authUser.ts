@@ -23,6 +23,7 @@ export type AppUser = {
   appAccessTier?: AppAccessTier;
   entitlementPlanKey?: string;
   entitlementClassSlots?: ConditioningSlotKey[];
+  entitlementWeeklyBookingLimit?: number;
   strengthBlock?: "A" | "B" | "none";
   photoURL?: string;
   waiverAcceptedAt?: unknown;
@@ -39,6 +40,7 @@ type RawUserDoc = {
   appAccessTier?: unknown;
   entitlementPlanKey?: unknown;
   entitlementClassSlots?: unknown;
+  entitlementWeeklyBookingLimit?: unknown;
   strengthBlock?: unknown;
   photoURL?: unknown;
   waiverAcceptedAt?: unknown;
@@ -83,6 +85,17 @@ export function buildAppUser(
           CONDITIONING_SLOT_KEYS.includes(slot as ConditioningSlotKey)
       )
     : undefined;
+  const hasWeeklyBookingLimit = rawData !== null && rawData !== undefined &&
+    Object.prototype.hasOwnProperty.call(rawData, "entitlementWeeklyBookingLimit") &&
+    rawData.entitlementWeeklyBookingLimit !== null &&
+    rawData.entitlementWeeklyBookingLimit !== undefined;
+  const entitlementWeeklyBookingLimit = Number.isInteger(
+    rawData?.entitlementWeeklyBookingLimit
+  ) && Number(rawData?.entitlementWeeklyBookingLimit) > 0
+    ? Number(rawData?.entitlementWeeklyBookingLimit)
+    : hasWeeklyBookingLimit
+      ? 0
+      : undefined;
 
   return {
     uid: firebaseUser.uid,
@@ -108,6 +121,9 @@ export function buildAppUser(
     ...(appAccessTier !== undefined ? { appAccessTier } : {}),
     ...(entitlementPlanKey !== undefined ? { entitlementPlanKey } : {}),
     ...(entitlementClassSlots !== undefined ? { entitlementClassSlots } : {}),
+    ...(entitlementWeeklyBookingLimit !== undefined
+      ? { entitlementWeeklyBookingLimit }
+      : {}),
     strengthBlock:
       rawData?.strengthBlock === "A" || rawData?.strengthBlock === "B"
         ? rawData.strengthBlock
@@ -147,6 +163,8 @@ type AlphaWodAccessRecord = {
   alphaWodAccess?: unknown;
   appAccessTier?: unknown;
   entitlementClassSlots?: unknown;
+  entitlementWeeklyBookingLimit?: unknown;
+  entitlementPlanKey?: unknown;
   role?: unknown;
 };
 
@@ -168,8 +186,25 @@ export function hasAlphaWodAccess(appUser?: AlphaWodAccessRecord | null) {
   if (!baseAccess) return false;
   if (appUser?.appAccessTier === undefined) return true;
   if (appUser.appAccessTier === "full") return true;
-  if (appUser.appAccessTier !== "limited" ||
-      !Array.isArray(appUser.entitlementClassSlots) ||
+  if (appUser.appAccessTier !== "limited") return false;
+
+  // Current Conditioning memberships carry a server-authoritative weekly
+  // booking allowance and all four eligible timetable slots.
+  if (appUser.entitlementWeeklyBookingLimit !== undefined) {
+    if (appUser.entitlementPlanKey !== "adult_conditioning" ||
+        appUser.entitlementWeeklyBookingLimit !== 2 ||
+        !Array.isArray(appUser.entitlementClassSlots) ||
+        appUser.entitlementClassSlots.length !== CONDITIONING_SLOT_KEYS.length) {
+      return false;
+    }
+    const currentSlots = new Set(appUser.entitlementClassSlots);
+    return currentSlots.size === CONDITIONING_SLOT_KEYS.length &&
+      CONDITIONING_SLOT_KEYS.every((slot) => currentSlots.has(slot));
+  }
+
+  // Historical v6 memberships remain valid under the two slots agreed at
+  // their checkout. New memberships never rely on this projection.
+  if (!Array.isArray(appUser.entitlementClassSlots) ||
       appUser.entitlementClassSlots.length !== 2) return false;
   const uniqueSlots = new Set(appUser.entitlementClassSlots);
   return uniqueSlots.size === 2 && Array.from(uniqueSlots).every((slot) =>

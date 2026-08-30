@@ -83,7 +83,7 @@ components:
     textColor: "{colors.bone}"
     rounded: "{rounded.2xl}"
     padding: "20px"
-  conditioning-slot-selected:
+  conditioning-booking-selected:
     backgroundColor: "{colors.amber-soft}"
     textColor: "{colors.carbon}"
     rounded: "{rounded.xl}"
@@ -103,7 +103,7 @@ components:
 
 The public Pay As You Go journey is an operational departure board that becomes a class ticket. Real session rows lead; selecting a row visibly binds it to the amber ticket rail and its checkout form. It must never read as a generic membership landing page or as the purchase of a transferable credit.
 
-The wider world is matte, direct and gym-floor practical: carbon-black page framing, warm near-black panels, warm-white type, oversized condensed headings and a small amount of amber reserved for selection, price and primary action. Adult Conditioning extends the same decisive selected/unselected/disabled grammar into recurring-slot choice, while retaining the established recurring-membership checkout treatment.
+The wider world is matte, direct and gym-floor practical: carbon-black page framing, warm near-black panels, warm-white type, oversized condensed headings and a small amount of amber reserved for selection, price and primary action. Adult Conditioning extends the same decisive selected/unselected/disabled grammar into eligible schedule booking and weekly quota status, while retaining the established recurring-membership checkout treatment.
 
 **Key Characteristics:**
 
@@ -120,7 +120,7 @@ The palette is predominantly neutral and dark, with warm amber acting as a high-
 
 - **Ticket Amber** (`colors.amber`): PAYG price, selected rows, ticket headers, icons, links, form focus and primary actions.
 - **Ticket Amber Hover** (`colors.amber-hover`): PAYG hover only; do not make it a second resting accent.
-- **Membership Amber Soft** (`colors.amber-soft`): enabled recurring-membership actions and selected Conditioning slots. The closed Conditioning preview uses Ticket Amber instead. Preserve this surface distinction unless it is deliberately unified across the whole membership flow.
+- **Membership Amber Soft** (`colors.amber-soft`): enabled recurring-membership actions and booked or selected Conditioning classes. The closed Conditioning preview uses Ticket Amber instead. Preserve this surface distinction unless it is deliberately unified across the whole membership flow.
 
 ### Neutral
 
@@ -150,7 +150,7 @@ Anton supplies compressed, uppercase impact without decorative effects. PAYG del
 ### Hierarchy
 
 - **Display:** Anton, uppercase, tightly led. PAYG starts at the `display` token and reaches 4.5rem from the small breakpoint; success and Conditioning pages use 3–3.75rem.
-- **Headline:** Anton at about 1.875rem for day groups, ticket details, slot sections and status headings.
+- **Headline:** Anton at about 1.875rem for day groups, ticket details, quota sections and status headings.
 - **Body:** Barlow at 1rem/1.75rem for primary PAYG explanation; compact 0.875rem copy is common in forms and operational details. Membership checkout uses Inter at 0.875rem with generous 1.5–1.75rem leading.
 - **Label:** 0.6875–0.75rem, bold to black, often uppercase with 0.12–0.28em tracking for eyebrows, availability, receipt terms and navigation metadata.
 - **Values:** Times, prices and class names may use Anton; legal copy, attendee data and state explanations never do.
@@ -165,7 +165,7 @@ The schedule is grouped by day. Each clipped group contains full-width row butto
 
 On screens below the large breakpoint, the schedule stays primary. A fixed, blurred selection bar shows the chosen class and price above the safe-area inset; Continue scrolls to and focuses the full ticket/form. Extra page-bottom space prevents the bar covering content. Success and cancellation pages collapse to centered single cards (`max-w-2xl` and `max-w-xl`).
 
-Conditioning checkout is a single `max-w-2xl` column. Its four slot controls stack on narrow screens and become a two-column grid from the small breakpoint. The count remains adjacent to the section heading and uses a polite live region.
+Conditioning checkout is a single `max-w-2xl` column. It explains the two-class weekly allowance and limited app access without asking the customer to freeze future slots. In the signed-in Schedule, keep remaining weekly allowance adjacent to eligible Conditioning rows and expose quota changes through a polite live region.
 
 Shared navigation is horizontally scrollable rather than wrapping. The top navigation is a sticky black, blurred strip with pill links and top safe-area padding. The bottom navigation is a fixed frosted-white shell capped at 27rem by default and 36rem from the small breakpoint, with 44px minimum item height and bottom safe-area positioning.
 
@@ -175,13 +175,13 @@ The system is flat by default and establishes depth through tonal layering and t
 
 Blur belongs to sticky navigation and the mobile selection bar, where it preserves context while separating controls. Mobile globally reduces these blur utilities to 8px.
 
-**The Transaction-Object Rule.** Apply a large shadow only to an object that represents an active purchase, receipt or destructive decision; ordinary schedule rows and slot cards remain tonal and bordered.
+**The Transaction-Object Rule.** Apply a large shadow only to an object that represents an active purchase, receipt or destructive decision; ordinary schedule rows and quota cards remain tonal and bordered.
 
 ## Shapes
 
 PAYG cards, notices, fields and primary controls use gently rounded 12–16px corners. The ticket header and body are clipped by one 16px outer card, and dashed separators provide the perforated receipt language. Rows are not individually rounded inside their clipped day container.
 
-Recurring-membership cards retain their roomier 28px corners and 16px fields. Conditioning slot controls use 12px corners inside a 16px section. Navigation has a separate geometry: fully pill-shaped top links, a 22px bottom shell and 14px bottom items.
+Recurring-membership cards retain their roomier 28px corners and 16px fields. Conditioning quota summaries and eligible booking controls use 12px corners inside a 16px section. Navigation has a separate geometry: fully pill-shaped top links, a 22px bottom shell and 14px bottom items.
 
 **The Nested-Radius Rule.** Outer shells own the largest curve; inner controls step down. Do not give every nested element the same oversized radius.
 
@@ -205,12 +205,13 @@ Recurring-membership cards retain their roomier 28px corners and 16px fields. Co
 - Before selection, prompt for one session. After selection, pin class, date, time, location and availability above attendee fields.
 - Success reuses the ticket shell for processing, confirmed, refund, cancellation, no-show and dispute states. Preserve the order reference and recorded cancellation cutoff.
 
-### Conditioning slot selector
+### Conditioning weekly allowance
 
-- Render the canonical slot options as pressed-state buttons with day over an Anton time value.
-- Exactly two selections are allowed. Once two are selected, remaining choices become disabled but selected choices remain removable.
-- Changing slots clears prior legal acceptances and checkout-attempt state. The selection count is announced with `aria-live="polite"`.
-- The closed preview ends in an amber Coming soon notice and enquiry action; it must not expose a payment control.
+- Checkout states the contract as any two eligible Conditioning classes per Europe/London Monday-to-Sunday week; it does not ask the customer to choose recurring slots.
+- In the signed-in Schedule, distinguish eligible, booked, full and quota-exhausted classes without relying on colour. Show the remaining allowance for the week containing each class start.
+- Booking an eligible class consumes one place from that week's allowance. Cancelling it releases the place back to the same week and refreshes the visible count after server confirmation, allowing the member to choose another eligible class.
+- Announce booking and cancellation changes with `aria-live="polite"`. Capacity, class eligibility, London-local week boundaries and the two-class limit remain server-authoritative.
+- The closed checkout preview ends in an amber Coming soon notice and enquiry action; it must not expose a payment control.
 
 ### Inputs and acceptances
 
@@ -241,13 +242,13 @@ Recurring-membership cards retain their roomier 28px corners and 16px fields. Co
 - PAYG is **£7.50 for one named class and one adult attendee**. It requires no account or membership and is never described as a credit, pass or reschedulable booking.
 - State plainly that the class cannot be transferred or rescheduled; cancellations made at least 24 hours before class are refundable, while later cancellations and no-shows are non-refundable. For eligible cancellations say the refund is being processed, not that it is already complete.
 - Show exact London-local date/time, coach/location when supplied, remaining capacity, Stripe hand-off and the recorded cancellation cutoff. Processing retries must say they do not create another charge.
-- Adult Conditioning is **£30 per month** and requires exactly two of Monday 06:00, Tuesday 18:00, Thursday 18:00 and Friday 05:30. It includes Schedule, Profile and Membership only; Dashboard/WOD, Training, Leaderboards and performance statistics are explicitly excluded.
-- Legal and availability language is state-bound. Checkout opens only when the runtime gate and approved legal payload allow it; otherwise show the timetable/slot preview with a clear closed state. Never make a release-gated flow look purchasable.
+- Adult Conditioning is **£30 per month** and includes any two eligible Conditioning classes per Europe/London Monday-to-Sunday week. Members choose from the live Schedule, may make different choices each week, and regain that week's place when they cancel a booking. It includes Schedule, Profile and Membership only; Dashboard/WOD, Training, Leaderboards and performance statistics are explicitly excluded.
+- Legal and availability language is state-bound. Checkout opens only when the runtime gate and approved legal payload allow it; otherwise show the timetable or offer preview with a clear closed state. Never make a release-gated flow look purchasable.
 - Access, eligibility, capacity, price, payment, cancellation and refunds are server-authoritative. UI visibility explains the contract but is not the security boundary.
 
 ### Reuse guidance
 
-- Reuse the local visual roles above, but source product facts from `MEMBERSHIP_PLANS`, `CONDITIONING_SLOT_OPTIONS`, `POLICY_TEXT`, versioned checkout-document resolvers and the sanitised PAYG schedule response.
+- Reuse the local visual roles above, but source product facts from `MEMBERSHIP_PLANS`, `POLICY_TEXT`, versioned checkout-document resolvers, authoritative Conditioning eligibility/quota responses and the sanitised PAYG schedule response.
 - Reuse `getUserNavItems` rather than copying route lists. Pair any hidden limited-access feature with the existing route/capability guard and explanatory unavailable state.
 - The implemented patterns are currently page-local Tailwind compositions, not a shared component library. Extract only when reuse is real, and preserve each component's full selected, disabled, loading, error and focus state matrix.
 
@@ -255,8 +256,8 @@ Recurring-membership cards retain their roomier 28px corners and 16px fields. Co
 
 ### Do
 
-- **Do** let real schedule rows or canonical recurring slots lead the decision.
-- **Do** use amber to connect a selected source row/slot to its purchase summary and action.
+- **Do** let real schedule rows lead the decision and make the current London-local week's remaining Conditioning allowance easy to understand.
+- **Do** use amber to connect a selected or booked source row to its summary and action.
 - **Do** repeat the exact selected class, price and policy boundary at checkout and confirmation.
 - **Do** preserve separate PAYG and recurring-membership typography/action treatments while sharing interaction semantics.
 - **Do** keep faint text to secondary metadata and use readable contrast for every condition of purchase.
@@ -268,5 +269,5 @@ Recurring-membership cards retain their roomier 28px corners and 16px fields. Co
 - **Don't** imply that £7.50 buys a reusable credit, transferable place or rescheduling right.
 - **Don't** show restricted Conditioning members Dashboard/WOD, Training, Leaderboards or performance navigation.
 - **Don't** treat hidden navigation as authorization; server and route guards remain mandatory.
-- **Don't** silently change selected Conditioning slots or preserve acceptances after slot/participant details change.
+- **Don't** imply Conditioning choices recur automatically, carry into another week or remain consumed after their booking is cancelled.
 - **Don't** add decorative shadows, extra accent colors or ambient animation to ordinary operational rows.

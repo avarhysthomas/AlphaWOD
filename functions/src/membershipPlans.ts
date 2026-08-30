@@ -15,6 +15,7 @@
 import {DateTime} from "luxon";
 import {
   AppAccessTier,
+  CONDITIONING_SLOT_KEYS,
   ConditioningSlotKey,
   canonicalConditioningSlots,
 } from "./authz";
@@ -65,7 +66,29 @@ export const SUPPORTED_YOUTH_FAMILY_DISCOUNT_PERCENTAGES = [
 ] as const;
 
 /** Catalogue schema version stored on every membership document. */
-export const MEMBERSHIP_SCHEMA_VERSION = 6;
+export const MEMBERSHIP_SCHEMA_VERSION = 7;
+
+export type ConditioningBookingPolicy = {
+  version: 1;
+  timezone: typeof BILLING_TIMEZONE;
+  weekStartsOn: "monday";
+  weeklyBookingLimit: 2;
+  eligibleSlotKeys: ConditioningSlotKey[];
+};
+
+/** Flexible Adult Conditioning booking policy introduced in catalogue v7. */
+export const CONDITIONING_BOOKING_POLICY: ConditioningBookingPolicy = {
+  version: 1,
+  timezone: BILLING_TIMEZONE,
+  weekStartsOn: "monday",
+  weeklyBookingLimit: 2,
+  eligibleSlotKeys: [
+    "monday_0600",
+    "tuesday_1800",
+    "thursday_1800",
+    "friday_0530",
+  ],
+};
 
 /** ---------------------------------------------------------------
  * Company and contact identity (Membership Terms sections 1 and 14)
@@ -156,7 +179,7 @@ export const MEMBERSHIP_PLANS: Record<PlanKey, MembershipPlan> = {
     appAccessTier: "limited",
     stripePriceEnvKey: "STRIPE_PRICE_ADULT_CONDITIONING",
     cardGroup: "adult",
-    summary: "Access to exactly two selected recurring conditioning sessions each week, with limited Zero Alpha App access.",
+    summary: "Book any two eligible conditioning sessions each Monday-to-Sunday week, with limited Zero Alpha App access.",
   },
   adult_ladies: {
     key: "adult_ladies",
@@ -429,7 +452,10 @@ export type CommercialPlanSnapshot = {
   automaticTaxEnabled: boolean;
   grantsAlphaWodAccess: boolean;
   appAccessTier: AppAccessTier;
-  selectedConditioningSlots: ConditioningSlotKey[];
+  /** Present only on frozen catalogue-v6 fixed-slot contracts. */
+  selectedConditioningSlots?: ConditioningSlotKey[];
+  /** Current flexible booking policy; null for plans without a weekly quota. */
+  conditioningBookingPolicy: ConditioningBookingPolicy | null;
   minAge: number;
   maxAge: number | null;
   cancellationNoticeDays: number;
@@ -517,15 +543,9 @@ export function resolveCheckoutSignerRole(planKey: PlanKey): CheckoutSignerRole 
 }
 
 export function createCommercialPlanSnapshot(
-  planKey: PlanKey,
-  selectedConditioningSlots: unknown = []
+  planKey: PlanKey
 ): CommercialPlanSnapshot {
   const plan = getPlan(planKey);
-  const frozenSlots = planKey === "adult_conditioning" ?
-    canonicalConditioningSlots(selectedConditioningSlots) : [];
-  if (planKey === "adult_conditioning" && !frozenSlots) {
-    throw new Error("adult_conditioning requires exactly two valid recurring slots");
-  }
   return {
     catalogueSchemaVersion: MEMBERSHIP_SCHEMA_VERSION,
     planKey: plan.key,
@@ -544,7 +564,10 @@ export function createCommercialPlanSnapshot(
     automaticTaxEnabled: BILLING_POLICY.automaticTaxEnabled,
     grantsAlphaWodAccess: plan.grantsAlphaWodAccess,
     appAccessTier: plan.appAccessTier,
-    selectedConditioningSlots: frozenSlots || [],
+    conditioningBookingPolicy: planKey === "adult_conditioning" ? {
+      ...CONDITIONING_BOOKING_POLICY,
+      eligibleSlotKeys: [...CONDITIONING_BOOKING_POLICY.eligibleSlotKeys],
+    } : null,
     minAge: plan.minAge,
     maxAge: plan.maxAge,
     cancellationNoticeDays: BILLING_POLICY.cancellationNoticeDays,
@@ -923,6 +946,7 @@ export type EntitlementDecision = {
   entitlementSource: "none" | "stripe";
   appAccessTier: AppAccessTier;
   entitlementClassSlots: ConditioningSlotKey[];
+  entitlementWeeklyBookingLimit: number | null;
   /** Why the decision was made; stored on the audit trail. */
   reason: string;
 };
@@ -931,7 +955,31 @@ export type ValidatedCommercialEntitlementPolicy = {
   grantsAlphaWodAccess: boolean;
   appAccessTier: AppAccessTier;
   entitlementClassSlots: ConditioningSlotKey[];
+  entitlementWeeklyBookingLimit: number | null;
+  conditioningBookingPolicy: ConditioningBookingPolicy | null;
 };
+
+function validateConditioningBookingPolicy(
+  value: unknown
+): ConditioningBookingPolicy | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const policy = value as Record<string, unknown>;
+  const eligibleSlotKeys = policy.eligibleSlotKeys;
+  if (policy.version !== CONDITIONING_BOOKING_POLICY.version ||
+    policy.timezone !== CONDITIONING_BOOKING_POLICY.timezone ||
+    policy.weekStartsOn !== CONDITIONING_BOOKING_POLICY.weekStartsOn ||
+    policy.weeklyBookingLimit !==
+      CONDITIONING_BOOKING_POLICY.weeklyBookingLimit ||
+    !Array.isArray(eligibleSlotKeys) ||
+    eligibleSlotKeys.length !== CONDITIONING_SLOT_KEYS.length ||
+    !CONDITIONING_SLOT_KEYS.every(
+      (slot, index) => eligibleSlotKeys[index] === slot
+    )) return null;
+  return {
+    ...CONDITIONING_BOOKING_POLICY,
+    eligibleSlotKeys: [...CONDITIONING_BOOKING_POLICY.eligibleSlotKeys],
+  };
+}
 
 /**
  * Validates only the immutable entitlement fields stored in a commercial
@@ -957,13 +1005,16 @@ export function validateCommercialEntitlementPolicy(
   // grant combinations rather than broadening an ambiguous old snapshot.
   if (Number(terms.catalogueSchemaVersion) <= 5) {
     if (terms.appAccessTier !== undefined ||
-      terms.selectedConditioningSlots !== undefined) return null;
+      terms.selectedConditioningSlots !== undefined ||
+      terms.conditioningBookingPolicy !== undefined) return null;
     if (terms.planKey === "adult_unlimited" &&
       terms.grantsAlphaWodAccess === true) {
       return {
         grantsAlphaWodAccess: true,
         appAccessTier: "full",
         entitlementClassSlots: [],
+        entitlementWeeklyBookingLimit: null,
+        conditioningBookingPolicy: null,
       };
     }
     const historicalNonAppPlans = [
@@ -978,39 +1029,101 @@ export function validateCommercialEntitlementPolicy(
         grantsAlphaWodAccess: false,
         appAccessTier: "none",
         entitlementClassSlots: [],
+        entitlementWeeklyBookingLimit: null,
+        conditioningBookingPolicy: null,
       };
     }
     return null;
   }
 
-  if ((terms.appAccessTier !== "none" &&
+  if (Number(terms.catalogueSchemaVersion) === 6) {
+    if (terms.conditioningBookingPolicy !== undefined ||
+      (terms.appAccessTier !== "none" &&
       terms.appAccessTier !== "limited" &&
       terms.appAccessTier !== "full") ||
       !Array.isArray(terms.selectedConditioningSlots)) return null;
 
+    if (terms.grantsAlphaWodAccess === false) {
+      return terms.appAccessTier === "none" &&
+        terms.selectedConditioningSlots.length === 0 ? {
+          grantsAlphaWodAccess: false,
+          appAccessTier: "none",
+          entitlementClassSlots: [],
+          entitlementWeeklyBookingLimit: null,
+          conditioningBookingPolicy: null,
+        } : null;
+    }
+
+    if (terms.appAccessTier === "full") {
+      return terms.planKey === "adult_unlimited" &&
+        terms.selectedConditioningSlots.length === 0 ? {
+          grantsAlphaWodAccess: true,
+          appAccessTier: "full",
+          entitlementClassSlots: [],
+          entitlementWeeklyBookingLimit: null,
+          conditioningBookingPolicy: null,
+        } : null;
+    }
+    if (terms.appAccessTier !== "limited" ||
+      terms.planKey !== "adult_conditioning") return null;
+    const slots = canonicalConditioningSlots(terms.selectedConditioningSlots);
+    return slots ? {
+      grantsAlphaWodAccess: true,
+      appAccessTier: "limited",
+      entitlementClassSlots: slots,
+      entitlementWeeklyBookingLimit: null,
+      conditioningBookingPolicy: null,
+    } : null;
+  }
+
+  // Unknown future catalogue shapes never inherit v7 access semantics.
+  if (Number(terms.catalogueSchemaVersion) !== MEMBERSHIP_SCHEMA_VERSION ||
+    terms.selectedConditioningSlots !== undefined ||
+    (terms.appAccessTier !== "none" && terms.appAccessTier !== "limited" &&
+      terms.appAccessTier !== "full")) return null;
+
+  if (terms.planKey === "adult_conditioning") {
+    const policy = validateConditioningBookingPolicy(
+      terms.conditioningBookingPolicy
+    );
+    return terms.grantsAlphaWodAccess === true &&
+      terms.appAccessTier === "limited" && policy ? {
+        grantsAlphaWodAccess: true,
+        appAccessTier: "limited",
+        entitlementClassSlots: [...policy.eligibleSlotKeys],
+        entitlementWeeklyBookingLimit: policy.weeklyBookingLimit,
+        conditioningBookingPolicy: policy,
+      } : null;
+  }
+
+  if (terms.conditioningBookingPolicy !== null) return null;
   if (terms.grantsAlphaWodAccess === false) {
-    return terms.appAccessTier === "none" &&
-      terms.selectedConditioningSlots.length === 0 ? {
+    const currentNonAppPlans = [
+      "adult_ladies",
+      "adult_gym",
+      "youth_youngstars",
+      "youth_teenstars",
+    ];
+    return currentNonAppPlans.includes(terms.planKey) &&
+      terms.appAccessTier === "none" ? {
         grantsAlphaWodAccess: false,
         appAccessTier: "none",
         entitlementClassSlots: [],
+        entitlementWeeklyBookingLimit: null,
+        conditioningBookingPolicy: null,
       } : null;
   }
 
   if (terms.appAccessTier === "full") {
-    return terms.selectedConditioningSlots.length === 0 ? {
+    return terms.planKey === "adult_unlimited" ? {
       grantsAlphaWodAccess: true,
       appAccessTier: "full",
       entitlementClassSlots: [],
+      entitlementWeeklyBookingLimit: null,
+      conditioningBookingPolicy: null,
     } : null;
   }
-  if (terms.appAccessTier !== "limited") return null;
-  const slots = canonicalConditioningSlots(terms.selectedConditioningSlots);
-  return slots ? {
-    grantsAlphaWodAccess: true,
-    appAccessTier: "limited",
-    entitlementClassSlots: slots,
-  } : null;
+  return null;
 }
 
 /**
@@ -1033,6 +1146,7 @@ export function resolveEntitlementForCommercialTerms(
         entitlementSource: "none",
         appAccessTier: "none",
         entitlementClassSlots: [],
+        entitlementWeeklyBookingLimit: null,
         reason: "membership_access_policy_invalid_terminal",
       };
     }
@@ -1042,6 +1156,7 @@ export function resolveEntitlementForCommercialTerms(
       entitlementSource: "stripe",
       appAccessTier: "none",
       entitlementClassSlots: [],
+      entitlementWeeklyBookingLimit: null,
       reason: "membership_access_policy_invalid",
     };
   }
@@ -1052,6 +1167,7 @@ export function resolveEntitlementForCommercialTerms(
       entitlementSource: "none",
       appAccessTier: "none",
       entitlementClassSlots: [],
+      entitlementWeeklyBookingLimit: null,
       reason: `membership_${state}`,
     };
   }
@@ -1062,6 +1178,7 @@ export function resolveEntitlementForCommercialTerms(
     // effective claims down to none/empty.
     appAccessTier: policy.appAccessTier,
     entitlementClassSlots: policy.entitlementClassSlots,
+    entitlementWeeklyBookingLimit: policy.entitlementWeeklyBookingLimit,
     reason: `membership_${state}`,
   };
 }
@@ -1075,8 +1192,7 @@ export function resolveEntitlementForCommercialTerms(
  */
 export function resolveEntitlementForMembership(
   planKey: PlanKey,
-  state: MembershipState,
-  selectedConditioningSlots: unknown = []
+  state: MembershipState
 ): EntitlementDecision | null {
   const plan = getPlan(planKey);
   if (!plan.grantsAlphaWodAccess || plan.appAccessTier === "none") return null;
@@ -1092,28 +1208,24 @@ export function resolveEntitlementForMembership(
       entitlementSource: "none",
       appAccessTier: "none",
       entitlementClassSlots: [],
+      entitlementWeeklyBookingLimit: null,
       reason: `membership_${state}`,
     };
   }
 
-  const classSlots = plan.appAccessTier === "limited" ?
-    canonicalConditioningSlots(selectedConditioningSlots) : [];
-  if (plan.appAccessTier === "limited" && !classSlots) {
-    return {
-      entitlementStatus: "restricted",
-      entitlementSource: "stripe",
-      appAccessTier: "none",
-      entitlementClassSlots: [],
-      reason: "membership_access_policy_invalid",
-    };
-  }
+  const isFlexibleConditioning = planKey === "adult_conditioning";
+  const classSlots = isFlexibleConditioning ?
+    [...CONDITIONING_BOOKING_POLICY.eligibleSlotKeys] : [];
+  const weeklyBookingLimit = isFlexibleConditioning ?
+    CONDITIONING_BOOKING_POLICY.weeklyBookingLimit : null;
 
   if (isMembershipStateEntitled(state)) {
     return {
       entitlementStatus: "active",
       entitlementSource: "stripe",
       appAccessTier: plan.appAccessTier,
-      entitlementClassSlots: classSlots || [],
+      entitlementClassSlots: classSlots,
+      entitlementWeeklyBookingLimit: weeklyBookingLimit,
       reason: `membership_${state}`,
     };
   }
@@ -1123,6 +1235,7 @@ export function resolveEntitlementForMembership(
     entitlementSource: "stripe",
     appAccessTier: "none",
     entitlementClassSlots: [],
+    entitlementWeeklyBookingLimit: null,
     reason: `membership_${state}`,
   };
 }

@@ -111,7 +111,7 @@ describe("Memberships presale presentation", () => {
     expect(screen.queryAllByRole("link").filter((link) =>
       link.getAttribute("href")?.startsWith("/memberships/checkout/")
     )).toHaveLength(1);
-    expect(screen.getByRole("link", {name: "Preview weekly slots"}))
+    expect(screen.getByRole("link", {name: "Preview weekly allowance"}))
       .toHaveAttribute("href", "/memberships/checkout/adult_conditioning");
   });
 
@@ -125,7 +125,7 @@ describe("Memberships presale presentation", () => {
     expect(screen.queryAllByRole("link").filter((link) =>
       link.getAttribute("href")?.startsWith("/memberships/checkout/")
     )).toHaveLength(6);
-    expect(screen.getByText(/Coming soon · choose exactly two weekly conditioning slots/i))
+    expect(screen.getByText(/Coming soon · book any two eligible Conditioning classes each week/i))
       .toBeInTheDocument();
   });
 
@@ -150,7 +150,7 @@ describe("Memberships presale presentation", () => {
     mockConditioningCheckoutEnabled = true;
     render(<Memberships />);
 
-    expect(screen.queryByText(/Coming soon · choose exactly two/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Coming soon · book any two/i)).not.toBeInTheDocument();
     expect(screen.getByRole("link", {name: "Choose Adult Conditioning Only"}))
       .toHaveAttribute("href", "/memberships/checkout/adult_conditioning");
   });

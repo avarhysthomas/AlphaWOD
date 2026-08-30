@@ -523,6 +523,7 @@ describe("billing collections are server-only", () => {
     "membershipCheckoutLocks/participant_test",
     "membershipEntitlementOwners/member_test",
     "membershipBookingCleanupJobs/sub_test",
+    "conditioningWeeklyBookingUsage/week_test",
     "stripeEvents/evt_test",
     "membershipEmailOutbox/sub_test",
     "membershipCancellationReceipts/cancel_test",

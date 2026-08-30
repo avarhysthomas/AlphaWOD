@@ -61,6 +61,11 @@ import {
   MEMBERSHIP_CHECKOUT_SCHEMA_VERSION,
 } from "./membership";
 import {
+  applyConditioningQuotaRelease,
+  prepareConditioningQuotaRelease,
+  reserveConditioningWeeklyQuota,
+} from "./conditioningQuota";
+import {
   buildCreatePaygCheckoutSession,
   buildGetPaygCancellationPreview,
   buildGetPaygCheckoutStatus,
@@ -109,6 +114,7 @@ type UserDoc = {
   entitlementPlanKey?: string;
   appAccessTier?: AppAccessTier;
   entitlementClassSlots?: ConditioningSlotKey[];
+  entitlementWeeklyBookingLimit?: number | null;
   entitlementReason?: string;
   alphaWodAccess?: boolean;
   accessSchemaVersion?: number;
@@ -178,6 +184,10 @@ type BookingDoc = {
   createdAt: FieldValue | Timestamp;
   cancelledAt?: FieldValue | Timestamp;
   cancelledReason?: "user_cancelled" | "authorised_absence" | string;
+  conditioningQuotaUsageId?: string;
+  conditioningQuotaWeekKey?: string;
+  conditioningQuotaPolicyVersion?: number;
+  conditioningQuotaWeeklyLimit?: number;
 
   // attendance (day-of)
   attendanceStatus?: "none" | "checked_in" | "dip";
@@ -282,6 +292,8 @@ function userAccessPatch(user: UserDoc) {
     // checks continue to use the effective tier/slots from `buildManagedClaims`.
     appAccessTier: access.entitlementPolicyAppAccessTier,
     entitlementClassSlots: access.entitlementPolicyClassSlots,
+    entitlementWeeklyBookingLimit:
+      access.entitlementPolicyWeeklyBookingLimit,
     accessSchemaVersion: ACCESS_SCHEMA_VERSION,
   };
 }
@@ -348,6 +360,8 @@ async function convergeUserDerivedAccess(userId: string): Promise<void> {
       user.appAccessTier !== accessPatch.appAccessTier ||
       JSON.stringify(user.entitlementClassSlots ?? []) !==
         JSON.stringify(accessPatch.entitlementClassSlots) ||
+      (user.entitlementWeeklyBookingLimit ?? null) !==
+        accessPatch.entitlementWeeklyBookingLimit ||
       user.accessSchemaVersion !== ACCESS_SCHEMA_VERSION) {
       if (!current.updateTime) {
         throw new Error(`Cannot derive access for ${userId} without an update time.`);
@@ -781,9 +795,9 @@ function conditioningSlotForOccurrence(
 function assertClassBookingEntitlement(
   user: UserDoc,
   classData: Partial<ClassDoc>
-): void {
+): ConditioningSlotKey | null {
   const access = requireStrictAuthorisation(user);
-  if (access.appAccessTier === "full") return;
+  if (access.appAccessTier === "full") return null;
   if (access.appAccessTier !== "limited") {
     throw new HttpsError(
       "permission-denied",
@@ -795,17 +809,18 @@ function assertClassBookingEntitlement(
   if (!classSlot) {
     throw new HttpsError(
       "permission-denied",
-      "Adult Conditioning membership covers only its selected recurring sessions.",
+      "Adult Conditioning membership covers only eligible Conditioning sessions.",
       {
         reason: "class_not_conditioning_membership_slot",
         allowedConditioningSlotKeys: access.entitlementClassSlots,
       }
     );
   }
+  if (access.entitlementWeeklyBookingLimit === 2) return classSlot;
   if (!access.entitlementClassSlots.includes(classSlot)) {
     throw new HttpsError(
       "permission-denied",
-      "This recurring conditioning session is not one of the two selected for this membership.",
+      "This recurring conditioning session is not included in this membership's eligible scope.",
       {
         reason: "conditioning_slot_not_selected",
         classConditioningSlotKey: classSlot,
@@ -813,6 +828,7 @@ function assertClassBookingEntitlement(
       }
     );
   }
+  return classSlot;
 }
 
 function ukDateKeyNow() {
@@ -950,8 +966,11 @@ export const bookClass = onCall(async (request) => {
     const member = assertApprovedMember(userSnap.data() as UserDoc | undefined);
 
     const classData = classSnap.data() as Partial<ClassDoc>;
-    assertClassBookingEntitlement(member, classData);
-    const entitlementSubscriptionId =
+    const conditioningClassSlot = assertClassBookingEntitlement(
+      member,
+      classData
+    );
+    const membershipEligibility =
       await assertStripeMembershipBookingEligibility(
         tx,
         uid,
@@ -985,6 +1004,31 @@ export const bookClass = onCall(async (request) => {
       // if cancelled, we allow re-book (overwrite below)
     }
 
+    let conditioningQuotaBinding = null;
+    const conditioningPolicy =
+      membershipEligibility.conditioningBookingPolicy;
+    if (conditioningPolicy) {
+      const subscriptionId = membershipEligibility.subscriptionId;
+      if (!subscriptionId || !conditioningClassSlot) {
+        throw new HttpsError(
+          "permission-denied",
+          "The Conditioning booking policy could not be verified."
+        );
+      }
+      conditioningQuotaBinding = await reserveConditioningWeeklyQuota(
+        tx,
+        db,
+        {
+          userId: uid,
+          subscriptionId,
+          bookingId: bookingRef.id,
+          classStart: classData.startTime,
+          classSlot: conditioningClassSlot,
+          policy: conditioningPolicy,
+        }
+      );
+    }
+
     const userName = (userSnap.data() as UserDoc | undefined)?.name || "Member";
 
     tx.set(bookingRef, {
@@ -993,7 +1037,10 @@ export const bookClass = onCall(async (request) => {
       userName,
       status: "booked",
       bookingKind: "member",
-      ...(entitlementSubscriptionId ? {entitlementSubscriptionId} : {}),
+      ...(membershipEligibility.subscriptionId ? {
+        entitlementSubscriptionId: membershipEligibility.subscriptionId,
+      } : {}),
+      ...(conditioningQuotaBinding ?? {}),
       createdAt: FieldValue.serverTimestamp(),
     } satisfies BookingDoc);
 
@@ -1033,6 +1080,14 @@ export const cancelBooking = onCall(async (request) => {
     const classData = classSnap.data() as Partial<ClassDoc>;
     assertBookingWindowOpen(classData, "Cancellation closed");
     const bookedCount = Number(classData.bookedCount ?? 0);
+    const quotaRelease = await prepareConditioningQuotaRelease(
+      tx,
+      db,
+      bookingRef.id,
+      booking
+    );
+
+    applyConditioningQuotaRelease(tx, quotaRelease);
 
     tx.update(bookingRef, {
       status: "cancelled",
@@ -1078,8 +1133,11 @@ export const adminAddBooking = onCall(async (request) => {
     const userData = assertApprovedMember(userSnap.data() as UserDoc);
 
     const classData = classSnap.data() as Partial<ClassDoc>;
-    assertClassBookingEntitlement(userData, classData);
-    const entitlementSubscriptionId =
+    const conditioningClassSlot = assertClassBookingEntitlement(
+      userData,
+      classData
+    );
+    const membershipEligibility =
       await assertStripeMembershipBookingEligibility(
         tx,
         userId,
@@ -1106,6 +1164,31 @@ export const adminAddBooking = onCall(async (request) => {
       // If cancelled, allow overwrite / re-add
     }
 
+    let conditioningQuotaBinding = null;
+    const conditioningPolicy =
+      membershipEligibility.conditioningBookingPolicy;
+    if (conditioningPolicy) {
+      const subscriptionId = membershipEligibility.subscriptionId;
+      if (!subscriptionId || !conditioningClassSlot) {
+        throw new HttpsError(
+          "permission-denied",
+          "The Conditioning booking policy could not be verified."
+        );
+      }
+      conditioningQuotaBinding = await reserveConditioningWeeklyQuota(
+        tx,
+        db,
+        {
+          userId,
+          subscriptionId,
+          bookingId: bookingRef.id,
+          classStart: classData.startTime,
+          classSlot: conditioningClassSlot,
+          policy: conditioningPolicy,
+        }
+      );
+    }
+
     const userName = userData.name || "Member";
 
     tx.set(bookingRef, {
@@ -1114,7 +1197,10 @@ export const adminAddBooking = onCall(async (request) => {
       userName,
       status: "booked",
       bookingKind: "member",
-      ...(entitlementSubscriptionId ? {entitlementSubscriptionId} : {}),
+      ...(membershipEligibility.subscriptionId ? {
+        entitlementSubscriptionId: membershipEligibility.subscriptionId,
+      } : {}),
+      ...(conditioningQuotaBinding ?? {}),
       createdAt: FieldValue.serverTimestamp(),
       attendanceStatus: "none",
       attended: false,
@@ -1660,6 +1746,13 @@ export const markBookingStatus = onCall(async (request) => {
       classDoc.startTime,
       booking.entitlementSubscriptionId
     );
+    const quotaRelease = status === "authorised_absence" ?
+      await prepareConditioningQuotaRelease(
+        tx,
+        db,
+        bookingRef.id,
+        booking
+      ) : null;
 
     const lbUserRef = db
       .collection("leaderboards")
@@ -1789,6 +1882,7 @@ export const markBookingStatus = onCall(async (request) => {
     // Authorised absence = cancel booking + free spot
     if (status === "authorised_absence") {
       const bookedCount = Number(classDoc.bookedCount ?? 0);
+      applyConditioningQuotaRelease(tx, quotaRelease);
 
       tx.update(bookingRef, {
         status: "cancelled",
@@ -2219,6 +2313,7 @@ export const listStaffUsers = onCall(async (request) => {
         user.entitlementPlanKey : null,
       appAccessTier: access.appAccessTier,
       entitlementClassSlots: access.entitlementClassSlots,
+      entitlementWeeklyBookingLimit: access.entitlementWeeklyBookingLimit,
       alphaWodAccess: access.alphaWodAccess,
       strengthBlock: user.strengthBlock === "A" || user.strengthBlock === "B" ?
         user.strengthBlock : "none",
@@ -2251,6 +2346,8 @@ export const bootstrapUserProfile = onCall(async (request) => {
       } : {}),
       appAccessTier: existingAccess.entitlementPolicyAppAccessTier,
       entitlementClassSlots: existingAccess.entitlementPolicyClassSlots,
+      entitlementWeeklyBookingLimit:
+        existingAccess.entitlementPolicyWeeklyBookingLimit,
     } : {
       role: "user" as const,
       approvalStatus: "pending" as const,
@@ -2258,6 +2355,7 @@ export const bootstrapUserProfile = onCall(async (request) => {
       entitlementSource: "none" as const,
       appAccessTier: "none" as const,
       entitlementClassSlots: [] as ConditioningSlotKey[],
+      entitlementWeeklyBookingLimit: null,
     };
     const nextAccess = resolveUserAuthorisation(safeAuthorisation);
     const currentName = typeof existing.name === "string" && existing.name.trim() ?
@@ -2268,6 +2366,8 @@ export const bootstrapUserProfile = onCall(async (request) => {
       ...safeAuthorisation,
       appAccessTier: nextAccess.entitlementPolicyAppAccessTier,
       entitlementClassSlots: nextAccess.entitlementPolicyClassSlots,
+      entitlementWeeklyBookingLimit:
+        nextAccess.entitlementPolicyWeeklyBookingLimit,
       alphaWodAccess: nextAccess.alphaWodAccess,
       accessSchemaVersion: ACCESS_SCHEMA_VERSION,
       profileSchemaVersion: 1,
@@ -2298,6 +2398,7 @@ export const bootstrapUserProfile = onCall(async (request) => {
       entitlementSource: access.entitlementSource,
       appAccessTier: access.appAccessTier,
       entitlementClassSlots: access.entitlementClassSlots,
+      entitlementWeeklyBookingLimit: access.entitlementWeeklyBookingLimit,
       alphaWodAccess: access.alphaWodAccess,
     },
   };
@@ -2465,6 +2566,8 @@ export const setMemberEntitlement = onCall(async (request) => {
       ...next,
       appAccessTier: access.entitlementPolicyAppAccessTier,
       entitlementClassSlots: access.entitlementPolicyClassSlots,
+      entitlementWeeklyBookingLimit:
+        access.entitlementPolicyWeeklyBookingLimit,
       alphaWodAccess: access.alphaWodAccess,
       accessSchemaVersion: ACCESS_SCHEMA_VERSION,
       entitlementPlanKey: planKey || FieldValue.delete(),
@@ -2479,6 +2582,8 @@ export const setMemberEntitlement = onCall(async (request) => {
       ...next,
       appAccessTier: access.entitlementPolicyAppAccessTier,
       entitlementClassSlots: access.entitlementPolicyClassSlots,
+      entitlementWeeklyBookingLimit:
+        access.entitlementPolicyWeeklyBookingLimit,
       alphaWodAccess: access.alphaWodAccess,
     };
   });
@@ -2530,6 +2635,7 @@ export const approveUserAccess = onCall(async (request) => {
       ...(preserveMemberEntitlement ? {
         appAccessTier: user.appAccessTier,
         entitlementClassSlots: user.entitlementClassSlots,
+        entitlementWeeklyBookingLimit: user.entitlementWeeklyBookingLimit,
       } : {}),
     };
     const access = resolveUserAuthorisation(next);
@@ -2537,6 +2643,8 @@ export const approveUserAccess = onCall(async (request) => {
       ...next,
       appAccessTier: access.entitlementPolicyAppAccessTier,
       entitlementClassSlots: access.entitlementPolicyClassSlots,
+      entitlementWeeklyBookingLimit:
+        access.entitlementPolicyWeeklyBookingLimit,
       alphaWodAccess: access.alphaWodAccess,
       accessSchemaVersion: ACCESS_SCHEMA_VERSION,
       approvedAt: FieldValue.serverTimestamp(),
@@ -2603,6 +2711,8 @@ export const updateMemberRole = onCall(async (request) => {
       ...next,
       appAccessTier: access.entitlementPolicyAppAccessTier,
       entitlementClassSlots: access.entitlementPolicyClassSlots,
+      entitlementWeeklyBookingLimit:
+        access.entitlementPolicyWeeklyBookingLimit,
       entitlementPlanKey: FieldValue.delete(),
       alphaWodAccess: access.alphaWodAccess,
       accessSchemaVersion: ACCESS_SCHEMA_VERSION,

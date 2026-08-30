@@ -256,6 +256,12 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Server-authoritative Monday-to-Sunday counters serialize flexible
+    // Conditioning bookings. Client access could forge or bypass the limit.
+    match /conditioningWeeklyBookingUsage/{usageId} {
+      allow read, write: if false;
+    }
+
     // Webhook idempotency ledger. A client write here could suppress or replay
     // a fulfilment event.
     match /stripeEvents/{eventId} {

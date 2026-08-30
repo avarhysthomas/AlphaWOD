@@ -46,6 +46,7 @@ import {
   CheckoutAcceptanceStatement,
   CheckoutDocument,
   CheckoutSignerRole,
+  ConditioningBookingPolicy,
   CommercialPlanSnapshot,
   CHECKOUT_DOCUMENT_CONTENT_BUDGET_BYTES,
   CHECKOUT_DOCUMENTS,
@@ -97,6 +98,10 @@ import {
   resolveUserAuthorisation,
 } from "./authz";
 import {
+  applyConditioningQuotaRelease,
+  prepareConditioningQuotaRelease,
+} from "./conditioningQuota";
+import {
   CheckoutAttemptFingerprintMismatchError,
   CheckoutRateLimitExceededError,
   CheckoutRateLimitStateError,
@@ -134,7 +139,7 @@ import {
  * snapshot it accepts. Keep this independent from the stored document schema:
  * a Firestore migration must not invalidate an otherwise exact Stripe retry.
  */
-export const MEMBERSHIP_CHECKOUT_SCHEMA_VERSION = 5;
+export const MEMBERSHIP_CHECKOUT_SCHEMA_VERSION = 6;
 
 const REGION = "europe-west1";
 
@@ -481,8 +486,8 @@ type MembershipIntentDoc = {
   planKey: PlanKey;
   /** Complete customer-facing commercial plan frozen before Stripe opens. */
   commercialTerms: CommercialPlanSnapshot;
-  /** Two immutable weekly class slots for Adult Conditioning; empty otherwise. */
-  selectedConditioningSlots: ConditioningSlotKey[];
+  /** Present only on historical catalogue-v6 fixed-slot attempts. */
+  selectedConditioningSlots?: ConditioningSlotKey[];
   /** Stripe mode frozen with this retryable attempt. */
   stripeMode: StripeMode;
   /** Exact validated Price frozen for this attempt, even if config later rotates. */
@@ -585,7 +590,8 @@ type MembershipDoc = {
   planKey: PlanKey;
   stripePriceId: string;
   commercialTerms: CommercialPlanSnapshot;
-  selectedConditioningSlots: ConditioningSlotKey[];
+  /** Present only on historical catalogue-v6 fixed-slot contracts. */
+  selectedConditioningSlots?: ConditioningSlotKey[];
   planName: string;
   grantsAlphaWodAccess: boolean;
   participant: ParticipantRecord;
@@ -609,6 +615,7 @@ type MembershipDoc = {
     appAccessTier: AppAccessTier;
     entitlementPlanKey: string | null;
     entitlementClassSlots: ConditioningSlotKey[];
+    entitlementWeeklyBookingLimit?: number | null;
   } | null;
   currentPeriodEnd: number | null;
   billingMode: "presale_deferred" | "standard";
@@ -810,7 +817,7 @@ function orderFor(
 ): MembershipOrderSnapshot {
   const participantCount = participantCountFor(value);
   const commercialTerms = value.commercialTerms ??
-    createCommercialPlanSnapshot(value.planKey, value.selectedConditioningSlots);
+    createCommercialPlanSnapshot(value.planKey);
   const stored = value.order;
   if (stored && stored.participantCount === participantCount &&
     stored.unitAmountPence === commercialTerms.amountPence &&
@@ -819,6 +826,36 @@ function orderFor(
     return stored;
   }
   return createOrderSnapshot(commercialTerms, participantCount);
+}
+
+function conditioningEntitlementProjection(
+  commercialTerms: unknown,
+  planKey: PlanKey
+): {
+  conditioningBookingPolicy: ConditioningBookingPolicy | null;
+  entitlementClassSlots: ConditioningSlotKey[];
+  entitlementWeeklyBookingLimit: number | null;
+  selectedConditioningSlots?: ConditioningSlotKey[];
+} {
+  const policy = validateCommercialEntitlementPolicy(
+    commercialTerms,
+    planKey
+  );
+  if (!policy || planKey !== "adult_conditioning") {
+    return {
+      conditioningBookingPolicy: null,
+      entitlementClassSlots: [],
+      entitlementWeeklyBookingLimit: null,
+    };
+  }
+  return {
+    conditioningBookingPolicy: policy.conditioningBookingPolicy,
+    entitlementClassSlots: [...policy.entitlementClassSlots],
+    entitlementWeeklyBookingLimit: policy.entitlementWeeklyBookingLimit,
+    ...(!policy.conditioningBookingPolicy ? {
+      selectedConditioningSlots: [...policy.entitlementClassSlots],
+    } : {}),
+  };
 }
 
 function youthFamilyDiscountPercentFor(
@@ -1310,30 +1347,15 @@ function requirePlanKey(value: unknown): PlanKey {
   return value;
 }
 
-function requireSelectedConditioningSlots(
-  planKey: PlanKey,
-  value: unknown
-): ConditioningSlotKey[] {
-  if (planKey === "adult_conditioning") {
-    const slots = canonicalConditioningSlots(value);
-    if (!slots) {
-      throw new HttpsError(
-        "invalid-argument",
-        "Select exactly two different recurring conditioning class slots.",
-        {reason: "conditioning_slots_invalid"}
-      );
-    }
-    return slots;
-  }
+function rejectLegacySelectedConditioningSlots(value: unknown): void {
   if (value !== undefined && value !== null &&
       (!Array.isArray(value) || value.length > 0)) {
     throw new HttpsError(
       "invalid-argument",
-      "Conditioning class slots are available only for Adult Conditioning membership.",
-      {reason: "conditioning_slots_not_supported"}
+      "Fixed Conditioning slots are no longer selected at checkout. Refresh and review the flexible weekly booking terms.",
+      {reason: "conditioning_slots_no_longer_supported"}
     );
   }
-  return [];
 }
 
 function normalizeParticipantIdentityName(fullName: string): string {
@@ -2195,6 +2217,10 @@ type MembershipBookingForCleanup = {
   isGuestBooking?: unknown;
   entitlementSubscriptionId?: unknown;
   createdAt?: unknown;
+  conditioningQuotaUsageId?: string;
+  conditioningQuotaWeekKey?: string;
+  conditioningQuotaPolicyVersion?: number;
+  conditioningQuotaWeeklyLimit?: number;
 };
 
 type MembershipBookingCleanupJobDoc = {
@@ -2421,6 +2447,13 @@ async function reconcileMembershipBookingCandidate(
     }
 
     const bookedCount = Number(classSnap.get("bookedCount") ?? 0);
+    const quotaRelease = await prepareConditioningQuotaRelease(
+      tx,
+      db(),
+      bookingRef.id,
+      booking
+    );
+    applyConditioningQuotaRelease(tx, quotaRelease);
     tx.update(bookingRef, {
       status: "cancelled",
       cancelledAt: serverTimestamp(),
@@ -2583,10 +2616,15 @@ function membershipBookingIneligibleError(): HttpsError {
 export async function assertStripeMembershipBookingEligibility(
   tx: Transaction,
   userId: string,
-  user: {entitlementSource?: unknown},
+  user: Parameters<typeof resolveUserAuthorisation>[0] & {
+    entitlementSource?: unknown;
+  },
   classStart: unknown,
   expectedSubscriptionId?: unknown
-): Promise<string | null> {
+): Promise<{
+  subscriptionId: string | null;
+  conditioningBookingPolicy: ConditioningBookingPolicy | null;
+}> {
   const hasBookingBinding = expectedSubscriptionId !== undefined &&
     expectedSubscriptionId !== null;
   const bookingSubscriptionId = typeof expectedSubscriptionId === "string" &&
@@ -2595,7 +2633,9 @@ export async function assertStripeMembershipBookingEligibility(
   if (hasBookingBinding && !bookingSubscriptionId) {
     throw membershipBookingIneligibleError();
   }
-  if (user.entitlementSource !== "stripe" && !bookingSubscriptionId) return null;
+  if (user.entitlementSource !== "stripe" && !bookingSubscriptionId) {
+    return {subscriptionId: null, conditioningBookingPolicy: null};
+  }
 
   const owner = await tx.get(entitlementOwnerRef(userId));
   const subscriptionId = owner.get("subscriptionId");
@@ -2610,9 +2650,22 @@ export async function assertStripeMembershipBookingEligibility(
   );
   if (!membership.exists) throw membershipBookingIneligibleError();
   const authority = membership.data() as MembershipDoc;
+  const entitlementPolicy = validateCommercialEntitlementPolicy(
+    authority.commercialTerms,
+    authority.planKey
+  );
+  const profilePolicy = resolveUserAuthorisation(user);
   const classStartMillis = timestampMillis(classStart);
   if (authority.subscriptionId !== subscriptionId ||
     authority.entitlementTargetUid !== userId ||
+    !entitlementPolicy || entitlementPolicy.grantsAlphaWodAccess !== true ||
+    !profilePolicy.valid || profilePolicy.entitlementSource !== "stripe" ||
+    profilePolicy.entitlementPolicyAppAccessTier !==
+      entitlementPolicy.appAccessTier ||
+    JSON.stringify(profilePolicy.entitlementPolicyClassSlots) !==
+      JSON.stringify(entitlementPolicy.entitlementClassSlots) ||
+    profilePolicy.entitlementPolicyWeeklyBookingLimit !==
+      entitlementPolicy.entitlementWeeklyBookingLimit ||
     classStartMillis === null ||
     !classStartAllowedByMembership(
       membershipBookingBoundary(authority),
@@ -2620,7 +2673,11 @@ export async function assertStripeMembershipBookingEligibility(
     )) {
     throw membershipBookingIneligibleError();
   }
-  return subscriptionId;
+  return {
+    subscriptionId,
+    conditioningBookingPolicy:
+      entitlementPolicy.conditioningBookingPolicy,
+  };
 }
 
 /**
@@ -3215,6 +3272,37 @@ function checkoutRecoveryProviderDiagnostic(error: unknown): Record<string, unkn
   };
 }
 
+function conditioningPolicyMetadata(
+  policy: ConditioningBookingPolicy
+): Record<string, string> {
+  return {
+    conditioningPolicyVersion: String(policy.version),
+    conditioningWeeklyLimit: String(policy.weeklyBookingLimit),
+    conditioningEligibleSlots: policy.eligibleSlotKeys.join(","),
+  };
+}
+
+function conditioningPolicyMetadataMismatch(
+  metadata: Stripe.Metadata | null | undefined,
+  policy: ConditioningBookingPolicy
+): boolean {
+  const expected = conditioningPolicyMetadata(policy);
+  return metadata?.conditioningPolicyVersion !==
+      expected.conditioningPolicyVersion ||
+    metadata?.conditioningWeeklyLimit !== expected.conditioningWeeklyLimit ||
+    metadata?.conditioningEligibleSlots !== expected.conditioningEligibleSlots ||
+    metadata?.conditioningSlots != null;
+}
+
+function hasUnexpectedConditioningMetadata(
+  metadata: Stripe.Metadata | null | undefined
+): boolean {
+  return metadata?.conditioningSlots != null ||
+    metadata?.conditioningPolicyVersion != null ||
+    metadata?.conditioningWeeklyLimit != null ||
+    metadata?.conditioningEligibleSlots != null;
+}
+
 function checkoutSessionCommonBindingMismatch(
   session: Stripe.Checkout.Session,
   intentRef: DocumentReference,
@@ -3227,13 +3315,34 @@ function checkoutSessionCommonBindingMismatch(
   if (session.metadata?.appAccessTier !== intent.commercialTerms.appAccessTier) {
     return "app_access_tier_metadata";
   }
-  const expectedSlots = intent.planKey === "adult_conditioning" ?
-    canonicalConditioningSlots(intent.selectedConditioningSlots) : [];
+  const policy = validateCommercialEntitlementPolicy(
+    intent.commercialTerms,
+    intent.planKey
+  );
+  if (!policy) return "commercial_entitlement_policy";
   if (intent.planKey === "adult_conditioning" &&
-    (!expectedSlots || session.metadata?.conditioningSlots !==
-      expectedSlots.join(","))) return "conditioning_slots_metadata";
+    policy.conditioningBookingPolicy &&
+    conditioningPolicyMetadataMismatch(
+      session.metadata,
+      policy.conditioningBookingPolicy
+    )) return "conditioning_booking_policy_metadata";
+  if (intent.planKey === "adult_conditioning" &&
+    !policy.conditioningBookingPolicy) {
+    const expectedSlots = canonicalConditioningSlots(
+      intent.selectedConditioningSlots
+    );
+    if (!expectedSlots || JSON.stringify(expectedSlots) !==
+      JSON.stringify(policy.entitlementClassSlots) ||
+      session.metadata?.conditioningSlots !==
+      expectedSlots.join(",") ||
+      session.metadata?.conditioningPolicyVersion != null ||
+      session.metadata?.conditioningWeeklyLimit != null ||
+      session.metadata?.conditioningEligibleSlots != null) {
+      return "conditioning_slots_metadata";
+    }
+  }
   if (intent.planKey !== "adult_conditioning" &&
-    session.metadata?.conditioningSlots != null) {
+    hasUnexpectedConditioningMetadata(session.metadata)) {
     return "unexpected_conditioning_slots_metadata";
   }
   if (typeof session.expires_at !== "number" ||
@@ -3673,6 +3782,8 @@ async function applyMembershipEntitlement(
     let nextSource: EntitlementSource = decision.entitlementSource;
     let nextTier: AppAccessTier = decision.appAccessTier;
     let nextClassSlots: ConditioningSlotKey[] = decision.entitlementClassSlots;
+    let nextWeeklyBookingLimit: number | null =
+      decision.entitlementWeeklyBookingLimit;
     let nextPlanKey: string | null = nextSource === "stripe" ?
       membership.planKey : null;
 
@@ -3686,6 +3797,8 @@ async function applyMembershipEntitlement(
       entitlementPlanKey: typeof user.entitlementPlanKey === "string" ?
         user.entitlementPlanKey : null,
       entitlementClassSlots: current.entitlementPolicyClassSlots,
+      entitlementWeeklyBookingLimit:
+        current.entitlementPolicyWeeklyBookingLimit,
     };
 
     if (nextStatus === "none" &&
@@ -3699,6 +3812,8 @@ async function applyMembershipEntitlement(
       nextClassSlots = canonicalConditioningSlots(
         preMembership.entitlementClassSlots
       ) ?? [];
+      nextWeeklyBookingLimit =
+        preMembership.entitlementWeeklyBookingLimit ?? null;
     }
 
     if (!isEntitlementCompatibleWithRole(user.role, nextStatus, nextSource)) {
@@ -3719,6 +3834,7 @@ async function applyMembershipEntitlement(
       appAccessTier: nextTier,
       entitlementPlanKey: nextPlanKey,
       entitlementClassSlots: nextClassSlots,
+      entitlementWeeklyBookingLimit: nextWeeklyBookingLimit,
     };
     const access = resolveUserAuthorisation(next);
 
@@ -3744,6 +3860,8 @@ async function applyMembershipEntitlement(
       entitlementClassSlots:
         access.entitlementPolicyAppAccessTier === "limited" ?
           access.entitlementPolicyClassSlots : FieldValue.delete(),
+      entitlementWeeklyBookingLimit:
+        access.entitlementPolicyWeeklyBookingLimit,
       appAccessTier: access.entitlementPolicyAppAccessTier,
       alphaWodAccess: access.alphaWodAccess,
       accessSchemaVersion: ACCESS_SCHEMA_VERSION,
@@ -4028,28 +4146,48 @@ async function convergeMembershipFromStripe(
         throw new Error(`Membership ${subscriptionId} lost its convergence lease.`);
       }
       const stored = fresh.data() as MembershipDoc;
-      const currentContractMismatch = stripeSubscriptionContractMismatch(
-        subscription,
-        {
-          planKey: stored.planKey,
-          stripePriceId: stored.stripePriceId,
-          stripeCustomerId: stored.stripeCustomerId,
-          billingCycleAnchor: stored.billingCycleAnchor,
-          ...(stored.schemaVersion >= MEMBERSHIP_SCHEMA_VERSION ? {
-            appAccessTier: stored.commercialTerms?.appAccessTier ??
-              getPlan(stored.planKey).appAccessTier,
-          } : {}),
-          ...(Number.isSafeInteger(stored.participantCount) ? {
-            participantCount: stored.participantCount,
-          } : {}),
-          ...(stored.planKey === "adult_conditioning" ? {
-            selectedConditioningSlots: stored.selectedConditioningSlots,
-          } : {}),
-          ...(stored.schemaVersion >= 2 ? {
-            discountCouponId: stored.discount?.couponId ?? null,
-          } : {}),
-        }
+      const storedEntitlementPolicy = validateCommercialEntitlementPolicy(
+        stored.commercialTerms,
+        stored.planKey
       );
+      const expectsLegacyConditioningSlots =
+        stored.planKey === "adult_conditioning" &&
+        Boolean(storedEntitlementPolicy) &&
+        !storedEntitlementPolicy?.conditioningBookingPolicy;
+      const storedLegacySlots = expectsLegacyConditioningSlots ?
+        canonicalConditioningSlots(stored.selectedConditioningSlots) : null;
+      const storedLegacyPolicyMismatch = expectsLegacyConditioningSlots &&
+        (!storedLegacySlots || JSON.stringify(storedLegacySlots) !==
+          JSON.stringify(storedEntitlementPolicy?.entitlementClassSlots));
+      const currentContractMismatch = !storedEntitlementPolicy ||
+        storedLegacyPolicyMismatch ?
+        `Membership ${stored.subscriptionId} has an invalid commercial entitlement policy.` :
+        stripeSubscriptionContractMismatch(
+          subscription,
+          {
+            planKey: stored.planKey,
+            stripePriceId: stored.stripePriceId,
+            stripeCustomerId: stored.stripeCustomerId,
+            billingCycleAnchor: stored.billingCycleAnchor,
+            ...(stored.schemaVersion >= MEMBERSHIP_SCHEMA_VERSION ? {
+              appAccessTier: stored.commercialTerms?.appAccessTier ??
+                getPlan(stored.planKey).appAccessTier,
+            } : {}),
+            ...(Number.isSafeInteger(stored.participantCount) ? {
+              participantCount: stored.participantCount,
+            } : {}),
+            ...(stored.planKey === "adult_conditioning" &&
+              storedEntitlementPolicy.conditioningBookingPolicy ? {
+                conditioningBookingPolicy:
+                  storedEntitlementPolicy.conditioningBookingPolicy,
+              } : stored.planKey === "adult_conditioning" ? {
+                selectedConditioningSlots: storedLegacySlots || undefined,
+              } : {}),
+            ...(stored.schemaVersion >= 2 ? {
+              discountCouponId: stored.discount?.couponId ?? null,
+            } : {}),
+          }
+        );
       const providerNeedsManualReview = Boolean(currentContractMismatch);
       const openDisputeIds = Array.isArray(stored.openDisputeIds) ?
         [...new Set(stored.openDisputeIds.filter((id) => typeof id === "string"))] : [];
@@ -5047,8 +5185,7 @@ function buildCreateMembershipCheckoutHandler(
     const planKey = requirePlanKey(request.data?.planKey);
     requirePlanPurchaseFlowOpen(planKey);
     const plan = getPlan(planKey);
-    const selectedConditioningSlots = requireSelectedConditioningSlots(
-      planKey,
+    rejectLegacySelectedConditioningSlots(
       request.data?.selectedConditioningSlots
     );
     const participantName = requirePersonName(
@@ -5175,10 +5312,7 @@ function buildCreateMembershipCheckoutHandler(
       );
     }
 
-    const commercialTerms = createCommercialPlanSnapshot(
-      planKey,
-      selectedConditioningSlots
-    );
+    const commercialTerms = createCommercialPlanSnapshot(planKey);
     const documents = resolveCheckoutDocuments(planKey);
     const participantCount = 1 + additionalParticipants.length;
     const statements = resolveCheckoutAcceptanceStatements(planKey, participantCount);
@@ -5372,7 +5506,6 @@ function buildCreateMembershipCheckoutHandler(
         payerEmail,
         planKey,
         commercialTerms,
-        selectedConditioningSlots,
         stripeMode: assertBillingEnvironment().stripeMode,
         stripePriceId: validatedConfig.priceId,
         participant,
@@ -5441,8 +5574,10 @@ function buildCreateMembershipCheckoutHandler(
               candidate.intent.billingCycleAnchor,
             initialChargePence: candidate.intent.initialChargePence ?? null,
             appAccessTier: candidate.intent.commercialTerms.appAccessTier,
-            selectedConditioningSlots:
-              candidate.intent.selectedConditioningSlots ?? [],
+            ...conditioningEntitlementProjection(
+              candidate.intent.commercialTerms,
+              candidate.intent.planKey
+            ),
             promotionCodesEnabled: isPresaleIntent(candidate.intent) &&
               candidate.intent.planKey === EXISTING_MEMBER_OFFER.planKey,
           };
@@ -5510,7 +5645,10 @@ function buildCreateMembershipCheckoutHandler(
         firstPaymentAt: intent.firstPaymentAt ?? intent.billingCycleAnchor,
         initialChargePence: intent.initialChargePence ?? null,
         appAccessTier: intent.commercialTerms.appAccessTier,
-        selectedConditioningSlots: intent.selectedConditioningSlots ?? [],
+        ...conditioningEntitlementProjection(
+          intent.commercialTerms,
+          intent.planKey
+        ),
         promotionCodesEnabled: isPresaleIntent(intent) &&
           intent.planKey === EXISTING_MEMBER_OFFER.planKey,
       };
@@ -5553,6 +5691,24 @@ function buildCreateMembershipCheckoutHandler(
       );
     }
     let session: Stripe.Checkout.Session;
+    const legacyConditioningSlots = intent.planKey === "adult_conditioning" &&
+      !intent.commercialTerms.conditioningBookingPolicy ?
+      canonicalConditioningSlots(intent.selectedConditioningSlots) : null;
+    if (intent.planKey === "adult_conditioning" &&
+      !intent.commercialTerms.conditioningBookingPolicy &&
+      !legacyConditioningSlots) {
+      throw new HttpsError(
+        "failed-precondition",
+        "This checkout's frozen Conditioning policy is invalid. Contact support."
+      );
+    }
+    let conditioningMetadata: Record<string, string> = {};
+    if (intent.planKey === "adult_conditioning") {
+      conditioningMetadata = intent.commercialTerms.conditioningBookingPolicy ?
+        conditioningPolicyMetadata(
+          intent.commercialTerms.conditioningBookingPolicy
+        ) : {conditioningSlots: (legacyConditioningSlots || []).join(",")};
+    }
     try {
       session = await checkoutStripe.checkout.sessions.create({
         mode: "subscription",
@@ -5593,9 +5749,7 @@ function buildCreateMembershipCheckoutHandler(
             intentId: intentRef.id,
             participantCount: String(participantCountFor(intent)),
             appAccessTier: intent.commercialTerms.appAccessTier,
-            ...(intent.planKey === "adult_conditioning" ? {
-              conditioningSlots: intent.selectedConditioningSlots.join(","),
-            } : {}),
+            ...conditioningMetadata,
           },
         },
         metadata: {
@@ -5604,9 +5758,7 @@ function buildCreateMembershipCheckoutHandler(
           intentId: intentRef.id,
           participantCount: String(participantCountFor(intent)),
           appAccessTier: intent.commercialTerms.appAccessTier,
-          ...(intent.planKey === "adult_conditioning" ? {
-            conditioningSlots: intent.selectedConditioningSlots.join(","),
-          } : {}),
+          ...conditioningMetadata,
         },
       }, {idempotencyKey: `checkout:${checkoutAttemptHash}`});
       assertStripeObjectMode("Checkout Session", session.id, session.livemode);
@@ -5737,7 +5889,10 @@ function buildCreateMembershipCheckoutHandler(
       firstPaymentAt: intent.firstPaymentAt ?? intent.billingCycleAnchor,
       initialChargePence: intent.initialChargePence ?? null,
       appAccessTier: intent.commercialTerms.appAccessTier,
-      selectedConditioningSlots: intent.selectedConditioningSlots ?? [],
+      ...conditioningEntitlementProjection(
+        intent.commercialTerms,
+        intent.planKey
+      ),
       promotionCodesEnabled: isPresaleIntent(intent) &&
         intent.planKey === EXISTING_MEMBER_OFFER.planKey,
     };
@@ -5885,8 +6040,10 @@ export const getMyMemberships = onCall({region: REGION}, async (request) => {
       grantsAlphaWodAccess: membership.grantsAlphaWodAccess,
       appAccessTier: membership.commercialTerms?.appAccessTier ??
         getPlan(membership.planKey).appAccessTier,
-      selectedConditioningSlots: membership.selectedConditioningSlots ??
-        membership.commercialTerms?.selectedConditioningSlots ?? [],
+      ...conditioningEntitlementProjection(
+        membership.commercialTerms,
+        membership.planKey
+      ),
       participantFullName: membership.participant?.fullName ?? "",
       participantFullNames: participants.map(({fullName}) => fullName),
       participantCount: participantCountFor(membership),
@@ -7276,12 +7433,35 @@ async function fulfilCheckoutSession(
   if (session.metadata?.appAccessTier !== intent.commercialTerms.appAccessTier) {
     throw new Error(`Checkout Session ${session.id} has the wrong app access tier.`);
   }
-  const expectedSessionSlots = intent.planKey === "adult_conditioning" ?
-    canonicalConditioningSlots(intent.selectedConditioningSlots) : [];
+  const entitlementPolicy = validateCommercialEntitlementPolicy(
+    intent.commercialTerms,
+    intent.planKey
+  );
+  if (!entitlementPolicy) {
+    throw new Error(`Checkout Session ${session.id} has an invalid commercial entitlement policy.`);
+  }
   if (intent.planKey === "adult_conditioning" &&
-    (!expectedSessionSlots || session.metadata?.conditioningSlots !==
-      expectedSessionSlots.join(","))) {
-    throw new Error(`Checkout Session ${session.id} has different conditioning slots.`);
+    entitlementPolicy.conditioningBookingPolicy &&
+    conditioningPolicyMetadataMismatch(
+      session.metadata,
+      entitlementPolicy.conditioningBookingPolicy
+    )) {
+    throw new Error(`Checkout Session ${session.id} has a different conditioning booking policy.`);
+  }
+  if (intent.planKey === "adult_conditioning" &&
+    !entitlementPolicy.conditioningBookingPolicy) {
+    const expectedSessionSlots = canonicalConditioningSlots(
+      intent.selectedConditioningSlots
+    );
+    if (!expectedSessionSlots || JSON.stringify(expectedSessionSlots) !==
+      JSON.stringify(entitlementPolicy.entitlementClassSlots) ||
+      session.metadata?.conditioningSlots !==
+      expectedSessionSlots.join(",") ||
+      session.metadata?.conditioningPolicyVersion != null ||
+      session.metadata?.conditioningWeeklyLimit != null ||
+      session.metadata?.conditioningEligibleSlots != null) {
+      throw new Error(`Checkout Session ${session.id} has different conditioning slots.`);
+    }
   }
 
   const presale = isPresaleIntent(intent);
@@ -7320,7 +7500,7 @@ async function fulfilCheckoutSession(
   }
 
   const commercialTerms = intent.commercialTerms ??
-    createCommercialPlanSnapshot(intent.planKey, intent.selectedConditioningSlots);
+    createCommercialPlanSnapshot(intent.planKey);
   const subscription = await stripe().subscriptions.retrieve(subscriptionId, {
     expand: ["discounts"],
   });
@@ -7341,9 +7521,13 @@ async function fulfilCheckoutSession(
     ...(Number.isSafeInteger(intent.participantCount) ? {
       participantCount: intent.participantCount,
     } : {}),
-    ...(intent.planKey === "adult_conditioning" ? {
-      selectedConditioningSlots: intent.selectedConditioningSlots,
-    } : {}),
+    ...(intent.planKey === "adult_conditioning" &&
+      entitlementPolicy.conditioningBookingPolicy ? {
+        conditioningBookingPolicy:
+          entitlementPolicy.conditioningBookingPolicy,
+      } : intent.planKey === "adult_conditioning" ? {
+        selectedConditioningSlots: entitlementPolicy.entitlementClassSlots,
+      } : {}),
   });
   if (contractMismatch) throw new Error(contractMismatch);
   const discount = await resolveApprovedCheckoutDiscount(
@@ -7393,8 +7577,9 @@ async function fulfilCheckoutSession(
     planKey: intent.planKey,
     stripePriceId: intent.stripePriceId,
     commercialTerms,
-    selectedConditioningSlots: intent.selectedConditioningSlots ??
-      commercialTerms.selectedConditioningSlots ?? [],
+    ...(intent.selectedConditioningSlots ? {
+      selectedConditioningSlots: intent.selectedConditioningSlots,
+    } : {}),
     planName: commercialTerms.planName,
     grantsAlphaWodAccess: commercialTerms.grantsAlphaWodAccess,
     participant: intent.participant,
@@ -7544,6 +7729,7 @@ type SubscriptionContractExpectation = {
   intentId?: string;
   participantCount?: number;
   selectedConditioningSlots?: ConditioningSlotKey[];
+  conditioningBookingPolicy?: ConditioningBookingPolicy;
   /** Undefined skips legacy validation; null requires no provider discount. */
   discountCouponId?: string | null;
 };
@@ -7573,9 +7759,19 @@ function stripeSubscriptionContractMismatch(
   if (expected.selectedConditioningSlots) {
     const expectedSlots = canonicalConditioningSlots(expected.selectedConditioningSlots);
     if (!expectedSlots ||
-      subscription.metadata?.conditioningSlots !== expectedSlots.join(",")) {
+      subscription.metadata?.conditioningSlots !== expectedSlots.join(",") ||
+      subscription.metadata?.conditioningPolicyVersion != null ||
+      subscription.metadata?.conditioningWeeklyLimit != null ||
+      subscription.metadata?.conditioningEligibleSlots != null) {
       return `Subscription ${subscription.id} has different conditioning slots.`;
     }
+  }
+  if (expected.conditioningBookingPolicy &&
+    conditioningPolicyMetadataMismatch(
+      subscription.metadata,
+      expected.conditioningBookingPolicy
+    )) {
+    return `Subscription ${subscription.id} has a different conditioning booking policy.`;
   }
   if (expected.intentId && subscription.metadata?.intentId !== expected.intentId) {
     return `Subscription ${subscription.id} has the wrong checkout intent metadata.`;
@@ -8200,7 +8396,10 @@ type AdminCheckoutIssue = {
   intentId: string;
   planKey: PlanKey;
   planName: string;
-  selectedConditioningSlots: ConditioningSlotKey[];
+  conditioningBookingPolicy: ConditioningBookingPolicy | null;
+  entitlementClassSlots: ConditioningSlotKey[];
+  entitlementWeeklyBookingLimit: number | null;
+  selectedConditioningSlots?: ConditioningSlotKey[];
   participantFullNames: string[];
   participantCount: number;
   payerUid: string | null;
@@ -8373,8 +8572,10 @@ export function buildListMemberships(requireAdmin: (request: any) => Promise<voi
         intentId: doc.id,
         planKey: intent.planKey,
         planName: intent.commercialTerms?.planName ?? getPlan(intent.planKey).name,
-        selectedConditioningSlots: intent.selectedConditioningSlots ??
-          intent.commercialTerms?.selectedConditioningSlots ?? [],
+        ...conditioningEntitlementProjection(
+          intent.commercialTerms,
+          intent.planKey
+        ),
         participantFullNames: participants.map(({fullName}) => fullName),
         participantCount: participantCountFor(intent),
         payerUid: intent.payerUid ?? null,
@@ -8421,8 +8622,10 @@ export function buildListMemberships(requireAdmin: (request: any) => Promise<voi
         grantsAlphaWodAccess: membership.grantsAlphaWodAccess,
         appAccessTier: membership.commercialTerms?.appAccessTier ??
           getPlan(membership.planKey).appAccessTier,
-        selectedConditioningSlots: membership.selectedConditioningSlots ??
-          membership.commercialTerms?.selectedConditioningSlots ?? [],
+        ...conditioningEntitlementProjection(
+          membership.commercialTerms,
+          membership.planKey
+        ),
         entitlementTargetUid: membership.entitlementTargetUid,
         participantFullName: membership.participant?.fullName ?? "",
         participantFullNames: participants.map(({fullName}) => fullName),
@@ -9393,6 +9596,8 @@ export const __testing = {
   resolveApprovedCheckoutDiscount,
   adminMembershipFinancialProjectionFor,
   buildAdminMembershipFinancialSummary,
+  stripeSubscriptionContractMismatch,
+  conditioningEntitlementProjection,
   buildReleaseAbandonedCheckoutHandler,
 };
 
@@ -9453,16 +9658,16 @@ const WELCOME_EMAIL_VARIANTS: Record<PlanKey, WelcomeEmailVariant> = {
   },
   adult_conditioning: {
     eyebrow: "ADULT CONDITIONING",
-    headline: "Your two weekly sessions are set.",
-    summary: "Access to the two recurring conditioning sessions selected at checkout, with limited Zero Alpha App access.",
+    headline: "Two sessions each week. Your choice.",
+    summary: "Book any two eligible conditioning sessions in each Monday-to-Sunday London week, with limited Zero Alpha App access.",
     inclusions: [
-      "Booking access for your two fixed weekly conditioning slots",
+      "Choose any two of the four eligible conditioning sessions each week",
       "Class schedule, bookings and profile access in the Zero Alpha App",
       "A rolling monthly membership with no minimum term",
     ],
-    accessNote: "Your linked account can book only the two recurring conditioning slots frozen with this membership. WOD, training-log and leaderboard features are not included.",
+    accessNote: "Your linked account can book up to two eligible conditioning sessions each Monday-to-Sunday week. You can change your choice by cancelling and booking another eligible session in the same week. WOD, training-log and leaderboard features are not included.",
     appCta: {
-      title: "Manage your selected sessions in the Zero Alpha app",
+      title: "Choose your weekly sessions in the Zero Alpha app",
       buttonLabel: "Open the Zero Alpha app",
     },
   },
@@ -9510,13 +9715,28 @@ const WELCOME_EMAIL_VARIANTS: Record<PlanKey, WelcomeEmailVariant> = {
   },
 };
 
+// Historical schema-v6 memberships keep their two checkout-frozen slots.
+// Current schema-v7 Conditioning memberships use the flexible plan variant.
+const LEGACY_FIXED_CONDITIONING_WELCOME_VARIANT: WelcomeEmailVariant = {
+  eyebrow: "ADULT CONDITIONING",
+  headline: "Your two weekly sessions are set.",
+  summary: "Access to the two recurring conditioning sessions selected at checkout, with limited Zero Alpha App access.",
+  inclusions: [
+    "Booking access for your two fixed weekly conditioning slots",
+    "Class schedule, bookings and profile access in the Zero Alpha App",
+    "A rolling monthly membership with no minimum term",
+  ],
+  accessNote: "Your linked account can book only the two recurring conditioning slots frozen with this membership. WOD, training-log and leaderboard features are not included.",
+  appCta: {
+    title: "Manage your selected sessions in the Zero Alpha app",
+    buttonLabel: "Open the Zero Alpha app",
+  },
+};
+
 function buildConfirmationHtml(details: ConfirmationDetails): string {
   const {membership, initialChargePence, claimUrl} = details;
   const commercialTerms = membership.commercialTerms ??
-    createCommercialPlanSnapshot(
-      membership.planKey,
-      membership.selectedConditioningSlots
-    );
+    createCommercialPlanSnapshot(membership.planKey);
   const isYouthPlan = commercialTerms.audience === "youth";
   const participants = participantsFor(membership);
   const participantCount = participantCountFor(membership);
@@ -9704,11 +9924,11 @@ function buildConfirmationHtml(details: ConfirmationDetails): string {
 
 function buildWelcomeHtml(membership: MembershipDoc): string {
   const commercialTerms = membership.commercialTerms ??
-    createCommercialPlanSnapshot(
-      membership.planKey,
-      membership.selectedConditioningSlots
-    );
-  const variant = WELCOME_EMAIL_VARIANTS[membership.planKey];
+    createCommercialPlanSnapshot(membership.planKey);
+  const variant = membership.planKey === "adult_conditioning" &&
+    commercialTerms.catalogueSchemaVersion === 6 ?
+    LEGACY_FIXED_CONDITIONING_WELCOME_VARIANT :
+    WELCOME_EMAIL_VARIANTS[membership.planKey];
   const participants = participantsFor(membership);
   const participantNames = participants.map(({fullName}) => fullName).join(", ");
   const participantCount = participantCountFor(membership);
@@ -9979,10 +10199,7 @@ function buildWelcomePayload(membership: MembershipDoc): ConfirmationEmailPayloa
   if (!membership.payerEmail) return null;
   const fromEmail = membershipFromEmail.value().trim() || COMPANY.confirmationSender;
   const commercialTerms = membership.commercialTerms ??
-    createCommercialPlanSnapshot(
-      membership.planKey,
-      membership.selectedConditioningSlots
-    );
+    createCommercialPlanSnapshot(membership.planKey);
   return {
     from: `${COMPANY.tradingName} <${fromEmail}>`,
     to: [membership.payerEmail],

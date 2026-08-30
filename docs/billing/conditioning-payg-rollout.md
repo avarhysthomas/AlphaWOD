@@ -24,11 +24,17 @@ currency and recurring shape before accepting money.
 
 ### Adult Conditioning Only Membership
 
-- The member chooses exactly two fixed weekly sessions from Monday 06:00,
-  Tuesday 18:00, Thursday 18:00 and Friday 05:30.
-- Those two choices are frozen on the checkout intent and entitlement.
-- The member may book only matching scheduled classes while the entitlement is
-  active. The server enforces this independently of the interface.
+- The member may book any two eligible Conditioning classes in each
+  Europe/London Monday-to-Sunday week while the entitlement is active. The
+  eligible timetable is Monday 06:00, Tuesday 18:00, Thursday 18:00 and Friday
+  05:30 in Europe/London.
+- Choices are made from the live schedule and may change from week to week;
+  checkout does not freeze recurring class slots on the intent or entitlement.
+- Each booking consumes one place from the allowance for the London-local week
+  containing that class start. Cancelling the booking releases that place back
+  to the same week's allowance so the member may choose another eligible class.
+- Class eligibility, week boundaries, booking state and the two-class quota are
+  enforced by the server independently of the interface.
 - App access is limited to Schedule, Profile and membership management. It does
   not include Dashboard/WOD, Training, Leaderboards, or the attendance tier and
   lifetime performance totals on Profile.
@@ -136,9 +142,11 @@ Before either gate is opened:
 5. In Stripe test mode, prove a successful purchase, per-source admission
    limiting, duplicate attendee/class lock safety, abandoned Checkout PII
    scrubbing/expiry, webhook replay and capacity convergence.
-6. For Conditioning, prove an exact two-slot checkout, allowed-slot booking,
-   rejected third-slot booking, restricted app navigation and membership
-   cancellation/claim flows.
+6. For Conditioning, prove checkout without fixed-slot selection; any two
+   eligible bookings in one Europe/London Monday-to-Sunday week; rejection of a
+   third concurrent booking in that week; cancellation restoring one place;
+   different class choices in the following week; restricted app navigation;
+   and membership cancellation/claim flows.
 7. For PAYG, prove full and nearly-full classes, concurrent holds, guest roster
    check-in, cancellation on both sides of exactly 24 hours, refund success and
    failure recovery, `refund.created`/`refund.updated`/`refund.failed` webhook

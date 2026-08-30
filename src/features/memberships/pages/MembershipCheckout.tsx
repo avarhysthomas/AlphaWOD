@@ -18,7 +18,6 @@ import {
   resolveDisplayAge,
   resolveYouthMonthlyPricing,
   type CheckoutAcceptanceId,
-  type ConditioningSlotKey,
 } from "../../../lib/membershipPlans";
 import {
   clearCheckoutAttempt,
@@ -75,9 +74,6 @@ export default function MembershipCheckout() {
   const { user, appUser, loading: authLoading } = useAuth();
 
   const [participantFullName, setParticipantFullName] = useState("");
-  const [selectedConditioningSlots, setSelectedConditioningSlots] = useState<
-    ConditioningSlotKey[]
-  >([]);
   const [participantDateOfBirth, setParticipantDateOfBirth] = useState("");
   const [additionalParticipants, setAdditionalParticipants] = useState<
     AdditionalParticipantInput[]
@@ -108,7 +104,6 @@ export default function MembershipCheckout() {
 
     acceptedPlanKey.current = planKey;
     setAcceptedStatements({});
-    setSelectedConditioningSlots([]);
     checkoutAttempt.current = null;
     clearCheckoutAttempt();
     setError("");
@@ -214,7 +209,6 @@ export default function MembershipCheckout() {
   );
   const canSubmit =
     (isConditioning ? conditioningCheckoutEnabled : checkoutEnabled) &&
-    (!isConditioning || selectedConditioningSlots.length === 2) &&
     participantFullName.trim().length >= 2 &&
     age !== null &&
     !ageMismatch &&
@@ -238,7 +232,7 @@ export default function MembershipCheckout() {
       setBillingPolicyChanged(false);
 
       const checkoutDetails: CheckoutDetails = {
-        checkoutSchemaVersion: 5,
+        checkoutSchemaVersion: 6,
         // This is deliberately the same snapshot that chose every price/date
         // shown on this render. The callable fails closed if the cutoff moved.
         expectedBillingMode: presale ? "presale_deferred" : "standard",
@@ -250,7 +244,6 @@ export default function MembershipCheckout() {
         participantIsPayer: !isYouth,
         signedName: typedSignature,
         acceptedStatementIds: checkoutStatements.map(({id}) => id),
-        ...(isConditioning ? { selectedConditioningSlots } : {}),
         ...(promotionCodeAvailable && promotionCode.trim()
           ? {promotionCode: promotionCode.trim()}
           : {}),
@@ -328,15 +321,6 @@ export default function MembershipCheckout() {
         planName={plan.name}
         planSummary={plan.summary}
         price={formatPlanPrice(plan)}
-        selectedSlots={selectedConditioningSlots}
-        onToggle={(slot) => {
-          setSelectedConditioningSlots((current) => {
-            if (current.includes(slot)) return current.filter((value) => value !== slot);
-            return current.length < 2 ? [...current, slot] : current;
-          });
-          setAcceptedStatements({});
-          checkoutAttempt.current = null;
-        }}
       />
     );
   }
@@ -437,53 +421,7 @@ export default function MembershipCheckout() {
 
         <form onSubmit={handleSubmit} className="mt-8 space-y-5">
           {isConditioning ? (
-            <section className="rounded-2xl border border-white/10 bg-[#151311] p-6" aria-labelledby="active-conditioning-slots-title">
-              <div className="flex flex-wrap items-end justify-between gap-3">
-                <div>
-                  <h2 id="active-conditioning-slots-title" className="font-heading text-3xl uppercase text-white">Choose two weekly slots</h2>
-                  <p className="mt-2 text-sm leading-6 text-white/55">Your app will allow bookings only for these two recurring conditioning sessions.</p>
-                  <p className="mt-2 max-w-2xl text-sm leading-6 text-white/65">
-                    App access includes Schedule, Profile and Membership only; Dashboard/WOD,
-                    Training, Leaderboards and performance stats are not included.
-                  </p>
-                </div>
-                <p aria-live="polite" className="text-sm font-black text-amber-200">{selectedConditioningSlots.length} of 2 selected</p>
-              </div>
-              <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                {CONDITIONING_SLOT_OPTIONS.map((slot) => {
-                  const selected = selectedConditioningSlots.includes(slot.key);
-                  const disabled = !selected && selectedConditioningSlots.length === 2;
-                  return (
-                    <button
-                      key={slot.key}
-                      type="button"
-                      aria-pressed={selected}
-                      disabled={disabled}
-                      onClick={() => {
-                        setSelectedConditioningSlots((current) =>
-                          current.includes(slot.key)
-                            ? current.filter((value) => value !== slot.key)
-                            : current.length < 2 ? [...current, slot.key] : current
-                        );
-                        setAcceptedStatements({});
-                        checkoutAttempt.current = null;
-                      }}
-                      className={[
-                        "rounded-xl border px-5 py-4 text-left outline-none transition focus-visible:ring-2 focus-visible:ring-amber-200",
-                        selected
-                          ? "border-amber-200 bg-amber-100 text-black"
-                          : disabled
-                            ? "cursor-not-allowed border-white/5 bg-black/20 text-white/25"
-                            : "border-white/12 bg-black/30 text-white hover:border-white/25",
-                      ].join(" ")}
-                    >
-                      <span className="block text-sm font-black">{slot.day}</span>
-                      <span className={`mt-1 block font-heading text-3xl ${selected ? "text-black" : "text-white"}`}>{slot.time}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
+            <ConditioningBookingAllowance idPrefix="active-conditioning" />
           ) : null}
           {promotionCodeAvailable && (
             <div className="rounded-[28px] border border-amber-500/25 bg-amber-500/10 p-6">
@@ -1031,14 +969,10 @@ function ConditioningCheckoutPreview({
   planName,
   planSummary,
   price,
-  selectedSlots,
-  onToggle,
 }: {
   planName: string;
   planSummary: string;
   price: string;
-  selectedSlots: ConditioningSlotKey[];
-  onToggle: (slot: ConditioningSlotKey) => void;
 }) {
   return (
     <main className="carbon-fiber-bg min-h-screen overflow-x-hidden px-5 py-10 text-[#f4f0ea] sm:px-8">
@@ -1052,51 +986,9 @@ function ConditioningCheckoutPreview({
         <p className="mt-4 text-lg font-bold text-[#f4b16d]">{price} per month</p>
         <p className="mt-4 max-w-xl text-sm leading-7 text-white/68">{planSummary}</p>
 
-        <section className="mt-8 rounded-2xl border border-white/10 bg-[#151311] p-6 sm:p-7" aria-labelledby="conditioning-slots-title">
-          <div className="flex flex-wrap items-end justify-between gap-3">
-            <div>
-              <h2 id="conditioning-slots-title" className="font-heading text-3xl uppercase text-white">
-                Choose two weekly slots
-              </h2>
-              <p className="mt-2 text-sm leading-6 text-white/52">
-                These are the two recurring sessions this membership will allow you to book.
-              </p>
-              <p className="mt-2 max-w-xl text-sm leading-6 text-white/65">
-                App access includes Schedule, Profile and Membership only; Dashboard/WOD,
-                Training, Leaderboards and performance stats are not included.
-              </p>
-            </div>
-            <p aria-live="polite" className="text-sm font-black text-[#f4b16d]">
-              {selectedSlots.length} of 2 selected
-            </p>
-          </div>
-          <div className="mt-6 grid gap-3 sm:grid-cols-2">
-            {CONDITIONING_SLOT_OPTIONS.map((slot) => {
-              const selected = selectedSlots.includes(slot.key);
-              const disabled = !selected && selectedSlots.length === 2;
-              return (
-                <button
-                  key={slot.key}
-                  type="button"
-                  aria-pressed={selected}
-                  disabled={disabled}
-                  onClick={() => onToggle(slot.key)}
-                  className={[
-                    "rounded-xl border px-5 py-4 text-left outline-none transition focus-visible:ring-2 focus-visible:ring-[#f4b16d]",
-                    selected
-                      ? "border-[#f4b16d] bg-[#f4b16d] text-black"
-                      : disabled
-                      ? "cursor-not-allowed border-white/5 bg-black/20 text-white/28"
-                      : "border-white/12 bg-black/30 text-white hover:border-white/25 hover:bg-black/45",
-                  ].join(" ")}
-                >
-                  <span className="block text-sm font-black">{slot.day}</span>
-                  <span className={selected ? "mt-1 block font-heading text-3xl text-black" : "mt-1 block font-heading text-3xl text-white"}>{slot.time}</span>
-                </button>
-              );
-            })}
-          </div>
-        </section>
+        <div className="mt-8">
+          <ConditioningBookingAllowance idPrefix="conditioning-preview" />
+        </div>
 
         <section className="mt-6 rounded-2xl border border-amber-300/20 bg-amber-300/10 p-6 text-amber-50">
           <h2 className="font-heading text-3xl uppercase">Coming soon</h2>
@@ -1110,5 +1002,56 @@ function ConditioningCheckoutPreview({
         </section>
       </div>
     </main>
+  );
+}
+
+function ConditioningBookingAllowance({idPrefix}: {idPrefix: string}) {
+  const titleId = `${idPrefix}-allowance-title`;
+
+  return (
+    <section
+      className="rounded-2xl border border-white/10 bg-[#151311] p-6 sm:p-7"
+      aria-labelledby={titleId}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="max-w-xl">
+          <h2 id={titleId} className="font-heading text-3xl uppercase text-white">
+            Book any two each week
+          </h2>
+          <p className="mt-2 text-sm leading-6 text-white/68">
+            Choose up to two eligible Conditioning classes in each Monday–Sunday week.
+            Your choices are not fixed, so you can book different days from one week to
+            the next.
+          </p>
+        </div>
+        <p className="rounded-full border border-amber-300/25 bg-amber-300/10 px-3 py-2 text-xs font-black uppercase tracking-[0.14em] text-amber-100">
+          2 bookings / week
+        </p>
+      </div>
+
+      <h3 className="mt-6 text-[11px] font-black uppercase tracking-[0.2em] text-white/50">
+        Eligible timetable
+      </h3>
+      <ul
+        aria-label="Eligible Conditioning timetable"
+        className="mt-3 grid gap-3 sm:grid-cols-2"
+      >
+        {CONDITIONING_SLOT_OPTIONS.map((slot) => (
+          <li
+            key={slot.key}
+            className="flex items-center justify-between gap-4 rounded-xl border border-white/10 bg-black/30 px-4 py-3"
+          >
+            <span className="text-sm font-bold text-white/72">{slot.day}</span>
+            <span className="font-heading text-2xl text-white">{slot.time}</span>
+          </li>
+        ))}
+      </ul>
+
+      <p className="mt-5 text-sm leading-6 text-white/62">
+        Cancel before the class booking cutoff to free that booking and choose another
+        eligible class. App access includes Schedule, Profile and Membership only;
+        Dashboard/WOD, Training, Leaderboards and performance stats are not included.
+      </p>
+    </section>
   );
 }

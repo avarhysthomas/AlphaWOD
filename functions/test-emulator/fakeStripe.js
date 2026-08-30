@@ -318,6 +318,14 @@ function createFakeStripe() {
             ...(payload["metadata[conditioningSlots]"] ? {
               conditioningSlots: payload["metadata[conditioningSlots]"],
             } : {}),
+            ...(payload["metadata[conditioningPolicyVersion]"] ? {
+              conditioningPolicyVersion:
+                payload["metadata[conditioningPolicyVersion]"],
+              conditioningWeeklyLimit:
+                payload["metadata[conditioningWeeklyLimit]"],
+              conditioningEligibleSlots:
+                payload["metadata[conditioningEligibleSlots]"],
+            } : {}),
             ...(payload["metadata[firebaseUid]"] ? {
               firebaseUid: payload["metadata[firebaseUid]"],
             } : {}),

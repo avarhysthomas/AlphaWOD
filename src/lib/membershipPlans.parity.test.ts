@@ -102,6 +102,7 @@ describe("membership catalogue parity", () => {
     "YOUTH_FAMILY_OFFER",
     "SUPPORTED_YOUTH_FAMILY_DISCOUNT_PERCENTAGES",
     "MEMBERSHIP_SCHEMA_VERSION",
+    "CONDITIONING_BOOKING_POLICY",
     "COMPANY",
     "PLAN_KEYS",
     "MEMBERSHIP_PLANS",
@@ -121,14 +122,14 @@ describe("membership catalogue parity", () => {
     }
   );
 
-  it("keeps schema v6 and the youth recommendation boundary identical", () => {
+  it("keeps schema v7 and the youth recommendation boundary identical", () => {
     const {
       MEMBERSHIP_SCHEMA_VERSION,
       MEMBERSHIP_PLANS,
       resolveYouthPlanForAge,
     } = require("./membershipPlans") as typeof import("./membershipPlans");
 
-    expect(MEMBERSHIP_SCHEMA_VERSION).toBe(6);
+    expect(MEMBERSHIP_SCHEMA_VERSION).toBe(7);
     expect(resolveYouthPlanForAge(-1)).toBeNull();
     expect(resolveYouthPlanForAge(0)).toBe("youth_youngstars");
     expect(resolveYouthPlanForAge(10)).toBe("youth_youngstars");

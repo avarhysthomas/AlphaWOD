@@ -24,7 +24,7 @@ The product connects Zero Alpha Fitness's real weekly timetable and membership r
 
 - Recurring memberships are purchased through Stripe Checkout and managed in AlphaWOD.
 - Adult Conditioning Only Membership costs £30 per month and follows the existing first-of-month billing schedule.
-- A Conditioning Only member selects exactly two recurring weekly slots from Monday 06:00, Tuesday 18:00, Thursday 18:00, and Friday 05:30.
+- A Conditioning Only member may book any two eligible Conditioning classes in each Europe/London Monday-to-Sunday week: Monday 06:00, Tuesday 18:00, Thursday 18:00, or Friday 05:30. The choices are made from the live schedule and may change from week to week.
 - Conditioning Only members can use Schedule, Profile, and Membership management. Dashboard/WOD programming, Training, Leaderboards, and profile performance statistics are not included.
 - Pay As You Go costs £7.50 for one named class from the whole public schedule. It is not a reusable credit and cannot be transferred or rescheduled.
 - Pay As You Go does not require an account. Checkout collects the adult attendee's name and date of birth, plus an email address and contact number for operational contact about that class.
@@ -35,7 +35,7 @@ The product connects Zero Alpha Fitness's real weekly timetable and membership r
 - Firebase Authentication, Firestore, Cloud Functions, and Stripe are the incumbent stack.
 - Stripe live and test catalogues are separate. Provider identifiers are allowlisted and validated server-side before Checkout.
 - Membership access, plan capability, class eligibility, capacity, payments, refunds, and bookings are server-authoritative. Hiding UI is never the security boundary.
-- Conditioning Only slot selection is part of the frozen purchase agreement and entitlement projection. Changing selected slots requires an explicit supported staff/member workflow; it is not inferred from attendance.
+- Conditioning Only is a weekly booking allowance, not a pair of recurring slot entitlements. Each booked eligible class consumes one of that London-local week's two places; cancelling the booking releases the place back to the same week's allowance so the member can choose another eligible class. Eligibility and quota are enforced from authoritative booking state, not inferred from hidden navigation or attendance alone.
 - Pay As You Go uses a separate one-time purchase, hold, order, and fulfilment flow. It must not enter recurring membership, portal, cancellation, MRR, or entitlement processing.
 - Public visitors receive only a sanitised PAYG timetable projection. The private classes collection remains access controlled.
 - Each purchase flow remains behind its own runtime release gate until Stripe sandbox evidence, legal publication, monitoring, and production verification are complete.

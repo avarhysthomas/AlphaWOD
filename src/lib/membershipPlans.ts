@@ -49,7 +49,7 @@ export const SUPPORTED_YOUTH_FAMILY_DISCOUNT_PERCENTAGES = [
 ] as const;
 
 /** Catalogue schema version frozen into every checkout commercial snapshot. */
-export const MEMBERSHIP_SCHEMA_VERSION = 6;
+export const MEMBERSHIP_SCHEMA_VERSION = 7;
 
 export const COMPANY = {
   legalName: "ZERO ALPHA FITNESS LTD",
@@ -116,7 +116,7 @@ export const MEMBERSHIP_PLANS: Record<PlanKey, MembershipPlan> = {
     appAccessTier: "limited",
     stripePriceEnvKey: "STRIPE_PRICE_ADULT_CONDITIONING",
     cardGroup: "adult",
-    summary: "Access to exactly two selected recurring conditioning sessions each week, with limited Zero Alpha App access.",
+    summary: "Book any two eligible conditioning sessions each Monday-to-Sunday week, with limited Zero Alpha App access.",
   },
   adult_ladies: {
     key: "adult_ladies",
@@ -346,7 +346,9 @@ export type CommercialPlanSnapshot = {
   automaticTaxEnabled: boolean;
   grantsAlphaWodAccess: boolean;
   appAccessTier: AppAccessTier;
-  selectedConditioningSlots: ConditioningSlotKey[];
+  /** Present only on frozen catalogue-v6 fixed-slot contracts. */
+  selectedConditioningSlots?: ConditioningSlotKey[];
+  conditioningBookingPolicy: ConditioningBookingPolicy | null;
   minAge: number;
   maxAge: number | null;
   cancellationNoticeDays: number;
@@ -433,16 +435,8 @@ export function resolveCheckoutSignerRole(planKey: PlanKey): CheckoutSignerRole 
     "youth_guardian_and_payer" : "adult_participant_and_payer";
 }
 
-export function createCommercialPlanSnapshot(
-  planKey: PlanKey,
-  selectedConditioningSlots: unknown = []
-): CommercialPlanSnapshot {
+export function createCommercialPlanSnapshot(planKey: PlanKey): CommercialPlanSnapshot {
   const plan = getPlan(planKey);
-  const frozenSlots = planKey === "adult_conditioning" ?
-    canonicalConditioningSlots(selectedConditioningSlots) : [];
-  if (planKey === "adult_conditioning" && !frozenSlots) {
-    throw new Error("adult_conditioning requires exactly two valid recurring slots");
-  }
   return {
     catalogueSchemaVersion: MEMBERSHIP_SCHEMA_VERSION,
     planKey: plan.key,
@@ -461,7 +455,10 @@ export function createCommercialPlanSnapshot(
     automaticTaxEnabled: BILLING_POLICY.automaticTaxEnabled,
     grantsAlphaWodAccess: plan.grantsAlphaWodAccess,
     appAccessTier: plan.appAccessTier,
-    selectedConditioningSlots: frozenSlots || [],
+    conditioningBookingPolicy: planKey === "adult_conditioning" ? {
+      ...CONDITIONING_BOOKING_POLICY,
+      eligibleSlotKeys: [...CONDITIONING_BOOKING_POLICY.eligibleSlotKeys],
+    } : null,
     minAge: plan.minAge,
     maxAge: plan.maxAge,
     cancellationNoticeDays: BILLING_POLICY.cancellationNoticeDays,
@@ -480,6 +477,27 @@ export const CONDITIONING_SLOT_OPTIONS: ReadonlyArray<{
   { key: "thursday_1800", day: "Thursday", time: "18:00", label: "Thursday · 18:00" },
   { key: "friday_0530", day: "Friday", time: "05:30", label: "Friday · 05:30" },
 ];
+
+export type ConditioningBookingPolicy = {
+  version: 1;
+  timezone: typeof BILLING_TIMEZONE;
+  weekStartsOn: "monday";
+  weeklyBookingLimit: 2;
+  eligibleSlotKeys: ConditioningSlotKey[];
+};
+
+export const CONDITIONING_BOOKING_POLICY: ConditioningBookingPolicy = {
+  version: 1,
+  timezone: BILLING_TIMEZONE,
+  weekStartsOn: "monday",
+  weeklyBookingLimit: 2,
+  eligibleSlotKeys: [
+    "monday_0600",
+    "tuesday_1800",
+    "thursday_1800",
+    "friday_0530",
+  ],
+};
 
 export function canonicalConditioningSlots(value: unknown): ConditioningSlotKey[] | null {
   if (!Array.isArray(value) || value.length !== 2 ||

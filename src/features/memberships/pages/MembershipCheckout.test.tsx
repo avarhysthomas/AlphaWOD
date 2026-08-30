@@ -10,6 +10,7 @@ let mockPlanKey = "adult_unlimited";
 let mockDocumentsApproved = false;
 let mockFrontendPurchaseEnabled = false;
 let mockLocalJourneyEnabled = false;
+let mockConditioningCheckoutEnabled = false;
 
 jest.mock("../purchaseAvailability", () => ({
   get MEMBERSHIP_PURCHASE_AVAILABILITY() {
@@ -21,6 +22,8 @@ jest.mock("../purchaseAvailability", () => ({
       localTestJourneyEnabled: mockLocalJourneyEnabled,
       publicPurchaseEnabled,
       checkoutEnabled: publicPurchaseEnabled || mockLocalJourneyEnabled,
+      conditioningCheckoutEnabled: mockConditioningCheckoutEnabled &&
+        (publicPurchaseEnabled || mockLocalJourneyEnabled),
     };
   },
 }));
@@ -84,6 +87,7 @@ beforeEach(() => {
   mockDocumentsApproved = false;
   mockFrontendPurchaseEnabled = false;
   mockLocalJourneyEnabled = false;
+  mockConditioningCheckoutEnabled = false;
 });
 
 afterEach(() => {
@@ -125,6 +129,48 @@ function structuredCheckoutFailure(
 }
 
 describe("MembershipCheckout", () => {
+  it("presents Conditioning as a flexible weekly allowance without a slot selector", () => {
+    renderCheckout("adult_conditioning");
+
+    expect(screen.getByRole("heading", {name: "Book any two each week"}))
+      .toBeInTheDocument();
+    expect(screen.getByText(/up to two eligible Conditioning classes.*Monday–Sunday/i))
+      .toBeInTheDocument();
+    expect(screen.getByText(/choices are not fixed/i)).toBeInTheDocument();
+    const timetable = screen.getByRole("list", {
+      name: "Eligible Conditioning timetable",
+    });
+    expect(timetable).toHaveTextContent("Monday");
+    expect(timetable).toHaveTextContent("06:00");
+    expect(timetable).toHaveTextContent("Tuesday");
+    expect(timetable).toHaveTextContent("Thursday");
+    expect(timetable).toHaveTextContent("18:00");
+    expect(timetable).toHaveTextContent("Friday");
+    expect(timetable).toHaveTextContent("05:30");
+    expect(screen.queryByText(/of 2 selected/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", {name: /Monday.*06:00/i}))
+      .not.toBeInTheDocument();
+  });
+
+  it("submits Conditioning checkout without fixed slot purchase data", async () => {
+    mockLocalJourneyEnabled = true;
+    mockConditioningCheckoutEnabled = true;
+    mockCreateCheckout.mockResolvedValue({sessionUrl: ""});
+    renderCheckout("adult_conditioning");
+
+    await submitAdultCheckout();
+
+    await waitFor(() => expect(mockCreateCheckout).toHaveBeenCalledTimes(1));
+    expect(mockCreateCheckout).toHaveBeenCalledWith(expect.objectContaining({
+      planKey: "adult_conditioning",
+      checkoutSchemaVersion: 6,
+    }));
+    expect(mockCreateCheckout.mock.calls[0][0])
+      .not.toHaveProperty("selectedConditioningSlots");
+    expect(mockResolveCheckoutAttempt.mock.calls[0][0])
+      .not.toHaveProperty("selectedConditioningSlots");
+  });
+
   it("keeps checkout closed when the legal publication source gate is disabled", () => {
     renderCheckout("adult_unlimited");
 
@@ -463,7 +509,7 @@ describe("MembershipCheckout", () => {
     await waitFor(() => expect(mockCreateCheckout).toHaveBeenCalledTimes(1));
     expect(mockCreateCheckout).toHaveBeenCalledWith(expect.objectContaining({
       planKey: "youth_teenstars",
-      checkoutSchemaVersion: 5,
+      checkoutSchemaVersion: 6,
       participantFullName: "Alex Child",
       participantDateOfBirth: dateOfBirth,
       participantIsPayer: false,
@@ -517,7 +563,7 @@ describe("MembershipCheckout", () => {
     await waitFor(() => expect(mockCreateCheckout).toHaveBeenCalledTimes(1));
     expect(mockResolveCheckoutAttempt).toHaveBeenCalledWith(
       expect.objectContaining({
-        checkoutSchemaVersion: 5,
+        checkoutSchemaVersion: 6,
         planKey: "youth_teenstars",
         participantFullName: "Alex Child",
         participantDateOfBirth: firstDateOfBirth,
@@ -530,7 +576,7 @@ describe("MembershipCheckout", () => {
       {payerUid: null}
     );
     expect(mockCreateCheckout).toHaveBeenCalledWith(expect.objectContaining({
-      checkoutSchemaVersion: 5,
+      checkoutSchemaVersion: 6,
       checkoutAttemptId: "attempt_test",
       participantFullName: "Alex Child",
       additionalParticipants: [{

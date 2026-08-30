@@ -4,6 +4,7 @@ import { useAuth } from "../../../context/AuthContext";
 import { hasAlphaWodAccess } from "../../../context/authUser";
 import {
   COMPANY,
+  CONDITIONING_SLOT_OPTIONS,
   MEMBERSHIP_PLANS,
   POLICY_TEXT,
   formatConditioningSlot,
@@ -32,15 +33,24 @@ const EYEBROW = "text-[12px] font-bold uppercase tracking-[0.28em] text-white/34
 const POLL_ATTEMPTS = 6;
 const POLL_INTERVAL_MS = 2000;
 
+function historicalConditioningSlots(membership: MyMembership) {
+  if (membership.entitlementWeeklyBookingLimit != null) return [];
+  if (membership.entitlementClassSlots?.length === 2) {
+    return membership.entitlementClassSlots;
+  }
+  return membership.selectedConditioningSlots?.length === 2
+    ? membership.selectedConditioningSlots
+    : [];
+}
+
 function activeSuccessMessageFor(membership: MyMembership): string {
   if (MEMBERSHIP_PLANS[membership.planKey]?.audience === "youth") {
     return POLICY_TEXT.youthSuccess;
   }
   if (membership.appAccessTier === "limited") {
-    const slots = (membership.selectedConditioningSlots ?? [])
-      .map(formatConditioningSlot)
-      .join(" and ");
-    return `Payment confirmed. Your Adult Conditioning Only membership is active with limited Zero Alpha App access${slots ? ` for ${slots}` : " for your two selected weekly sessions"}.`;
+    return membership.entitlementWeeklyBookingLimit === 2
+      ? "Payment confirmed. Your Adult Conditioning Only membership is active with limited Zero Alpha App access and up to two eligible Conditioning bookings in each Monday–Sunday week."
+      : "Payment confirmed. Your Adult Conditioning Only membership is active with limited Zero Alpha App access.";
   }
   return membership.grantsAlphaWodAccess && membership.participantIsPayer
     ? POLICY_TEXT.adultUnlimitedSuccess
@@ -158,6 +168,9 @@ export default function MembershipSuccess() {
     membership.participantFullNames,
     membership.participantCount
   ) : [];
+  const legacyConditioningSlots = membership
+    ? historicalConditioningSlots(membership)
+    : [];
   const presale = isFoundingPresale();
   const isAlphaWodAccountJourney = membership
     ? membership.grantsAlphaWodAccess &&
@@ -289,17 +302,38 @@ export default function MembershipSuccess() {
           )}
 
           {membership?.appAccessTier === "limited" &&
-            (membership.selectedConditioningSlots?.length ?? 0) > 0 ? (
+            membership.entitlementWeeklyBookingLimit === 2 ? (
               <div className="mt-5 rounded-2xl border border-amber-300/20 bg-amber-300/10 p-5">
-                <p className="text-sm font-bold text-amber-100">Your recurring booking slots</p>
-                <ul className="mt-3 space-y-2 text-sm text-amber-50/75">
-                  {membership.selectedConditioningSlots?.map((slot) => (
-                    <li key={slot}>{formatConditioningSlot(slot)}</li>
+                <p className="text-sm font-bold text-amber-100">
+                  2 Conditioning bookings each week
+                </p>
+                <p className="mt-2 text-sm leading-6 text-amber-50/75">
+                  Choose any eligible class below. Your choices can change from one
+                  Monday–Sunday week to the next.
+                </p>
+                <ul className="mt-3 grid gap-2 text-sm text-amber-50/75 sm:grid-cols-2">
+                  {CONDITIONING_SLOT_OPTIONS.map((slot) => (
+                    <li key={slot.key} className="rounded-xl bg-black/15 px-3 py-2">
+                      {slot.label}
+                    </li>
                   ))}
                 </ul>
                 <p className="mt-3 text-xs leading-5 text-amber-50/55">Schedule, Profile and Membership management are included. Dashboard, Training and Leaderboards require full app access.</p>
               </div>
-            ) : null}
+            ) : membership?.appAccessTier === "limited" &&
+              legacyConditioningSlots.length === 2 ? (
+                <div className="mt-5 rounded-2xl border border-amber-300/20 bg-amber-300/10 p-5">
+                  <p className="text-sm font-bold text-amber-100">
+                    Your recurring booking slots
+                  </p>
+                  <ul className="mt-3 space-y-2 text-sm text-amber-50/75">
+                    {legacyConditioningSlots.map((slot) => (
+                      <li key={slot}>{formatConditioningSlot(slot)}</li>
+                    ))}
+                  </ul>
+                  <p className="mt-3 text-xs leading-5 text-amber-50/55">Schedule, Profile and Membership management are included. Dashboard, Training and Leaderboards require full app access.</p>
+                </div>
+              ) : null}
 
           {membership && (
             <MembershipDiscountSummary

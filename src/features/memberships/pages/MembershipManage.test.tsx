@@ -227,6 +227,30 @@ describe("MembershipManage cancellation confirmation", () => {
     ));
   });
 
+  it("shows the flexible Conditioning allowance on membership management", async () => {
+    mockGetMyMemberships.mockResolvedValue({
+      ok: true,
+      memberships: [{
+        ...activeMembership,
+        planKey: "adult_conditioning",
+        planName: "Adult Conditioning Only Membership",
+        appAccessTier: "limited",
+        entitlementWeeklyBookingLimit: 2,
+      }],
+      cancellationPreview,
+    });
+
+    render(<MembershipManage />);
+
+    expect(await screen.findByText("2 Conditioning bookings each week"))
+      .toBeInTheDocument();
+    expect(screen.getByText(/bookings can change.*Monday–Sunday week/i))
+      .toBeInTheDocument();
+    expect(screen.getByText("Monday · 06:00")).toBeInTheDocument();
+    expect(screen.queryByText(/Selected weekly conditioning slots/i))
+      .not.toBeInTheDocument();
+  });
+
   it.each([
     ["standard", multiChildTeenAlphasMembership],
     ["presale", {

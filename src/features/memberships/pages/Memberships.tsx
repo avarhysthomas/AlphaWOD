@@ -60,7 +60,7 @@ function PlanCard({
 
       {isConditioningComingSoon ? (
         <p className="mt-4 text-sm font-bold text-amber-200">
-          Coming soon · choose exactly two weekly conditioning slots
+          Coming soon · book any two eligible Conditioning classes each week
         </p>
       ) : null}
 
@@ -69,7 +69,7 @@ function PlanCard({
           to={`/memberships/checkout/${plan.key}`}
           className="mt-6 block rounded-2xl bg-white px-5 py-3 text-center text-sm font-bold uppercase tracking-[0.14em] text-black transition hover:bg-white/85"
         >
-          {isConditioningComingSoon ? "Preview weekly slots" : `Choose ${plan.name.replace("Membership", "").trim()}`}
+          {isConditioningComingSoon ? "Preview weekly allowance" : `Choose ${plan.name.replace("Membership", "").trim()}`}
         </Link>
       ) : (
         <button
@@ -306,9 +306,10 @@ export default function Memberships() {
             <li>{POLICY_TEXT.pastDue}</li>
             <li>
               Adult Unlimited includes full eligible Zero Alpha App access. Adult Conditioning
-              Only includes Schedule, Profile and Membership management with booking limited to
-              the two selected weekly slots. Youth, Ladies Only and Gym Only memberships do not
-              include app access.
+              Only includes Schedule, Profile and Membership management, with up to two eligible
+              Conditioning bookings in each Monday–Sunday week. Those two classes can change
+              from week to week. Youth, Ladies Only and Gym Only memberships do not include app
+              access.
             </li>
           </ul>
           <p className="mt-5 text-xs leading-6 text-white/40">

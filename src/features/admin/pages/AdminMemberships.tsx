@@ -13,7 +13,11 @@ import {
   Users,
 } from "lucide-react";
 import AppBottomNav from "../../../components/layout/AppBottomNav";
-import {formatConditioningSlot, type PlanKey} from "../../../lib/membershipPlans";
+import {
+  CONDITIONING_SLOT_OPTIONS,
+  formatConditioningSlot,
+  type PlanKey,
+} from "../../../lib/membershipPlans";
 import MembershipDiscountSummary from "../../memberships/components/MembershipDiscountSummary";
 import {resolveParticipantFullNames} from "../../memberships/components/membershipPresentation";
 import {
@@ -237,6 +241,13 @@ function MembershipDetails({
   const firstPaymentAt = membership.firstPaymentAt ??
     membership.billingCycleAnchor ?? membership.currentPeriodEnd;
   const serviceStartsAt = membership.serviceStartsAt ?? firstPaymentAt;
+  const legacyConditioningSlots = membership.entitlementWeeklyBookingLimit == null &&
+    membership.entitlementClassSlots?.length === 2
+    ? membership.entitlementClassSlots
+    : membership.entitlementWeeklyBookingLimit == null &&
+      membership.selectedConditioningSlots?.length === 2
+      ? membership.selectedConditioningSlots
+      : [];
 
   return (
     <div className="border-t border-white/8 bg-black/20 px-4 py-5 sm:px-5 lg:px-6">
@@ -276,10 +287,18 @@ function MembershipDetails({
       {membership.appAccessTier === "limited" ? (
         <div className="mt-5 rounded-2xl border border-amber-300/20 bg-amber-300/[0.08] p-4 text-sm leading-6 text-amber-50/85">
           <p className="font-semibold text-amber-100">Conditioning booking policy</p>
-          {(membership.selectedConditioningSlots?.length ?? 0) === 2 ? (
-            <p className="mt-1">Selected slots: {membership.selectedConditioningSlots?.map(formatConditioningSlot).join(" · ")}</p>
+          {membership.entitlementWeeklyBookingLimit === 2 ? (
+            <p className="mt-1">
+              Up to 2 bookings each Monday–Sunday week: {CONDITIONING_SLOT_OPTIONS
+                .map(({label}) => label).join(" · ")}
+            </p>
+          ) : legacyConditioningSlots.length === 2 ? (
+            <p className="mt-1">
+              Historical agreement: {legacyConditioningSlots
+                .map(formatConditioningSlot).join(" · ")}
+            </p>
           ) : (
-            <p className="mt-1 text-red-100">Two canonical slots are not recorded. Access should remain failed closed until this is repaired.</p>
+            <p className="mt-1 text-red-100">The Conditioning booking policy is incomplete. Access should remain failed closed until this is repaired.</p>
           )}
           <p className="mt-1 text-xs text-amber-50/55">Allowed app areas: Schedule, Profile and Membership only.</p>
         </div>

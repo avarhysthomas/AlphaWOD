@@ -13,6 +13,9 @@ const {
   CURRENT_WAIVER_ACKNOWLEDGEMENTS,
   CURRENT_WAIVER_VERSION,
 } = require("../lib/authz");
+const {
+  createCommercialPlanSnapshot,
+} = require("../lib/membershipPlans");
 
 const projectId = process.env.GCLOUD_PROJECT || "alpha-wod-functions-test";
 const db = admin.firestore();
@@ -23,6 +26,7 @@ const setMemberEntitlement = functionsTest.wrap(functions.setMemberEntitlement);
 const updateMemberRole = functionsTest.wrap(functions.updateMemberRole);
 const getMonthlyLeaderboard = functionsTest.wrap(functions.getMonthlyLeaderboard);
 const bookClass = functionsTest.wrap(functions.bookClass);
+const cancelBooking = functionsTest.wrap(functions.cancelBooking);
 const adminAddBooking = functionsTest.wrap(functions.adminAddBooking);
 const checkInBooking = functionsTest.wrap(functions.checkInBooking);
 const markBookingStatus = functionsTest.wrap(functions.markBookingStatus);
@@ -72,6 +76,9 @@ function activeProfile(role, source) {
 
 async function seedStripeBookingAuthority(uid, overrides = {}) {
   const subscriptionId = overrides.subscriptionId ?? `sub_${uid}`;
+  const planKey = overrides.planKey ?? "adult_unlimited";
+  const commercialTerms = overrides.commercialTerms ??
+    createCommercialPlanSnapshot(planKey);
   const ownerId = createHash("sha256").update(uid).digest("hex");
   await db.collection("membershipEntitlementOwners").doc(ownerId).set({
     schemaVersion: 1,
@@ -80,7 +87,10 @@ async function seedStripeBookingAuthority(uid, overrides = {}) {
     state: overrides.ownerState ?? "active",
   });
   await db.collection("memberships").doc(subscriptionId).set({
+    schemaVersion: commercialTerms.catalogueSchemaVersion,
     subscriptionId,
+    planKey,
+    commercialTerms,
     entitlementTargetUid: overrides.entitlementTargetUid ?? uid,
     state: overrides.state ?? "active",
     grantsAlphaWodAccess: overrides.grantsAlphaWodAccess ?? true,
@@ -164,7 +174,16 @@ test("limited members and admins can book only the member's two conditioning slo
     alphaWodAccess: true,
     name: "Limited Member",
   });
-  await seedStripeBookingAuthority("limited");
+  const legacyCommercialTerms = {
+    ...createCommercialPlanSnapshot("adult_conditioning"),
+    catalogueSchemaVersion: 6,
+    selectedConditioningSlots: ["monday_0600", "tuesday_1800"],
+  };
+  delete legacyCommercialTerms.conditioningBookingPolicy;
+  await seedStripeBookingAuthority("limited", {
+    planKey: "adult_conditioning",
+    commercialTerms: legacyCommercialTerms,
+  });
 
   const seedClass = async (
     id,
@@ -231,6 +250,193 @@ test("limited members and admins can book only the member's two conditioning slo
         error.details?.reason === "class_not_conditioning_membership_slot"
     );
   }
+});
+
+test("flexible Conditioning quota serializes weekly bookings and every cancellation path releases it", async () => {
+  await Promise.all([createAuthUser("admin"), createAuthUser("flexible")]);
+  await db.collection("users").doc("admin").set({
+    ...activeProfile("admin", "staff"),
+    name: "Admin",
+  });
+  await db.collection("users").doc("flexible").set({
+    role: "user",
+    approvalStatus: "approved",
+    entitlementStatus: "active",
+    entitlementSource: "stripe",
+    entitlementPlanKey: "adult_conditioning",
+    appAccessTier: "limited",
+    entitlementClassSlots: [
+      "monday_0600",
+      "tuesday_1800",
+      "thursday_1800",
+      "friday_0530",
+    ],
+    entitlementWeeklyBookingLimit: 2,
+    alphaWodAccess: true,
+    name: "Flexible Member",
+  });
+  await seedStripeBookingAuthority("flexible", {
+    planKey: "adult_conditioning",
+  });
+
+  const classes = [
+    ["flex-monday", "2099-01-05T06:00:00.000Z", "monday_0600"],
+    ["flex-tuesday", "2099-01-06T18:00:00.000Z", "tuesday_1800"],
+    ["flex-thursday", "2099-01-08T18:00:00.000Z", "thursday_1800"],
+    ["flex-friday", "2099-01-09T05:30:00.000Z", "friday_0530"],
+    ["flex-next-monday", "2099-01-12T06:00:00.000Z", "monday_0600"],
+  ];
+  await Promise.all(classes.map(async ([id, startIso, conditioningSlotKey]) => {
+    const start = new Date(startIso);
+    await db.collection("classes").doc(id).set({
+      templateId: `template_${id}`,
+      title: "Conditioning",
+      timezone: "Europe/London",
+      startTime: admin.firestore.Timestamp.fromDate(start),
+      endTime: admin.firestore.Timestamp.fromMillis(start.getTime() + 3600000),
+      coachId: "coach",
+      coachName: "Coach",
+      capacity: 10,
+      bookedCount: 0,
+      location: "Gym",
+      status: "scheduled",
+      conditioningSlotKey,
+      createdAt: admin.firestore.Timestamp.now(),
+    });
+  }));
+
+  const initial = await Promise.all([
+    bookClass(request({classId: "flex-monday"}, "flexible")),
+    adminAddBooking(request({
+      classId: "flex-tuesday",
+      userId: "flexible",
+    }, "admin")),
+  ]);
+  assert.deepEqual(initial, [{success: true}, {success: true}]);
+  let usageSnap = await db.collection("conditioningWeeklyBookingUsage").get();
+  assert.equal(usageSnap.size, 1);
+  assert.equal(usageSnap.docs[0].get("bookedCount"), 2);
+
+  await markBookingStatus(request({
+    classId: "flex-tuesday",
+    userId: "flexible",
+    status: "dip",
+  }, "admin"));
+  usageSnap = await db.collection("conditioningWeeklyBookingUsage").get();
+  assert.equal(usageSnap.docs[0].get("bookedCount"), 2);
+
+  await assert.rejects(
+    () => bookClass(request({classId: "flex-thursday"}, "flexible")),
+    (error) => error.details?.reason ===
+      "conditioning_weekly_booking_limit_reached" &&
+      error.details?.weeklyBookingLimit === 2 &&
+      error.details?.timezone === "Europe/London"
+  );
+
+  await cancelBooking(request({classId: "flex-monday"}, "flexible"));
+  usageSnap = await db.collection("conditioningWeeklyBookingUsage").get();
+  assert.equal(usageSnap.docs[0].get("bookedCount"), 1);
+
+  const raced = await Promise.allSettled([
+    bookClass(request({classId: "flex-thursday"}, "flexible")),
+    bookClass(request({classId: "flex-friday"}, "flexible")),
+  ]);
+  assert.equal(raced.filter(({status}) => status === "fulfilled").length, 1);
+  const rejection = raced.find(({status}) => status === "rejected");
+  assert.equal(
+    rejection.reason.details?.reason,
+    "conditioning_weekly_booking_limit_reached"
+  );
+  const successfulClassId = raced[0].status === "fulfilled" ?
+    "flex-thursday" : "flex-friday";
+  const rejectedClassId = successfulClassId === "flex-thursday" ?
+    "flex-friday" : "flex-thursday";
+
+  await markBookingStatus(request({
+    classId: successfulClassId,
+    userId: "flexible",
+    status: "authorised_absence",
+  }, "admin"));
+  usageSnap = await db.collection("conditioningWeeklyBookingUsage").get();
+  assert.equal(usageSnap.docs[0].get("bookedCount"), 1);
+
+  assert.deepEqual(
+    await bookClass(request({classId: rejectedClassId}, "flexible")),
+    {success: true}
+  );
+  usageSnap = await db.collection("conditioningWeeklyBookingUsage").get();
+  assert.equal(usageSnap.docs[0].get("bookedCount"), 2);
+  assert.deepEqual(usageSnap.docs[0].get("activeBookingIds").sort(), [
+    "flex-tuesday_flexible",
+    `${rejectedClassId}_flexible`,
+  ].sort());
+
+  assert.deepEqual(
+    await bookClass(request({classId: "flex-next-monday"}, "flexible")),
+    {success: true}
+  );
+  usageSnap = await db.collection("conditioningWeeklyBookingUsage").get();
+  assert.equal(usageSnap.size, 2);
+  const nextWeekUsage = usageSnap.docs.find(
+    (doc) => doc.get("weekKey") === "2099-01-12"
+  );
+  assert.ok(nextWeekUsage);
+  assert.equal(nextWeekUsage.get("bookedCount"), 1);
+});
+
+test("membership cleanup releases a flexible Conditioning weekly quota atomically", async () => {
+  await createAuthUser("cleanup-flexible");
+  await db.collection("users").doc("cleanup-flexible").set({
+    role: "user",
+    approvalStatus: "approved",
+    entitlementStatus: "active",
+    entitlementSource: "stripe",
+    entitlementPlanKey: "adult_conditioning",
+    appAccessTier: "limited",
+    entitlementClassSlots: [
+      "monday_0600",
+      "tuesday_1800",
+      "thursday_1800",
+      "friday_0530",
+    ],
+    entitlementWeeklyBookingLimit: 2,
+    alphaWodAccess: true,
+    name: "Cleanup Flexible",
+  });
+  const subscriptionId = await seedStripeBookingAuthority(
+    "cleanup-flexible",
+    {planKey: "adult_conditioning"}
+  );
+  const start = new Date("2099-01-05T06:00:00.000Z");
+  await db.collection("classes").doc("cleanup-flex-class").set({
+    templateId: "template_cleanup_flex",
+    title: "Conditioning",
+    timezone: "Europe/London",
+    startTime: admin.firestore.Timestamp.fromDate(start),
+    endTime: admin.firestore.Timestamp.fromMillis(start.getTime() + 3600000),
+    coachId: "coach",
+    coachName: "Coach",
+    capacity: 10,
+    bookedCount: 0,
+    location: "Gym",
+    status: "scheduled",
+    conditioningSlotKey: "monday_0600",
+    createdAt: admin.firestore.Timestamp.now(),
+  });
+  await bookClass(request({classId: "cleanup-flex-class"}, "cleanup-flexible"));
+  const membershipRef = db.collection("memberships").doc(subscriptionId);
+  await membershipRef.set({state: "cancelled"}, {merge: true});
+
+  await reconcileMembershipFutureBookings(membershipRef, Date.now());
+
+  const booking = await db.collection("bookings")
+    .doc("cleanup-flex-class_cleanup-flexible").get();
+  assert.equal(booking.get("status"), "cancelled");
+  assert.equal(booking.get("cancelledReason"), "membership_ineligible");
+  const usage = await db.collection("conditioningWeeklyBookingUsage").get();
+  assert.equal(usage.size, 1);
+  assert.equal(usage.docs[0].get("bookedCount"), 0);
+  assert.deepEqual(usage.docs[0].get("activeBookingIds"), []);
 });
 
 test("Stripe membership booking uses the cancellation and grace horizons", async () => {
