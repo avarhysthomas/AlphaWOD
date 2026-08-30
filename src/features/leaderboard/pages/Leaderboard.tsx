@@ -126,22 +126,22 @@ function PodiumCard({
   return (
     <div
       className={[
-        "relative flex min-h-[168px] flex-col items-center justify-end overflow-hidden rounded-[22px] border bg-[#151311] px-4 py-5 text-center",
+        "relative flex min-h-[238px] min-w-0 flex-col items-center overflow-hidden rounded-[22px] border bg-[#151311] px-2 pb-5 pt-4 text-center sm:min-h-[250px] sm:px-4 sm:pt-5",
         place === 1
-          ? "min-h-[220px] border-yellow-400/30 bg-[linear-gradient(180deg,rgba(255,255,255,0.08),rgba(21,19,17,1))]"
+          ? "min-h-[262px] border-yellow-400/30 bg-[linear-gradient(180deg,rgba(255,255,255,0.08),rgba(21,19,17,1))] sm:min-h-[278px]"
           : "border-white/10",
       ].join(" ")}
     >
-      <div className="absolute top-5 rounded-full bg-white/[0.08] px-3 py-1 text-[11px] font-black tracking-[0.12em] text-white/52">
-        # {place}
+      <div className="rounded-full border border-white/[0.06] bg-white/[0.08] px-3 py-1 text-[11px] font-black tracking-[0.12em] text-white/60">
+        #{place}
       </div>
-      <div className="mb-3 rounded-full border border-[#8b725b]/70 bg-[#66503f] p-1">
+      <div className="mt-3 rounded-full border border-[#8b725b]/70 bg-[#66503f] p-1 shadow-[0_10px_24px_rgba(0,0,0,0.28)]">
         <UserAvatar name={row.name || "Member"} photoURL={row.photoURL} size={place === 1 ? 64 : 58} />
       </div>
-      <div className="min-w-0 max-w-[56px] truncate leading-tight text-black text-base font-bold text-white">
+      <div className="mt-3 flex min-h-[2.5rem] w-full min-w-0 items-center justify-center break-words px-0.5 text-sm font-bold leading-[1.2] text-white sm:text-base">
         {row.name || "Member"} {isMe ? <span className="text-white/45">(you)</span> : null}
       </div>
-      <div className="mt-3 font-mono text-5xl font-bold leading-none text-white">
+      <div className="mt-auto pt-3 font-mono text-5xl font-bold leading-none text-white">
           {Number(row.attendedCount || 0)}
       </div>
       <div className="mt-2 text-[11px] font-bold uppercase tracking-[0.24em] text-white/34">
@@ -220,15 +220,13 @@ return (
             aria-label="Profile"
             className="grid h-12 w-12 overflow-hidden rounded-full border border-[#8b725b]/60 bg-[#765f4b] text-sm font-bold uppercase text-[#f8efe5]"
           >
-            {profilePhotoURL ? (
-              <img
-                src={profilePhotoURL}
-                alt={appUser?.name ? `${appUser.name}'s profile` : "Profile"}
-                className="h-full w-full object-cover"
-              />
-            ) : (
-              <span className="grid h-full w-full place-items-center">{firstName.slice(0, 1)}</span>
-            )}
+            <UserAvatar
+              appearance="plain"
+              name={appUser?.name}
+              photoURL={profilePhotoURL}
+              size={48}
+              fallback={firstName.slice(0, 1)}
+            />
           </Link>
         </div>
       </header>
@@ -315,7 +313,7 @@ return (
             No check-ins yet for this month.
           </div>
         ) : (
-          <div className="grid grid-cols-3 items-end gap-3">
+          <div className="grid grid-cols-3 items-end gap-2 sm:gap-3">
               {top2 ? (
               <PodiumCard place={2} row={top2} isMe={Boolean(user?.uid && top2.userId === user.uid)} />
               ) : (
