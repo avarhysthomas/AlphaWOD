@@ -581,7 +581,7 @@ export default function Dashboard() {
   const hasNextUpToday = Boolean(
     nextUpStart && datekeyLondon(nextUpStart) === todayKey
   );
-  const navItems = getUserNavItems(appUser?.role);
+  const navItems = getUserNavItems(appUser);
   const percentagePresets = [50, 60, 65, 70, 75, 80, 85, 90, 95, 100];
   const enteredWeight = Number.parseFloat(calculatorWeight);
   const selectedPercentage = Number.parseFloat(percentageInput);

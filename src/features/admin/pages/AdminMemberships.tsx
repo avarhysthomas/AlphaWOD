@@ -13,7 +13,7 @@ import {
   Users,
 } from "lucide-react";
 import AppBottomNav from "../../../components/layout/AppBottomNav";
-import type {PlanKey} from "../../../lib/membershipPlans";
+import {formatConditioningSlot, type PlanKey} from "../../../lib/membershipPlans";
 import MembershipDiscountSummary from "../../memberships/components/MembershipDiscountSummary";
 import {resolveParticipantFullNames} from "../../memberships/components/membershipPresentation";
 import {
@@ -44,6 +44,7 @@ type CheckoutRecoveryNotice = {
 const PLAN_TABS: Array<{key: PlanFilter; label: string}> = [
   {key: "all", label: "All memberships"},
   {key: "adult_unlimited", label: "Adult Unlimited"},
+  {key: "adult_conditioning", label: "Conditioning Only"},
   {key: "adult_gym", label: "Adult Gym Only"},
   {key: "adult_ladies", label: "Ladies Only"},
   {key: "youth_youngstars", label: "MINI ALPHAS - 10 & Under"},
@@ -263,7 +264,26 @@ function MembershipDetails({
             {membership.confirmationEmailStatus?.replaceAll("_", " ") ?? "—"}
           </dd>
         </div>
+        <div>
+          <dt className="text-xs text-white/45">App access tier</dt>
+          <dd className="mt-1 text-white/78">
+            {membership.appAccessTier === "limited" ? "Limited" :
+              membership.appAccessTier === "full" ? "Full" : "None"}
+          </dd>
+        </div>
       </dl>
+
+      {membership.appAccessTier === "limited" ? (
+        <div className="mt-5 rounded-2xl border border-amber-300/20 bg-amber-300/[0.08] p-4 text-sm leading-6 text-amber-50/85">
+          <p className="font-semibold text-amber-100">Conditioning booking policy</p>
+          {(membership.selectedConditioningSlots?.length ?? 0) === 2 ? (
+            <p className="mt-1">Selected slots: {membership.selectedConditioningSlots?.map(formatConditioningSlot).join(" · ")}</p>
+          ) : (
+            <p className="mt-1 text-red-100">Two canonical slots are not recorded. Access should remain failed closed until this is repaired.</p>
+          )}
+          <p className="mt-1 text-xs text-amber-50/55">Allowed app areas: Schedule, Profile and Membership only.</p>
+        </div>
+      ) : null}
 
       <div className="mt-5 rounded-2xl border border-white/8 bg-white/[0.025] px-4 py-3 text-xs leading-6 text-white/48">
         <p className="break-all">Subscription {membership.subscriptionId}</p>
@@ -987,6 +1007,10 @@ export default function AdminMemberships() {
                                 Guardian {membership.guardianFullName}
                               </p>
                             ) : null}
+                            <p className="mt-1 truncate text-xs text-white/38">
+                              {membership.planName}
+                              {membership.appAccessTier === "limited" ? " · limited app" : ""}
+                            </p>
                           </div>
 
                           <div className="min-w-0">

@@ -13,6 +13,7 @@ import { db } from "../../../firebase";
 import { AlertTriangle, Bell, Plus, Save } from "lucide-react";
 import { getUserNavItems } from "../../../components/layout/UserTopNav";
 import { useAuth } from "../../../context/AuthContext";
+import { isLimitedAppUser } from "../../../lib/appAccess";
 import { bootstrapUserProfile } from "../../auth/services/account";
 
 
@@ -118,6 +119,7 @@ export default function Profile() {
   const navigate = useNavigate();
   const { appUser, refreshAppUser } = useAuth();
   const user = auth.currentUser;
+  const limitedAccess = isLimitedAppUser(appUser);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -187,7 +189,10 @@ export default function Profile() {
         setEmail(resolvedEmail);
         setPhotoURL(resolvedPhoto);
 
-        setStats(data.stats ?? null);
+        // Attendance tiers and lifetime totals are performance features. Keep
+        // the profile itself available to Conditioning members without
+        // surfacing those full-app-only statistics.
+        setStats(limitedAccess ? null : data.stats ?? null);
 
       } catch (e: any) {
         setErr(e?.message ?? "Failed to load profile.");
@@ -195,7 +200,7 @@ export default function Profile() {
         setLoading(false);
       }
     })();
-  }, [refreshAppUser, user]);
+  }, [limitedAccess, refreshAppUser, user]);
 
   async function uploadProfilePicIfNeeded(): Promise<string | null> {
     if (!user) return null;
@@ -284,7 +289,7 @@ export default function Profile() {
   const mk = monthKeyLondon(new Date());
   const monthCount = stats?.monthCheckIns?.[mk] ?? 0;
   const totalCheckIns = stats?.totalCheckIns ?? 0;
-  const navItems = getUserNavItems(appUser?.role);
+  const navItems = getUserNavItems(appUser);
   const firstName = displayName.split(" ")[0] || email.split("@")[0] || "A";
   const initials =
     displayName
@@ -301,7 +306,11 @@ export default function Profile() {
       <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_top_right,rgba(120,95,70,0.16),transparent_34%),linear-gradient(180deg,rgba(255,255,255,0.025),transparent_22%)]" />
       <main className="relative mx-auto min-h-screen max-w-xl px-5 pb-36 pt-7 sm:max-w-3xl sm:px-8">
         <header className="flex items-center justify-between" style={{ paddingTop: "env(safe-area-inset-top)" }}>
-          <Link to="/dashboard" aria-label="Zero Alpha home" className="block">
+          <Link
+            to={limitedAccess ? "/schedule" : "/dashboard"}
+            aria-label="Zero Alpha home"
+            className="block"
+          >
             <img src="/ZERO-ALPHA.png" alt="ZERO-ALPHA" className="h-20 w-auto object-contain" />
           </Link>
           <div className="flex items-center gap-3">
@@ -373,10 +382,16 @@ export default function Profile() {
               <p className="mt-2 truncate font-mono text-sm text-white/36">
                 {handle}
               </p>
-              <div className="mt-5 flex flex-wrap items-center gap-3">
-                <TierChip count={monthCount} />
-                <span className="font-mono text-sm text-white/38">{totalCheckIns} lifetime</span>
-              </div>
+              {!limitedAccess ? (
+                <div className="mt-5 flex flex-wrap items-center gap-3">
+                  <TierChip count={monthCount} />
+                  <span className="font-mono text-sm text-white/38">{totalCheckIns} lifetime</span>
+                </div>
+              ) : (
+                <p className="mt-5 text-sm font-semibold text-white/44">
+                  Conditioning membership
+                </p>
+              )}
             </div>
           </div>
           {file ? (

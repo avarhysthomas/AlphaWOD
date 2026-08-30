@@ -6,6 +6,7 @@ import {
   COMPANY,
   MEMBERSHIP_PLANS,
   POLICY_TEXT,
+  formatConditioningSlot,
   isFoundingPresale,
   isPlanKey,
 } from "../../../lib/membershipPlans";
@@ -34,6 +35,12 @@ const POLL_INTERVAL_MS = 2000;
 function activeSuccessMessageFor(membership: MyMembership): string {
   if (MEMBERSHIP_PLANS[membership.planKey]?.audience === "youth") {
     return POLICY_TEXT.youthSuccess;
+  }
+  if (membership.appAccessTier === "limited") {
+    const slots = (membership.selectedConditioningSlots ?? [])
+      .map(formatConditioningSlot)
+      .join(" and ");
+    return `Payment confirmed. Your Adult Conditioning Only membership is active with limited Zero Alpha App access${slots ? ` for ${slots}` : " for your two selected weekly sessions"}.`;
   }
   return membership.grantsAlphaWodAccess && membership.participantIsPayer
     ? POLICY_TEXT.adultUnlimitedSuccess
@@ -153,10 +160,10 @@ export default function MembershipSuccess() {
   ) : [];
   const presale = isFoundingPresale();
   const isAlphaWodAccountJourney = membership
-    ? membership.planKey === "adult_unlimited" &&
-      membership.grantsAlphaWodAccess &&
+    ? membership.grantsAlphaWodAccess &&
       membership.participantIsPayer
-    : returnedPlanKey === "adult_unlimited";
+    : returnedPlanKey !== null &&
+      MEMBERSHIP_PLANS[returnedPlanKey].appAccessTier !== "none";
   const membershipIsYouth = membership ?
     MEMBERSHIP_PLANS[membership.planKey]?.audience === "youth" : false;
 
@@ -281,6 +288,19 @@ export default function MembershipSuccess() {
             </p>
           )}
 
+          {membership?.appAccessTier === "limited" &&
+            (membership.selectedConditioningSlots?.length ?? 0) > 0 ? (
+              <div className="mt-5 rounded-2xl border border-amber-300/20 bg-amber-300/10 p-5">
+                <p className="text-sm font-bold text-amber-100">Your recurring booking slots</p>
+                <ul className="mt-3 space-y-2 text-sm text-amber-50/75">
+                  {membership.selectedConditioningSlots?.map((slot) => (
+                    <li key={slot}>{formatConditioningSlot(slot)}</li>
+                  ))}
+                </ul>
+                <p className="mt-3 text-xs leading-5 text-amber-50/55">Schedule, Profile and Membership management are included. Dashboard, Training and Leaderboards require full app access.</p>
+              </div>
+            ) : null}
+
           {membership && (
             <MembershipDiscountSummary
               planKey={membership.planKey}
@@ -351,10 +371,10 @@ export default function MembershipSuccess() {
               </Link>
               {presentation?.appAccessAvailable === true && (
                 <Link
-                  to="/dashboard"
+                  to={membership?.appAccessTier === "limited" ? "/schedule" : "/dashboard"}
                   className="block text-center text-sm text-white/50 underline underline-offset-4"
                 >
-                  Go to Zero Alpha App
+                  {membership?.appAccessTier === "limited" ? "Go to my schedule" : "Go to Zero Alpha App"}
                 </Link>
               )}
             </div>

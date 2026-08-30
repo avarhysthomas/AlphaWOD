@@ -3,8 +3,12 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const admin = require("firebase-admin");
+const {createHash} = require("node:crypto");
 const functionsTest = require("firebase-functions-test")();
 const functions = require("../lib/index");
+const {
+  reconcileMembershipFutureBookings,
+} = require("../lib/membership");
 const {
   CURRENT_WAIVER_ACKNOWLEDGEMENTS,
   CURRENT_WAIVER_VERSION,
@@ -16,7 +20,13 @@ const bootstrapUserProfile = functionsTest.wrap(functions.bootstrapUserProfile);
 const acceptCurrentWaiver = functionsTest.wrap(functions.acceptCurrentWaiver);
 const listStaffUsers = functionsTest.wrap(functions.listStaffUsers);
 const setMemberEntitlement = functionsTest.wrap(functions.setMemberEntitlement);
+const updateMemberRole = functionsTest.wrap(functions.updateMemberRole);
 const getMonthlyLeaderboard = functionsTest.wrap(functions.getMonthlyLeaderboard);
+const bookClass = functionsTest.wrap(functions.bookClass);
+const adminAddBooking = functionsTest.wrap(functions.adminAddBooking);
+const checkInBooking = functionsTest.wrap(functions.checkInBooking);
+const markBookingStatus = functionsTest.wrap(functions.markBookingStatus);
+const getClassRoster = functionsTest.wrap(functions.getClassRoster);
 
 function request(data, uid) {
   return {
@@ -53,8 +63,32 @@ function activeProfile(role, source) {
     approvalStatus: "approved",
     entitlementStatus: "active",
     entitlementSource: source,
+    appAccessTier: "full",
+    entitlementClassSlots: [],
+    ...(source === "stripe" ? {entitlementPlanKey: "adult_unlimited"} : {}),
     alphaWodAccess: true,
   };
+}
+
+async function seedStripeBookingAuthority(uid, overrides = {}) {
+  const subscriptionId = overrides.subscriptionId ?? `sub_${uid}`;
+  const ownerId = createHash("sha256").update(uid).digest("hex");
+  await db.collection("membershipEntitlementOwners").doc(ownerId).set({
+    schemaVersion: 1,
+    subscriptionId,
+    userIdHash: ownerId,
+    state: overrides.ownerState ?? "active",
+  });
+  await db.collection("memberships").doc(subscriptionId).set({
+    subscriptionId,
+    entitlementTargetUid: overrides.entitlementTargetUid ?? uid,
+    state: overrides.state ?? "active",
+    grantsAlphaWodAccess: overrides.grantsAlphaWodAccess ?? true,
+    providerContractStatus: overrides.providerContractStatus ?? "verified",
+    cancelAt: overrides.cancelAt === undefined ? null : overrides.cancelAt,
+    pastDueGraceEndsAt: overrides.pastDueGraceEndsAt ?? null,
+  });
+  return subscriptionId;
 }
 
 test.beforeEach(clearEmulators);
@@ -108,6 +142,588 @@ test("admin boundaries use authoritative profiles and staff directory is project
   const directory = await listStaffUsers(request({}, "admin"));
   assert.equal(directory.users.length, 2);
   assert.equal(directory.users.some((user) => "privateBillingId" in user), false);
+});
+
+test("limited members and admins can book only the member's two conditioning slots", async () => {
+  await Promise.all([
+    createAuthUser("admin"),
+    createAuthUser("limited"),
+  ]);
+  await db.collection("users").doc("admin").set({
+    ...activeProfile("admin", "staff"),
+    name: "Admin",
+  });
+  await db.collection("users").doc("limited").set({
+    role: "user",
+    approvalStatus: "approved",
+    entitlementStatus: "active",
+    entitlementSource: "stripe",
+    entitlementPlanKey: "adult_conditioning",
+    appAccessTier: "limited",
+    entitlementClassSlots: ["monday_0600", "tuesday_1800"],
+    alphaWodAccess: true,
+    name: "Limited Member",
+  });
+  await seedStripeBookingAuthority("limited");
+
+  const seedClass = async (
+    id,
+    startIso,
+    conditioningSlotKey,
+    timezone = "Europe/London"
+  ) => {
+    const start = new Date(startIso);
+    await db.collection("classes").doc(id).set({
+      templateId: `template_${id}`,
+      title: "Conditioning",
+      timezone,
+      startTime: admin.firestore.Timestamp.fromDate(start),
+      endTime: admin.firestore.Timestamp.fromMillis(start.getTime() + 3600000),
+      coachId: "coach",
+      coachName: "Coach",
+      capacity: 10,
+      bookedCount: 0,
+      location: "Gym",
+      status: "scheduled",
+      ...(conditioningSlotKey !== undefined ? {conditioningSlotKey} : {}),
+      createdAt: admin.firestore.Timestamp.now(),
+    });
+  };
+  // Missing explicit metadata exercises the conservative exact-time resolver.
+  await seedClass("monday", "2099-01-05T06:00:00.000Z");
+  await seedClass("tuesday", "2099-01-06T18:00:00.000Z", "tuesday_1800");
+  await seedClass("thursday", "2099-01-08T18:00:00.000Z", "thursday_1800");
+  await seedClass("mismatched", "2099-01-08T18:00:00.000Z", "monday_0600");
+  await seedClass("explicit-null", "2099-01-05T06:00:00.000Z", null);
+  await seedClass(
+    "non-london",
+    "2099-01-05T06:00:00.000Z",
+    undefined,
+    "America/New_York"
+  );
+
+  assert.deepEqual(await bookClass(request({classId: "monday"}, "limited")), {
+    success: true,
+  });
+  assert.deepEqual(await adminAddBooking(request({
+    classId: "tuesday",
+    userId: "limited",
+  }, "admin")), {success: true});
+
+  await assert.rejects(
+    () => bookClass(request({classId: "thursday"}, "limited")),
+    (error) => error.code === "permission-denied" &&
+      error.details?.reason === "conditioning_slot_not_selected" &&
+      error.details?.classConditioningSlotKey === "thursday_1800"
+  );
+  await assert.rejects(
+    () => adminAddBooking(request({
+      classId: "mismatched",
+      userId: "limited",
+    }, "admin")),
+    (error) => error.code === "permission-denied" &&
+      error.details?.reason === "class_not_conditioning_membership_slot"
+  );
+  for (const classId of ["explicit-null", "non-london"]) {
+    await assert.rejects(
+      () => bookClass(request({classId}, "limited")),
+      (error) => error.code === "permission-denied" &&
+        error.details?.reason === "class_not_conditioning_membership_slot"
+    );
+  }
+});
+
+test("Stripe membership booking uses the cancellation and grace horizons", async () => {
+  await Promise.all([
+    createAuthUser("admin"),
+    createAuthUser("horizon-member"),
+  ]);
+  await db.collection("users").doc("admin").set({
+    ...activeProfile("admin", "staff"),
+    name: "Admin",
+  });
+  await db.collection("users").doc("horizon-member").set({
+    ...activeProfile("user", "stripe"),
+    name: "Horizon Member",
+  });
+  const subscriptionId = await seedStripeBookingAuthority("horizon-member");
+  const membershipRef = db.collection("memberships").doc(subscriptionId);
+  const cutoffMillis = Date.parse("2099-06-01T12:00:00.000Z");
+  await membershipRef.set({
+    cancelAt: cutoffMillis / 1000,
+    // A current-period end is not itself a booking cap.
+    currentPeriodEnd: Math.floor(cutoffMillis / 1000) - 3600,
+  }, {merge: true});
+
+  const seedClass = async (id, startMillis) => {
+    await db.collection("classes").doc(id).set({
+      templateId: `template_${id}`,
+      title: "Open Gym",
+      timezone: "Europe/London",
+      startTime: admin.firestore.Timestamp.fromMillis(startMillis),
+      endTime: admin.firestore.Timestamp.fromMillis(startMillis + 3600000),
+      coachId: "coach",
+      coachName: "Coach",
+      capacity: 10,
+      bookedCount: 0,
+      location: "Gym",
+      status: "scheduled",
+      createdAt: admin.firestore.Timestamp.now(),
+    });
+  };
+  await seedClass("cutoff-before-member", cutoffMillis - 1);
+  await seedClass("cutoff-before-admin", cutoffMillis - 1);
+  await seedClass("cutoff-at", cutoffMillis);
+  await seedClass("cutoff-after", cutoffMillis + 1);
+
+  assert.deepEqual(await bookClass(request({
+    classId: "cutoff-before-member",
+  }, "horizon-member")), {success: true});
+  assert.deepEqual(await adminAddBooking(request({
+    classId: "cutoff-before-admin",
+    userId: "horizon-member",
+  }, "admin")), {success: true});
+  await assert.rejects(
+    bookClass(request({classId: "cutoff-at"}, "horizon-member")),
+    (error) => error.code === "permission-denied" &&
+      error.details?.reason === "stripe_membership_booking_ineligible"
+  );
+  await assert.rejects(
+    adminAddBooking(request({
+      classId: "cutoff-after",
+      userId: "horizon-member",
+    }, "admin")),
+    (error) => error.code === "permission-denied" &&
+      error.details?.reason === "stripe_membership_booking_ineligible"
+  );
+
+  await membershipRef.set({cancelAt: null}, {merge: true});
+  assert.deepEqual(await bookClass(request({
+    classId: "cutoff-after",
+  }, "horizon-member")), {success: true});
+
+  const graceEndsAtMillis = Date.parse("2099-07-01T23:59:59.999Z");
+  await membershipRef.set({
+    state: "past_due_grace",
+    pastDueGraceEndsAt: admin.firestore.Timestamp.fromMillis(graceEndsAtMillis),
+  }, {merge: true});
+  await seedClass("grace-at", graceEndsAtMillis);
+  await seedClass("grace-after", graceEndsAtMillis + 1);
+  assert.deepEqual(await bookClass(request({
+    classId: "grace-at",
+  }, "horizon-member")), {success: true});
+  await assert.rejects(
+    adminAddBooking(request({
+      classId: "grace-after",
+      userId: "horizon-member",
+    }, "admin")),
+    (error) => error.code === "permission-denied" &&
+      error.details?.reason === "stripe_membership_booking_ineligible"
+  );
+
+  await membershipRef.set({
+    state: "active",
+    cancelAt: null,
+    pastDueGraceEndsAt: null,
+    cancellationRequest: {
+      id: "cancel_horizon_member",
+      kind: "contractual",
+      status: "pending",
+      receivedAt: admin.firestore.Timestamp.now(),
+      outcome: {cancelAtUnixSeconds: cutoffMillis / 1000},
+    },
+  }, {merge: true});
+  await seedClass("accepted-cancellation-before", cutoffMillis - 1);
+  await seedClass("accepted-cancellation-at", cutoffMillis);
+  assert.deepEqual(await bookClass(request({
+    classId: "accepted-cancellation-before",
+  }, "horizon-member")), {success: true});
+  await assert.rejects(
+    bookClass(request({classId: "accepted-cancellation-at"}, "horizon-member")),
+    (error) => error.code === "permission-denied" &&
+      error.details?.reason === "stripe_membership_booking_ineligible"
+  );
+
+  const coolingOffAccessEndMillis = cutoffMillis + 500;
+  await membershipRef.set({
+    cancellationRequest: {
+      id: "cooling_off_horizon_member",
+      kind: "cooling_off",
+      status: "pending",
+      receivedAt: admin.firestore.Timestamp.now(),
+      accessEndsAtMillis: coolingOffAccessEndMillis,
+      outcome: {cancelAtUnixSeconds: Math.floor(coolingOffAccessEndMillis / 1000) + 3600},
+    },
+  }, {merge: true});
+  await seedClass("cooling-off-before", coolingOffAccessEndMillis - 1);
+  await seedClass("cooling-off-at", coolingOffAccessEndMillis);
+  assert.deepEqual(await bookClass(request({
+    classId: "cooling-off-before",
+  }, "horizon-member")), {success: true});
+  await assert.rejects(
+    bookClass(request({classId: "cooling-off-at"}, "horizon-member")),
+    (error) => error.code === "permission-denied" &&
+      error.details?.reason === "stripe_membership_booking_ineligible"
+  );
+
+  await membershipRef.set({
+    cancellationRequest: {
+      id: "cancel_horizon_member_malformed",
+      kind: "contractual",
+      status: "manual_review",
+      receivedAt: admin.firestore.Timestamp.now(),
+      outcome: {},
+    },
+  }, {merge: true});
+  await assert.rejects(
+    bookClass(request({classId: "accepted-cancellation-before"}, "horizon-member")),
+    (error) => error.code === "permission-denied" &&
+      error.details?.reason === "stripe_membership_booking_ineligible"
+  );
+
+  const replacementSubscriptionId = "sub_replacement_generation";
+  const ownerId = createHash("sha256").update("horizon-member").digest("hex");
+  await db.collection("memberships").doc(replacementSubscriptionId).set({
+    subscriptionId: replacementSubscriptionId,
+    entitlementTargetUid: "different-user",
+    state: "active",
+    grantsAlphaWodAccess: true,
+    providerContractStatus: "verified",
+    cancelAt: null,
+    pastDueGraceEndsAt: null,
+  });
+  await db.collection("membershipEntitlementOwners").doc(ownerId).set({
+    subscriptionId: replacementSubscriptionId,
+    state: "active",
+  }, {merge: true});
+  await seedClass("owner-replacement-race", graceEndsAtMillis - 1);
+  await assert.rejects(
+    bookClass(request({classId: "owner-replacement-race"}, "horizon-member")),
+    (error) => error.code === "permission-denied" &&
+      error.details?.reason === "stripe_membership_booking_ineligible"
+  );
+});
+
+test("membership reconciliation cancels uncovered future bookings exactly once", async () => {
+  await createAuthUser("cleanup-member");
+  await db.collection("users").doc("cleanup-member").set({
+    ...activeProfile("user", "stripe"),
+    name: "Cleanup Member",
+  });
+  const subscriptionId = await seedStripeBookingAuthority("cleanup-member");
+  const membershipRef = db.collection("memberships").doc(subscriptionId);
+  const nowMillis = Date.parse("2099-08-01T00:00:00.000Z");
+  const cutoffMillis = Date.parse("2099-08-08T12:00:00.000Z");
+  await membershipRef.set({
+    cancellationRequest: {
+      id: "cancel_cleanup_member",
+      kind: "contractual",
+      status: "manual_review",
+      receivedAt: admin.firestore.Timestamp.fromMillis(nowMillis),
+      outcome: {cancelAtUnixSeconds: cutoffMillis / 1000},
+    },
+  }, {merge: true});
+
+  const seedBooking = async ({
+    suffix,
+    startMillis,
+    binding = subscriptionId,
+    bookingKind = "member",
+  }) => {
+    const classId = `cleanup-class-${suffix}`;
+    const bookingId = `cleanup-booking-${suffix}`;
+    await db.collection("classes").doc(classId).set({
+      startTime: admin.firestore.Timestamp.fromMillis(startMillis),
+      endTime: admin.firestore.Timestamp.fromMillis(startMillis + 3600000),
+      capacity: 10,
+      bookedCount: 1,
+      status: "scheduled",
+    });
+    await db.collection("bookings").doc(bookingId).set({
+      classId,
+      userId: "cleanup-member",
+      userName: "Cleanup Member",
+      status: "booked",
+      bookingKind,
+      ...(binding === null ? {} : {entitlementSubscriptionId: binding}),
+      createdAt: admin.firestore.Timestamp.fromMillis(nowMillis),
+    });
+    return {classId, bookingId};
+  };
+
+  const covered = await seedBooking({
+    suffix: "covered",
+    startMillis: cutoffMillis - 1,
+  });
+  const bound = await seedBooking({
+    suffix: "bound",
+    startMillis: cutoffMillis,
+  });
+  const legacy = await seedBooking({
+    suffix: "legacy",
+    startMillis: cutoffMillis + 1,
+    binding: null,
+  });
+  const replacement = await seedBooking({
+    suffix: "replacement",
+    startMillis: cutoffMillis + 1,
+    binding: "sub_replacement",
+  });
+  const guest = await seedBooking({
+    suffix: "guest",
+    startMillis: cutoffMillis + 1,
+    bookingKind: "payg_guest",
+  });
+
+  await reconcileMembershipFutureBookings(membershipRef, nowMillis);
+  await reconcileMembershipFutureBookings(membershipRef, nowMillis);
+
+  for (const target of [bound, legacy]) {
+    const booking = await db.collection("bookings").doc(target.bookingId).get();
+    assert.equal(booking.get("status"), "cancelled");
+    assert.equal(booking.get("cancelledReason"), "membership_ineligible");
+    assert.equal(
+      (await db.collection("classes").doc(target.classId).get()).get("bookedCount"),
+      0
+    );
+  }
+  for (const target of [covered, replacement, guest]) {
+    assert.equal(
+      (await db.collection("bookings").doc(target.bookingId).get()).get("status"),
+      "booked"
+    );
+    assert.equal(
+      (await db.collection("classes").doc(target.classId).get()).get("bookedCount"),
+      1
+    );
+  }
+  const cleanupJob = await db.collection("membershipBookingCleanupJobs")
+    .doc(subscriptionId).get();
+  assert.equal(cleanupJob.get("status"), "complete");
+  assert.equal(cleanupJob.get("processedCount"), 5);
+  assert.equal(cleanupJob.get("cancelledCount"), 2);
+});
+
+test("roster and attendance fail closed for an out-of-horizon member booking", async () => {
+  await Promise.all([
+    createAuthUser("admin"),
+    createAuthUser("stale-booking-member"),
+  ]);
+  await db.collection("users").doc("admin").set({
+    ...activeProfile("admin", "staff"),
+    name: "Admin",
+  });
+  await db.collection("users").doc("stale-booking-member").set({
+    ...activeProfile("user", "stripe"),
+    name: "Stale Booking Member",
+  });
+  const cutoffMillis = Date.parse("2099-08-01T12:00:00.000Z");
+  const subscriptionId = await seedStripeBookingAuthority("stale-booking-member", {
+    cancelAt: cutoffMillis / 1000,
+  });
+  const classId = "stale-membership-class";
+  const bookingId = `${classId}_stale-booking-member`;
+  await db.collection("classes").doc(classId).set({
+    templateId: "template_stale_membership_class",
+    title: "Open Gym",
+    timezone: "Europe/London",
+    startTime: admin.firestore.Timestamp.fromMillis(cutoffMillis),
+    endTime: admin.firestore.Timestamp.fromMillis(cutoffMillis + 3600000),
+    coachId: "coach",
+    coachName: "Coach",
+    capacity: 10,
+    bookedCount: 1,
+    location: "Gym",
+    status: "scheduled",
+    createdAt: admin.firestore.Timestamp.now(),
+  });
+  await db.collection("bookings").doc(bookingId).set({
+    classId,
+    userId: "stale-booking-member",
+    userName: "Stale Booking Member",
+    status: "booked",
+    bookingKind: "member",
+    entitlementSubscriptionId: subscriptionId,
+    createdAt: admin.firestore.Timestamp.now(),
+    attendanceStatus: "none",
+    attended: false,
+  });
+
+  const roster = await getClassRoster(request({classId}, "admin"));
+  assert.equal(roster.total, 0);
+  assert.deepEqual(roster.attendees, []);
+  for (const action of [
+    () => checkInBooking(request({bookingId, attended: true}, "admin")),
+    () => markBookingStatus(request({bookingId, status: "checked_in"}, "admin")),
+  ]) {
+    await assert.rejects(
+      action,
+      (error) => error.code === "permission-denied" &&
+        error.details?.reason === "stripe_membership_booking_ineligible"
+    );
+  }
+  assert.equal(
+    (await db.collection("bookings").doc(bookingId).get()).get("status"),
+    "booked"
+  );
+  assert.equal(
+    (await db.collection("classes").doc(classId).get()).get("bookedCount"),
+    1
+  );
+});
+
+test("PAYG guest roster and attendance never create member stats or leaderboard rows", async () => {
+  await createAuthUser("admin");
+  await db.collection("users").doc("admin").set({
+    ...activeProfile("admin", "staff"),
+    name: "Admin",
+  });
+  const classId = "payg-class";
+  const orderId = `payg_${"a".repeat(64)}`;
+  const duplicateLockId = "c".repeat(64);
+  const bookingId = `payg_guest_${"a".repeat(64)}`;
+  const syntheticUserId = `payg_guest_${"b".repeat(40)}`;
+  const start = new Date("2099-01-05T18:00:00.000Z");
+  const end = new Date("2099-01-05T19:00:00.000Z");
+  await db.collection("classes").doc(classId).set({
+    templateId: "payg-template",
+    title: "Conditioning",
+    timezone: "Europe/London",
+    startTime: admin.firestore.Timestamp.fromDate(start),
+    endTime: admin.firestore.Timestamp.fromDate(end),
+    coachId: "coach",
+    coachName: "Coach",
+    capacity: 10,
+    bookedCount: 1,
+    location: "Gym",
+    status: "scheduled",
+    createdAt: admin.firestore.Timestamp.now(),
+  });
+  await db.collection("bookings").doc(bookingId).set({
+    classId,
+    userId: syntheticUserId,
+    userName: "Guest Person",
+    status: "booked",
+    bookingKind: "payg_guest",
+    isGuestBooking: true,
+    paygOrderId: orderId,
+    attendanceStatus: "none",
+    attended: false,
+    checkedInAt: null,
+    checkedInBy: null,
+    createdAt: admin.firestore.Timestamp.now(),
+  });
+  await db.collection("paygOrders").doc(orderId).set({
+    schemaVersion: 1,
+    orderId,
+    offeringKey: "adult_payg_class",
+    purchaseKind: "payg_class",
+    status: "confirmed",
+    capacityState: "held",
+    bookingId,
+    duplicateLockId,
+    class: {classId, title: "Conditioning"},
+    classStartMillis: start.getTime(),
+    classEndMillis: end.getTime(),
+    attendee: {fullName: "Guest Person", dateOfBirth: "1990-01-01"},
+    contact: {email: "guest@example.test", phone: "+447700900123"},
+  });
+  await db.collection("paygCheckoutLocks").doc(duplicateLockId).set({
+    duplicateLockId,
+    orderId,
+    state: "confirmed",
+  });
+
+  const roster = await getClassRoster(request({classId}, "admin"));
+  assert.equal(roster.total, 1);
+  assert.deepEqual(roster.attendees.map((attendee) => ({
+    bookingId: attendee.bookingId,
+    bookingKind: attendee.bookingKind,
+    isGuestBooking: attendee.isGuestBooking,
+    paygOrderId: attendee.paygOrderId,
+    userName: attendee.userName,
+    email: attendee.email,
+  })), [{
+    bookingId,
+    bookingKind: "payg_guest",
+    isGuestBooking: true,
+    paygOrderId: orderId,
+    userName: "Guest Person",
+    email: "",
+  }]);
+
+  const realDateNow = Date.now;
+  try {
+    Date.now = () => start.getTime() - 30 * 60 * 1000 - 1;
+    await assert.rejects(
+      checkInBooking(request({bookingId, attended: true}, "admin")),
+      (error) => error.code === "failed-precondition" &&
+        error.details?.reason === "payg_check_in_outside_window"
+    );
+    Date.now = () => end.getTime() - 1;
+    await assert.rejects(
+      markBookingStatus(request({bookingId, status: "dip"}, "admin")),
+      (error) => error.code === "failed-precondition" &&
+        error.details?.reason === "payg_no_show_too_early"
+    );
+    assert.equal(
+      (await db.collection("paygOrders").doc(orderId).get()).get("status"),
+      "confirmed"
+    );
+    assert.equal(
+      (await db.collection("paygCheckoutLocks").doc(duplicateLockId).get()).exists,
+      true
+    );
+
+    // Both trusted boundaries are inclusive.
+    Date.now = () => start.getTime() - 30 * 60 * 1000;
+    await checkInBooking(request({bookingId, attended: true}, "admin"));
+    assert.equal((await db.collection("bookings").doc(bookingId).get()).get("attended"), true);
+    assert.equal((await db.collection("paygOrders").doc(orderId).get()).get("status"), "attended");
+    assert.equal(
+      (await db.collection("paygCheckoutLocks").doc(duplicateLockId).get()).exists,
+      true
+    );
+    assert.equal((await db.collection("users").doc(syntheticUserId).get()).exists, false);
+    assert.equal((await db.collection("leaderboards").get()).empty, true);
+
+    Date.now = () => end.getTime();
+    await markBookingStatus(request({bookingId, status: "dip"}, "admin"));
+    const noShowOrder = await db.collection("paygOrders").doc(orderId).get();
+    assert.equal(noShowOrder.get("status"), "no_show");
+    assert.equal(noShowOrder.get("capacityState"), "consumed");
+    assert.equal(noShowOrder.get("noShowReviewAt"), undefined);
+    assert.equal(
+      (await db.collection("paygCheckoutLocks").doc(duplicateLockId).get()).exists,
+      false
+    );
+
+    await assert.rejects(
+      markBookingStatus(request({bookingId, status: "booked"}, "admin")),
+      (error) => error.code === "failed-precondition" &&
+        /can no longer have its attendance changed/i.test(error.message)
+    );
+    // A staff correction at the inclusive class-end boundary can recover an
+    // attendee from no-show without changing refund eligibility or recreating
+    // a duplicate lock after checkout has closed.
+    await checkInBooking(request({bookingId, attended: true}, "admin"));
+    const correctedOrder = await db.collection("paygOrders").doc(orderId).get();
+    assert.equal(correctedOrder.get("status"), "attended");
+    assert.equal(correctedOrder.get("attendanceCorrectedFrom"), "no_show");
+    assert.equal(correctedOrder.get("attendanceCorrectedBy"), "admin");
+    assert.equal(
+      (await db.collection("paygCheckoutLocks").doc(duplicateLockId).get()).exists,
+      false
+    );
+    await assert.rejects(
+      markBookingStatus(request({bookingId, status: "authorised_absence"}, "admin")),
+      (error) => error.code === "failed-precondition" && /PAYG cancellation flow/i.test(
+        error.message
+      )
+    );
+  } finally {
+    Date.now = realDateNow;
+  }
 });
 
 test("admin entitlement changes cannot forge Stripe or legacy provenance", async () => {
@@ -199,6 +815,78 @@ test("manual entitlement changes cannot bypass an active Stripe owner generation
   assert.equal((await memberRef.get()).get("entitlementSource"), "manual");
 });
 
+test("role changes cannot bypass an active Conditioning entitlement owner", async () => {
+  await Promise.all([createAuthUser("admin"), createAuthUser("member")]);
+  await db.collection("users").doc("admin").set({
+    ...activeProfile("admin", "staff"),
+    name: "Admin",
+  });
+  const memberRef = db.collection("users").doc("member");
+  await memberRef.set({
+    role: "user",
+    approvalStatus: "approved",
+    entitlementStatus: "active",
+    entitlementSource: "stripe",
+    entitlementPlanKey: "adult_conditioning",
+    appAccessTier: "limited",
+    entitlementClassSlots: ["monday_0600", "friday_0530"],
+    alphaWodAccess: true,
+    name: "Conditioning Member",
+  });
+  const ownerRef = db.collection("membershipEntitlementOwners")
+    .doc(require("node:crypto").createHash("sha256").update("member").digest("hex"));
+  await ownerRef.set({
+    schemaVersion: 6,
+    subscriptionId: "sub_conditioning",
+    state: "active",
+  });
+
+  for (const role of ["banned", "sgpt"]) {
+    await assert.rejects(
+      updateMemberRole(request({userId: "member", role}, "admin")),
+      (error) => error.code === "failed-precondition" &&
+        /active Stripe entitlement/i.test(error.message)
+    );
+    assert.equal((await memberRef.get()).get("role"), "user");
+  }
+
+  await memberRef.set({
+    role: "banned",
+    approvalStatus: "approved",
+    entitlementStatus: "restricted",
+    entitlementSource: "manual",
+    appAccessTier: "none",
+    entitlementClassSlots: [],
+    alphaWodAccess: false,
+  }, {merge: true});
+  await assert.rejects(
+    updateMemberRole(request({userId: "member", role: "user"}, "admin")),
+    (error) => error.code === "failed-precondition" &&
+      /active Stripe entitlement/i.test(error.message)
+  );
+
+  await memberRef.set({
+    role: "sgpt",
+    entitlementStatus: "active",
+    entitlementSource: "staff",
+    appAccessTier: "full",
+    entitlementClassSlots: [],
+    alphaWodAccess: true,
+  }, {merge: true});
+  await assert.rejects(
+    updateMemberRole(request({userId: "member", role: "user"}, "admin")),
+    (error) => error.code === "failed-precondition" &&
+      /active Stripe entitlement/i.test(error.message)
+  );
+
+  await ownerRef.set({state: "released"}, {merge: true});
+  await updateMemberRole(request({userId: "member", role: "user"}, "admin"));
+  const releasedProfile = await memberRef.get();
+  assert.equal(releasedProfile.get("role"), "user");
+  assert.equal(releasedProfile.get("entitlementStatus"), "none");
+  assert.equal(releasedProfile.get("alphaWodAccess"), false);
+});
+
 test("canonical waiver evidence is immutable across a retry", async () => {
   await createAuthUser("member");
   await bootstrapUserProfile(request({displayName: "Member A"}, "member"));
@@ -258,6 +946,25 @@ test("leaderboard callable rejects abusive month keys before scanning", async ()
   await assert.rejects(
     getMonthlyLeaderboard(request({monthKey: "attacker-random-month"}, "member")),
     (error) => error.code === "invalid-argument"
+  );
+});
+
+test("limited members cannot access leaderboard callables", async () => {
+  await createAuthUser("limited");
+  await db.collection("users").doc("limited").set({
+    role: "user",
+    approvalStatus: "approved",
+    entitlementStatus: "active",
+    entitlementSource: "stripe",
+    entitlementPlanKey: "adult_conditioning",
+    appAccessTier: "limited",
+    entitlementClassSlots: ["monday_0600", "tuesday_1800"],
+    alphaWodAccess: true,
+  });
+  await assert.rejects(
+    getMonthlyLeaderboard(request({monthKey: "2026-08"}, "limited")),
+    (error) => error.code === "permission-denied" &&
+      error.details?.reason === "full_app_access_required"
   );
 });
 

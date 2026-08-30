@@ -34,6 +34,7 @@
     "test:infrastructure": "node --test scripts/*.test.js",
     "verify:frontend-production-closed": "node scripts/verifyFrontendProductionEnv.js --expect-purchase-closed",
     "verify:frontend-production-open": "node scripts/verifyFrontendProductionEnv.js --expect-purchase-open",
+    "verify:frontend-conditioning-production-open": "node scripts/verifyFrontendProductionEnv.js --expect-purchase-open --expect-conditioning-open",
     "verify:monitoring": "node scripts/verifyBillingMonitoring.js",
     "sync:published-legal": "node scripts/syncPublishedLegalDocuments.js --write",
     "verify:legal-registry-sync": "node scripts/syncPublishedLegalDocuments.js --check",

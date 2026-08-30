@@ -12,6 +12,34 @@
 
 const http = require("node:http");
 
+const MEMBERSHIP_APP_ACCESS_TIER_BY_PLAN = Object.freeze({
+  adult_unlimited: "full",
+  adult_conditioning: "limited",
+  adult_ladies: "none",
+  adult_gym: "none",
+  youth_youngstars: "none",
+  youth_teenstars: "none",
+});
+
+/**
+ * Upgrades an otherwise-current commercial fixture to the metadata written by
+ * the schema-v6 checkout flow. An explicit value (including null/undefined) is
+ * preserved so contract-negative tests can still exercise fail-closed paths.
+ * Conditioning slots are deliberately not invented; non-conditioning plans
+ * must continue to omit that Stripe metadata key entirely.
+ */
+function membershipCommercialMetadata(metadata) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return metadata;
+  }
+  const expectedTier = MEMBERSHIP_APP_ACCESS_TIER_BY_PLAN[metadata.planKey];
+  if (!expectedTier ||
+    Object.prototype.hasOwnProperty.call(metadata, "appAccessTier")) {
+    return metadata;
+  }
+  return {...metadata, appAccessTier: expectedTier};
+}
+
 function formEncodedToObject(body) {
   const params = new URLSearchParams(body);
   const out = {};
@@ -22,6 +50,7 @@ function formEncodedToObject(body) {
 function createFakeStripe() {
   const prices = new Map([
     ["price_unlimited", {amount: 6000, name: "Adult Unlimited Membership"}],
+    ["price_conditioning", {amount: 3000, name: "Adult Conditioning Only Membership"}],
     ["price_ladies", {amount: 5000, name: "Adult Ladies Only Membership"}],
     ["price_gym", {amount: 4500, name: "Adult Gym Only"}],
     ["price_youngstars", {amount: 3000, name: "MINI ALPHAS - 10 & Under"}],
@@ -285,6 +314,10 @@ function createFakeStripe() {
             intentId: payload["metadata[intentId]"],
             planKey: payload["metadata[planKey]"],
             participantCount: payload["metadata[participantCount]"],
+            appAccessTier: payload["metadata[appAccessTier]"],
+            ...(payload["metadata[conditioningSlots]"] ? {
+              conditioningSlots: payload["metadata[conditioningSlots]"],
+            } : {}),
             ...(payload["metadata[firebaseUid]"] ? {
               firebaseUid: payload["metadata[firebaseUid]"],
             } : {}),
@@ -483,6 +516,7 @@ function createFakeStripe() {
         ...existing,
         ...overrides,
       };
+      subscription.metadata = membershipCommercialMetadata(subscription.metadata);
       state.subscriptions.set(id, subscription);
       return subscription;
     },
@@ -503,7 +537,15 @@ function createFakeStripe() {
       const object = event.data?.object;
       if ((event.type === "checkout.session.completed" ||
           event.type === "checkout.session.async_payment_succeeded") && object?.id) {
-        state.checkoutSessions.set(object.id, object);
+        const existing = state.checkoutSessions.get(object.id) || {};
+        state.checkoutSessions.set(object.id, {
+          ...existing,
+          ...object,
+          metadata: membershipCommercialMetadata({
+            ...(existing.metadata || {}),
+            ...(object.metadata || {}),
+          }),
+        });
       }
       if (event.type === "invoice.paid" && object?.id) {
         state.invoices.set(object.id, object);
@@ -558,4 +600,4 @@ function createFakeStripe() {
   };
 }
 
-module.exports = {createFakeStripe};
+module.exports = {createFakeStripe, membershipCommercialMetadata};

@@ -1,5 +1,15 @@
 import type { AppRole } from "../lib/roles";
 
+export const CONDITIONING_SLOT_KEYS = [
+  "monday_0600",
+  "tuesday_1800",
+  "thursday_1800",
+  "friday_0530",
+] as const;
+
+export type ConditioningSlotKey = typeof CONDITIONING_SLOT_KEYS[number];
+export type AppAccessTier = "none" | "limited" | "full";
+
 export type AppUser = {
   uid: string;
   profileExists?: boolean;
@@ -10,6 +20,9 @@ export type AppUser = {
   entitlementStatus?: "none" | "active" | "restricted";
   entitlementSource?: "none" | "legacy" | "manual" | "stripe" | "staff";
   alphaWodAccess?: boolean;
+  appAccessTier?: AppAccessTier;
+  entitlementPlanKey?: string;
+  entitlementClassSlots?: ConditioningSlotKey[];
   strengthBlock?: "A" | "B" | "none";
   photoURL?: string;
   waiverAcceptedAt?: unknown;
@@ -23,6 +36,9 @@ type RawUserDoc = {
   entitlementStatus?: unknown;
   entitlementSource?: unknown;
   alphaWodAccess?: unknown;
+  appAccessTier?: unknown;
+  entitlementPlanKey?: unknown;
+  entitlementClassSlots?: unknown;
   strengthBlock?: unknown;
   photoURL?: unknown;
   waiverAcceptedAt?: unknown;
@@ -49,6 +65,24 @@ export function buildAppUser(
     typeof rawData?.waiverAcceptedVersion === "string"
       ? rawData.waiverAcceptedVersion
       : undefined;
+  const appAccessTier =
+    rawData?.appAccessTier === "full" || rawData?.appAccessTier === "limited" ||
+    rawData?.appAccessTier === "none"
+      ? rawData.appAccessTier
+      : rawData && Object.prototype.hasOwnProperty.call(rawData, "appAccessTier")
+      ? "none"
+      : undefined;
+  const entitlementPlanKey =
+    typeof rawData?.entitlementPlanKey === "string" && rawData.entitlementPlanKey.trim()
+      ? rawData.entitlementPlanKey.trim()
+      : undefined;
+  const rawEntitlementClassSlots = rawData?.entitlementClassSlots;
+  const entitlementClassSlots = Array.isArray(rawEntitlementClassSlots)
+    ? Array.from(new Set(rawEntitlementClassSlots)).filter(
+        (slot): slot is ConditioningSlotKey =>
+          CONDITIONING_SLOT_KEYS.includes(slot as ConditioningSlotKey)
+      )
+    : undefined;
 
   return {
     uid: firebaseUser.uid,
@@ -71,6 +105,9 @@ export function buildAppUser(
         ? rawData.entitlementSource
         : "none",
     alphaWodAccess: rawData?.alphaWodAccess === true,
+    ...(appAccessTier !== undefined ? { appAccessTier } : {}),
+    ...(entitlementPlanKey !== undefined ? { entitlementPlanKey } : {}),
+    ...(entitlementClassSlots !== undefined ? { entitlementClassSlots } : {}),
     strengthBlock:
       rawData?.strengthBlock === "A" || rawData?.strengthBlock === "B"
         ? rawData.strengthBlock
@@ -98,6 +135,7 @@ export function buildSafePendingAppUser(
     entitlementStatus: "none",
     entitlementSource: "none",
     alphaWodAccess: false,
+    appAccessTier: "none",
     strengthBlock: "none",
   };
 }
@@ -107,6 +145,8 @@ type AlphaWodAccessRecord = {
   entitlementStatus?: unknown;
   entitlementSource?: unknown;
   alphaWodAccess?: unknown;
+  appAccessTier?: unknown;
+  entitlementClassSlots?: unknown;
   role?: unknown;
 };
 
@@ -119,11 +159,21 @@ export function hasAlphaWodAccess(appUser?: AlphaWodAccessRecord | null) {
         appUser?.entitlementSource === "manual" ||
         appUser?.entitlementSource === "stripe"));
 
-  return (
+  const baseAccess = (
     appUser?.approvalStatus === "approved" &&
     appUser.entitlementStatus === "active" &&
     appUser.alphaWodAccess === true &&
     hasValidEntitlement
+  );
+  if (!baseAccess) return false;
+  if (appUser?.appAccessTier === undefined) return true;
+  if (appUser.appAccessTier === "full") return true;
+  if (appUser.appAccessTier !== "limited" ||
+      !Array.isArray(appUser.entitlementClassSlots) ||
+      appUser.entitlementClassSlots.length !== 2) return false;
+  const uniqueSlots = new Set(appUser.entitlementClassSlots);
+  return uniqueSlots.size === 2 && Array.from(uniqueSlots).every((slot) =>
+    CONDITIONING_SLOT_KEYS.includes(slot as ConditioningSlotKey)
   );
 }
 
@@ -133,4 +183,18 @@ export function getAlphaWodAccessGateRoute(
   if (appUser?.approvalStatus !== "approved") return "/pending-approval";
   if (!hasAlphaWodAccess(appUser)) return "/access-restricted";
   return null;
+}
+
+/**
+ * Legacy entitled users pre-date the tier projection. Keep those approved
+ * accounts on full access while explicit malformed or `none` values fail closed.
+ */
+export function getEffectiveAppAccessTier(
+  appUser?: AppUser | null
+): AppAccessTier {
+  if (!hasAlphaWodAccess(appUser)) return "none";
+  if (appUser?.appAccessTier === "limited" || appUser?.appAccessTier === "full") {
+    return appUser.appAccessTier;
+  }
+  return appUser?.appAccessTier === undefined ? "full" : "none";
 }

@@ -15,7 +15,7 @@ import {
 import {MEMBERSHIP_PURCHASE_AVAILABILITY} from "../purchaseAvailability";
 
 const CARD =
-  "rounded-[28px] border border-white/10 bg-[#151311] p-7 shadow-[0_26px_80px_rgba(0,0,0,0.42)]";
+  "rounded-2xl border border-white/10 bg-[#151311] p-7 shadow-[0_26px_80px_rgba(0,0,0,0.42)]";
 const EYEBROW = "text-[12px] font-bold uppercase tracking-[0.28em] text-white/34";
 
 function PlanCard({
@@ -27,6 +27,8 @@ function PlanCard({
   presale: boolean;
   checkoutEnabled: boolean;
 }) {
+  const isConditioning = plan.key === "adult_conditioning";
+  const isConditioningComingSoon = isConditioning && !checkoutEnabled;
   return (
     <div className={CARD}>
       <div className="flex items-start justify-between gap-4">
@@ -50,18 +52,24 @@ function PlanCard({
         </p>
       )}
 
-      {plan.grantsAlphaWodAccess && !presale && (
+      {plan.appAccessTier !== "none" && !presale && (
         <p className="mt-4 inline-flex rounded-full border border-amber-500/25 bg-amber-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-200">
-          Includes Zero Alpha App access
+          {plan.appAccessTier === "limited" ? "Limited Zero Alpha App access" : "Full Zero Alpha App access"}
         </p>
       )}
 
-      {checkoutEnabled ? (
+      {isConditioningComingSoon ? (
+        <p className="mt-4 text-sm font-bold text-amber-200">
+          Coming soon · choose exactly two weekly conditioning slots
+        </p>
+      ) : null}
+
+      {checkoutEnabled || isConditioningComingSoon ? (
         <Link
           to={`/memberships/checkout/${plan.key}`}
           className="mt-6 block rounded-2xl bg-white px-5 py-3 text-center text-sm font-bold uppercase tracking-[0.14em] text-black transition hover:bg-white/85"
         >
-          Choose {plan.name.replace("Membership", "").trim()}
+          {isConditioningComingSoon ? "Preview weekly slots" : `Choose ${plan.name.replace("Membership", "").trim()}`}
         </Link>
       ) : (
         <button
@@ -158,6 +166,7 @@ export default function Memberships() {
   const presale = isFoundingPresale();
   const {
     checkoutEnabled,
+    conditioningCheckoutEnabled,
     documentsApproved,
     localTestJourneyEnabled,
   } = MEMBERSHIP_PURCHASE_AVAILABILITY;
@@ -189,6 +198,19 @@ export default function Memberships() {
         <h1 className="mt-4 font-heading text-[3rem] uppercase leading-[0.98] tracking-[0.01em] text-white sm:text-[4rem]">
           Memberships
         </h1>
+
+        <div className="mt-7 flex flex-col gap-5 border-y border-[#f4b16d]/25 py-6 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="font-heading text-3xl uppercase text-white">Just want one class?</h2>
+            <p className="mt-2 text-sm leading-6 text-white/60">See the live timetable and choose one Pay As You Go session for £7.50. No account or recurring membership.</p>
+          </div>
+          <Link
+            to="/pay-as-you-go"
+            className="inline-flex min-h-[48px] shrink-0 items-center justify-center rounded-xl bg-[#f4b16d] px-5 py-3 text-sm font-black text-black outline-none transition hover:bg-[#ffc485] focus-visible:ring-2 focus-visible:ring-white"
+          >
+            View PAYG timetable
+          </Link>
+        </div>
 
         {presale && (
           <dl className="mt-7 grid gap-5 border-y border-white/10 py-5 text-sm sm:grid-cols-3">
@@ -265,7 +287,8 @@ export default function Memberships() {
               key={plan.key}
               plan={plan}
               presale={presale}
-              checkoutEnabled={checkoutEnabled}
+              checkoutEnabled={plan.key === "adult_conditioning" ?
+                conditioningCheckoutEnabled : checkoutEnabled}
             />
           ))}
           <YouthCard presale={presale} checkoutEnabled={checkoutEnabled} />
@@ -282,8 +305,10 @@ export default function Memberships() {
             <li>{POLICY_TEXT.noPause}</li>
             <li>{POLICY_TEXT.pastDue}</li>
             <li>
-              Only the Adult Unlimited Membership automatically includes eligible Zero Alpha App
-              access. Youth, Ladies Only and Gym Only memberships do not.
+              Adult Unlimited includes full eligible Zero Alpha App access. Adult Conditioning
+              Only includes Schedule, Profile and Membership management with booking limited to
+              the two selected weekly slots. Youth, Ladies Only and Gym Only memberships do not
+              include app access.
             </li>
           </ul>
           <p className="mt-5 text-xs leading-6 text-white/40">

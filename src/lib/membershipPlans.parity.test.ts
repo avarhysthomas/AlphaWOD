@@ -121,14 +121,14 @@ describe("membership catalogue parity", () => {
     }
   );
 
-  it("keeps schema v5 and the youth recommendation boundary identical", () => {
+  it("keeps schema v6 and the youth recommendation boundary identical", () => {
     const {
       MEMBERSHIP_SCHEMA_VERSION,
       MEMBERSHIP_PLANS,
       resolveYouthPlanForAge,
     } = require("./membershipPlans") as typeof import("./membershipPlans");
 
-    expect(MEMBERSHIP_SCHEMA_VERSION).toBe(5);
+    expect(MEMBERSHIP_SCHEMA_VERSION).toBe(6);
     expect(resolveYouthPlanForAge(-1)).toBeNull();
     expect(resolveYouthPlanForAge(0)).toBe("youth_youngstars");
     expect(resolveYouthPlanForAge(10)).toBe("youth_youngstars");
@@ -140,14 +140,16 @@ describe("membership catalogue parity", () => {
     );
   });
 
-  it("grants AlphaWOD access on exactly one plan", () => {
+  it("grants app access only to Unlimited and Conditioning with distinct tiers", () => {
     const {
       MEMBERSHIP_PLANS,
       PLAN_KEYS,
     } = require("./membershipPlans") as typeof import("./membershipPlans");
 
     const granting = PLAN_KEYS.filter((key) => MEMBERSHIP_PLANS[key].grantsAlphaWodAccess);
-    expect(granting).toEqual(["adult_unlimited"]);
+    expect(granting).toEqual(["adult_unlimited", "adult_conditioning"]);
+    expect(MEMBERSHIP_PLANS.adult_unlimited.appAccessTier).toBe("full");
+    expect(MEMBERSHIP_PLANS.adult_conditioning.appAccessTier).toBe("limited");
   });
 
   it("freezes the approved version of every checkout document", () => {

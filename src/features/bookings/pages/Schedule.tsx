@@ -13,7 +13,10 @@ import {
 } from "firebase/firestore";
 import { db } from "../../../firebase";
 import { useAuth } from "../../../context/AuthContext";
+import type { ConditioningSlotKey } from "../../../context/authUser";
 import { getUserNavItems } from "../../../components/layout/UserTopNav";
+import { isLimitedAppUser } from "../../../lib/appAccess";
+import { formatConditioningSlot } from "../../../lib/membershipPlans";
 import { Flame, Dumbbell, PersonStanding, Award, Activity, Bell, Search } from "lucide-react";
 import { bookClass as bookClassCallable, cancelBooking as cancelBookingCallable } from "../services/bookings";
 
@@ -27,6 +30,7 @@ type ClassDoc = {
   capacity?: number;
   bookedCount?: number;
   status?: "scheduled" | "cancelled";
+  conditioningSlotKey?: ConditioningSlotKey | null;
 };
 
 type BookingDoc = {
@@ -95,6 +99,86 @@ function fmtRemaining(ms: number) {
 
 function normalizeStrengthBlock(value: unknown): StrengthBlock {
   return value === "A" || value === "B" ? value : "none";
+}
+
+const CONDITIONING_SLOT_BY_DAY_TIME: Record<string, ConditioningSlotKey> = {
+  "Monday|06:00": "monday_0600",
+  "Tuesday|18:00": "tuesday_1800",
+  "Thursday|18:00": "thursday_1800",
+  "Friday|05:30": "friday_0530",
+};
+
+function getConditioningSlotForClass(classData: ClassDoc): ConditioningSlotKey | null {
+  if (classData.timezone !== DEFAULT_TZ || classData.conditioningSlotKey === null) {
+    return null;
+  }
+  const start = classData.startTime?.toDate?.();
+  if (!start) return null;
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    weekday: "long",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: DEFAULT_TZ,
+  }).formatToParts(start);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((entry) => entry.type === type)?.value ?? "";
+  const derived = CONDITIONING_SLOT_BY_DAY_TIME[`${part("weekday")}|${part("hour")}:${part("minute")}`] ?? null;
+  if (classData.conditioningSlotKey !== undefined) {
+    return classData.conditioningSlotKey === derived ? derived : null;
+  }
+  return derived;
+}
+
+type ClassAccess = {
+  allowed: boolean;
+  reason?: "not_conditioning_slot" | "conditioning_slot_not_selected" | "strength_block";
+  message?: string;
+};
+
+function resolveClassAccess({
+  classData,
+  limited,
+  entitlementClassSlots,
+  strengthBlock,
+  isAdmin,
+  strengthBlocksEnabled,
+}: {
+  classData: ClassDoc;
+  limited: boolean;
+  entitlementClassSlots: ConditioningSlotKey[];
+  strengthBlock: StrengthBlock;
+  isAdmin: boolean;
+  strengthBlocksEnabled: boolean;
+}): ClassAccess {
+  if (limited) {
+    const conditioningSlot = getConditioningSlotForClass(classData);
+    if (!conditioningSlot) {
+      return {
+        allowed: false,
+        reason: "not_conditioning_slot",
+        message: "Conditioning Only covers the four recurring conditioning slots.",
+      };
+    }
+    if (!entitlementClassSlots.includes(conditioningSlot)) {
+      const selected = entitlementClassSlots.map(formatConditioningSlot).join(" and ");
+      return {
+        allowed: false,
+        reason: "conditioning_slot_not_selected",
+        message: selected
+          ? `Your membership is set to ${selected}.`
+          : "This recurring slot is not selected on your membership.",
+      };
+    }
+  }
+  if (!canAccessClass(classData, strengthBlock, isAdmin, strengthBlocksEnabled)) {
+    return {
+      allowed: false,
+      reason: "strength_block",
+      message: "You are not assigned to the strength block for this class.",
+    };
+  }
+  return { allowed: true };
 }
 
 function getStrengthSlotForClass(classData: ClassDoc): "A" | "B" | null {
@@ -292,6 +376,7 @@ export default function Schedule() {
 
   const { user, appUser } = useAuth();
   const isAdmin = appUser?.role === "admin";
+  const limitedAccess = isLimitedAppUser(appUser);
 
   const [classes, setClasses] = useState<ClassRow[]>([]);
   const [loadingClasses, setLoadingClasses] = useState(true);
@@ -408,12 +493,16 @@ export default function Schedule() {
   }, [user]);
 
   const memberStrengthBlock = normalizeStrengthBlock(appUser?.strengthBlock);
+  const entitlementClassSlots = useMemo(
+    () => appUser?.entitlementClassSlots ?? [],
+    [appUser?.entitlementClassSlots]
+  );
   const visibleClasses = useMemo(
     () =>
-      classes.filter(({ data }) =>
+      limitedAccess ? classes : classes.filter(({ data }) =>
         canAccessClass(data, memberStrengthBlock, isAdmin, strengthBlocksEnabled)
       ),
-    [classes, isAdmin, memberStrengthBlock, strengthBlocksEnabled]
+    [classes, isAdmin, limitedAccess, memberStrengthBlock, strengthBlocksEnabled]
   );
 
   const weekDays = useMemo(
@@ -463,11 +552,16 @@ export default function Schedule() {
     if (!user) return alert("Log in first.");
 
     const classRow = classes.find((item) => item.id === classId);
-    if (
-      classRow &&
-      !canAccessClass(classRow.data, memberStrengthBlock, isAdmin, strengthBlocksEnabled)
-    ) {
-      return alert("You are not assigned to the strength block for this class.");
+    if (classRow) {
+      const access = resolveClassAccess({
+        classData: classRow.data,
+        limited: limitedAccess,
+        entitlementClassSlots,
+        strengthBlock: memberStrengthBlock,
+        isAdmin,
+        strengthBlocksEnabled,
+      });
+      if (!access.allowed) return alert(access.message || "This class is not included in your membership.");
     }
 
     setBusyClassId(classId);
@@ -489,6 +583,13 @@ export default function Schedule() {
       if (e?.code === "already-exists" || message.includes("Already booked")) return alert("Already booked");
       if (e?.code === "failed-precondition" && message.includes("Class is full")) return alert("Class is full");
       if (e?.code === "failed-precondition" && message.includes("Booking closed")) return alert("Booking closed for this class");
+      const reason = e?.details?.reason;
+      if (reason === "class_not_conditioning_membership_slot") {
+        return alert("Conditioning Only covers the four recurring conditioning slots.");
+      }
+      if (reason === "conditioning_slot_not_selected") {
+        return alert("This recurring session is not one of the two selected for your membership.");
+      }
       if (e?.code === "permission-denied" || message.includes("strength block")) {
         return alert("You are not assigned to the strength block for this class.");
       }
@@ -496,7 +597,7 @@ export default function Schedule() {
     } finally {
       setBusyClassId(null);
     }
-  }, [appUser?.name, classes, isAdmin, memberStrengthBlock, strengthBlocksEnabled, user]);
+  }, [appUser?.name, classes, entitlementClassSlots, isAdmin, limitedAccess, memberStrengthBlock, strengthBlocksEnabled, user]);
 
   const handleCancel = useCallback(async (classId: string) => {
     if (!user) return alert("Log in first.");
@@ -533,7 +634,7 @@ export default function Schedule() {
     navigate(`/admin/classes/${classId}`);
   }, [navigate]);
 
-  const navItems = getUserNavItems(appUser?.role);
+  const navItems = getUserNavItems(appUser);
   const firstName = appUser?.name?.split(" ")[0] || appUser?.email?.split("@")[0] || "there";
   const profilePhotoURL = appUser?.photoURL || user?.photoURL || "";
 
@@ -541,7 +642,7 @@ export default function Schedule() {
     <div className="carbon-fiber-bg min-h-screen overflow-x-hidden text-[#f4f0ea]">
       <main className="relative mx-auto min-h-screen max-w-xl px-5 pb-32 pt-7 sm:max-w-3xl sm:px-8">
         <header className="flex items-center justify-between" style={{ paddingTop: "env(safe-area-inset-top)" }}>
-          <Link to="/dashboard" aria-label="Zero Alpha home" className="block">
+          <Link to={limitedAccess ? "/schedule" : "/dashboard"} aria-label="Zero Alpha home" className="block">
             <img src="/ZERO-ALPHA.png" alt="ZERO-ALPHA" className="h-20 w-auto object-contain" />
           </Link>
           <div className="flex items-center gap-3">
@@ -677,6 +778,14 @@ export default function Schedule() {
                   booked={Boolean(activeBookingsByClassId[id])}
                   busy={busyClassId === id}
                   isAdmin={isAdmin}
+                  access={resolveClassAccess({
+                    classData: data,
+                    limited: limitedAccess,
+                    entitlementClassSlots,
+                    strengthBlock: memberStrengthBlock,
+                    isAdmin,
+                    strengthBlocksEnabled,
+                  })}
                   onBook={handleBook}
                   onCancel={handleCancel}
                   onRoster={handleRoster}
@@ -720,6 +829,7 @@ const ScheduleClassCard = React.memo(function ScheduleClassCard({
   booked,
   busy,
   isAdmin,
+  access,
   onBook,
   onCancel,
   onRoster,
@@ -729,6 +839,7 @@ const ScheduleClassCard = React.memo(function ScheduleClassCard({
   booked: boolean;
   busy: boolean;
   isAdmin: boolean;
+  access: ClassAccess;
   onBook: (classId: string) => void;
   onCancel: (classId: string) => void;
   onRoster: (classId: string) => void;
@@ -748,6 +859,7 @@ const ScheduleClassCard = React.memo(function ScheduleClassCard({
   const showChili = isTuesdayHyroxClass(data);
   const percent = capacityPercent(bookedCount, capacity);
   const waitlist = capacity > 0 ? Math.max(0, bookedCount - capacity) : 0;
+  const bookingNotIncluded = !access.allowed && !booked;
 
   return (
     <article
@@ -787,6 +899,11 @@ const ScheduleClassCard = React.memo(function ScheduleClassCard({
       </div>
 
       <div className="mt-4 flex flex-wrap gap-2">
+        {bookingNotIncluded ? (
+          <span className="rounded-full border border-amber-300/20 bg-amber-300/10 px-4 py-2 text-[12px] font-bold uppercase tracking-[0.12em] text-amber-200">
+            Not in your plan
+          </span>
+        ) : null}
         {booked ? (
           <span className="rounded-full bg-emerald-400/12 px-4 py-2 text-[12px] font-bold uppercase tracking-[0.12em] text-emerald-200">
             Booked
@@ -814,6 +931,12 @@ const ScheduleClassCard = React.memo(function ScheduleClassCard({
         ) : null}
       </div>
 
+      {bookingNotIncluded ? (
+        <div className="mt-4 rounded-xl border border-amber-300/15 bg-amber-300/[0.07] p-4">
+          <p className="text-sm leading-6 text-amber-50/75">{access.message}</p>
+        </div>
+      ) : null}
+
       <div className="mt-5 flex flex-col gap-3 border-t border-white/8 pt-4 sm:flex-row">
         {isAdmin ? (
           <button
@@ -834,6 +957,13 @@ const ScheduleClassCard = React.memo(function ScheduleClassCard({
           >
             {cancelClosed ? "Too late" : busy ? "Cancelling..." : "Cancel booking"}
           </button>
+        ) : bookingNotIncluded ? (
+          <Link
+            to="/memberships"
+            className="inline-flex min-h-[48px] items-center justify-center rounded-xl border border-amber-300/25 bg-amber-300/10 px-5 py-3 text-sm font-bold text-amber-100 outline-none transition hover:bg-amber-300/15 focus-visible:ring-2 focus-visible:ring-amber-200 sm:min-w-[150px]"
+          >
+            View full access
+          </Link>
         ) : (
           <button
             type="button"

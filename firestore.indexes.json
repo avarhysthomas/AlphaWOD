@@ -71,6 +71,30 @@
       "fieldPath": "expiresAt",
       "indexes": [],
       "ttl": true
+    },
+    {
+      "collectionGroup": "paygCheckoutRateLimits",
+      "fieldPath": "expiresAt",
+      "indexes": [],
+      "ttl": true
+    },
+    {
+      "collectionGroup": "paygCheckoutAdmissions",
+      "fieldPath": "expiresAt",
+      "indexes": [],
+      "ttl": true
+    },
+    {
+      "collectionGroup": "paygCheckoutLocks",
+      "fieldPath": "deleteAt",
+      "indexes": [],
+      "ttl": true
+    },
+    {
+      "collectionGroup": "paygIntents",
+      "fieldPath": "piiDeleteAt",
+      "indexes": [],
+      "ttl": true
     }
   ]
 }

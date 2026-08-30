@@ -13,6 +13,11 @@
  */
 
 import {DateTime} from "luxon";
+import {
+  AppAccessTier,
+  ConditioningSlotKey,
+  canonicalConditioningSlots,
+} from "./authz";
 
 export const BILLING_TIMEZONE = "Europe/London";
 export const BILLING_CURRENCY = "gbp";
@@ -60,7 +65,7 @@ export const SUPPORTED_YOUTH_FAMILY_DISCOUNT_PERCENTAGES = [
 ] as const;
 
 /** Catalogue schema version stored on every membership document. */
-export const MEMBERSHIP_SCHEMA_VERSION = 5;
+export const MEMBERSHIP_SCHEMA_VERSION = 6;
 
 /** ---------------------------------------------------------------
  * Company and contact identity (Membership Terms sections 1 and 14)
@@ -85,6 +90,7 @@ export const COMPANY = {
  * -------------------------------------------------------------- */
 export const PLAN_KEYS = [
   "adult_unlimited",
+  "adult_conditioning",
   "adult_ladies",
   "adult_gym",
   "youth_youngstars",
@@ -114,6 +120,8 @@ export type MembershipPlan = {
    * AlphaWOD access (Membership Terms 8). Only Adult Unlimited does.
    */
   grantsAlphaWodAccess: boolean;
+  /** Server-authoritative feature tier projected while the membership is entitled. */
+  appAccessTier: AppAccessTier;
   /** Environment/config key holding this plan's Stripe price ID. */
   stripePriceEnvKey: string;
   /** Youth options are presented inside one catalogue card. */
@@ -131,9 +139,24 @@ export const MEMBERSHIP_PLANS: Record<PlanKey, MembershipPlan> = {
     minAge: 18,
     maxAge: null,
     grantsAlphaWodAccess: true,
+    appAccessTier: "full",
     stripePriceEnvKey: "STRIPE_PRICE_ADULT_UNLIMITED",
     cardGroup: "adult",
     summary: "Full access to sessions and the gym floor. The only membership that automatically includes eligible Zero Alpha App access.",
+  },
+  adult_conditioning: {
+    key: "adult_conditioning",
+    audience: "adult",
+    name: "Adult Conditioning Only Membership",
+    amountPence: 3000,
+    currency: BILLING_CURRENCY,
+    minAge: 18,
+    maxAge: null,
+    grantsAlphaWodAccess: true,
+    appAccessTier: "limited",
+    stripePriceEnvKey: "STRIPE_PRICE_ADULT_CONDITIONING",
+    cardGroup: "adult",
+    summary: "Access to exactly two selected recurring conditioning sessions each week, with limited Zero Alpha App access.",
   },
   adult_ladies: {
     key: "adult_ladies",
@@ -144,6 +167,7 @@ export const MEMBERSHIP_PLANS: Record<PlanKey, MembershipPlan> = {
     minAge: 18,
     maxAge: null,
     grantsAlphaWodAccess: false,
+    appAccessTier: "none",
     stripePriceEnvKey: "STRIPE_PRICE_ADULT_LADIES",
     cardGroup: "adult",
     summary: "Ladies only sessions and gym access. Does not include Zero Alpha App access.",
@@ -157,6 +181,7 @@ export const MEMBERSHIP_PLANS: Record<PlanKey, MembershipPlan> = {
     minAge: 18,
     maxAge: null,
     grantsAlphaWodAccess: false,
+    appAccessTier: "none",
     stripePriceEnvKey: "STRIPE_PRICE_ADULT_GYM",
     cardGroup: "adult",
     summary: "Gym floor access only. Does not include coached sessions or Zero Alpha App access.",
@@ -170,6 +195,7 @@ export const MEMBERSHIP_PLANS: Record<PlanKey, MembershipPlan> = {
     minAge: 0,
     maxAge: 10,
     grantsAlphaWodAccess: false,
+    appAccessTier: "none",
     stripePriceEnvKey: "STRIPE_PRICE_YOUTH_YOUNGSTARS",
     cardGroup: "youth",
     summary: "A strength and conditioning class for 10 and under! Fun, progressive, and challenging.",
@@ -183,6 +209,7 @@ export const MEMBERSHIP_PLANS: Record<PlanKey, MembershipPlan> = {
     minAge: 11,
     maxAge: null,
     grantsAlphaWodAccess: false,
+    appAccessTier: "none",
     stripePriceEnvKey: "STRIPE_PRICE_YOUTH_TEENSTARS",
     cardGroup: "youth",
     summary: "Strength and conditioning for 11 and up! Develop athletic qualities in a supportive environment.",
@@ -401,6 +428,8 @@ export type CommercialPlanSnapshot = {
   vatRegistered: boolean;
   automaticTaxEnabled: boolean;
   grantsAlphaWodAccess: boolean;
+  appAccessTier: AppAccessTier;
+  selectedConditioningSlots: ConditioningSlotKey[];
   minAge: number;
   maxAge: number | null;
   cancellationNoticeDays: number;
@@ -487,8 +516,16 @@ export function resolveCheckoutSignerRole(planKey: PlanKey): CheckoutSignerRole 
     "youth_guardian_and_payer" : "adult_participant_and_payer";
 }
 
-export function createCommercialPlanSnapshot(planKey: PlanKey): CommercialPlanSnapshot {
+export function createCommercialPlanSnapshot(
+  planKey: PlanKey,
+  selectedConditioningSlots: unknown = []
+): CommercialPlanSnapshot {
   const plan = getPlan(planKey);
+  const frozenSlots = planKey === "adult_conditioning" ?
+    canonicalConditioningSlots(selectedConditioningSlots) : [];
+  if (planKey === "adult_conditioning" && !frozenSlots) {
+    throw new Error("adult_conditioning requires exactly two valid recurring slots");
+  }
   return {
     catalogueSchemaVersion: MEMBERSHIP_SCHEMA_VERSION,
     planKey: plan.key,
@@ -506,6 +543,8 @@ export function createCommercialPlanSnapshot(planKey: PlanKey): CommercialPlanSn
     vatRegistered: BILLING_POLICY.vatRegistered,
     automaticTaxEnabled: BILLING_POLICY.automaticTaxEnabled,
     grantsAlphaWodAccess: plan.grantsAlphaWodAccess,
+    appAccessTier: plan.appAccessTier,
+    selectedConditioningSlots: frozenSlots || [],
     minAge: plan.minAge,
     maxAge: plan.maxAge,
     cancellationNoticeDays: BILLING_POLICY.cancellationNoticeDays,
@@ -882,9 +921,150 @@ export function isMembershipStateBlockingDuplicate(state: MembershipState): bool
 export type EntitlementDecision = {
   entitlementStatus: "none" | "active" | "restricted";
   entitlementSource: "none" | "stripe";
+  appAccessTier: AppAccessTier;
+  entitlementClassSlots: ConditioningSlotKey[];
   /** Why the decision was made; stored on the audit trail. */
   reason: string;
 };
+
+export type ValidatedCommercialEntitlementPolicy = {
+  grantsAlphaWodAccess: boolean;
+  appAccessTier: AppAccessTier;
+  entitlementClassSlots: ConditioningSlotKey[];
+};
+
+/**
+ * Validates only the immutable entitlement fields stored in a commercial
+ * snapshot. It intentionally does not consult the current plan registry: a
+ * catalogue edit must never rewrite an already-purchased access policy.
+ */
+export function validateCommercialEntitlementPolicy(
+  commercialTerms: unknown,
+  expectedPlanKey?: string
+): ValidatedCommercialEntitlementPolicy | null {
+  if (!commercialTerms || typeof commercialTerms !== "object" ||
+      Array.isArray(commercialTerms)) return null;
+  const terms = commercialTerms as Record<string, unknown>;
+  if (!Number.isSafeInteger(terms.catalogueSchemaVersion) ||
+      Number(terms.catalogueSchemaVersion) < 1 ||
+      typeof terms.planKey !== "string" || !terms.planKey ||
+      (expectedPlanKey !== undefined && terms.planKey !== expectedPlanKey) ||
+      typeof terms.grantsAlphaWodAccess !== "boolean") return null;
+
+  // Schema v1-v5 never stored tiers or conditioning slots, and the only plan
+  // that could grant app access was Adult Unlimited. Adapt only that exact,
+  // historically valid shape; reject stray tier fields and impossible plan/
+  // grant combinations rather than broadening an ambiguous old snapshot.
+  if (Number(terms.catalogueSchemaVersion) <= 5) {
+    if (terms.appAccessTier !== undefined ||
+      terms.selectedConditioningSlots !== undefined) return null;
+    if (terms.planKey === "adult_unlimited" &&
+      terms.grantsAlphaWodAccess === true) {
+      return {
+        grantsAlphaWodAccess: true,
+        appAccessTier: "full",
+        entitlementClassSlots: [],
+      };
+    }
+    const historicalNonAppPlans = [
+      "adult_ladies",
+      "adult_gym",
+      "youth_youngstars",
+      "youth_teenstars",
+    ];
+    if (historicalNonAppPlans.includes(terms.planKey) &&
+      terms.grantsAlphaWodAccess === false) {
+      return {
+        grantsAlphaWodAccess: false,
+        appAccessTier: "none",
+        entitlementClassSlots: [],
+      };
+    }
+    return null;
+  }
+
+  if ((terms.appAccessTier !== "none" &&
+      terms.appAccessTier !== "limited" &&
+      terms.appAccessTier !== "full") ||
+      !Array.isArray(terms.selectedConditioningSlots)) return null;
+
+  if (terms.grantsAlphaWodAccess === false) {
+    return terms.appAccessTier === "none" &&
+      terms.selectedConditioningSlots.length === 0 ? {
+        grantsAlphaWodAccess: false,
+        appAccessTier: "none",
+        entitlementClassSlots: [],
+      } : null;
+  }
+
+  if (terms.appAccessTier === "full") {
+    return terms.selectedConditioningSlots.length === 0 ? {
+      grantsAlphaWodAccess: true,
+      appAccessTier: "full",
+      entitlementClassSlots: [],
+    } : null;
+  }
+  if (terms.appAccessTier !== "limited") return null;
+  const slots = canonicalConditioningSlots(terms.selectedConditioningSlots);
+  return slots ? {
+    grantsAlphaWodAccess: true,
+    appAccessTier: "limited",
+    entitlementClassSlots: slots,
+  } : null;
+}
+
+/**
+ * Resolves access from the contract frozen on the membership document.
+ * Invalid snapshots fail closed and are distinguishable by their reason.
+ */
+export function resolveEntitlementForCommercialTerms(
+  commercialTerms: unknown,
+  state: MembershipState,
+  expectedPlanKey?: string
+): EntitlementDecision | null {
+  const policy = validateCommercialEntitlementPolicy(
+    commercialTerms,
+    expectedPlanKey
+  );
+  if (!policy) {
+    if (state === "revoked" || state === "cancelled") {
+      return {
+        entitlementStatus: "none",
+        entitlementSource: "none",
+        appAccessTier: "none",
+        entitlementClassSlots: [],
+        reason: "membership_access_policy_invalid_terminal",
+      };
+    }
+    if (state === "scheduled") return null;
+    return {
+      entitlementStatus: "restricted",
+      entitlementSource: "stripe",
+      appAccessTier: "none",
+      entitlementClassSlots: [],
+      reason: "membership_access_policy_invalid",
+    };
+  }
+  if (!policy.grantsAlphaWodAccess || state === "scheduled") return null;
+  if (state === "revoked" || state === "cancelled") {
+    return {
+      entitlementStatus: "none",
+      entitlementSource: "none",
+      appAccessTier: "none",
+      entitlementClassSlots: [],
+      reason: `membership_${state}`,
+    };
+  }
+  return {
+    entitlementStatus: isMembershipStateEntitled(state) ? "active" : "restricted",
+    entitlementSource: "stripe",
+    // The profile keeps this frozen policy even when state/approval gates the
+    // effective claims down to none/empty.
+    appAccessTier: policy.appAccessTier,
+    entitlementClassSlots: policy.entitlementClassSlots,
+    reason: `membership_${state}`,
+  };
+}
 
 /**
  * Maps a membership to the Phase 0 entitlement pair.
@@ -895,27 +1075,45 @@ export type EntitlementDecision = {
  */
 export function resolveEntitlementForMembership(
   planKey: PlanKey,
-  state: MembershipState
+  state: MembershipState,
+  selectedConditioningSlots: unknown = []
 ): EntitlementDecision | null {
-  if (!getPlan(planKey).grantsAlphaWodAccess) return null;
+  const plan = getPlan(planKey);
+  if (!plan.grantsAlphaWodAccess || plan.appAccessTier === "none") return null;
 
   // A presale reserves ownership but must not project any entitlement before
   // the first invoice is paid. Returning null also preserves an existing
   // legacy/manual grant instead of prematurely replacing it with restricted.
   if (state === "scheduled") return null;
 
-  if (isMembershipStateEntitled(state)) {
-    return {
-      entitlementStatus: "active",
-      entitlementSource: "stripe",
-      reason: `membership_${state}`,
-    };
-  }
-
   if (state === "revoked" || state === "cancelled") {
     return {
       entitlementStatus: "none",
       entitlementSource: "none",
+      appAccessTier: "none",
+      entitlementClassSlots: [],
+      reason: `membership_${state}`,
+    };
+  }
+
+  const classSlots = plan.appAccessTier === "limited" ?
+    canonicalConditioningSlots(selectedConditioningSlots) : [];
+  if (plan.appAccessTier === "limited" && !classSlots) {
+    return {
+      entitlementStatus: "restricted",
+      entitlementSource: "stripe",
+      appAccessTier: "none",
+      entitlementClassSlots: [],
+      reason: "membership_access_policy_invalid",
+    };
+  }
+
+  if (isMembershipStateEntitled(state)) {
+    return {
+      entitlementStatus: "active",
+      entitlementSource: "stripe",
+      appAccessTier: plan.appAccessTier,
+      entitlementClassSlots: classSlots || [],
       reason: `membership_${state}`,
     };
   }
@@ -923,6 +1121,8 @@ export function resolveEntitlementForMembership(
   return {
     entitlementStatus: "restricted",
     entitlementSource: "stripe",
+    appAccessTier: "none",
+    entitlementClassSlots: [],
     reason: `membership_${state}`,
   };
 }

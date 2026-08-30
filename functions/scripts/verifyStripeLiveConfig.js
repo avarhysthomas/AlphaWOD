@@ -19,7 +19,9 @@ const {
   assertProductionClosedConfig,
 } = require("./verifyProductionConfig");
 const {
+  APPROVED_LIVE_PAYG_CATALOGUE,
   APPROVED_LIVE_STRIPE_CATALOGUE,
+  matchesApprovedLivePaygCatalogueEntry,
   matchesApprovedLiveStripeCatalogueEntry,
 } = require("../lib/stripeLiveCatalog");
 const {redactProviderSecrets} = require("./stripeCliTestKey");
@@ -70,6 +72,28 @@ async function main() {
     }
     verified.push({planKey, priceId: price.id, productId: product.id});
     productsByPlan.set(planKey, product.id);
+  }
+
+  const paygApproved = APPROVED_LIVE_PAYG_CATALOGUE;
+  const paygPrice = await stripe.prices.retrieve(
+    environment[paygApproved.priceEnvKey],
+    {expand: ["product"]}
+  );
+  const paygProduct = typeof paygPrice.product === "object" &&
+    paygPrice.product && !paygPrice.product.deleted ? paygPrice.product : null;
+  const paygValid = paygPrice.livemode === true &&
+    paygPrice.active === true &&
+    paygPrice.currency.toLowerCase() === paygApproved.currency &&
+    paygPrice.unit_amount === paygApproved.amountPence &&
+    paygProduct?.livemode === true &&
+    paygProduct.active === true &&
+    matchesApprovedLivePaygCatalogueEntry(
+      paygPrice,
+      paygProduct,
+      paygApproved
+    );
+  if (!paygValid) {
+    throw new Error("PAYG does not match the approved LIVE one-time catalogue.");
   }
 
   const couponId = environment.STRIPE_EXISTING_MEMBER_COUPON_ID;
@@ -158,6 +182,7 @@ async function main() {
   verified.forEach(({planKey, priceId, productId}) =>
     console.log(`- ${planKey}: ${priceId} -> ${productId}`)
   );
+  console.log(`- adult_payg_class: ${paygPrice.id} -> ${paygProduct.id}`);
   console.log(`- Existing-member Coupon: ${coupon.id}`);
   console.log(`- Shared reusable Promotion Code: ${promotionCode.id}`);
   console.log(`- Youth family Coupon: ${familyCoupon.id}`);

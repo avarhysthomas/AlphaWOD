@@ -14,6 +14,9 @@ const active = {
   approvalStatus: "approved",
   entitlementStatus: "active",
   entitlementSource: "stripe",
+  entitlementPlanKey: "adult_unlimited",
+  appAccessTier: "full",
+  entitlementClassSlots: [],
   name: "Active Member",
   photoURL: "https://example.test/active.jpg",
 };

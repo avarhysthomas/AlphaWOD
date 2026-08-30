@@ -7,6 +7,7 @@ module.exports = {
       fontFamily: {
         heading: ['Anton', 'sans-serif'],
         body: ['Inter', 'sans-serif'],
+        barlow: ['Barlow', 'sans-serif'],
       },
       colors: {
         industrial: '#1a1a1a',
@@ -18,4 +19,3 @@ module.exports = {
   },
     plugins: [],
   }
-  

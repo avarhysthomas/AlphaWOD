@@ -17,6 +17,7 @@ import {
   isGeneralMemberRole,
   isSgptRole,
 } from "./lib/roles";
+import { hasAppCapability, isLimitedAppUser, type AppCapability } from "./lib/appAccess";
 
 const WODEditor = React.lazy(() => import("./features/wod/pages/WODEditor"));
 const WODDisplay = React.lazy(() => import("./features/wod/pages/WODDisplay"));
@@ -45,6 +46,10 @@ const Memberships = React.lazy(() => import("./features/memberships/pages/Member
 const MembershipCheckout = React.lazy(() => import("./features/memberships/pages/MembershipCheckout"));
 const MembershipSuccess = React.lazy(() => import("./features/memberships/pages/MembershipSuccess"));
 const MembershipManage = React.lazy(() => import("./features/memberships/pages/MembershipManage"));
+const FeatureNotIncluded = React.lazy(() => import("./features/auth/pages/FeatureNotIncluded"));
+const PayAsYouGo = React.lazy(() => import("./features/payg/pages/PayAsYouGo"));
+const PayAsYouGoSuccess = React.lazy(() => import("./features/payg/pages/PayAsYouGoSuccess"));
+const PayAsYouGoCancellation = React.lazy(() => import("./features/payg/pages/PayAsYouGoCancellation"));
 
 /** ---------- Route guards ---------- */
 
@@ -115,6 +120,24 @@ function RequireMember({ children }: { children: React.ReactElement }) {
   return children;
 }
 
+function RequireCapability({
+  capability,
+  featureName,
+  children,
+}: {
+  capability: AppCapability;
+  featureName: string;
+  children: React.ReactElement;
+}) {
+  const { appUser, loading } = useAuth();
+
+  if (loading) return <LoadingScreen />;
+  if (isLimitedAppUser(appUser) && !hasAppCapability(appUser, capability)) {
+    return <FeatureNotIncluded featureName={featureName} />;
+  }
+  return children;
+}
+
 function RequireTrainingAccess({ children }: { children: React.ReactElement }) {
   const { appUser, loading } = useAuth();
   const location = useLocation();
@@ -143,6 +166,7 @@ function getAuthedHome(appUser: ReturnType<typeof useAuth>["appUser"]) {
   const gateRoute = getAlphaWodAccessGateRoute(appUser);
   if (gateRoute) return gateRoute;
   if (isSgptRole(appUser?.role)) return "/sgpt/dashboard";
+  if (isLimitedAppUser(appUser)) return "/schedule";
   return "/dashboard";
 }
 
@@ -166,6 +190,7 @@ export default function App() {
 
   const isAuthed = !!user;
   const waiverBypass = location.pathname.startsWith("/memberships") ||
+    location.pathname.startsWith("/pay-as-you-go") ||
     location.pathname === "/account/membership" ||
     location.pathname === "/admin/memberships";
   return (
@@ -217,6 +242,9 @@ export default function App() {
       {/* Reachable signed out: the buyer lands here straight from Stripe,
           before they have an account, and claims the purchase from here. */}
       <Route path="/memberships/success" element={<MembershipSuccess />} />
+      <Route path="/pay-as-you-go" element={<PayAsYouGo />} />
+      <Route path="/pay-as-you-go/success" element={<PayAsYouGoSuccess />} />
+      <Route path="/pay-as-you-go/cancel" element={<PayAsYouGoCancellation />} />
       <Route
         path="/account/membership"
         element={
@@ -232,7 +260,9 @@ export default function App() {
         element={
           <RequireAuth>
             <RequireAlphaWodAccess>
-              {isSgptRole(appUser?.role) ? <Navigate to="/sgpt/dashboard" replace /> : <Dashboard />}
+              <RequireCapability capability="dashboard" featureName="Dashboard and WOD">
+                {isSgptRole(appUser?.role) ? <Navigate to="/sgpt/dashboard" replace /> : <Dashboard />}
+              </RequireCapability>
             </RequireAlphaWodAccess>
           </RequireAuth>
         }
@@ -269,9 +299,11 @@ export default function App() {
         element={
           <RequireAuth>
             <RequireAlphaWodAccess>
-              <RequireMember>
-                <Leaderboard />
-              </RequireMember>
+              <RequireCapability capability="leaderboards" featureName="Leaderboards">
+                <RequireMember>
+                  <Leaderboard />
+                </RequireMember>
+              </RequireCapability>
             </RequireAlphaWodAccess>
           </RequireAuth>
         }
@@ -282,7 +314,9 @@ export default function App() {
         element={
           <RequireAuth>
             <RequireAlphaWodAccess>
-              <DipLeaderboard />
+              <RequireCapability capability="leaderboards" featureName="Leaderboards">
+                <DipLeaderboard />
+              </RequireCapability>
             </RequireAlphaWodAccess>
           </RequireAuth>
         }
@@ -304,9 +338,11 @@ export default function App() {
         element={
           <RequireAuth>
             <RequireAlphaWodAccess>
-              <RequireTrainingAccess>
-                <Training />
-              </RequireTrainingAccess>
+              <RequireCapability capability="training" featureName="Training and performance tracking">
+                <RequireTrainingAccess>
+                  <Training />
+                </RequireTrainingAccess>
+              </RequireCapability>
             </RequireAlphaWodAccess>
           </RequireAuth>
         }
@@ -316,9 +352,11 @@ export default function App() {
         element={
           <RequireAuth>
             <RequireAlphaWodAccess>
-              <RequireTrainingAccess>
-                <TrainingCategory />
-              </RequireTrainingAccess>
+              <RequireCapability capability="training" featureName="Training and performance tracking">
+                <RequireTrainingAccess>
+                  <TrainingCategory />
+                </RequireTrainingAccess>
+              </RequireCapability>
             </RequireAlphaWodAccess>
           </RequireAuth>
         }
@@ -328,9 +366,11 @@ export default function App() {
         element={
           <RequireAuth>
             <RequireAlphaWodAccess>
-              <RequireTrainingAccess>
-                <TrainingMovement />
-              </RequireTrainingAccess>
+              <RequireCapability capability="training" featureName="Training and performance tracking">
+                <RequireTrainingAccess>
+                  <TrainingMovement />
+                </RequireTrainingAccess>
+              </RequireCapability>
             </RequireAlphaWodAccess>
           </RequireAuth>
         }

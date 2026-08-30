@@ -49,8 +49,34 @@ describe("auth user builders", () => {
       entitlementStatus: "none",
       entitlementSource: "none",
       alphaWodAccess: false,
+      appAccessTier: "none",
       strengthBlock: "none",
     });
+  });
+
+  it("parses a valid limited entitlement and fails closed without two slots", () => {
+    const limited = buildAppUser(
+      {uid: "abc", email: "member@example.com"},
+      {
+        role: "user",
+        approvalStatus: "approved",
+        entitlementStatus: "active",
+        entitlementSource: "stripe",
+        alphaWodAccess: true,
+        appAccessTier: "limited",
+        entitlementPlanKey: "adult_conditioning",
+        entitlementClassSlots: ["thursday_1800", "monday_0600"],
+      }
+    );
+
+    expect(limited).toMatchObject({
+      appAccessTier: "limited",
+      entitlementPlanKey: "adult_conditioning",
+      entitlementClassSlots: ["thursday_1800", "monday_0600"],
+    });
+    expect(hasAlphaWodAccess(limited)).toBe(true);
+    expect(hasAlphaWodAccess({...limited, entitlementClassSlots: ["monday_0600"]}))
+      .toBe(false);
   });
 
   it.each([

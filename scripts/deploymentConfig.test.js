@@ -31,6 +31,11 @@ test("Vercel production builds are preflighted and preserve SPA deep links", () 
     packageJson.scripts["verify:frontend-production-open"],
     "node scripts/verifyFrontendProductionEnv.js --expect-purchase-open"
   );
+  assert.equal(
+    packageJson.scripts["verify:frontend-conditioning-production-open"],
+    "node scripts/verifyFrontendProductionEnv.js --expect-purchase-open " +
+      "--expect-conditioning-open"
+  );
   assert.equal(packageJson.engines?.node, "24.x");
 });
 
@@ -59,6 +64,10 @@ test("CI exercises the production build preflight with an inert browser fixture"
     workflow,
     /REACT_APP_MEMBERSHIP_PURCHASE_ENABLED: "false"/
   );
+  assert.match(
+    workflow,
+    /REACT_APP_ADULT_CONDITIONING_PURCHASE_ENABLED: "false"/
+  );
 });
 
 test("checked-in production examples keep every purchase/test gate closed", () => {
@@ -86,7 +95,14 @@ test("checked-in production examples keep every purchase/test gate closed", () =
   assert.match(functions, /^MEMBERSHIP_CHECKOUT_APP_ID=/m);
   assert.match(functions, /^MEMBERSHIP_FIREBASE_PROJECT_ID=alphawod-d1f2f$/m);
   assert.match(functions, /^STRIPE_EXPECTED_MODE=live$/m);
+  assert.match(functions, /^PAYG_PII_REDACTION_IMPLEMENTED=false$/m);
+  assert.match(functions, /^PAYG_PII_RETENTION_APPROVED=false$/m);
+  assert.match(functions, /^PAYG_CANCELLATION_TOKEN_KEY_ID=cancel-v1$/m);
+  assert.match(functions, /^PAYG_DUPLICATE_LOCK_KEY_ID=lock-v1$/m);
   assert.match(functions, /MEMBERSHIP_CHECKOUT_RATE_LIMIT_SECRET/);
+  assert.match(functions, /PAYG_CANCELLATION_TOKEN_SECRET/);
+  assert.match(functions, /PAYG_CHECKOUT_RATE_LIMIT_SECRET/);
+  assert.match(functions, /PAYG_DUPLICATE_LOCK_SECRET/);
 });
 
 test("checkout abuse records have server-managed TTL field overrides", () => {
@@ -103,8 +119,19 @@ test("checkout abuse records have server-managed TTL field overrides", () => {
   for (const collection of [
     "membershipCheckoutRateAdmissions",
     "membershipCheckoutRateLimits",
+    "paygCheckoutAdmissions",
+    "paygCheckoutRateLimits",
   ]) {
     const override = overrides.get(`${collection}/expiresAt`);
+    assert.equal(override?.ttl, true);
+    assert.deepEqual(override?.indexes, []);
+  }
+
+  for (const [collection, field] of [
+    ["paygCheckoutLocks", "deleteAt"],
+    ["paygIntents", "piiDeleteAt"],
+  ]) {
+    const override = overrides.get(`${collection}/${field}`);
     assert.equal(override?.ttl, true);
     assert.deepEqual(override?.indexes, []);
   }
@@ -134,6 +161,7 @@ test("membership Functions deploy in complete selective batches of ten or fewer"
     "functions:releaseAbandonedMembershipCheckout",
     "functions:recoverMembershipCancellations",
     "functions:recoverStripeEvents",
+    "functions:reconcileMembershipBookings",
     "functions:reconcilePastDueMemberships",
     "functions:requestMembershipCancellation",
     "functions:retryMembershipConfirmations",

@@ -48,7 +48,15 @@ service cloud.firestore {
       return currentUserExists() &&
         currentUser().approvalStatus == "approved" &&
         currentUser().alphaWodAccess == true &&
+        (
+          currentUser().appAccessTier == "limited" ||
+          currentUser().appAccessTier == "full"
+        ) &&
         (hasStaffEntitlement() || hasMemberEntitlement());
+    }
+
+    function hasFullAppAccess() {
+      return hasAlphaWodAccess() && currentUser().appAccessTier == "full";
     }
 
     function isAdmin() {
@@ -137,21 +145,21 @@ service cloud.firestore {
 
       match /trainingLogs/{logId} {
         allow read: if hasPerformanceAccess() ||
-          (isOwnUser(userId) && hasAlphaWodAccess());
+          (isOwnUser(userId) && hasFullAppAccess());
 
         allow create: if isOwnUser(userId) &&
-          hasAlphaWodAccess() &&
+          hasFullAppAccess() &&
           isValidTrainingLog(request.resource.data, userId) &&
           request.resource.data.createdAt == request.time;
 
         allow update: if isOwnUser(userId) &&
-          hasAlphaWodAccess() &&
+          hasFullAppAccess() &&
           isValidTrainingLog(request.resource.data, userId) &&
           request.resource.data.userId == resource.data.userId &&
           request.resource.data.createdAt == resource.data.createdAt;
 
         allow delete: if isOwnUser(userId) &&
-          hasAlphaWodAccess() &&
+          hasFullAppAccess() &&
           resource.data.userId == userId;
       }
     }
@@ -175,12 +183,12 @@ service cloud.firestore {
     }
 
     match /wods/{wodDate} {
-      allow read: if hasAlphaWodAccess();
+      allow read: if hasFullAppAccess();
       allow write: if isAdmin();
     }
 
     match /wodTemplates/{templateId} {
-      allow read: if hasAlphaWodAccess();
+      allow read: if hasFullAppAccess();
       allow write: if isAdmin();
     }
 
@@ -241,6 +249,13 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Resumable server-only jobs release capacity from future bookings after
+    // a Stripe membership boundary changes. Clients must not suppress or
+    // forge cleanup progress.
+    match /membershipBookingCleanupJobs/{jobId} {
+      allow read, write: if false;
+    }
+
     // Webhook idempotency ledger. A client write here could suppress or replay
     // a fulfilment event.
     match /stripeEvents/{eventId} {
@@ -271,6 +286,44 @@ service cloud.firestore {
     }
 
     match /membershipAudit/{entryId} {
+      allow read, write: if false;
+    }
+
+    // Anonymous PAYG purchase, legal evidence, order and delivery records are
+    // server-only. Public and staff screens use deliberately shaped callables;
+    // no browser may enumerate guest contact or date-of-birth data, forge a
+    // paid booking, suppress a refund, or tamper with confirmation delivery.
+    match /paygIntents/{intentId} {
+      allow read, write: if false;
+    }
+
+    match /paygOrders/{orderId} {
+      allow read, write: if false;
+    }
+
+    match /paygWaiverAcceptances/{acceptanceId} {
+      allow read, write: if false;
+    }
+
+    match /paygEmailOutbox/{messageId} {
+      allow read, write: if false;
+    }
+
+    // Anonymous checkout abuse controls, active attendee/class locks, and
+    // paid-contract mismatch review records are trusted-server state only.
+    match /paygCheckoutRateLimits/{bucketId} {
+      allow read, write: if false;
+    }
+
+    match /paygCheckoutAdmissions/{admissionId} {
+      allow read, write: if false;
+    }
+
+    match /paygCheckoutLocks/{lockId} {
+      allow read, write: if false;
+    }
+
+    match /paygPaymentReviews/{reviewId} {
       allow read, write: if false;
     }
 

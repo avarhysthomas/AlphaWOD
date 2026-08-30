@@ -27,6 +27,7 @@ const {
   ACCESS_SCHEMA_VERSION,
   CURRENT_WAIVER_VERSION,
   buildManagedClaims,
+  isAppAccessTier,
   isApprovalStatus,
   isCanonicalCurrentWaiverAcceptance,
   isEntitlementCompatibleWithRole,
@@ -65,6 +66,9 @@ const ACCESS_REVIEW_FIELDS = [
   "approvalStatus",
   "entitlementStatus",
   "entitlementSource",
+  "entitlementPlanKey",
+  "appAccessTier",
+  "entitlementClassSlots",
   "alphaWodAccess",
 ];
 
@@ -75,6 +79,10 @@ function accessReviewEntry(userId, patch) {
     approvalStatus: patch.approvalStatus,
     entitlementStatus: patch.entitlementStatus,
     entitlementSource: patch.entitlementSource,
+    entitlementPlanKey: typeof patch.entitlementPlanKey === "string" ?
+      patch.entitlementPlanKey : null,
+    appAccessTier: patch.appAccessTier,
+    entitlementClassSlots: patch.entitlementClassSlots,
     alphaWodAccess: patch.alphaWodAccess,
   };
 }
@@ -101,8 +109,19 @@ function canonicalAccessReviewEntries(entries) {
       !isUserRole(entry.role) || !isApprovalStatus(entry.approvalStatus) ||
       !isEntitlementStatus(entry.entitlementStatus) ||
       !isEntitlementSource(entry.entitlementSource) ||
+      !(entry.entitlementPlanKey === null ||
+        typeof entry.entitlementPlanKey === "string") ||
+      !isAppAccessTier(entry.appAccessTier) ||
+      !Array.isArray(entry.entitlementClassSlots) ||
       entry.alphaWodAccess !== true) {
       throw new Error("The approved access report contains an invalid access grant.");
+    }
+    const resolved = resolveUserAuthorisation(entry);
+    if (!resolved.valid || !resolved.alphaWodAccess ||
+      resolved.appAccessTier !== entry.appAccessTier ||
+      JSON.stringify(resolved.entitlementClassSlots) !==
+        JSON.stringify(entry.entitlementClassSlots)) {
+      throw new Error("The approved access report contains an invalid access policy.");
     }
     if (seen.has(entry.userId)) {
       throw new Error(`The approved access report repeats user ${entry.userId}.`);
@@ -192,20 +211,52 @@ function desiredHistoricalAccess(data) {
     entitlementSource = "none";
   }
 
-  const next = {role, approvalStatus, entitlementStatus, entitlementSource};
+  const entitlementPlanKeyPresent = data.entitlementPlanKey !== undefined &&
+    data.entitlementPlanKey !== null && data.entitlementPlanKey !== "";
+  if (entitlementPlanKeyPresent && typeof data.entitlementPlanKey !== "string") {
+    return {error: "invalid_access_policy"};
+  }
+  const next = {
+    role,
+    approvalStatus,
+    entitlementStatus,
+    entitlementSource,
+    ...(entitlementPlanKeyPresent ? {
+      entitlementPlanKey: data.entitlementPlanKey,
+    } : {}),
+    ...(data.appAccessTier !== undefined && data.appAccessTier !== null ? {
+      appAccessTier: data.appAccessTier,
+    } : {}),
+    ...(data.entitlementClassSlots !== undefined ? {
+      entitlementClassSlots: data.entitlementClassSlots,
+    } : {}),
+  };
   const access = resolveUserAuthorisation(next);
+  if (!access.valid) return {error: "invalid_access_policy"};
   return {next, access, implicitApproval};
 }
 
 function profileAccessStateForAuth(profile, authUser) {
   const authDisabled = authUser?.disabled === true;
-  const next = authDisabled && profile.entitlementStatus === "active" ? {
-    ...profile,
-    entitlementStatus: "restricted",
-  } : {...profile};
-  const access = resolveUserAuthorisation(next);
+  const next = {...profile};
+  const resolved = resolveUserAuthorisation(next);
+  const access = authDisabled ? {
+    ...resolved,
+    appAccessTier: "none",
+    entitlementClassSlots: [],
+    alphaWodAccess: false,
+    disabled: true,
+    restricted: true,
+  } : resolved;
   return {
-    profile: {...next, alphaWodAccess: access.alphaWodAccess},
+    profile: {
+      ...next,
+      // Auth-disabled and pending users retain the frozen membership policy in
+      // Firestore. Only claims and alphaWodAccess represent effective access.
+      appAccessTier: resolved.entitlementPolicyAppAccessTier,
+      entitlementClassSlots: resolved.entitlementPolicyClassSlots,
+      alphaWodAccess: access.alphaWodAccess,
+    },
     access,
     authDisabled,
   };
@@ -234,6 +285,9 @@ function privilegedClaimSnapshot(authUser) {
     approvalStatus: claims.approvalStatus ?? null,
     entitlementStatus: claims.entitlementStatus ?? null,
     entitlementSource: claims.entitlementSource ?? null,
+    appAccessTier: claims.appAccessTier ?? null,
+    entitlementClassSlots: Array.isArray(claims.entitlementClassSlots) ?
+      claims.entitlementClassSlots : null,
     alphaWodAccess: claims.alphaWodAccess === true,
     disabled: claims.disabled === true,
     restricted: claims.restricted === true,
@@ -272,6 +326,8 @@ function currentProfileApplyState(basePatch, authUser) {
   }, authUser);
   const managedClaims = buildManagedClaims(state.profile);
   if (state.authDisabled) {
+    managedClaims.appAccessTier = "none";
+    managedClaims.entitlementClassSlots = [];
     managedClaims.alphaWodAccess = false;
     managedClaims.disabled = true;
     managedClaims.restricted = true;
@@ -714,6 +770,9 @@ async function main() {
       approvalStatus: patch.approvalStatus,
       entitlementStatus: patch.entitlementStatus,
       entitlementSource: patch.entitlementSource,
+      entitlementPlanKey: patch.entitlementPlanKey ?? null,
+      appAccessTier: patch.appAccessTier,
+      entitlementClassSlots: patch.entitlementClassSlots,
       alphaWodAccess: patch.alphaWodAccess,
       authDisabled: authAccess.authDisabled,
       implicitApproval: desired.implicitApproval,

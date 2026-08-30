@@ -463,7 +463,7 @@ describe("MembershipCheckout", () => {
     await waitFor(() => expect(mockCreateCheckout).toHaveBeenCalledTimes(1));
     expect(mockCreateCheckout).toHaveBeenCalledWith(expect.objectContaining({
       planKey: "youth_teenstars",
-      checkoutSchemaVersion: 4,
+      checkoutSchemaVersion: 5,
       participantFullName: "Alex Child",
       participantDateOfBirth: dateOfBirth,
       participantIsPayer: false,
@@ -517,7 +517,7 @@ describe("MembershipCheckout", () => {
     await waitFor(() => expect(mockCreateCheckout).toHaveBeenCalledTimes(1));
     expect(mockResolveCheckoutAttempt).toHaveBeenCalledWith(
       expect.objectContaining({
-        checkoutSchemaVersion: 4,
+        checkoutSchemaVersion: 5,
         planKey: "youth_teenstars",
         participantFullName: "Alex Child",
         participantDateOfBirth: firstDateOfBirth,
@@ -530,7 +530,7 @@ describe("MembershipCheckout", () => {
       {payerUid: null}
     );
     expect(mockCreateCheckout).toHaveBeenCalledWith(expect.objectContaining({
-      checkoutSchemaVersion: 4,
+      checkoutSchemaVersion: 5,
       checkoutAttemptId: "attempt_test",
       participantFullName: "Alex Child",
       additionalParticipants: [{

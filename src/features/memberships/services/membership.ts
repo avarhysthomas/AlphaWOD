@@ -6,6 +6,7 @@ import {
   resolveCheckoutDocuments,
   resolveCheckoutSignerRole,
   type CheckoutAcceptanceId,
+  type ConditioningSlotKey,
   type PlanKey,
 } from "../../../lib/membershipPlans";
 
@@ -99,6 +100,8 @@ export type MyMembership = {
   discount?: MembershipDiscount | null;
   paymentSchedule?: MembershipPaymentSchedule | null;
   grantsAlphaWodAccess: boolean;
+  appAccessTier?: "none" | "limited" | "full";
+  selectedConditioningSlots?: ConditioningSlotKey[];
   participantFullName: string;
   participantFullNames?: string[];
   participantCount?: number;
@@ -125,7 +128,7 @@ export type MyMembership = {
 
 export type CheckoutRequest = {
   /** Versioned request contract for the multi-participant checkout implementation. */
-  checkoutSchemaVersion: 4;
+  checkoutSchemaVersion: 5;
   /** Stable across retries of the same form submission for Stripe idempotency. */
   checkoutAttemptId: string;
   /**
@@ -145,6 +148,8 @@ export type CheckoutRequest = {
   signedName: string;
   /** Exact ids checked individually; the server rejects any non-exact set. */
   acceptedStatementIds: CheckoutAcceptanceId[];
+  /** Exactly two canonical weekly slots for Adult Conditioning only. */
+  selectedConditioningSlots?: ConditioningSlotKey[];
   /** Optional shared campaign code. Included in the digest, never stored as plaintext. */
   promotionCode?: string;
   guardianFullName?: string;
@@ -271,7 +276,10 @@ async function fingerprintCheckoutDetails(
       payerUid: context.payerUid,
       details,
       legalAndCommercialSnapshot: {
-        commercialTerms: createCommercialPlanSnapshot(details.planKey),
+        commercialTerms: createCommercialPlanSnapshot(
+          details.planKey,
+          details.selectedConditioningSlots
+        ),
         signerRole: resolveCheckoutSignerRole(details.planKey),
         documents: resolveCheckoutDocuments(details.planKey),
         statements: resolveCheckoutAcceptanceStatements(
@@ -515,6 +523,8 @@ export type AdminMembership = {
   revenueState: "projected" | "at_risk" | "excluded";
   stripeStatus: string;
   grantsAlphaWodAccess: boolean;
+  appAccessTier?: "none" | "limited" | "full";
+  selectedConditioningSlots?: ConditioningSlotKey[];
   entitlementTargetUid: string | null;
   participantFullName: string;
   participantFullNames?: string[];

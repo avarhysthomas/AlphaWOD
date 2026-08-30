@@ -12,7 +12,12 @@ import {onDocumentWritten} from "firebase-functions/v2/firestore";
 import {setGlobalOptions} from "firebase-functions/v2";
 import {defineSecret} from "firebase-functions/params";
 import * as admin from "firebase-admin";
-import {FieldValue, Timestamp} from "firebase-admin/firestore";
+import {
+  DocumentReference,
+  FieldValue,
+  Timestamp,
+  Transaction,
+} from "firebase-admin/firestore";
 import {createHash} from "crypto";
 import {DateTime} from "luxon";
 import {
@@ -20,6 +25,8 @@ import {
   CURRENT_WAIVER_ACKNOWLEDGEMENTS,
   CURRENT_WAIVER_TITLE,
   CURRENT_WAIVER_VERSION,
+  AppAccessTier,
+  ConditioningSlotKey,
   EntitlementSource,
   EntitlementStatus,
   buildManagedClaims,
@@ -29,6 +36,7 @@ import {
   isEntitlementStatus,
   isEntitlementCompatibleWithRole,
   isCanonicalCurrentWaiverAcceptance,
+  isConditioningSlotKey,
   isUserRole,
   isValidEntitlementPair,
   mergeManagedClaims,
@@ -41,13 +49,31 @@ import {
   buildLinkMembershipParticipant,
   buildReleaseAbandonedMembershipCheckout,
   buildRecoverMembershipCancellations,
+  buildReconcileMembershipBookings,
   buildRecoverStripeEvents,
   buildReconcilePastDueMemberships,
   buildRequestMembershipCancellation,
   buildRetryMembershipConfirmations,
   buildStripeWebhook,
+  assertStripeMembershipBookingEligibility,
+  MEMBERSHIP_STRIPE_WORKER_SECRETS,
+  MEMBERSHIP_WEBHOOK_SECRETS,
   MEMBERSHIP_CHECKOUT_SCHEMA_VERSION,
 } from "./membership";
+import {
+  buildCreatePaygCheckoutSession,
+  buildGetPaygCancellationPreview,
+  buildGetPaygCheckoutStatus,
+  buildGetPublicPaygSchedule,
+  buildRecoverPaygOperations,
+  buildRequestPaygCancellation,
+  buildRetryPaygConfirmations,
+  dispatchPaygStripeEvent,
+  PAYG_CANCELLATION_TOKEN_SECRET,
+  PAYG_DUPLICATE_LOCK_COLLECTION,
+  PAYG_NO_SHOW_REVIEW_DELAY_MS,
+  shouldReleasePaygDuplicateLockForAttendance,
+} from "./payg";
 import {
   LEADERBOARD_CANDIDATE_MAX_ROWS,
   LeaderboardProfile,
@@ -81,6 +107,8 @@ type UserDoc = {
   entitlementStatus?: unknown;
   entitlementSource?: unknown;
   entitlementPlanKey?: string;
+  appAccessTier?: AppAccessTier;
+  entitlementClassSlots?: ConditioningSlotKey[];
   entitlementReason?: string;
   alphaWodAccess?: boolean;
   accessSchemaVersion?: number;
@@ -112,6 +140,8 @@ type ClassTemplate = {
   capacity: number;
   location: string;
   isActive: boolean;
+  conditioningSlotKey?: ConditioningSlotKey | null;
+  paygEligible?: boolean;
 };
 
 type ClassDoc = {
@@ -126,6 +156,8 @@ type ClassDoc = {
   bookedCount: number;
   location: string;
   status: "scheduled" | "cancelled";
+  conditioningSlotKey?: ConditioningSlotKey | null;
+  paygEligible?: boolean;
   createdAt: FieldValue | Timestamp;
   updatedAt?: FieldValue | Timestamp;
 };
@@ -152,6 +184,15 @@ type BookingDoc = {
   attended?: boolean;
   checkedInAt?: FieldValue | Timestamp | null;
   checkedInBy?: string | null;
+
+  // Anonymous PAYG bookings use a synthetic user id only as a stable row key.
+  // They never project into users, stats, training, or leaderboards.
+  bookingKind?: "member" | "payg_guest";
+  isGuestBooking?: boolean;
+  paygOrderId?: string;
+  paygAttendanceOutcome?: "attended" | "no_show";
+  /** Stripe membership generation that authorised this member booking. */
+  entitlementSubscriptionId?: string;
 
   // admin exception metadata
   addedByAdmin?: boolean;
@@ -237,6 +278,10 @@ function userAccessPatch(user: UserDoc) {
   const access = resolveUserAuthorisation(user);
   return {
     alphaWodAccess: access.alphaWodAccess,
+    // Profile fields hold the frozen entitlement policy. Claims and runtime
+    // checks continue to use the effective tier/slots from `buildManagedClaims`.
+    appAccessTier: access.entitlementPolicyAppAccessTier,
+    entitlementClassSlots: access.entitlementPolicyClassSlots,
     accessSchemaVersion: ACCESS_SCHEMA_VERSION,
   };
 }
@@ -300,6 +345,9 @@ async function convergeUserDerivedAccess(userId: string): Promise<void> {
     const user = current.data() as UserDoc;
     const accessPatch = userAccessPatch(user);
     if (user.alphaWodAccess !== accessPatch.alphaWodAccess ||
+      user.appAccessTier !== accessPatch.appAccessTier ||
+      JSON.stringify(user.entitlementClassSlots ?? []) !==
+        JSON.stringify(accessPatch.entitlementClassSlots) ||
       user.accessSchemaVersion !== ACCESS_SCHEMA_VERSION) {
       if (!current.updateTime) {
         throw new Error(`Cannot derive access for ${userId} without an update time.`);
@@ -669,6 +717,104 @@ function bookingIdFor(classId: string, userId: string) {
   return `${classId}_${userId}`;
 }
 
+const CONDITIONING_SLOT_BY_LONDON_WEEKDAY_TIME = new Map<string, ConditioningSlotKey>([
+  ["1|06:00", "monday_0600"],
+  ["2|18:00", "tuesday_1800"],
+  ["4|18:00", "thursday_1800"],
+  ["5|05:30", "friday_0530"],
+]);
+
+function conditioningSlotForSchedule(
+  jsDayOfWeek: number,
+  startTime: string
+): ConditioningSlotKey | null {
+  const luxonWeekday = jsDayOfWeek === 0 ? 7 : jsDayOfWeek;
+  return CONDITIONING_SLOT_BY_LONDON_WEEKDAY_TIME.get(
+    `${luxonWeekday}|${startTime}`
+  ) ?? null;
+}
+
+function conditioningSlotForTemplate(
+  template: Partial<ClassTemplate>
+): ConditioningSlotKey | null {
+  // Slots are a London commercial promise. A non-London template never gains
+  // entitlement merely because its wall-clock fields happen to match.
+  if ((template.timezone || "Europe/London") !== "Europe/London" ||
+      !Number.isInteger(template.dayOfWeek) ||
+      typeof template.startTime !== "string") return null;
+  const scheduled = conditioningSlotForSchedule(
+    template.dayOfWeek as number,
+    template.startTime
+  );
+  if (template.conditioningSlotKey === null) return null;
+  if (template.conditioningSlotKey !== undefined) {
+    return isConditioningSlotKey(template.conditioningSlotKey) &&
+      template.conditioningSlotKey === scheduled ?
+      template.conditioningSlotKey : null;
+  }
+  // Compatibility for the four existing exact weekly templates. No class
+  // title or other mutable copy participates in this decision.
+  return scheduled;
+}
+
+function conditioningSlotForOccurrence(
+  occurrence: Partial<ClassDoc>
+): ConditioningSlotKey | null {
+  if (occurrence.timezone !== "Europe/London" ||
+      occurrence.conditioningSlotKey === null) return null;
+  const startDate = occurrence.startTime?.toDate?.();
+  if (!(startDate instanceof Date) || !Number.isFinite(startDate.getTime())) {
+    return null;
+  }
+  const london = DateTime.fromJSDate(startDate, {zone: "Europe/London"});
+  const scheduled = CONDITIONING_SLOT_BY_LONDON_WEEKDAY_TIME.get(
+    `${london.weekday}|${london.toFormat("HH:mm")}`
+  ) ?? null;
+  if (occurrence.conditioningSlotKey !== undefined) {
+    return isConditioningSlotKey(occurrence.conditioningSlotKey) &&
+      occurrence.conditioningSlotKey === scheduled ?
+      occurrence.conditioningSlotKey : null;
+  }
+  return scheduled;
+}
+
+function assertClassBookingEntitlement(
+  user: UserDoc,
+  classData: Partial<ClassDoc>
+): void {
+  const access = requireStrictAuthorisation(user);
+  if (access.appAccessTier === "full") return;
+  if (access.appAccessTier !== "limited") {
+    throw new HttpsError(
+      "permission-denied",
+      "This account does not include class booking access.",
+      {reason: "class_booking_access_not_included"}
+    );
+  }
+  const classSlot = conditioningSlotForOccurrence(classData);
+  if (!classSlot) {
+    throw new HttpsError(
+      "permission-denied",
+      "Adult Conditioning membership covers only its selected recurring sessions.",
+      {
+        reason: "class_not_conditioning_membership_slot",
+        allowedConditioningSlotKeys: access.entitlementClassSlots,
+      }
+    );
+  }
+  if (!access.entitlementClassSlots.includes(classSlot)) {
+    throw new HttpsError(
+      "permission-denied",
+      "This recurring conditioning session is not one of the two selected for this membership.",
+      {
+        reason: "conditioning_slot_not_selected",
+        classConditioningSlotKey: classSlot,
+        allowedConditioningSlotKeys: access.entitlementClassSlots,
+      }
+    );
+  }
+}
+
 function ukDateKeyNow() {
   return DateTime.now().setZone("Europe/London").toFormat("yyyy-LL-dd");
 }
@@ -728,6 +874,8 @@ async function generateRange(daysAhead: number) {
         bookedCount: 0,
         location: t.location,
         status: "scheduled",
+        conditioningSlotKey: conditioningSlotForTemplate(t),
+        paygEligible: t.paygEligible !== false,
         createdAt: FieldValue.serverTimestamp(),
       };
 
@@ -802,6 +950,14 @@ export const bookClass = onCall(async (request) => {
     const member = assertApprovedMember(userSnap.data() as UserDoc | undefined);
 
     const classData = classSnap.data() as Partial<ClassDoc>;
+    assertClassBookingEntitlement(member, classData);
+    const entitlementSubscriptionId =
+      await assertStripeMembershipBookingEligibility(
+        tx,
+        uid,
+        member,
+        classData.startTime
+      );
     const bookingSettings =
       bookingSettingsSnap.data() as Partial<BookingSettingsDoc> | undefined;
     const strengthBlocksEnabled = normaliseStrengthBlocksEnabled(
@@ -836,6 +992,8 @@ export const bookClass = onCall(async (request) => {
       userId: uid,
       userName,
       status: "booked",
+      bookingKind: "member",
+      ...(entitlementSubscriptionId ? {entitlementSubscriptionId} : {}),
       createdAt: FieldValue.serverTimestamp(),
     } satisfies BookingDoc);
 
@@ -920,6 +1078,14 @@ export const adminAddBooking = onCall(async (request) => {
     const userData = assertApprovedMember(userSnap.data() as UserDoc);
 
     const classData = classSnap.data() as Partial<ClassDoc>;
+    assertClassBookingEntitlement(userData, classData);
+    const entitlementSubscriptionId =
+      await assertStripeMembershipBookingEligibility(
+        tx,
+        userId,
+        userData,
+        classData.startTime
+      );
     const capacity = Number(classData.capacity ?? 0);
     const bookedCount = Number(classData.bookedCount ?? 0);
 
@@ -947,6 +1113,8 @@ export const adminAddBooking = onCall(async (request) => {
       userId,
       userName,
       status: "booked",
+      bookingKind: "member",
+      ...(entitlementSubscriptionId ? {entitlementSubscriptionId} : {}),
       createdAt: FieldValue.serverTimestamp(),
       attendanceStatus: "none",
       attended: false,
@@ -969,6 +1137,158 @@ export const adminAddBooking = onCall(async (request) => {
 /** -----------------------------
  * Admin check-in
  * ----------------------------*/
+const PAYG_CHECK_IN_EARLY_WINDOW_MS = 30 * 60 * 1000;
+
+function isPaygGuestBooking(booking: BookingDoc): boolean {
+  return booking.bookingKind === "payg_guest" &&
+    booking.isGuestBooking === true &&
+    typeof booking.paygOrderId === "string" &&
+    /^payg_[a-f0-9]{64}$/.test(booking.paygOrderId);
+}
+
+function assertBookingPayloadMatches(
+  booking: BookingDoc,
+  classId: string,
+  userId: string
+): void {
+  if ((classId && booking.classId !== classId) ||
+    (userId && booking.userId !== userId)) {
+    throw new HttpsError(
+      "failed-precondition",
+      "The booking does not match the supplied class or attendee."
+    );
+  }
+}
+
+async function updatePaygGuestAttendance(
+  tx: Transaction,
+  bookingRef: DocumentReference,
+  booking: BookingDoc,
+  callerUid: string,
+  status: "booked" | "checked_in" | "dip"
+) {
+  if (!["booked", "checked_in", "dip"].includes(status)) {
+    throw new HttpsError("invalid-argument", "Invalid PAYG attendance status.");
+  }
+  if (!isPaygGuestBooking(booking) || !booking.paygOrderId) {
+    throw new HttpsError(
+      "failed-precondition",
+      "This guest booking is missing its PAYG order binding."
+    );
+  }
+  const orderRef = db.collection("paygOrders").doc(booking.paygOrderId);
+  const orderSnap = await tx.get(orderRef);
+  if (!orderSnap.exists) {
+    throw new HttpsError("failed-precondition", "The PAYG order was not found.");
+  }
+  const order = orderSnap.data() as Record<string, unknown>;
+  if (order.purchaseKind !== "payg_class" ||
+    order.offeringKey !== "adult_payg_class" ||
+    order.orderId !== booking.paygOrderId ||
+    order.bookingId !== bookingRef.id ||
+    (order.class as {classId?: unknown} | undefined)?.classId !== booking.classId) {
+    throw new HttpsError(
+      "failed-precondition",
+      "The guest booking does not match its PAYG order."
+    );
+  }
+  const orderStatus = String(order.status);
+  const allowedOrderStatuses = status === "dip" ?
+    ["confirmed", "attended", "no_show"] :
+    status === "checked_in" ? ["confirmed", "attended", "no_show"] :
+      ["confirmed", "attended"];
+  if (!allowedOrderStatuses.includes(orderStatus)) {
+    throw new HttpsError(
+      "failed-precondition",
+      "This PAYG order can no longer have its attendance changed."
+    );
+  }
+
+  const checkedIn = status === "checked_in";
+  const noShow = status === "dip";
+  const classStartMillis = Number(order.classStartMillis);
+  const classEndMillis = Number(order.classEndMillis);
+  if (!Number.isSafeInteger(classStartMillis) || classStartMillis <= 0 ||
+    !Number.isSafeInteger(classEndMillis) ||
+    classEndMillis <= classStartMillis) {
+    throw new HttpsError(
+      "failed-precondition",
+      "The PAYG order has invalid class timing evidence."
+    );
+  }
+  const nowMillis = Date.now();
+  if (checkedIn && (nowMillis < classStartMillis - PAYG_CHECK_IN_EARLY_WINDOW_MS ||
+    nowMillis > classEndMillis)) {
+    throw new HttpsError(
+      "failed-precondition",
+      "PAYG check-in opens 30 minutes before class and closes when class ends.",
+      {reason: "payg_check_in_outside_window"}
+    );
+  }
+  if (noShow && nowMillis < classEndMillis) {
+    throw new HttpsError(
+      "failed-precondition",
+      "A PAYG booking cannot be marked as a no-show before the class ends.",
+      {reason: "payg_no_show_too_early"}
+    );
+  }
+  const duplicateLockId = typeof order.duplicateLockId === "string" &&
+      /^[a-f0-9]{64}$/.test(order.duplicateLockId) ?
+    order.duplicateLockId : null;
+  if (status !== "booked" && !duplicateLockId) {
+    throw new HttpsError(
+      "failed-precondition",
+      "The PAYG order is missing its duplicate-booking lock."
+    );
+  }
+  tx.update(bookingRef, {
+    attended: checkedIn,
+    attendanceStatus: checkedIn ? "checked_in" : noShow ? "dip" : "none",
+    checkedInAt: checkedIn ? FieldValue.serverTimestamp() : null,
+    checkedInBy: callerUid,
+    paygAttendanceOutcome: checkedIn ? "attended" :
+      noShow ? "no_show" : FieldValue.delete(),
+    ...(checkedIn && orderStatus === "no_show" ? {
+      attendanceCorrectedAt: FieldValue.serverTimestamp(),
+      attendanceCorrectedFrom: "no_show",
+    } : {}),
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+  tx.set(orderRef, {
+    status: checkedIn ? "attended" : noShow ? "no_show" : "confirmed",
+    capacityState: status === "booked" ? "held" : "consumed",
+    noShowReviewAt: status === "booked" ? Timestamp.fromMillis(
+      classEndMillis + PAYG_NO_SHOW_REVIEW_DELAY_MS
+    ) : FieldValue.delete(),
+    attendanceResolvedAt: status === "booked" ?
+      FieldValue.delete() : FieldValue.serverTimestamp(),
+    attendedAt: checkedIn ? FieldValue.serverTimestamp() : FieldValue.delete(),
+    noShowAt: noShow ? FieldValue.serverTimestamp() : FieldValue.delete(),
+    ...(checkedIn && orderStatus === "no_show" ? {
+      attendanceCorrectedAt: FieldValue.serverTimestamp(),
+      attendanceCorrectedBy: callerUid,
+      attendanceCorrectedFrom: "no_show",
+    } : {}),
+    updatedAt: FieldValue.serverTimestamp(),
+  }, {merge: true});
+  if (duplicateLockId && shouldReleasePaygDuplicateLockForAttendance({
+    attendanceStatus: status,
+    classEndMillis,
+    nowMillis,
+  })) {
+    tx.delete(
+      db.collection(PAYG_DUPLICATE_LOCK_COLLECTION).doc(duplicateLockId)
+    );
+  }
+
+  return {
+    ok: true,
+    leaderboardChanged: false,
+    paygGuest: true,
+    kind: status,
+  };
+}
+
 export const checkInBooking = onCall(async (request) => {
   const callerUid = requireAuth(request);
   await requireAdmin(request);
@@ -998,13 +1318,39 @@ export const checkInBooking = onCall(async (request) => {
       if (!bookingSnap.exists) throw new HttpsError("not-found", "Booking not found.");
 
       const booking = bookingSnap.data() as BookingDoc;
+      assertBookingPayloadMatches(booking, classId, userIdFromPayload);
 
       if (booking.status !== "booked") {
         throw new HttpsError("failed-precondition", "Not an active booking.");
       }
 
-      // If attended isn't changing, we still allow updating checkedInBy timestamp if you want,
-      // but leaderboard should not change.
+      if (isPaygGuestBooking(booking)) {
+        return updatePaygGuestAttendance(
+          tx,
+          bookingRef,
+          booking,
+          callerUid,
+          nextAttended ? "checked_in" : "booked"
+        );
+      }
+
+      const classRef = db.collection("classes").doc(booking.classId);
+      const userRef = db.collection("users").doc(booking.userId);
+      const [classSnap, userSnap] = await Promise.all([
+        tx.get(classRef),
+        tx.get(userRef),
+      ]);
+      if (!classSnap.exists) throw new HttpsError("not-found", "Class not found.");
+      const classDoc = classSnap.data() as ClassDoc;
+      const u = (userSnap.data() || {}) as UserDoc;
+      await assertStripeMembershipBookingEligibility(
+        tx,
+        booking.userId,
+        u,
+        classDoc.startTime,
+        booking.entitlementSubscriptionId
+      );
+
       // If attended isn't changing, we still allow updating checkedInBy timestamp if you want,
       // but leaderboard should not change.
       const prevAttended = booking.attended === true;
@@ -1014,15 +1360,7 @@ export const checkInBooking = onCall(async (request) => {
 
       if (prevAttended === nextAttended) {
         if (dipDelta !== 0) {
-          const classRef = db.collection("classes").doc(booking.classId);
-          const classSnap = await tx.get(classRef);
-          if (!classSnap.exists) throw new HttpsError("not-found", "Class not found.");
-
-          const classDoc = classSnap.data() as ClassDoc;
           const monthKey = ukMonthKeyFromDate(classDoc.startTime.toDate());
-          const userRef = db.collection("users").doc(booking.userId);
-          const userSnap = await tx.get(userRef);
-          const u = (userSnap.data() || {}) as UserDoc;
 
           await updateDipLeaderboardCount(
             tx,
@@ -1043,11 +1381,6 @@ export const checkInBooking = onCall(async (request) => {
       }
 
       // We need the class to determine which month to count it in
-      const classRef = db.collection("classes").doc(booking.classId);
-      const classSnap = await tx.get(classRef);
-      if (!classSnap.exists) throw new HttpsError("not-found", "Class not found.");
-
-      const classDoc = classSnap.data() as ClassDoc;
       const classStart = classDoc.startTime.toDate();
 
       // Use UK month bucket (matches your gym reality)
@@ -1068,11 +1401,6 @@ export const checkInBooking = onCall(async (request) => {
         0;
 
       const nextCount = Math.max(0, current + delta);
-
-      // Read user profile info for nicer leaderboard display
-      const userRef = db.collection("users").doc(booking.userId);
-      const userSnap = await tx.get(userRef);
-      const u = (userSnap.data() || {}) as UserDoc;
 
       await updateDipLeaderboardCount(
         tx,
@@ -1200,10 +1528,19 @@ async function requireAdminOrSgpt(request: AuthedRequest): Promise<void> {
   }
 }
 
-async function requireApprovedMember(request: AuthedRequest): Promise<void> {
+async function requireFullAppMember(request: AuthedRequest): Promise<void> {
   const uid = requireAuth(request);
   const snap = await db.collection("users").doc(uid).get();
-  assertApprovedMember(snap.exists ? snap.data() as UserDoc : undefined);
+  const user = snap.exists ? snap.data() as UserDoc : undefined;
+  assertApprovedMember(user);
+  const access = requireStrictAuthorisation(user);
+  if (access.appAccessTier !== "full") {
+    throw new HttpsError(
+      "permission-denied",
+      "Leaderboard access is not included with this membership.",
+      {reason: "full_app_access_required", requiredAppAccessTier: "full"}
+    );
+  }
 }
 
 /**
@@ -1254,37 +1591,75 @@ export const markBookingStatus = onCall(async (request) => {
   const callerUid = requireAuth(request);
   await requireAdmin(request);
 
-  const classId = requireString(request.data?.classId, "classId");
-  const userId = requireString(request.data?.userId, "userId");
+  const bookingIdFromPayload =
+    typeof request.data?.bookingId === "string" ? request.data.bookingId.trim() : "";
+  const classIdFromPayload =
+    typeof request.data?.classId === "string" ? request.data.classId.trim() : "";
+  const userIdFromPayload =
+    typeof request.data?.userId === "string" ? request.data.userId.trim() : "";
   const status = requireString(request.data?.status, "status") as
     | "checked_in"
     | "booked"
     | "dip"
     | "authorised_absence";
 
-  const bookingId = bookingIdFor(classId, userId);
+  const bookingId = bookingIdFromPayload ||
+    (classIdFromPayload && userIdFromPayload ?
+      bookingIdFor(classIdFromPayload, userIdFromPayload) : "");
+  if (!bookingId) {
+    throw new HttpsError(
+      "invalid-argument",
+      "bookingId OR (classId and userId) required."
+    );
+  }
   const bookingRef = db.collection("bookings").doc(bookingId);
-  const classRef = db.collection("classes").doc(classId);
-  const userRef = db.collection("users").doc(userId);
 
   return db.runTransaction(async (tx) => {
     const bookingSnap = await tx.get(bookingRef);
     if (!bookingSnap.exists) throw new HttpsError("not-found", "Booking not found.");
 
     const booking = bookingSnap.data() as BookingDoc;
+    assertBookingPayloadMatches(booking, classIdFromPayload, userIdFromPayload);
     if (booking.status !== "booked") {
       throw new HttpsError("failed-precondition", "Not an active booking.");
     }
 
+    const classId = booking.classId;
+    const userId = booking.userId;
+    const classRef = db.collection("classes").doc(classId);
     const classSnap = await tx.get(classRef);
     if (!classSnap.exists) throw new HttpsError("not-found", "Class not found.");
 
     const classDoc = classSnap.data() as ClassDoc;
+    if (isPaygGuestBooking(booking)) {
+      if (status === "authorised_absence") {
+        throw new HttpsError(
+          "failed-precondition",
+          "Use the PAYG cancellation flow so the 24-hour refund policy is applied."
+        );
+      }
+      return updatePaygGuestAttendance(
+        tx,
+        bookingRef,
+        booking,
+        callerUid,
+        status
+      );
+    }
+
     const classStart = classDoc.startTime.toDate();
     const monthKey = ukMonthKeyFromDate(classStart);
 
+    const userRef = db.collection("users").doc(userId);
     const userSnap = await tx.get(userRef);
     const u = (userSnap.data() || {}) as UserDoc;
+    await assertStripeMembershipBookingEligibility(
+      tx,
+      userId,
+      u,
+      classDoc.startTime,
+      booking.entitlementSubscriptionId
+    );
 
     const lbUserRef = db
       .collection("leaderboards")
@@ -1474,34 +1849,82 @@ export const getClassRoster = onCall(async (request) => {
     .where("status", "==", "booked")
     .get();
 
-  const attendees = snap.docs.map((d) => d.data() as BookingDoc);
-  const profileRefs = Array.from(new Set(attendees.map((b) => b.userId).filter(Boolean)))
-    .map((userId) => db.collection("users").doc(userId));
-  const profileSnaps = profileRefs.length ? await db.getAll(...profileRefs) : [];
-  const profiles = new Map(
-    profileSnaps.map((profileSnap) => [
-      profileSnap.id,
-      (profileSnap.data() || {}) as UserDoc,
-    ])
+  const attendees = snap.docs.map((doc) => ({
+    bookingId: doc.id,
+    booking: doc.data() as BookingDoc,
+  }));
+  const memberUserIds = Array.from(new Set(attendees
+    .filter(({booking}) => !isPaygGuestBooking(booking))
+    .map(({booking}) => booking.userId)
+    .filter(Boolean)));
+  const membershipBindingByUserId = new Map(attendees
+    .filter(({booking}) => !isPaygGuestBooking(booking))
+    .map(({booking}) => [
+      booking.userId,
+      booking.entitlementSubscriptionId,
+    ]));
+  const {profiles, eligibleMemberIds} = await db.runTransaction(async (tx) => {
+    const classSnap = await tx.get(db.collection("classes").doc(classId));
+    if (!classSnap.exists) throw new HttpsError("not-found", "Class not found.");
+    const classData = classSnap.data() as ClassDoc;
+    const resolvedProfiles = new Map<string, UserDoc>();
+    const resolvedEligibleMemberIds = new Set<string>();
+
+    for (const userId of memberUserIds) {
+      const profileSnap = await tx.get(db.collection("users").doc(userId));
+      if (!profileSnap.exists) continue;
+      const profile = profileSnap.data() as UserDoc;
+      resolvedProfiles.set(userId, profile);
+      try {
+        await assertStripeMembershipBookingEligibility(
+          tx,
+          userId,
+          profile,
+          classData.startTime,
+          membershipBindingByUserId.get(userId)
+        );
+        resolvedEligibleMemberIds.add(userId);
+      } catch (error) {
+        if (error instanceof HttpsError && error.code === "permission-denied") {
+          continue;
+        }
+        throw error;
+      }
+    }
+    return {
+      profiles: resolvedProfiles,
+      eligibleMemberIds: resolvedEligibleMemberIds,
+    };
+  });
+  const visibleAttendees = attendees.filter(({booking}) =>
+    isPaygGuestBooking(booking) || eligibleMemberIds.has(booking.userId)
   );
 
-  const checkedInCount = attendees.filter((b) => b.attended === true).length;
+  const checkedInCount = visibleAttendees.filter(
+    ({booking}) => booking.attended === true
+  ).length;
 
   return {
     classId,
-    total: attendees.length,
+    total: visibleAttendees.length,
     checkedInCount,
-    attendees: attendees
-      .map((b) => {
+    attendees: visibleAttendees
+      .map(({bookingId, booking: b}) => {
+        const isGuestBooking = isPaygGuestBooking(b);
         const profile = profiles.get(b.userId);
-        const name = profile?.name || b.userName || "Member";
+        const name = isGuestBooking ?
+          b.userName || "PAYG guest" : profile?.name || b.userName || "Member";
 
         return {
+          bookingId,
+          bookingKind: isGuestBooking ? "payg_guest" : "member",
+          isGuestBooking,
+          paygOrderId: isGuestBooking ? b.paygOrderId : undefined,
           userId: b.userId,
           userName: name,
           name,
-          email: profile?.email ?? "",
-          photoURL: profile?.photoURL ?? "",
+          email: isGuestBooking ? "" : profile?.email ?? "",
+          photoURL: isGuestBooking ? "" : profile?.photoURL ?? "",
           attended: Boolean(b.attended),
           attendanceStatus: b.attendanceStatus ?? (b.attended ? "checked_in" : "none"),
           checkedInAt: b.checkedInAt ?? null,
@@ -1547,7 +1970,7 @@ async function buildMonthlyLeaderboardRows(monthKey: string): Promise<Leaderboar
         access: resolveUserAuthorisation(user),
       };
     })
-    .filter((u) => u.access.alphaWodAccess)
+    .filter((u) => u.access.appAccessTier === "full")
     .map((u) => ({
       userId: u.userId,
       name: u.name,
@@ -1590,7 +2013,8 @@ async function loadLeaderboardProfiles(values: unknown[]): Promise<Map<string, L
     db.collection("users").doc(userId)
   ));
   return new Map(snapshots
-    .filter((snapshot) => snapshot.exists)
+    .filter((snapshot) => snapshot.exists &&
+      resolveUserAuthorisation(snapshot.data() as UserDoc).appAccessTier === "full")
     .map((snapshot) => [snapshot.id, snapshot.data() as LeaderboardProfile]));
 }
 
@@ -1640,7 +2064,7 @@ export const onLeaderboardEntryWritten = onDocumentWritten(
 
 export const getMonthlyLeaderboard = onCall(async (request) => {
   requireAuth(request);
-  await requireApprovedMember(request);
+  await requireFullAppMember(request);
 
   const monthKey = requireLeaderboardMonthKey(request.data?.monthKey);
   const limit = leaderboardLimit(request.data?.limit);
@@ -1710,7 +2134,7 @@ export const reconcileMonthlyLeaderboard = onCall(async (request) => {
     const userSnap = await db.collection("users").doc(userId).get();
     if (!userSnap.exists) continue;
     const u = userSnap.data() as UserDoc;
-    if (!resolveUserAuthorisation(u).alphaWodAccess) continue;
+    if (resolveUserAuthorisation(u).appAccessTier !== "full") continue;
 
     const ref = lbMonthRef.collection("users").doc(userId);
     batch.set(ref, {
@@ -1732,7 +2156,7 @@ export const reconcileMonthlyLeaderboard = onCall(async (request) => {
 
 export const getMonthlyDipLeaderboard = onCall(async (request) => {
   requireAuth(request);
-  await requireApprovedMember(request);
+  await requireFullAppMember(request);
 
   const monthKey = requireLeaderboardMonthKey(request.data?.monthKey);
   const limit = leaderboardLimit(request.data?.limit);
@@ -1791,6 +2215,10 @@ export const listStaffUsers = onCall(async (request) => {
       approvalStatus: access.approvalStatus,
       entitlementStatus: access.entitlementStatus,
       entitlementSource: access.entitlementSource,
+      entitlementPlanKey: typeof user.entitlementPlanKey === "string" ?
+        user.entitlementPlanKey : null,
+      appAccessTier: access.appAccessTier,
+      entitlementClassSlots: access.entitlementClassSlots,
       alphaWodAccess: access.alphaWodAccess,
       strengthBlock: user.strengthBlock === "A" || user.strengthBlock === "B" ?
         user.strengthBlock : "none",
@@ -1818,11 +2246,18 @@ export const bootstrapUserProfile = onCall(async (request) => {
       approvalStatus: existingAccess.approvalStatus,
       entitlementStatus: existingAccess.entitlementStatus,
       entitlementSource: existingAccess.entitlementSource,
+      ...(typeof existing.entitlementPlanKey === "string" ? {
+        entitlementPlanKey: existing.entitlementPlanKey,
+      } : {}),
+      appAccessTier: existingAccess.entitlementPolicyAppAccessTier,
+      entitlementClassSlots: existingAccess.entitlementPolicyClassSlots,
     } : {
       role: "user" as const,
       approvalStatus: "pending" as const,
       entitlementStatus: "none" as const,
       entitlementSource: "none" as const,
+      appAccessTier: "none" as const,
+      entitlementClassSlots: [] as ConditioningSlotKey[],
     };
     const nextAccess = resolveUserAuthorisation(safeAuthorisation);
     const currentName = typeof existing.name === "string" && existing.name.trim() ?
@@ -1831,6 +2266,8 @@ export const bootstrapUserProfile = onCall(async (request) => {
 
     const patch = {
       ...safeAuthorisation,
+      appAccessTier: nextAccess.entitlementPolicyAppAccessTier,
+      entitlementClassSlots: nextAccess.entitlementPolicyClassSlots,
       alphaWodAccess: nextAccess.alphaWodAccess,
       accessSchemaVersion: ACCESS_SCHEMA_VERSION,
       profileSchemaVersion: 1,
@@ -1859,6 +2296,8 @@ export const bootstrapUserProfile = onCall(async (request) => {
       approvalStatus: access.approvalStatus,
       entitlementStatus: access.entitlementStatus,
       entitlementSource: access.entitlementSource,
+      appAccessTier: access.appAccessTier,
+      entitlementClassSlots: access.entitlementClassSlots,
       alphaWodAccess: access.alphaWodAccess,
     },
   };
@@ -2024,6 +2463,8 @@ export const setMemberEntitlement = onCall(async (request) => {
     const access = resolveUserAuthorisation(next);
     const patch = {
       ...next,
+      appAccessTier: access.entitlementPolicyAppAccessTier,
+      entitlementClassSlots: access.entitlementPolicyClassSlots,
       alphaWodAccess: access.alphaWodAccess,
       accessSchemaVersion: ACCESS_SCHEMA_VERSION,
       entitlementPlanKey: planKey || FieldValue.delete(),
@@ -2033,7 +2474,13 @@ export const setMemberEntitlement = onCall(async (request) => {
       updatedAt: FieldValue.serverTimestamp(),
     };
     tx.set(userRef, patch, {merge: true});
-    finalUser = {...user, ...next, alphaWodAccess: access.alphaWodAccess};
+    finalUser = {
+      ...user,
+      ...next,
+      appAccessTier: access.entitlementPolicyAppAccessTier,
+      entitlementClassSlots: access.entitlementPolicyClassSlots,
+      alphaWodAccess: access.alphaWodAccess,
+    };
   });
 
   await convergeUserDerivedAccess(userId);
@@ -2076,10 +2523,20 @@ export const approveUserAccess = onCall(async (request) => {
       approvalStatus: "approved" as const,
       entitlementStatus,
       entitlementSource,
+      ...(preserveMemberEntitlement &&
+        typeof user.entitlementPlanKey === "string" ? {
+          entitlementPlanKey: user.entitlementPlanKey,
+        } : {}),
+      ...(preserveMemberEntitlement ? {
+        appAccessTier: user.appAccessTier,
+        entitlementClassSlots: user.entitlementClassSlots,
+      } : {}),
     };
     const access = resolveUserAuthorisation(next);
     const patch = {
       ...next,
+      appAccessTier: access.entitlementPolicyAppAccessTier,
+      entitlementClassSlots: access.entitlementPolicyClassSlots,
       alphaWodAccess: access.alphaWodAccess,
       accessSchemaVersion: ACCESS_SCHEMA_VERSION,
       approvedAt: FieldValue.serverTimestamp(),
@@ -2108,10 +2565,21 @@ export const updateMemberRole = onCall(async (request) => {
   }
 
   const userRef = db.collection("users").doc(userId);
+  const entitlementOwnerRef = db.collection("membershipEntitlementOwners")
+    .doc(sha256(userId));
 
   await db.runTransaction(async (tx) => {
-    const snap = await tx.get(userRef);
+    const [snap, entitlementOwner] = await Promise.all([
+      tx.get(userRef),
+      tx.get(entitlementOwnerRef),
+    ]);
     if (!snap.exists) throw new HttpsError("not-found", "User not found.");
+    if (entitlementOwner.exists && entitlementOwner.get("state") !== "released") {
+      throw new HttpsError(
+        "failed-precondition",
+        "This member has an active Stripe entitlement. End or repair that membership before changing their role."
+      );
+    }
     const user = snap.data() as UserDoc;
     if (!isUserRole(user.role)) {
       throw new HttpsError("failed-precondition", "The member role is invalid.");
@@ -2133,6 +2601,9 @@ export const updateMemberRole = onCall(async (request) => {
     const access = resolveUserAuthorisation(next);
     const patch = {
       ...next,
+      appAccessTier: access.entitlementPolicyAppAccessTier,
+      entitlementClassSlots: access.entitlementPolicyClassSlots,
+      entitlementPlanKey: FieldValue.delete(),
       alphaWodAccess: access.alphaWodAccess,
       accessSchemaVersion: ACCESS_SCHEMA_VERSION,
       updatedAt: FieldValue.serverTimestamp(),
@@ -2282,11 +2753,28 @@ export const createMembershipCheckoutSessionV2 = buildCreateMembershipCheckoutSe
   convergeUserDerivedAccess,
   MEMBERSHIP_CHECKOUT_SCHEMA_VERSION
 );
-export const stripeWebhook = buildStripeWebhook(convergeUserDerivedAccess);
-export const recoverStripeEvents = buildRecoverStripeEvents(convergeUserDerivedAccess);
+const sharedStripeWebhookSecrets = [
+  ...MEMBERSHIP_WEBHOOK_SECRETS,
+  PAYG_CANCELLATION_TOKEN_SECRET,
+];
+const sharedStripeWorkerSecrets = [
+  ...MEMBERSHIP_STRIPE_WORKER_SECRETS,
+  PAYG_CANCELLATION_TOKEN_SECRET,
+];
+export const stripeWebhook = buildStripeWebhook(
+  convergeUserDerivedAccess,
+  dispatchPaygStripeEvent,
+  sharedStripeWebhookSecrets
+);
+export const recoverStripeEvents = buildRecoverStripeEvents(
+  convergeUserDerivedAccess,
+  dispatchPaygStripeEvent,
+  sharedStripeWorkerSecrets
+);
 export const recoverMembershipCancellations = buildRecoverMembershipCancellations(
   convergeUserDerivedAccess
 );
+export const reconcileMembershipBookings = buildReconcileMembershipBookings();
 export const reconcilePastDueMemberships = buildReconcilePastDueMemberships(
   convergeUserDerivedAccess
 );
@@ -2302,3 +2790,12 @@ export const linkMembershipParticipant = buildLinkMembershipParticipant(
   requireAdmin,
   convergeUserDerivedAccess
 );
+
+/** Separate, account-free one-time PAYG purchase domain. */
+export const getPublicPaygSchedule = buildGetPublicPaygSchedule();
+export const createPaygCheckoutSession = buildCreatePaygCheckoutSession();
+export const getPaygCancellationPreview = buildGetPaygCancellationPreview();
+export const getPaygCheckoutStatus = buildGetPaygCheckoutStatus();
+export const requestPaygCancellation = buildRequestPaygCancellation();
+export const recoverPaygOperations = buildRecoverPaygOperations();
+export const retryPaygConfirmations = buildRetryPaygConfirmations();

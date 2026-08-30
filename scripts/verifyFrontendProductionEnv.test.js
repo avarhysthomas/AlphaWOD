@@ -3,7 +3,7 @@ const test = require("node:test");
 
 const {
   assertFrontendProductionEnvironment,
-  parseExpectedPurchaseEnabled,
+  parseExpectedPurchaseStates,
 } = require("./verifyFrontendProductionEnv");
 
 function validEnvironment() {
@@ -18,6 +18,7 @@ function validEnvironment() {
     REACT_APP_USE_EMULATORS: "false",
     REACT_APP_MEMBERSHIP_TEST_JOURNEY_ENABLED: "false",
     REACT_APP_MEMBERSHIP_PURCHASE_ENABLED: "false",
+    REACT_APP_ADULT_CONDITIONING_PURCHASE_ENABLED: "false",
   };
 }
 
@@ -66,22 +67,46 @@ test("checks the requested armed, rollback and open frontend state", () => {
       REACT_APP_MEMBERSHIP_PURCHASE_ENABLED: "true",
     }, true)
   );
+  assert.doesNotThrow(() =>
+    assertFrontendProductionEnvironment({
+      ...validEnvironment(),
+      REACT_APP_MEMBERSHIP_PURCHASE_ENABLED: "true",
+      REACT_APP_ADULT_CONDITIONING_PURCHASE_ENABLED: "true",
+    }, true, true)
+  );
+  assert.throws(
+    () => assertFrontendProductionEnvironment({
+      ...validEnvironment(),
+      REACT_APP_ADULT_CONDITIONING_PURCHASE_ENABLED: "true",
+    }, false, true),
+    /requires REACT_APP_MEMBERSHIP_PURCHASE_ENABLED/i
+  );
 });
 
-test("parses only the two explicit frontend state checks", () => {
-  assert.equal(parseExpectedPurchaseEnabled([]), undefined);
-  assert.equal(
-    parseExpectedPurchaseEnabled(["--expect-purchase-closed"]),
-    false
+test("parses independent membership and Conditioning state checks", () => {
+  assert.deepEqual(parseExpectedPurchaseStates([]), {
+    purchaseEnabled: undefined,
+    conditioningEnabled: false,
+  });
+  assert.deepEqual(
+    parseExpectedPurchaseStates(["--expect-purchase-closed"]),
+    {purchaseEnabled: false, conditioningEnabled: false}
   );
-  assert.equal(
-    parseExpectedPurchaseEnabled(["--expect-purchase-open"]),
-    true
+  assert.deepEqual(
+    parseExpectedPurchaseStates([
+      "--expect-purchase-open",
+      "--expect-conditioning-open",
+    ]),
+    {purchaseEnabled: true, conditioningEnabled: true}
   );
-  assert.throws(() => parseExpectedPurchaseEnabled(["--unknown"]));
-  assert.throws(() => parseExpectedPurchaseEnabled([
+  assert.throws(() => parseExpectedPurchaseStates(["--unknown"]));
+  assert.throws(() => parseExpectedPurchaseStates([
     "--expect-purchase-closed",
     "--expect-purchase-open",
+  ]));
+  assert.throws(() => parseExpectedPurchaseStates([
+    "--expect-conditioning-closed",
+    "--expect-conditioning-open",
   ]));
 });
 
@@ -91,6 +116,7 @@ test("rejects placeholders, emulator use and the local membership journey", () =
     {REACT_APP_FIREBASE_APPCHECK_SITE_KEY: ""},
     {REACT_APP_USE_EMULATORS: "true"},
     {REACT_APP_MEMBERSHIP_TEST_JOURNEY_ENABLED: "true"},
+    {REACT_APP_ADULT_CONDITIONING_PURCHASE_ENABLED: "true"},
     {REACT_APP_FIREBASE_PROJECT_ID: "demo-alphawod-stripe"},
     {REACT_APP_FIREBASE_MESSAGING_SENDER_ID: "not-numeric"},
     {REACT_APP_FIREBASE_APP_ID: "1:987654321:web:abcdef"},

@@ -4,7 +4,10 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const {
+  APPROVED_LIVE_PAYG_CATALOGUE,
   APPROVED_LIVE_STRIPE_CATALOGUE,
+  APPROVED_TEST_PAYG_CATALOGUE,
+  matchesApprovedLivePaygCatalogueEntry,
   matchesApprovedLiveStripeCatalogueEntry,
 } = require("../lib/stripeLiveCatalog");
 const {
@@ -110,3 +113,48 @@ test("approved LIVE catalogue rejects drift in every frozen field", () => {
     );
   }
 });
+
+test(
+  "PAYG test and live catalogues freeze distinct exact one-time objects",
+  () => {
+    assert.notEqual(
+      APPROVED_TEST_PAYG_CATALOGUE.priceId,
+      APPROVED_LIVE_PAYG_CATALOGUE.priceId
+    );
+    assert.notEqual(
+      APPROVED_TEST_PAYG_CATALOGUE.productId,
+      APPROVED_LIVE_PAYG_CATALOGUE.productId
+    );
+    for (const approved of [
+      APPROVED_TEST_PAYG_CATALOGUE,
+      APPROVED_LIVE_PAYG_CATALOGUE,
+    ]) {
+      const price = {
+        id: approved.priceId,
+        type: "one_time",
+        billing_scheme: "per_unit",
+        tax_behavior: "unspecified",
+        custom_unit_amount: null,
+        transform_quantity: null,
+        recurring: null,
+      };
+      const product = {
+        id: approved.productId,
+        name: approved.productName,
+        tax_code: approved.productTaxCode,
+      };
+      assert.equal(
+        matchesApprovedLivePaygCatalogueEntry(price, product, approved),
+        true
+      );
+      assert.equal(
+        matchesApprovedLivePaygCatalogueEntry(
+          {...price, recurring: {interval: "month"}},
+          product,
+          approved
+        ),
+        false
+      );
+    }
+  }
+);

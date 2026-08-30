@@ -29,6 +29,10 @@ type BookingStatus = "booked" | "checked_in" | "authorised_absence" | "dip";
 type AttendanceStatus = "none" | "checked_in" | "dip";
 
 type BookingRow = {
+  bookingId?: string;
+  bookingKind?: "member" | "payg_guest";
+  isGuestBooking?: boolean;
+  paygOrderId?: string;
   userId: string;
   userName?: string;
   name?: string;
@@ -68,7 +72,7 @@ function normalizeStatus(r: BookingRow): BookingStatus {
   return "booked";
 }
 
-function StatusPill({ status }: { status: BookingStatus }) {
+function StatusPill({ status, guest = false }: { status: BookingStatus; guest?: boolean }) {
   const base =
     "text-[10px] uppercase tracking-[0.16em] px-2.5 py-1 rounded-md inline-flex items-center gap-2 font-black";
 
@@ -77,7 +81,7 @@ function StatusPill({ status }: { status: BookingStatus }) {
   }
 
   if (status === "dip") {
-    return <span className={`${base} bg-red-400/90 text-black`}>Dip</span>;
+    return <span className={`${base} bg-red-400/90 text-black`}>{guest ? "No show" : "Dip"}</span>;
   }
 
   if (status === "authorised_absence") {
@@ -117,6 +121,10 @@ export default function ClassRoster() {
   const selectedIds = useMemo(
     () => Object.entries(selected).filter(([, v]) => v).map(([id]) => id),
     [selected]
+  );
+  const selectedHasGuest = useMemo(
+    () => selectedIds.some((id) => rows.find((row) => row.userId === id)?.isGuestBooking),
+    [rows, selectedIds]
   );
 
   const toggleSelected = useCallback((uid: string) => {
@@ -269,15 +277,22 @@ export default function ClassRoster() {
 
     try {
       setBusyUserId(userId);
+      const rosterRow = rows.find((row) => row.userId === userId);
+      const bookingPayload = rosterRow?.bookingId
+        ? { bookingId: rosterRow.bookingId }
+        : { classId, userId };
 
       if (next === "checked_in" || next === "booked") {
         const attended = next === "checked_in";
         const mod = await import("../services/checkin");
-        await mod.checkInBooking({ classId, userId, attended });
+        await mod.checkInBooking({ ...bookingPayload, attended });
       } else {
+        if (next === "authorised_absence" && rosterRow?.isGuestBooking) {
+          return alert("PAYG cancellations must use the PAYG cancellation flow so the refund policy is applied correctly.");
+        }
         const functions = getFunctions(undefined, "europe-west1");
         const mark = httpsCallable(functions, "markBookingStatus");
-        await mark({ classId, userId, status: next });
+        await mark({ ...bookingPayload, status: next });
       }
 
       await loadRoster();
@@ -302,6 +317,12 @@ export default function ClassRoster() {
 
     const ids = idsArg ?? selectedIds;
     if (!ids.length) return;
+    const selectedRows = ids.map((id) => rows.find((row) => row.userId === id)).filter(
+      (row): row is BookingRow => Boolean(row)
+    );
+    if (next === "authorised_absence" && selectedRows.some((row) => row.isGuestBooking)) {
+      return alert("PAYG cancellations must use the PAYG cancellation flow, so guest bookings were not changed.");
+    }
 
     try {
       setBulkBusy(true);
@@ -311,7 +332,10 @@ export default function ClassRoster() {
         const mod = await import("../services/checkin");
 
         const results = await Promise.allSettled(
-          ids.map((uid) => mod.checkInBooking({ classId, userId: uid, attended }))
+          selectedRows.map((row) => mod.checkInBooking({
+            ...(row.bookingId ? { bookingId: row.bookingId } : { classId, userId: row.userId }),
+            attended,
+          }))
         );
 
         const failed = results.filter((x) => x.status === "rejected").length;
@@ -324,7 +348,10 @@ export default function ClassRoster() {
         const functions = getFunctions(undefined, "europe-west1");
         const mark = httpsCallable(functions, "markBookingStatus");
 
-        const results = await Promise.allSettled(ids.map((uid) => mark({ classId, userId: uid, status: next })));
+        const results = await Promise.allSettled(selectedRows.map((row) => mark({
+          ...(row.bookingId ? { bookingId: row.bookingId } : { classId, userId: row.userId }),
+          status: next,
+        })));
         const failed = results.filter((x) => x.status === "rejected").length;
 
         await loadRoster();
@@ -401,7 +428,7 @@ export default function ClassRoster() {
   const canBulkCheckIn = !loadingRoster && !bulkBusy && rows.some((r) => normalizeStatus(r) !== "checked_in");
   const canBulkUncheck = !loadingRoster && !bulkBusy && rows.some((r) => normalizeStatus(r) === "checked_in");
   const canBulkSelected = !loadingRoster && !bulkBusy && selectedIds.length > 0;
-  const navItems = getUserNavItems(appUser?.role);
+  const navItems = getUserNavItems(appUser);
   const firstName = appUser?.name?.split(" ")[0] || appUser?.email?.split("@")[0] || "A";
   const profilePhotoURL = appUser?.photoURL || user?.photoURL || "";
 
@@ -560,7 +587,8 @@ export default function ClassRoster() {
 
                 <button
                   onClick={() => bulkSetStatus("authorised_absence")}
-                  disabled={!canBulkSelected}
+                  disabled={!canBulkSelected || selectedHasGuest}
+                  title={selectedHasGuest ? "Use the PAYG cancellation flow for guest bookings" : undefined}
                   className="rounded-[14px] border border-white/10 bg-white/[0.04] px-3 py-3 text-sm font-bold text-white transition hover:bg-white/[0.07] disabled:opacity-35"
                 >
                   Auth absence
@@ -599,6 +627,7 @@ export default function ClassRoster() {
                 const status = normalizeStatus(r);
                 const isBusy = busyUserId === r.userId || bulkBusy;
                 const isSelected = !!selected[r.userId];
+                const isPaygGuest = r.bookingKind === "payg_guest" || r.isGuestBooking === true;
 
                 return (
                   <div
@@ -640,7 +669,9 @@ export default function ClassRoster() {
 
                       <div className="min-w-0 flex-1">
                         <div className="truncate text-base font-extrabold text-white">{r.name ?? "Member"}</div>
-                        <div className="mt-1 truncate text-sm font-medium text-white/38">{r.email ?? ""}</div>
+                        <div className="mt-1 truncate text-sm font-medium text-white/38">
+                          {isPaygGuest ? "PAYG guest · no app account" : r.email ?? ""}
+                        </div>
                       </div>
                       </div>
 
@@ -651,7 +682,10 @@ export default function ClassRoster() {
                               Admin
                             </span>
                           )}
-                          <StatusPill status={status} />
+                          {isPaygGuest ? (
+                            <span className="rounded-md border border-amber-300/20 bg-amber-300/10 px-2 py-1 text-[10px] font-black uppercase tracking-[0.08em] text-amber-200">PAYG</span>
+                          ) : null}
+                          <StatusPill status={status} guest={isPaygGuest} />
                         </div>
                         {!selectMode && (
                           <div className="flex items-center gap-1">
@@ -665,9 +699,9 @@ export default function ClassRoster() {
                             </button>
                             <button
                               onClick={() => setStatus(r.userId, "authorised_absence")}
-                              disabled={isBusy}
+                              disabled={isBusy || isPaygGuest}
                               className="grid h-9 w-9 place-items-center rounded-full text-white/38 transition hover:bg-white/[0.07] hover:text-white disabled:opacity-35"
-                              aria-label="Mark authorised absence"
+                              aria-label={isPaygGuest ? "PAYG cancellation uses its cancellation flow" : "Mark authorised absence"}
                             >
                               A
                             </button>

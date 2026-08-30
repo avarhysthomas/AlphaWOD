@@ -60,8 +60,10 @@ test("disabled Auth users are restricted and excluded from grants", () => {
   );
 
   assert.equal(scanState.authDisabled, true);
-  assert.equal(scanState.profile.entitlementStatus, "restricted");
+  assert.equal(scanState.profile.entitlementStatus, "active");
   assert.equal(scanState.profile.entitlementSource, "legacy");
+  assert.equal(scanState.profile.appAccessTier, "full");
+  assert.deepEqual(scanState.profile.entitlementClassSlots, []);
   assert.equal(scanState.profile.alphaWodAccess, false);
   assert.equal(scanState.access.alphaWodAccess, false);
   assert.equal(accessGrantCandidate("uid-disabled", scanState.profile), null);
@@ -79,13 +81,121 @@ test("disabled Auth users are restricted and excluded from grants", () => {
     emailVerified: true,
     customClaims: {externalTenant: "keep-me", alphaWodAccess: true},
   });
-  assert.equal(applyState.patch.entitlementStatus, "restricted");
+  assert.equal(applyState.patch.entitlementStatus, "active");
   assert.equal(applyState.patch.alphaWodAccess, false);
+  assert.equal(applyState.patch.appAccessTier, "full");
   assert.equal(applyState.nextClaims.alphaWodAccess, false);
+  assert.equal(applyState.nextClaims.appAccessTier, "none");
+  assert.deepEqual(applyState.nextClaims.entitlementClassSlots, []);
   assert.equal(applyState.nextClaims.disabled, true);
   assert.equal(applyState.nextClaims.restricted, true);
   assert.equal(applyState.nextClaims.externalTenant, "keep-me");
 });
+
+test(
+  "Conditioning policy survives repeated pending backfills then approval",
+  () => {
+    const frozen = {
+      role: "user",
+      approvalStatus: "pending",
+      entitlementStatus: "active",
+      entitlementSource: "stripe",
+      entitlementPlanKey: "adult_conditioning",
+      appAccessTier: "limited",
+      entitlementClassSlots: ["friday_0530", "monday_0600"],
+    };
+    const authUser = {
+      disabled: false,
+      email: "member@example.test",
+      emailVerified: true,
+      customClaims: {},
+    };
+
+    const first = currentProfileApplyState(frozen, authUser);
+    const second = currentProfileApplyState(first.patch, {
+      ...authUser,
+      customClaims: first.nextClaims,
+    });
+    for (const state of [first, second]) {
+      assert.equal(state.patch.appAccessTier, "limited");
+      assert.deepEqual(state.patch.entitlementClassSlots, [
+        "monday_0600", "friday_0530",
+      ]);
+      assert.equal(state.patch.alphaWodAccess, false);
+      assert.equal(state.nextClaims.appAccessTier, "none");
+      assert.deepEqual(state.nextClaims.entitlementClassSlots, []);
+    }
+
+    const approved = currentProfileApplyState({
+      ...second.patch,
+      approvalStatus: "approved",
+    }, {...authUser, customClaims: second.nextClaims});
+    assert.equal(approved.patch.appAccessTier, "limited");
+    assert.deepEqual(approved.patch.entitlementClassSlots, [
+      "monday_0600", "friday_0530",
+    ]);
+    assert.equal(approved.patch.alphaWodAccess, true);
+    assert.equal(approved.nextClaims.appAccessTier, "limited");
+    assert.deepEqual(approved.nextClaims.entitlementClassSlots, [
+      "monday_0600", "friday_0530",
+    ]);
+  }
+);
+
+test(
+  "Conditioning policy survives repeated disabled backfills then re-enable",
+  () => {
+    const frozen = {
+      role: "user",
+      approvalStatus: "approved",
+      entitlementStatus: "active",
+      entitlementSource: "stripe",
+      entitlementPlanKey: "adult_conditioning",
+      appAccessTier: "limited",
+      entitlementClassSlots: ["tuesday_1800", "thursday_1800"],
+    };
+    const disabledAuth = {
+      disabled: true,
+      email: "member@example.test",
+      emailVerified: true,
+      customClaims: {},
+    };
+
+    const first = currentProfileApplyState(frozen, disabledAuth);
+    const second = currentProfileApplyState(first.patch, {
+      ...disabledAuth,
+      customClaims: first.nextClaims,
+    });
+    for (const state of [first, second]) {
+      assert.equal(state.patch.entitlementStatus, "active");
+      assert.equal(state.patch.appAccessTier, "limited");
+      assert.deepEqual(state.patch.entitlementClassSlots, [
+        "tuesday_1800", "thursday_1800",
+      ]);
+      assert.equal(state.patch.alphaWodAccess, false);
+      assert.equal(state.nextClaims.appAccessTier, "none");
+      assert.deepEqual(state.nextClaims.entitlementClassSlots, []);
+      assert.equal(state.nextClaims.disabled, true);
+    }
+
+    const enabled = currentProfileApplyState(second.patch, {
+      ...disabledAuth,
+      disabled: false,
+      customClaims: second.nextClaims,
+    });
+    assert.equal(enabled.patch.entitlementStatus, "active");
+    assert.equal(enabled.patch.appAccessTier, "limited");
+    assert.deepEqual(enabled.patch.entitlementClassSlots, [
+      "tuesday_1800", "thursday_1800",
+    ]);
+    assert.equal(enabled.patch.alphaWodAccess, true);
+    assert.equal(enabled.nextClaims.appAccessTier, "limited");
+    assert.deepEqual(enabled.nextClaims.entitlementClassSlots, [
+      "tuesday_1800", "thursday_1800",
+    ]);
+    assert.equal(enabled.nextClaims.disabled, false);
+  }
+);
 
 test("migration preserves an explicit restriction", () => {
   const result = desiredHistoricalAccess({
@@ -101,6 +211,31 @@ test("migration preserves an explicit restriction", () => {
     entitlementSource: "manual",
   });
   assert.equal(result.access.alphaWodAccess, false);
+});
+
+test("migration preserves and validates Stripe Conditioning policy", () => {
+  const result = desiredHistoricalAccess({
+    role: "user",
+    approvalStatus: "approved",
+    entitlementStatus: "active",
+    entitlementSource: "stripe",
+    entitlementPlanKey: "adult_conditioning",
+    appAccessTier: "limited",
+    entitlementClassSlots: ["monday_0600", "friday_0530"],
+  });
+  assert.equal(result.error, undefined);
+  assert.equal(result.next.entitlementPlanKey, "adult_conditioning");
+  assert.equal(result.access.appAccessTier, "limited");
+  assert.deepEqual(result.access.entitlementClassSlots, [
+    "monday_0600", "friday_0530",
+  ]);
+
+  assert.equal(desiredHistoricalAccess({
+    role: "user",
+    approvalStatus: "approved",
+    entitlementStatus: "active",
+    entitlementSource: "stripe",
+  }).error, "invalid_access_policy");
 });
 
 test("migration reports invalid partial entitlement data", () => {
@@ -333,6 +468,9 @@ const reviewedGrant = {
   approvalStatus: "approved",
   entitlementStatus: "active",
   entitlementSource: "legacy",
+  entitlementPlanKey: null,
+  appAccessTier: "full",
+  entitlementClassSlots: [],
   alphaWodAccess: true,
 };
 
@@ -393,6 +531,8 @@ test("privileged legacy Auth claims are surfaced for the initial audit", () => {
     approvalStatus: "approved",
     entitlementStatus: null,
     entitlementSource: null,
+    appAccessTier: null,
+    entitlementClassSlots: null,
     alphaWodAccess: true,
     disabled: false,
     restricted: false,
@@ -439,6 +579,9 @@ test("apply uses current Auth identity and unrelated claims", () => {
   assert.equal(state.patch.emailVerified, true);
   assert.equal(state.nextClaims.role, "user");
   assert.equal(state.nextClaims.alphaWodAccess, true);
+  assert.equal(state.patch.appAccessTier, "full");
+  assert.deepEqual(state.patch.entitlementClassSlots, []);
+  assert.equal(state.nextClaims.appAccessTier, "full");
   assert.equal(state.nextClaims.externalTenant, "latest-value");
 
   const authOnly = currentAuthOnlyClaims({

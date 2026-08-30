@@ -3,6 +3,7 @@ import { Link, Navigate, useParams } from "react-router-dom";
 import { useAuth } from "../../../context/AuthContext";
 import {
   COMPANY,
+  CONDITIONING_SLOT_OPTIONS,
   EXISTING_MEMBER_OFFER,
   MEMBERSHIP_PLANS,
   POLICY_TEXT,
@@ -17,6 +18,7 @@ import {
   resolveDisplayAge,
   resolveYouthMonthlyPricing,
   type CheckoutAcceptanceId,
+  type ConditioningSlotKey,
 } from "../../../lib/membershipPlans";
 import {
   clearCheckoutAttempt,
@@ -73,6 +75,9 @@ export default function MembershipCheckout() {
   const { user, appUser, loading: authLoading } = useAuth();
 
   const [participantFullName, setParticipantFullName] = useState("");
+  const [selectedConditioningSlots, setSelectedConditioningSlots] = useState<
+    ConditioningSlotKey[]
+  >([]);
   const [participantDateOfBirth, setParticipantDateOfBirth] = useState("");
   const [additionalParticipants, setAdditionalParticipants] = useState<
     AdditionalParticipantInput[]
@@ -103,6 +108,7 @@ export default function MembershipCheckout() {
 
     acceptedPlanKey.current = planKey;
     setAcceptedStatements({});
+    setSelectedConditioningSlots([]);
     checkoutAttempt.current = null;
     clearCheckoutAttempt();
     setError("");
@@ -113,10 +119,12 @@ export default function MembershipCheckout() {
   const plan = isPlanKey(planKey) ? MEMBERSHIP_PLANS[planKey] : null;
   const {
     checkoutEnabled,
+    conditioningCheckoutEnabled,
     documentsApproved,
     localTestJourneyEnabled,
   } = MEMBERSHIP_PURCHASE_AVAILABILITY;
   const isYouth = plan?.audience === "youth";
+  const isConditioning = plan?.key === "adult_conditioning";
   const participantCount = isYouth ? 1 + additionalParticipants.length : 1;
   const presale = isFoundingPresale();
   const promotionCodeAvailable =
@@ -205,7 +213,8 @@ export default function MembershipCheckout() {
     acceptedStatements[id] === true
   );
   const canSubmit =
-    checkoutEnabled &&
+    (isConditioning ? conditioningCheckoutEnabled : checkoutEnabled) &&
+    (!isConditioning || selectedConditioningSlots.length === 2) &&
     participantFullName.trim().length >= 2 &&
     age !== null &&
     !ageMismatch &&
@@ -229,7 +238,7 @@ export default function MembershipCheckout() {
       setBillingPolicyChanged(false);
 
       const checkoutDetails: CheckoutDetails = {
-        checkoutSchemaVersion: 4,
+        checkoutSchemaVersion: 5,
         // This is deliberately the same snapshot that chose every price/date
         // shown on this render. The callable fails closed if the cutoff moved.
         expectedBillingMode: presale ? "presale_deferred" : "standard",
@@ -241,6 +250,7 @@ export default function MembershipCheckout() {
         participantIsPayer: !isYouth,
         signedName: typedSignature,
         acceptedStatementIds: checkoutStatements.map(({id}) => id),
+        ...(isConditioning ? { selectedConditioningSlots } : {}),
         ...(promotionCodeAvailable && promotionCode.trim()
           ? {promotionCode: promotionCode.trim()}
           : {}),
@@ -311,6 +321,25 @@ export default function MembershipCheckout() {
   const familySavingPence = youthPricing ?
     youthPricing.standardMonthlyPence - youthPricing.recurringMonthlyPence : 0;
   const childWord = participantCount === 1 ? "child" : "children";
+
+  if (isConditioning && !conditioningCheckoutEnabled) {
+    return (
+      <ConditioningCheckoutPreview
+        planName={plan.name}
+        planSummary={plan.summary}
+        price={formatPlanPrice(plan)}
+        selectedSlots={selectedConditioningSlots}
+        onToggle={(slot) => {
+          setSelectedConditioningSlots((current) => {
+            if (current.includes(slot)) return current.filter((value) => value !== slot);
+            return current.length < 2 ? [...current, slot] : current;
+          });
+          setAcceptedStatements({});
+          checkoutAttempt.current = null;
+        }}
+      />
+    );
+  }
 
   return (
     <div className="carbon-fiber-bg min-h-screen overflow-x-hidden text-[#f4f0ea]">
@@ -407,6 +436,55 @@ export default function MembershipCheckout() {
         )}
 
         <form onSubmit={handleSubmit} className="mt-8 space-y-5">
+          {isConditioning ? (
+            <section className="rounded-2xl border border-white/10 bg-[#151311] p-6" aria-labelledby="active-conditioning-slots-title">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <h2 id="active-conditioning-slots-title" className="font-heading text-3xl uppercase text-white">Choose two weekly slots</h2>
+                  <p className="mt-2 text-sm leading-6 text-white/55">Your app will allow bookings only for these two recurring conditioning sessions.</p>
+                  <p className="mt-2 max-w-2xl text-sm leading-6 text-white/65">
+                    App access includes Schedule, Profile and Membership only; Dashboard/WOD,
+                    Training, Leaderboards and performance stats are not included.
+                  </p>
+                </div>
+                <p aria-live="polite" className="text-sm font-black text-amber-200">{selectedConditioningSlots.length} of 2 selected</p>
+              </div>
+              <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                {CONDITIONING_SLOT_OPTIONS.map((slot) => {
+                  const selected = selectedConditioningSlots.includes(slot.key);
+                  const disabled = !selected && selectedConditioningSlots.length === 2;
+                  return (
+                    <button
+                      key={slot.key}
+                      type="button"
+                      aria-pressed={selected}
+                      disabled={disabled}
+                      onClick={() => {
+                        setSelectedConditioningSlots((current) =>
+                          current.includes(slot.key)
+                            ? current.filter((value) => value !== slot.key)
+                            : current.length < 2 ? [...current, slot.key] : current
+                        );
+                        setAcceptedStatements({});
+                        checkoutAttempt.current = null;
+                      }}
+                      className={[
+                        "rounded-xl border px-5 py-4 text-left outline-none transition focus-visible:ring-2 focus-visible:ring-amber-200",
+                        selected
+                          ? "border-amber-200 bg-amber-100 text-black"
+                          : disabled
+                            ? "cursor-not-allowed border-white/5 bg-black/20 text-white/25"
+                            : "border-white/12 bg-black/30 text-white hover:border-white/25",
+                      ].join(" ")}
+                    >
+                      <span className="block text-sm font-black">{slot.day}</span>
+                      <span className={`mt-1 block font-heading text-3xl ${selected ? "text-black" : "text-white"}`}>{slot.time}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          ) : null}
           {promotionCodeAvailable && (
             <div className="rounded-[28px] border border-amber-500/25 bg-amber-500/10 p-6">
               <label className="block">
@@ -946,5 +1024,91 @@ export default function MembershipCheckout() {
         </footer>
       </div>
     </div>
+  );
+}
+
+function ConditioningCheckoutPreview({
+  planName,
+  planSummary,
+  price,
+  selectedSlots,
+  onToggle,
+}: {
+  planName: string;
+  planSummary: string;
+  price: string;
+  selectedSlots: ConditioningSlotKey[];
+  onToggle: (slot: ConditioningSlotKey) => void;
+}) {
+  return (
+    <main className="carbon-fiber-bg min-h-screen overflow-x-hidden px-5 py-10 text-[#f4f0ea] sm:px-8">
+      <div className="mx-auto max-w-2xl">
+        <Link to="/memberships" className="text-sm text-white/55 underline underline-offset-4">
+          Back to memberships
+        </Link>
+        <h1 className="mt-7 font-heading text-5xl uppercase leading-none text-white sm:text-6xl">
+          {planName}
+        </h1>
+        <p className="mt-4 text-lg font-bold text-[#f4b16d]">{price} per month</p>
+        <p className="mt-4 max-w-xl text-sm leading-7 text-white/68">{planSummary}</p>
+
+        <section className="mt-8 rounded-2xl border border-white/10 bg-[#151311] p-6 sm:p-7" aria-labelledby="conditioning-slots-title">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h2 id="conditioning-slots-title" className="font-heading text-3xl uppercase text-white">
+                Choose two weekly slots
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-white/52">
+                These are the two recurring sessions this membership will allow you to book.
+              </p>
+              <p className="mt-2 max-w-xl text-sm leading-6 text-white/65">
+                App access includes Schedule, Profile and Membership only; Dashboard/WOD,
+                Training, Leaderboards and performance stats are not included.
+              </p>
+            </div>
+            <p aria-live="polite" className="text-sm font-black text-[#f4b16d]">
+              {selectedSlots.length} of 2 selected
+            </p>
+          </div>
+          <div className="mt-6 grid gap-3 sm:grid-cols-2">
+            {CONDITIONING_SLOT_OPTIONS.map((slot) => {
+              const selected = selectedSlots.includes(slot.key);
+              const disabled = !selected && selectedSlots.length === 2;
+              return (
+                <button
+                  key={slot.key}
+                  type="button"
+                  aria-pressed={selected}
+                  disabled={disabled}
+                  onClick={() => onToggle(slot.key)}
+                  className={[
+                    "rounded-xl border px-5 py-4 text-left outline-none transition focus-visible:ring-2 focus-visible:ring-[#f4b16d]",
+                    selected
+                      ? "border-[#f4b16d] bg-[#f4b16d] text-black"
+                      : disabled
+                      ? "cursor-not-allowed border-white/5 bg-black/20 text-white/28"
+                      : "border-white/12 bg-black/30 text-white hover:border-white/25 hover:bg-black/45",
+                  ].join(" ")}
+                >
+                  <span className="block text-sm font-black">{slot.day}</span>
+                  <span className={selected ? "mt-1 block font-heading text-3xl text-black" : "mt-1 block font-heading text-3xl text-white"}>{slot.time}</span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="mt-6 rounded-2xl border border-amber-300/20 bg-amber-300/10 p-6 text-amber-50">
+          <h2 className="font-heading text-3xl uppercase">Coming soon</h2>
+          <p className="mt-3 text-sm leading-7 text-amber-50/80">
+            Online purchase for Conditioning Only is closed while its plan-specific terms,
+            waiver wording and Stripe price are reviewed. No payment can be started here yet.
+          </p>
+          <a href={`mailto:${COMPANY.supportEmail}`} className="mt-5 inline-flex min-h-[48px] items-center rounded-xl bg-amber-100 px-5 py-3 text-sm font-black text-amber-950 outline-none focus-visible:ring-2 focus-visible:ring-white">
+            Ask about Conditioning Only
+          </a>
+        </section>
+      </div>
+    </main>
   );
 }

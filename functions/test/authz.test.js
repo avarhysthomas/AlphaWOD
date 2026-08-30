@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-var-requires */
+/* eslint-disable @typescript-eslint/no-var-requires, max-len */
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
@@ -7,7 +7,10 @@ const {
   CURRENT_WAIVER_ACKNOWLEDGEMENTS,
   CURRENT_WAIVER_TITLE,
   CURRENT_WAIVER_VERSION,
+  ACCESS_SCHEMA_VERSION,
+  CLAIMS_VERSION,
   buildManagedClaims,
+  canonicalConditioningSlots,
   claimsEqual,
   isCanonicalCurrentWaiverAcceptance,
   isEntitlementCompatibleWithRole,
@@ -26,6 +29,103 @@ test("approved legacy members receive AlphaWOD access", () => {
   assert.equal(access.alphaWodAccess, true);
   assert.equal(access.disabled, false);
   assert.equal(access.restricted, false);
+  assert.equal(access.appAccessTier, "full");
+  assert.deepEqual(access.entitlementClassSlots, []);
+});
+
+test("Adult Conditioning derives limited base access only with two canonical slots", () => {
+  const access = resolveUserAuthorisation({
+    role: "user",
+    approvalStatus: "approved",
+    entitlementStatus: "active",
+    entitlementSource: "stripe",
+    entitlementPlanKey: "adult_conditioning",
+    appAccessTier: "limited",
+    entitlementClassSlots: ["friday_0530", "monday_0600"],
+  });
+  assert.equal(access.valid, true);
+  assert.equal(access.alphaWodAccess, true);
+  assert.equal(access.appAccessTier, "limited");
+  assert.deepEqual(access.entitlementClassSlots, ["monday_0600", "friday_0530"]);
+
+  const malformed = resolveUserAuthorisation({
+    role: "user",
+    approvalStatus: "approved",
+    entitlementStatus: "active",
+    entitlementSource: "stripe",
+    entitlementPlanKey: "adult_conditioning",
+    appAccessTier: "limited",
+    entitlementClassSlots: ["monday_0600", "monday_0600"],
+  });
+  assert.equal(malformed.valid, false);
+  assert.equal(malformed.alphaWodAccess, false);
+  assert.equal(malformed.appAccessTier, "none");
+  assert.ok(malformed.issues.includes("app_access_policy_invalid"));
+});
+
+test("gated Conditioning profiles preserve policy while claims stay effective", () => {
+  const pendingProfile = {
+    role: "user",
+    approvalStatus: "pending",
+    entitlementStatus: "active",
+    entitlementSource: "stripe",
+    entitlementPlanKey: "adult_conditioning",
+    appAccessTier: "limited",
+    entitlementClassSlots: ["friday_0530", "monday_0600"],
+  };
+  const pending = resolveUserAuthorisation(pendingProfile);
+  assert.equal(pending.valid, true);
+  assert.equal(pending.alphaWodAccess, false);
+  assert.equal(pending.entitlementPolicyAppAccessTier, "limited");
+  assert.deepEqual(pending.entitlementPolicyClassSlots, [
+    "monday_0600", "friday_0530",
+  ]);
+  assert.equal(pending.appAccessTier, "none");
+  assert.deepEqual(pending.entitlementClassSlots, []);
+
+  const claims = buildManagedClaims(pendingProfile);
+  assert.equal(claims.alphaWodAccess, false);
+  assert.equal(claims.appAccessTier, "none");
+  assert.deepEqual(claims.entitlementClassSlots, []);
+
+  const suspended = resolveUserAuthorisation({
+    ...pendingProfile,
+    approvalStatus: "approved",
+    entitlementStatus: "restricted",
+  });
+  assert.equal(suspended.valid, true);
+  assert.equal(suspended.entitlementPolicyAppAccessTier, "limited");
+  assert.deepEqual(suspended.entitlementPolicyClassSlots, [
+    "monday_0600", "friday_0530",
+  ]);
+  assert.equal(suspended.appAccessTier, "none");
+  assert.equal(suspended.alphaWodAccess, false);
+});
+
+test("Stripe plan derivation fails closed while legacy/manual profiles remain migratable", () => {
+  const missingStripePlan = resolveUserAuthorisation({
+    role: "user",
+    approvalStatus: "approved",
+    entitlementStatus: "active",
+    entitlementSource: "stripe",
+  });
+  assert.equal(missingStripePlan.valid, false);
+  assert.equal(missingStripePlan.alphaWodAccess, false);
+
+  const unlimited = resolveUserAuthorisation({
+    role: "user",
+    approvalStatus: "approved",
+    entitlementStatus: "active",
+    entitlementSource: "stripe",
+    entitlementPlanKey: "adult_unlimited",
+  });
+  assert.equal(unlimited.valid, true);
+  assert.equal(unlimited.appAccessTier, "full");
+  assert.equal(unlimited.alphaWodAccess, true);
+  assert.deepEqual(canonicalConditioningSlots([
+    "thursday_1800", "tuesday_1800",
+  ]), ["tuesday_1800", "thursday_1800"]);
+  assert.equal(canonicalConditioningSlots(["unknown", "monday_0600"]), null);
 });
 
 test("missing and malformed profiles fail closed", () => {
@@ -135,6 +235,8 @@ test("managed claim updates preserve unrelated claims", () => {
   assert.equal(merged.role, "user");
   assert.equal(merged.approvalStatus, "pending");
   assert.equal(merged.alphaWodAccess, false);
+  assert.equal(merged.accessSchemaVersion, ACCESS_SCHEMA_VERSION);
+  assert.equal(merged.claimsVersion, CLAIMS_VERSION);
   assert.equal(claimsEqual(merged, {...merged}), true);
 });
 

@@ -30,6 +30,7 @@ import * as admin from "firebase-admin";
 import {
   DocumentReference,
   DocumentSnapshot,
+  FieldPath,
   FieldValue,
   Firestore,
   QueryDocumentSnapshot,
@@ -67,6 +68,7 @@ import {
   getPlan,
   isAgeEligibleForPlan,
   isMembershipStateBlockingDuplicate,
+  isMembershipStateEntitled,
   isPlanKey,
   isSupportedYouthFamilyDiscountPercent,
   resolveAgeFromDateOfBirth,
@@ -77,14 +79,18 @@ import {
   resolveCheckoutSignerRole,
   resolveCheckoutSessionExpiry,
   resolveCoolingOffEnd,
-  resolveEntitlementForMembership,
+  resolveEntitlementForCommercialTerms,
   resolveMembershipState,
   resolvePastDueGraceEndMillis,
+  validateCommercialEntitlementPolicy,
 } from "./membershipPlans";
 import {
   ACCESS_SCHEMA_VERSION,
+  AppAccessTier,
+  ConditioningSlotKey,
   EntitlementSource,
   EntitlementStatus,
+  canonicalConditioningSlots,
   isApprovalStatus,
   isEntitlementCompatibleWithRole,
   isUserRole,
@@ -128,7 +134,7 @@ import {
  * snapshot it accepts. Keep this independent from the stored document schema:
  * a Firestore migration must not invalidate an otherwise exact Stripe retry.
  */
-export const MEMBERSHIP_CHECKOUT_SCHEMA_VERSION = 4;
+export const MEMBERSHIP_CHECKOUT_SCHEMA_VERSION = 5;
 
 const REGION = "europe-west1";
 
@@ -156,6 +162,14 @@ const stripePortalConfigurationId = defineString("STRIPE_PORTAL_CONFIGURATION_ID
 const membershipPurchaseEnabled = defineString("MEMBERSHIP_PURCHASE_ENABLED", {
   default: "false",
 });
+const adultConditioningPurchaseEnabled = defineString(
+  "ADULT_CONDITIONING_PURCHASE_ENABLED",
+  {default: "false"}
+);
+const adultConditioningLegalApproved = defineString(
+  "ADULT_CONDITIONING_LEGAL_APPROVED",
+  {default: "false"}
+);
 const membershipTestJourneyEnabled = defineString("MEMBERSHIP_TEST_JOURNEY_ENABLED", {
   default: "false",
 });
@@ -183,6 +197,7 @@ const stripeYouthFamilyCouponId = defineString(
 
 const priceParams: Record<PlanKey, ReturnType<typeof defineString>> = {
   adult_unlimited: defineString("STRIPE_PRICE_ADULT_UNLIMITED", {default: ""}),
+  adult_conditioning: defineString("STRIPE_PRICE_ADULT_CONDITIONING", {default: ""}),
   adult_ladies: defineString("STRIPE_PRICE_ADULT_LADIES", {default: ""}),
   adult_gym: defineString("STRIPE_PRICE_ADULT_GYM", {default: ""}),
   youth_youngstars: defineString("STRIPE_PRICE_YOUTH_YOUNGSTARS", {default: ""}),
@@ -466,6 +481,8 @@ type MembershipIntentDoc = {
   planKey: PlanKey;
   /** Complete customer-facing commercial plan frozen before Stripe opens. */
   commercialTerms: CommercialPlanSnapshot;
+  /** Two immutable weekly class slots for Adult Conditioning; empty otherwise. */
+  selectedConditioningSlots: ConditioningSlotKey[];
   /** Stripe mode frozen with this retryable attempt. */
   stripeMode: StripeMode;
   /** Exact validated Price frozen for this attempt, even if config later rotates. */
@@ -568,6 +585,7 @@ type MembershipDoc = {
   planKey: PlanKey;
   stripePriceId: string;
   commercialTerms: CommercialPlanSnapshot;
+  selectedConditioningSlots: ConditioningSlotKey[];
   planName: string;
   grantsAlphaWodAccess: boolean;
   participant: ParticipantRecord;
@@ -588,6 +606,9 @@ type MembershipDoc = {
   preMembershipEntitlement: {
     entitlementStatus: EntitlementStatus;
     entitlementSource: EntitlementSource;
+    appAccessTier: AppAccessTier;
+    entitlementPlanKey: string | null;
+    entitlementClassSlots: ConditioningSlotKey[];
   } | null;
   currentPeriodEnd: number | null;
   billingMode: "presale_deferred" | "standard";
@@ -785,11 +806,11 @@ function createOrderSnapshot(
 function orderFor(
   value: Pick<MembershipIntentDoc, "commercialTerms" | "planKey"> &
     Partial<Pick<MembershipIntentDoc, "order" | "participant" | "participants" |
-      "participantKeys" | "participantCount">>
+      "participantKeys" | "participantCount" | "selectedConditioningSlots">>
 ): MembershipOrderSnapshot {
   const participantCount = participantCountFor(value);
   const commercialTerms = value.commercialTerms ??
-    createCommercialPlanSnapshot(value.planKey);
+    createCommercialPlanSnapshot(value.planKey, value.selectedConditioningSlots);
   const stored = value.order;
   if (stored && stored.participantCount === participantCount &&
     stored.unitAmountPence === commercialTerms.amountPence &&
@@ -1289,6 +1310,32 @@ function requirePlanKey(value: unknown): PlanKey {
   return value;
 }
 
+function requireSelectedConditioningSlots(
+  planKey: PlanKey,
+  value: unknown
+): ConditioningSlotKey[] {
+  if (planKey === "adult_conditioning") {
+    const slots = canonicalConditioningSlots(value);
+    if (!slots) {
+      throw new HttpsError(
+        "invalid-argument",
+        "Select exactly two different recurring conditioning class slots.",
+        {reason: "conditioning_slots_invalid"}
+      );
+    }
+    return slots;
+  }
+  if (value !== undefined && value !== null &&
+      (!Array.isArray(value) || value.length > 0)) {
+    throw new HttpsError(
+      "invalid-argument",
+      "Conditioning class slots are available only for Adult Conditioning membership.",
+      {reason: "conditioning_slots_not_supported"}
+    );
+  }
+  return [];
+}
+
 function normalizeParticipantIdentityName(fullName: string): string {
   return fullName.normalize("NFKC")
     .replace(/\p{Default_Ignorable_Code_Point}/gu, "")
@@ -1433,6 +1480,7 @@ function resolveReturnOrigin(): string {
  */
 const KNOWN_TEST_PRICE_IDS = new Set([
   "price_1U5PS5FzNDZoGGA0rPLiyQ2Q",
+  "price_1UA47fFzNDZoGGA0lgyZPUZ9",
   "price_1U5PKZFzNDZoGGA0xsnNcV2m",
   "price_1U5PJHFzNDZoGGA0izMSvHP1",
   "price_1U5PFZFzNDZoGGA06T2ggw4M",
@@ -1646,6 +1694,14 @@ function assertCheckoutDocumentModel(publicationReadyRequired: boolean): void {
       ],
       signerRole: "adult_participant_and_payer",
     },
+    adult_conditioning: {
+      documents: ["membershipTerms", "cancellationPolicy", "privacyNotice", "adultWaiver"],
+      statements: [
+        "membership_contract", "privacy_notice", "adult_participant_waiver",
+        "recurring_payment_authority", "immediate_performance",
+      ],
+      signerRole: "adult_participant_and_payer",
+    },
     adult_ladies: {
       documents: ["membershipTerms", "cancellationPolicy", "privacyNotice", "adultWaiver"],
       statements: [
@@ -1782,6 +1838,43 @@ function requirePurchaseFlowOpen(): void {
     );
   }
   assertBillingEnvironment();
+}
+
+/**
+ * Adult Conditioning has a separate launch boundary because the currently
+ * published membership bundle predates this plan and describes Unlimited as
+ * the only app-access membership. A local test journey may exercise the
+ * contract before publication, but a deployed/live runtime cannot.
+ */
+function requirePlanPurchaseFlowOpen(planKey: PlanKey): void {
+  if (planKey !== "adult_conditioning") return;
+  if (adultConditioningPurchaseEnabled.value().trim().toLowerCase() !== "true") {
+    throw new HttpsError(
+      "failed-precondition",
+      "Adult Conditioning membership is not available for purchase yet.",
+      {reason: "adult_conditioning_purchase_unavailable"}
+    );
+  }
+  if (adultConditioningLegalApproved.value().trim().toLowerCase() === "true") {
+    return;
+  }
+
+  const testJourneyRequested =
+    membershipTestJourneyEnabled.value().trim().toLowerCase() === "true";
+  const environment = assertBillingEnvironment();
+  const origin = resolveReturnOrigin();
+  const isolatedTestJourney = testJourneyRequested &&
+    environment.stripeMode === "test" &&
+    environment.projectId !== PRODUCTION_FIREBASE_PROJECT_ID &&
+    hasLoopbackFirebaseEmulatorDataPlane() &&
+    LOCAL_TEST_JOURNEY_ORIGINS.has(origin);
+  if (!isolatedTestJourney) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Adult Conditioning checkout is awaiting approved and published membership terms.",
+      {reason: "adult_conditioning_legal_not_approved"}
+    );
+  }
 }
 
 /** ---------------------------------------------------------------
@@ -1939,6 +2032,596 @@ type EntitlementOwnerRead = {
   ownerState: "active" | "released" | null;
   ownerMembershipBlocks: boolean;
 };
+
+type MembershipBookingBoundary = {
+  entitled: boolean;
+  valid: boolean;
+  cancelAtMillis: number | null;
+  graceEndsAtMillis: number | null;
+};
+
+type AcceptedCancellationBoundary = {
+  present: boolean;
+  valid: boolean;
+  accessEndsAtMillis: number | null;
+};
+
+const MEMBERSHIP_BOOKING_INELIGIBLE_REASON =
+  "stripe_membership_booking_ineligible";
+
+/**
+ * Resolves the access stop the member has already accepted, even while Stripe
+ * convergence is still pending or under manual review. Provider state must
+ * never extend that frozen promise. Malformed accepted evidence fails closed.
+ */
+function acceptedCancellationBoundary(
+  membership: MembershipDoc
+): AcceptedCancellationBoundary {
+  const raw = (membership as {cancellationRequest?: unknown})
+    .cancellationRequest;
+  if (raw === undefined || raw === null) {
+    return {present: false, valid: true, accessEndsAtMillis: null};
+  }
+  if (typeof raw !== "object") {
+    return {present: true, valid: false, accessEndsAtMillis: null};
+  }
+
+  const request = raw as Record<string, unknown>;
+  if (typeof request.id !== "string" || !request.id ||
+    !(request.receivedAt instanceof Timestamp) ||
+    (request.status !== "pending" && request.status !== "applied" &&
+      request.status !== "manual_review")) {
+    return {present: true, valid: false, accessEndsAtMillis: null};
+  }
+
+  if (request.kind === "cooling_off") {
+    const accessEndsAtMillis = request.accessEndsAtMillis;
+    if (!Number.isSafeInteger(accessEndsAtMillis) ||
+      Number(accessEndsAtMillis) <= 0) {
+      return {present: true, valid: false, accessEndsAtMillis: null};
+    }
+    return {
+      present: true,
+      valid: true,
+      accessEndsAtMillis: Number(accessEndsAtMillis),
+    };
+  }
+
+  if (request.kind !== undefined && request.kind !== "contractual" &&
+    request.kind !== "presale_withdrawal") {
+    return {present: true, valid: false, accessEndsAtMillis: null};
+  }
+  const outcome = request.outcome;
+  if (!outcome || typeof outcome !== "object") {
+    return {present: true, valid: false, accessEndsAtMillis: null};
+  }
+  const cancelAtUnixSeconds = (outcome as Record<string, unknown>)
+    .cancelAtUnixSeconds;
+  if (!Number.isSafeInteger(cancelAtUnixSeconds) ||
+    Number(cancelAtUnixSeconds) <= 0) {
+    return {present: true, valid: false, accessEndsAtMillis: null};
+  }
+  const accessEndsAtMillis = Number(cancelAtUnixSeconds) * 1000;
+  if (!Number.isSafeInteger(accessEndsAtMillis)) {
+    return {present: true, valid: false, accessEndsAtMillis: null};
+  }
+  return {present: true, valid: true, accessEndsAtMillis};
+}
+
+function authoritativeMembershipAccessEnd(
+  membership: MembershipDoc
+): {valid: boolean; accessEndsAtMillis: number | null} {
+  const cancelAt = membership.cancelAt;
+  if (cancelAt !== null &&
+    (!Number.isSafeInteger(cancelAt) || cancelAt <= 0)) {
+    return {valid: false, accessEndsAtMillis: null};
+  }
+  const providerCancelAtMillis = cancelAt === null ? null : cancelAt * 1000;
+  if (providerCancelAtMillis !== null &&
+    !Number.isSafeInteger(providerCancelAtMillis)) {
+    return {valid: false, accessEndsAtMillis: null};
+  }
+  const acceptedCancellation = acceptedCancellationBoundary(membership);
+  if (!acceptedCancellation.valid) {
+    return {valid: false, accessEndsAtMillis: null};
+  }
+  const candidates = [
+    providerCancelAtMillis,
+    acceptedCancellation.accessEndsAtMillis,
+  ].filter((value): value is number => value !== null);
+  return {
+    valid: true,
+    accessEndsAtMillis: candidates.length > 0 ? Math.min(...candidates) : null,
+  };
+}
+
+function membershipBookingBoundary(
+  membership: MembershipDoc
+): MembershipBookingBoundary {
+  const entitled = isMembershipStateEntitled(membership.state) &&
+    membership.grantsAlphaWodAccess === true &&
+    membership.providerContractStatus === "verified";
+  if (!entitled) {
+    return {
+      entitled: false,
+      valid: true,
+      cancelAtMillis: null,
+      graceEndsAtMillis: null,
+    };
+  }
+
+  const accessEnd = authoritativeMembershipAccessEnd(membership);
+  if (!accessEnd.valid) {
+    return {
+      entitled: true,
+      valid: false,
+      cancelAtMillis: null,
+      graceEndsAtMillis: null,
+    };
+  }
+  const cancelAtMillis = accessEnd.accessEndsAtMillis;
+
+  if (membership.state !== "past_due_grace") {
+    return {
+      entitled: true,
+      valid: true,
+      cancelAtMillis,
+      graceEndsAtMillis: null,
+    };
+  }
+
+  const graceEndsAtMillis = timestampMillis(membership.pastDueGraceEndsAt);
+  if (graceEndsAtMillis === null) {
+    return {
+      entitled: true,
+      valid: false,
+      cancelAtMillis,
+      graceEndsAtMillis: null,
+    };
+  }
+  return {
+    entitled: true,
+    valid: true,
+    cancelAtMillis,
+    graceEndsAtMillis,
+  };
+}
+
+type MembershipBookingForCleanup = {
+  classId?: unknown;
+  userId?: unknown;
+  status?: unknown;
+  bookingKind?: unknown;
+  isGuestBooking?: unknown;
+  entitlementSubscriptionId?: unknown;
+  createdAt?: unknown;
+};
+
+type MembershipBookingCleanupJobDoc = {
+  schemaVersion: 1;
+  subscriptionId: string;
+  userId: string;
+  boundaryFingerprint: string;
+  status: "pending" | "complete" | "manual_review";
+  acceptedAt: Timestamp;
+  legacyUnboundEligible: boolean;
+  cursorBookingId: string | null;
+  attemptCount: number;
+  processedCount: number;
+  cancelledCount: number;
+  leaseToken?: string;
+  leaseExpiresAt?: Timestamp;
+};
+
+const MEMBERSHIP_BOOKING_CLEANUP_COLLECTION =
+  "membershipBookingCleanupJobs";
+const MEMBERSHIP_BOOKING_CLEANUP_BATCH_SIZE = 50;
+const MEMBERSHIP_BOOKING_CLEANUP_LEASE_MS = 4 * 60 * 1000;
+
+function membershipBookingCleanupJobRef(
+  subscriptionId: string
+): DocumentReference {
+  return db().collection(MEMBERSHIP_BOOKING_CLEANUP_COLLECTION)
+    .doc(subscriptionId);
+}
+
+function membershipBookingCleanupFingerprint(
+  membership: MembershipDoc
+): string | null {
+  const boundary = membershipBookingBoundary(membership);
+  if (boundary.entitled && boundary.valid &&
+    boundary.cancelAtMillis === null &&
+    boundary.graceEndsAtMillis === null) return null;
+  return sha256(JSON.stringify({
+    entitled: boundary.entitled,
+    valid: boundary.valid,
+    cancelAtMillis: boundary.cancelAtMillis,
+    graceEndsAtMillis: boundary.graceEndsAtMillis,
+  }));
+}
+
+function writeMembershipBookingCleanupJob(
+  tx: Transaction,
+  jobRef: DocumentReference,
+  jobSnap: DocumentSnapshot,
+  subscriptionId: string,
+  userId: string,
+  boundaryFingerprint: string,
+  legacyUnboundEligible: boolean,
+  acceptedAt: Timestamp
+): void {
+  const existing = jobSnap.exists ?
+    jobSnap.data() as Partial<MembershipBookingCleanupJobDoc> : null;
+  const sameBoundary = existing?.boundaryFingerprint === boundaryFingerprint &&
+    existing.subscriptionId === subscriptionId &&
+    existing.userId === userId;
+  if (sameBoundary && existing?.status === "complete") return;
+
+  if (sameBoundary && existing?.status === "pending") {
+    tx.set(jobRef, {
+      legacyUnboundEligible:
+        existing.legacyUnboundEligible === true || legacyUnboundEligible,
+      updatedAt: serverTimestamp(),
+    }, {merge: true});
+    return;
+  }
+
+  tx.set(jobRef, {
+    schemaVersion: 1,
+    subscriptionId,
+    userId,
+    boundaryFingerprint,
+    status: "pending",
+    acceptedAt,
+    legacyUnboundEligible,
+    cursorBookingId: null,
+    attemptCount: 0,
+    processedCount: 0,
+    cancelledCount: 0,
+    leaseToken: FieldValue.delete(),
+    leaseExpiresAt: FieldValue.delete(),
+    lastError: FieldValue.delete(),
+    completedAt: FieldValue.delete(),
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }, {merge: true});
+}
+
+/** Queues bounded, resumable cleanup without delaying entitlement projection. */
+async function enqueueMembershipBookingCleanup(
+  membershipRef: DocumentReference,
+  nowMillis = Date.now()
+): Promise<DocumentReference | null> {
+  const jobRef = membershipBookingCleanupJobRef(membershipRef.id);
+  const acceptedAt = Timestamp.fromMillis(nowMillis);
+  return db().runTransaction(async (tx) => {
+    const membershipSnap = await tx.get(membershipRef);
+    if (!membershipSnap.exists) return null;
+    const membership = membershipSnap.data() as MembershipDoc;
+    const userId = membership.entitlementTargetUid;
+    const boundaryFingerprint = membershipBookingCleanupFingerprint(membership);
+    if (!userId || !boundaryFingerprint) return null;
+
+    const [ownerSnap, userSnap, jobSnap] = await Promise.all([
+      tx.get(entitlementOwnerRef(userId)),
+      tx.get(db().collection("users").doc(userId)),
+      tx.get(jobRef),
+    ]);
+    const legacyUnboundEligible = ownerSnap.exists &&
+      ownerSnap.get("state") === "active" &&
+      ownerSnap.get("subscriptionId") === membershipRef.id &&
+      userSnap.exists && userSnap.get("entitlementSource") === "stripe";
+    writeMembershipBookingCleanupJob(
+      tx,
+      jobRef,
+      jobSnap,
+      membershipRef.id,
+      userId,
+      boundaryFingerprint,
+      legacyUnboundEligible,
+      acceptedAt
+    );
+    return jobRef;
+  });
+}
+
+type MembershipBookingCleanupLease = {
+  token: string;
+  job: MembershipBookingCleanupJobDoc;
+};
+
+async function acquireMembershipBookingCleanupLease(
+  jobRef: DocumentReference,
+  nowMillis: number
+): Promise<MembershipBookingCleanupLease | null> {
+  return db().runTransaction(async (tx) => {
+    const jobSnap = await tx.get(jobRef);
+    if (!jobSnap.exists || jobSnap.get("status") !== "pending") return null;
+    const job = jobSnap.data() as MembershipBookingCleanupJobDoc;
+    if (job.schemaVersion !== 1 || job.subscriptionId !== jobRef.id ||
+      typeof job.userId !== "string" || !job.userId ||
+      typeof job.boundaryFingerprint !== "string" ||
+      !(job.acceptedAt instanceof Timestamp) ||
+      typeof job.legacyUnboundEligible !== "boolean" ||
+      (job.cursorBookingId !== null &&
+        typeof job.cursorBookingId !== "string")) {
+      tx.set(jobRef, {
+        status: "manual_review",
+        lastError: "Membership booking cleanup job evidence is malformed.",
+        manualReviewAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+      return null;
+    }
+    const leaseExpiresAtMillis = timestampMillis(job.leaseExpiresAt);
+    if (leaseExpiresAtMillis !== null && leaseExpiresAtMillis > nowMillis) {
+      return null;
+    }
+    const token = randomUUID();
+    tx.set(jobRef, {
+      attemptCount: FieldValue.increment(1),
+      leaseToken: token,
+      leaseExpiresAt: Timestamp.fromMillis(
+        nowMillis + MEMBERSHIP_BOOKING_CLEANUP_LEASE_MS
+      ),
+      lastAttemptAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }, {merge: true});
+    return {token, job};
+  });
+}
+
+async function reconcileMembershipBookingCandidate(
+  membershipRef: DocumentReference,
+  job: MembershipBookingCleanupJobDoc,
+  bookingRef: DocumentReference,
+  nowMillis: number
+): Promise<boolean> {
+  return db().runTransaction(async (tx) => {
+    const [membershipSnap, bookingSnap] = await Promise.all([
+      tx.get(membershipRef),
+      tx.get(bookingRef),
+    ]);
+    if (!bookingSnap.exists) return false;
+    const booking = bookingSnap.data() as MembershipBookingForCleanup;
+    if (booking.status !== "booked" || booking.userId !== job.userId ||
+      booking.bookingKind === "payg_guest" ||
+      booking.isGuestBooking === true) return false;
+
+    const binding = booking.entitlementSubscriptionId;
+    const hasBinding = binding !== undefined && binding !== null;
+    if (hasBinding && binding !== membershipRef.id) return false;
+    if (!hasBinding) {
+      const createdAtMillis = timestampMillis(booking.createdAt);
+      if (!job.legacyUnboundEligible || createdAtMillis === null ||
+        createdAtMillis > job.acceptedAt.toMillis()) return false;
+    }
+
+    const classId = typeof booking.classId === "string" ?
+      booking.classId : "";
+    if (!classId) return false;
+    const classRef = db().collection("classes").doc(classId);
+    const classSnap = await tx.get(classRef);
+    if (!classSnap.exists) return false;
+    const classStartMillis = timestampMillis(classSnap.get("startTime"));
+    if (classStartMillis === null || classStartMillis < nowMillis) return false;
+
+    if (membershipSnap.exists) {
+      const membership = membershipSnap.data() as MembershipDoc;
+      if (membership.entitlementTargetUid === job.userId &&
+        classStartAllowedByMembership(
+          membershipBookingBoundary(membership),
+          classStartMillis
+        )) return false;
+      if (!hasBinding && membership.entitlementTargetUid !== job.userId) {
+        return false;
+      }
+    } else if (!hasBinding) {
+      return false;
+    }
+
+    const bookedCount = Number(classSnap.get("bookedCount") ?? 0);
+    tx.update(bookingRef, {
+      status: "cancelled",
+      cancelledAt: serverTimestamp(),
+      cancelledReason: "membership_ineligible",
+    });
+    tx.update(classRef, {
+      bookedCount: FieldValue.increment(bookedCount > 0 ? -1 : 0),
+      updatedAt: serverTimestamp(),
+    });
+    return true;
+  });
+}
+
+async function processMembershipBookingCleanupJob(
+  jobRef: DocumentReference,
+  nowMillis = Date.now()
+): Promise<{processed: number; cancelled: number; completed: boolean}> {
+  const lease = await acquireMembershipBookingCleanupLease(jobRef, nowMillis);
+  if (!lease) return {processed: 0, cancelled: 0, completed: false};
+  const membershipRef = db().collection("memberships")
+    .doc(lease.job.subscriptionId);
+  try {
+    const baseQuery = db().collection("bookings")
+      .where("userId", "==", lease.job.userId)
+      .where("status", "==", "booked")
+      .orderBy(FieldPath.documentId())
+      .limit(MEMBERSHIP_BOOKING_CLEANUP_BATCH_SIZE);
+    const page = lease.job.cursorBookingId ?
+      await baseQuery.startAfter(lease.job.cursorBookingId).get() :
+      await baseQuery.get();
+    let cancelled = 0;
+    for (let offset = 0; offset < page.docs.length; offset += 5) {
+      const results = await Promise.all(page.docs
+        .slice(offset, offset + 5)
+        .map((booking) => reconcileMembershipBookingCandidate(
+          membershipRef,
+          lease.job,
+          booking.ref,
+          nowMillis
+        )));
+      cancelled += results.filter(Boolean).length;
+    }
+    const completed = page.size < MEMBERSHIP_BOOKING_CLEANUP_BATCH_SIZE;
+    const cursorBookingId = page.docs.length > 0 ?
+      page.docs[page.docs.length - 1].id : lease.job.cursorBookingId;
+    await db().runTransaction(async (tx) => {
+      const current = await tx.get(jobRef);
+      if (!current.exists || current.get("status") !== "pending" ||
+        current.get("leaseToken") !== lease.token ||
+        current.get("boundaryFingerprint") !==
+          lease.job.boundaryFingerprint) return;
+      tx.set(jobRef, {
+        status: completed ? "complete" : "pending",
+        cursorBookingId,
+        processedCount: FieldValue.increment(page.size),
+        cancelledCount: FieldValue.increment(cancelled),
+        leaseToken: FieldValue.delete(),
+        leaseExpiresAt: FieldValue.delete(),
+        lastError: FieldValue.delete(),
+        ...(completed ? {completedAt: serverTimestamp()} : {}),
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+    });
+    return {processed: page.size, cancelled, completed};
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await db().runTransaction(async (tx) => {
+      const current = await tx.get(jobRef);
+      if (!current.exists || current.get("leaseToken") !== lease.token ||
+        current.get("boundaryFingerprint") !==
+          lease.job.boundaryFingerprint) return;
+      tx.set(jobRef, {
+        leaseToken: FieldValue.delete(),
+        leaseExpiresAt: FieldValue.delete(),
+        lastError: message.slice(0, 1000),
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+    }).catch((recordError) =>
+      console.error("Could not release membership booking cleanup lease", jobRef.id, recordError)
+    );
+    throw error;
+  }
+}
+
+/**
+ * Enqueues and processes one bounded cleanup page. Exported for focused
+ * emulator verification; production convergence uses the resumable worker.
+ */
+export async function reconcileMembershipFutureBookings(
+  membershipRef: DocumentReference,
+  nowMillis = Date.now()
+): Promise<void> {
+  const jobRef = await enqueueMembershipBookingCleanup(
+    membershipRef,
+    nowMillis
+  );
+  if (jobRef) await processMembershipBookingCleanupJob(jobRef, nowMillis);
+}
+
+async function reconcileMembershipBookingCleanupJobsOnce(
+  limit = 20
+): Promise<{processed: number; failed: number; skipped: number}> {
+  const jobs = await db().collection(MEMBERSHIP_BOOKING_CLEANUP_COLLECTION)
+    .where("status", "==", "pending")
+    .limit(limit)
+    .get();
+  const result = {processed: 0, failed: 0, skipped: 0};
+  for (const job of jobs.docs) {
+    try {
+      const page = await processMembershipBookingCleanupJob(job.ref);
+      if (page.processed === 0 && !page.completed) result.skipped += 1;
+      else result.processed += 1;
+    } catch (error) {
+      console.error("Membership booking cleanup job failed", job.id, error);
+      result.failed += 1;
+    }
+  }
+  return result;
+}
+
+/** Resumes bounded cleanup pages independently of Stripe webhook latency. */
+export function buildReconcileMembershipBookings() {
+  return onSchedule({
+    region: REGION,
+    schedule: "every 5 minutes",
+    timeZone: "UTC",
+    timeoutSeconds: 540,
+  }, async () => {
+    await reconcileMembershipBookingCleanupJobsOnce();
+  });
+}
+
+function classStartAllowedByMembership(
+  boundary: MembershipBookingBoundary,
+  classStartMillis: number
+): boolean {
+  if (!boundary.valid || !boundary.entitled) return false;
+  // Stripe's cancel_at is the first instant without access.
+  if (boundary.cancelAtMillis !== null &&
+    classStartMillis >= boundary.cancelAtMillis) return false;
+  // The stored grace deadline is the inclusive final millisecond of grace.
+  if (boundary.graceEndsAtMillis !== null &&
+    classStartMillis > boundary.graceEndsAtMillis) return false;
+  return true;
+}
+
+function membershipBookingIneligibleError(): HttpsError {
+  return new HttpsError(
+    "permission-denied",
+    "This Stripe membership does not cover the selected class date.",
+    {reason: MEMBERSHIP_BOOKING_INELIGIBLE_REASON}
+  );
+}
+
+/**
+ * Resolves a Stripe-backed profile through its deterministic owner generation
+ * and authoritative membership inside the caller's transaction. Manual,
+ * legacy and staff entitlements do not depend on a Stripe membership row.
+ */
+export async function assertStripeMembershipBookingEligibility(
+  tx: Transaction,
+  userId: string,
+  user: {entitlementSource?: unknown},
+  classStart: unknown,
+  expectedSubscriptionId?: unknown
+): Promise<string | null> {
+  const hasBookingBinding = expectedSubscriptionId !== undefined &&
+    expectedSubscriptionId !== null;
+  const bookingSubscriptionId = typeof expectedSubscriptionId === "string" &&
+      expectedSubscriptionId.length > 0 && expectedSubscriptionId.length <= 255 ?
+    expectedSubscriptionId : null;
+  if (hasBookingBinding && !bookingSubscriptionId) {
+    throw membershipBookingIneligibleError();
+  }
+  if (user.entitlementSource !== "stripe" && !bookingSubscriptionId) return null;
+
+  const owner = await tx.get(entitlementOwnerRef(userId));
+  const subscriptionId = owner.get("subscriptionId");
+  if (!owner.exists || owner.get("state") !== "active" ||
+    typeof subscriptionId !== "string" || !subscriptionId ||
+    (bookingSubscriptionId !== null && subscriptionId !== bookingSubscriptionId)) {
+    throw membershipBookingIneligibleError();
+  }
+
+  const membership = await tx.get(
+    db().collection("memberships").doc(subscriptionId)
+  );
+  if (!membership.exists) throw membershipBookingIneligibleError();
+  const authority = membership.data() as MembershipDoc;
+  const classStartMillis = timestampMillis(classStart);
+  if (authority.subscriptionId !== subscriptionId ||
+    authority.entitlementTargetUid !== userId ||
+    classStartMillis === null ||
+    !classStartAllowedByMembership(
+      membershipBookingBoundary(authority),
+      classStartMillis
+    )) {
+    throw membershipBookingIneligibleError();
+  }
+  return subscriptionId;
+}
 
 /**
  * Reads the deterministic entitlement generation. An active generation stays
@@ -2541,6 +3224,18 @@ function checkoutSessionCommonBindingMismatch(
   if (session.mode !== "subscription") return "session_mode";
   if (session.metadata?.intentId !== intentRef.id) return "intent_metadata";
   if (session.metadata?.planKey !== intent.planKey) return "plan_metadata";
+  if (session.metadata?.appAccessTier !== intent.commercialTerms.appAccessTier) {
+    return "app_access_tier_metadata";
+  }
+  const expectedSlots = intent.planKey === "adult_conditioning" ?
+    canonicalConditioningSlots(intent.selectedConditioningSlots) : [];
+  if (intent.planKey === "adult_conditioning" &&
+    (!expectedSlots || session.metadata?.conditioningSlots !==
+      expectedSlots.join(","))) return "conditioning_slots_metadata";
+  if (intent.planKey !== "adult_conditioning" &&
+    session.metadata?.conditioningSlots != null) {
+    return "unexpected_conditioning_slots_metadata";
+  }
   if (typeof session.expires_at !== "number" ||
     session.expires_at !== intent.checkoutExpiresAt) return "session_expiry";
   return null;
@@ -2775,6 +3470,27 @@ async function applyMembershipEntitlement(
   membershipRef: DocumentReference,
   converge: (userId: string) => Promise<void>
 ): Promise<void> {
+  // Snapshot the previous owner/profile generation for legacy unbound rows,
+  // but never make an unbounded booking scan a prerequisite for revocation.
+  // New booking gates already read this membership authority synchronously;
+  // the scheduled worker restores class capacity in bounded pages.
+  await enqueueMembershipBookingCleanup(membershipRef).catch(async (error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("Membership booking cleanup could not be queued", {
+      subscriptionId: membershipRef.id,
+      error: message,
+    });
+    await writeAudit({
+      type: "membership_booking_cleanup_queue_failed",
+      severity: "error",
+      subscriptionId: membershipRef.id,
+      error: message.slice(0, 1000),
+    }).catch((auditError) =>
+      console.error("Could not write booking-cleanup queue audit", membershipRef.id, auditError)
+    );
+  });
+
+  const cleanupAcceptedAt = Timestamp.now();
   const outcome = await db().runTransaction(async (tx) => {
     const membershipSnap = await tx.get(membershipRef);
     if (!membershipSnap.exists) return null;
@@ -2782,6 +3498,10 @@ async function applyMembershipEntitlement(
     const membership = membershipSnap.data() as MembershipDoc;
     const uid = membership.entitlementTargetUid;
     if (!uid) return null;
+    const commercialEntitlementPolicy = validateCommercialEntitlementPolicy(
+      membership.commercialTerms,
+      membership.planKey
+    );
     // A blocking presale owns the duplicate lock but normally must not change
     // entitlement before first payment. The one exception is an already-
     // approved historical member whose profile predates the entitlement
@@ -2794,7 +3514,7 @@ async function applyMembershipEntitlement(
       membership.firstPaymentReceivedAt === null) {
       if (isMembershipStateBlockingDuplicate(membership.state)) {
         if (membership.state !== "scheduled" ||
-          !membership.grantsAlphaWodAccess ||
+          commercialEntitlementPolicy?.grantsAlphaWodAccess !== true ||
           membership.providerContractStatus !== "verified" ||
           membership.participant?.isPayer !== true) return null;
 
@@ -2832,6 +3552,9 @@ async function applyMembershipEntitlement(
         tx.set(userRef, {
           entitlementStatus: "active",
           entitlementSource: "legacy",
+          appAccessTier: "full",
+          entitlementClassSlots: FieldValue.delete(),
+          entitlementPlanKey: FieldValue.delete(),
           alphaWodAccess: restored.alphaWodAccess,
           accessSchemaVersion: ACCESS_SCHEMA_VERSION,
           entitlementReason: "presale_existing_member_grandfathered",
@@ -2860,17 +3583,40 @@ async function applyMembershipEntitlement(
       return null;
     }
 
+    const frozenDecision = resolveEntitlementForCommercialTerms(
+      membership.commercialTerms,
+      membership.state,
+      membership.planKey
+    );
     const decision = membership.providerContractStatus === "manual_review" &&
-      isMembershipStateBlockingDuplicate(membership.state) ? {
+      isMembershipStateBlockingDuplicate(membership.state) && frozenDecision ? {
+        ...frozenDecision,
         entitlementStatus: "restricted" as const,
         entitlementSource: "stripe" as const,
         reason: "Stripe subscription contract requires manual review.",
-      } : resolveEntitlementForMembership(membership.planKey, membership.state);
+      } : frozenDecision;
     if (!decision) return null;
 
     const userRef = db().collection("users").doc(uid);
     const userSnap = await tx.get(userRef);
     const owner = await readEntitlementOwner(tx, uid, membershipRef.id);
+    const cleanupFingerprint = membershipBookingCleanupFingerprint(membership);
+    if (cleanupFingerprint) {
+      const cleanupJobRef = membershipBookingCleanupJobRef(membershipRef.id);
+      const cleanupJobSnap = await tx.get(cleanupJobRef);
+      writeMembershipBookingCleanupJob(
+        tx,
+        cleanupJobRef,
+        cleanupJobSnap,
+        membershipRef.id,
+        uid,
+        cleanupFingerprint,
+        owner.ownerSubscriptionId === membershipRef.id &&
+          owner.ownerState === "active" && userSnap.exists &&
+          userSnap.get("entitlementSource") === "stripe",
+        cleanupAcceptedAt
+      );
+    }
 
     // Once a replacement membership owns this account, an older cancelled or
     // revoked membership is no longer authoritative for its entitlement. A
@@ -2925,6 +3671,10 @@ async function applyMembershipEntitlement(
     const current = resolveUserAuthorisation(user as any);
     let nextStatus: EntitlementStatus = decision.entitlementStatus;
     let nextSource: EntitlementSource = decision.entitlementSource;
+    let nextTier: AppAccessTier = decision.appAccessTier;
+    let nextClassSlots: ConditioningSlotKey[] = decision.entitlementClassSlots;
+    let nextPlanKey: string | null = nextSource === "stripe" ?
+      membership.planKey : null;
 
     // Remember what the member held before a paid membership first moved them,
     // so cancelling a purchase restores a grandfathered grant instead of
@@ -2932,6 +3682,10 @@ async function applyMembershipEntitlement(
     const preMembership = membership.preMembershipEntitlement ?? {
       entitlementStatus: current.entitlementStatus,
       entitlementSource: current.entitlementSource,
+      appAccessTier: current.entitlementPolicyAppAccessTier,
+      entitlementPlanKey: typeof user.entitlementPlanKey === "string" ?
+        user.entitlementPlanKey : null,
+      entitlementClassSlots: current.entitlementPolicyClassSlots,
     };
 
     if (nextStatus === "none" &&
@@ -2940,6 +3694,11 @@ async function applyMembershipEntitlement(
         preMembership.entitlementSource === "manual")) {
       nextStatus = preMembership.entitlementStatus;
       nextSource = preMembership.entitlementSource;
+      nextTier = preMembership.appAccessTier ?? "full";
+      nextPlanKey = preMembership.entitlementPlanKey ?? null;
+      nextClassSlots = canonicalConditioningSlots(
+        preMembership.entitlementClassSlots
+      ) ?? [];
     }
 
     if (!isEntitlementCompatibleWithRole(user.role, nextStatus, nextSource)) {
@@ -2957,6 +3716,9 @@ async function applyMembershipEntitlement(
       approvalStatus,
       entitlementStatus: nextStatus,
       entitlementSource: nextSource,
+      appAccessTier: nextTier,
+      entitlementPlanKey: nextPlanKey,
+      entitlementClassSlots: nextClassSlots,
     };
     const access = resolveUserAuthorisation(next);
 
@@ -2978,9 +3740,13 @@ async function applyMembershipEntitlement(
 
     tx.set(userRef, {
       ...next,
+      entitlementPlanKey: nextPlanKey ?? FieldValue.delete(),
+      entitlementClassSlots:
+        access.entitlementPolicyAppAccessTier === "limited" ?
+          access.entitlementPolicyClassSlots : FieldValue.delete(),
+      appAccessTier: access.entitlementPolicyAppAccessTier,
       alphaWodAccess: access.alphaWodAccess,
       accessSchemaVersion: ACCESS_SCHEMA_VERSION,
-      entitlementPlanKey: membership.planKey,
       entitlementReason: decision.reason,
       entitlementUpdatedAt: serverTimestamp(),
       entitlementUpdatedBy: "stripe_membership",
@@ -3269,8 +4035,15 @@ async function convergeMembershipFromStripe(
           stripePriceId: stored.stripePriceId,
           stripeCustomerId: stored.stripeCustomerId,
           billingCycleAnchor: stored.billingCycleAnchor,
+          ...(stored.schemaVersion >= MEMBERSHIP_SCHEMA_VERSION ? {
+            appAccessTier: stored.commercialTerms?.appAccessTier ??
+              getPlan(stored.planKey).appAccessTier,
+          } : {}),
           ...(Number.isSafeInteger(stored.participantCount) ? {
             participantCount: stored.participantCount,
+          } : {}),
+          ...(stored.planKey === "adult_conditioning" ? {
+            selectedConditioningSlots: stored.selectedConditioningSlots,
           } : {}),
           ...(stored.schemaVersion >= 2 ? {
             discountCouponId: stored.discount?.couponId ?? null,
@@ -4272,7 +5045,12 @@ function buildCreateMembershipCheckoutHandler(
           storedStripeCustomerId ? storedStripeCustomerId : null;
     }
     const planKey = requirePlanKey(request.data?.planKey);
+    requirePlanPurchaseFlowOpen(planKey);
     const plan = getPlan(planKey);
+    const selectedConditioningSlots = requireSelectedConditioningSlots(
+      planKey,
+      request.data?.selectedConditioningSlots
+    );
     const participantName = requirePersonName(
       request.data?.participantFullName, "participantFullName"
     );
@@ -4397,7 +5175,10 @@ function buildCreateMembershipCheckoutHandler(
       );
     }
 
-    const commercialTerms = createCommercialPlanSnapshot(planKey);
+    const commercialTerms = createCommercialPlanSnapshot(
+      planKey,
+      selectedConditioningSlots
+    );
     const documents = resolveCheckoutDocuments(planKey);
     const participantCount = 1 + additionalParticipants.length;
     const statements = resolveCheckoutAcceptanceStatements(planKey, participantCount);
@@ -4591,6 +5372,7 @@ function buildCreateMembershipCheckoutHandler(
         payerEmail,
         planKey,
         commercialTerms,
+        selectedConditioningSlots,
         stripeMode: assertBillingEnvironment().stripeMode,
         stripePriceId: validatedConfig.priceId,
         participant,
@@ -4658,6 +5440,9 @@ function buildCreateMembershipCheckoutHandler(
             firstPaymentAt: candidate.intent.firstPaymentAt ??
               candidate.intent.billingCycleAnchor,
             initialChargePence: candidate.intent.initialChargePence ?? null,
+            appAccessTier: candidate.intent.commercialTerms.appAccessTier,
+            selectedConditioningSlots:
+              candidate.intent.selectedConditioningSlots ?? [],
             promotionCodesEnabled: isPresaleIntent(candidate.intent) &&
               candidate.intent.planKey === EXISTING_MEMBER_OFFER.planKey,
           };
@@ -4724,6 +5509,8 @@ function buildCreateMembershipCheckoutHandler(
         serviceStartsAt: intent.serviceStartsAt ?? null,
         firstPaymentAt: intent.firstPaymentAt ?? intent.billingCycleAnchor,
         initialChargePence: intent.initialChargePence ?? null,
+        appAccessTier: intent.commercialTerms.appAccessTier,
+        selectedConditioningSlots: intent.selectedConditioningSlots ?? [],
         promotionCodesEnabled: isPresaleIntent(intent) &&
           intent.planKey === EXISTING_MEMBER_OFFER.planKey,
       };
@@ -4805,6 +5592,10 @@ function buildCreateMembershipCheckoutHandler(
             planKey,
             intentId: intentRef.id,
             participantCount: String(participantCountFor(intent)),
+            appAccessTier: intent.commercialTerms.appAccessTier,
+            ...(intent.planKey === "adult_conditioning" ? {
+              conditioningSlots: intent.selectedConditioningSlots.join(","),
+            } : {}),
           },
         },
         metadata: {
@@ -4812,6 +5603,10 @@ function buildCreateMembershipCheckoutHandler(
           planKey,
           intentId: intentRef.id,
           participantCount: String(participantCountFor(intent)),
+          appAccessTier: intent.commercialTerms.appAccessTier,
+          ...(intent.planKey === "adult_conditioning" ? {
+            conditioningSlots: intent.selectedConditioningSlots.join(","),
+          } : {}),
         },
       }, {idempotencyKey: `checkout:${checkoutAttemptHash}`});
       assertStripeObjectMode("Checkout Session", session.id, session.livemode);
@@ -4941,6 +5736,8 @@ function buildCreateMembershipCheckoutHandler(
       serviceStartsAt: intent.serviceStartsAt ?? null,
       firstPaymentAt: intent.firstPaymentAt ?? intent.billingCycleAnchor,
       initialChargePence: intent.initialChargePence ?? null,
+      appAccessTier: intent.commercialTerms.appAccessTier,
+      selectedConditioningSlots: intent.selectedConditioningSlots ?? [],
       promotionCodesEnabled: isPresaleIntent(intent) &&
         intent.planKey === EXISTING_MEMBER_OFFER.planKey,
     };
@@ -5086,6 +5883,10 @@ export const getMyMemberships = onCall({region: REGION}, async (request) => {
       planName: membership.planName,
       state: membership.state,
       grantsAlphaWodAccess: membership.grantsAlphaWodAccess,
+      appAccessTier: membership.commercialTerms?.appAccessTier ??
+        getPlan(membership.planKey).appAccessTier,
+      selectedConditioningSlots: membership.selectedConditioningSlots ??
+        membership.commercialTerms?.selectedConditioningSlots ?? [],
       participantFullName: membership.participant?.fullName ?? "",
       participantFullNames: participants.map(({fullName}) => fullName),
       participantCount: participantCountFor(membership),
@@ -5164,6 +5965,26 @@ async function settlePreparedCancellation(
   converge: (userId: string) => Promise<void>
 ): Promise<{outcome: CancellationOutcome; newlyFinalized: boolean}> {
   const subscriptionId = membershipRef.id;
+  // The accepted receipt is already authoritative for class access. Queue
+  // bounded capacity cleanup, but never delay the member's provider
+  // cancellation if this secondary reconciliation needs a later retry.
+  await enqueueMembershipBookingCleanup(membershipRef).catch(async (error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("Membership booking cleanup queue needs convergence retry", {
+      subscriptionId,
+      requestId: prepared.requestId,
+      error: message,
+    });
+    await writeAudit({
+      type: "membership_booking_cleanup_retry",
+      severity: "error",
+      subscriptionId,
+      requestId: prepared.requestId,
+      error: message.slice(0, 1000),
+    }).catch((auditError) =>
+      console.error("Could not write booking-cleanup audit", subscriptionId, auditError)
+    );
+  });
   const before = await membershipRef.get();
   if (!before.exists) {
     throw new Error(`Membership ${subscriptionId} disappeared during cancellation.`);
@@ -6452,6 +7273,16 @@ async function fulfilCheckoutSession(
   if (session.metadata?.planKey !== intent.planKey) {
     throw new Error(`Checkout Session ${session.id} has the wrong membership plan.`);
   }
+  if (session.metadata?.appAccessTier !== intent.commercialTerms.appAccessTier) {
+    throw new Error(`Checkout Session ${session.id} has the wrong app access tier.`);
+  }
+  const expectedSessionSlots = intent.planKey === "adult_conditioning" ?
+    canonicalConditioningSlots(intent.selectedConditioningSlots) : [];
+  if (intent.planKey === "adult_conditioning" &&
+    (!expectedSessionSlots || session.metadata?.conditioningSlots !==
+      expectedSessionSlots.join(","))) {
+    throw new Error(`Checkout Session ${session.id} has different conditioning slots.`);
+  }
 
   const presale = isPresaleIntent(intent);
   // Some dynamic payment methods complete standard Checkout before funds
@@ -6489,7 +7320,7 @@ async function fulfilCheckoutSession(
   }
 
   const commercialTerms = intent.commercialTerms ??
-    createCommercialPlanSnapshot(intent.planKey);
+    createCommercialPlanSnapshot(intent.planKey, intent.selectedConditioningSlots);
   const subscription = await stripe().subscriptions.retrieve(subscriptionId, {
     expand: ["discounts"],
   });
@@ -6505,9 +7336,13 @@ async function fulfilCheckoutSession(
     stripePriceId: intent.stripePriceId,
     stripeCustomerId: sessionCustomerId,
     billingCycleAnchor: intent.billingCycleAnchor,
+    appAccessTier: commercialTerms.appAccessTier,
     intentId: intentRef.id,
     ...(Number.isSafeInteger(intent.participantCount) ? {
       participantCount: intent.participantCount,
+    } : {}),
+    ...(intent.planKey === "adult_conditioning" ? {
+      selectedConditioningSlots: intent.selectedConditioningSlots,
     } : {}),
   });
   if (contractMismatch) throw new Error(contractMismatch);
@@ -6558,6 +7393,8 @@ async function fulfilCheckoutSession(
     planKey: intent.planKey,
     stripePriceId: intent.stripePriceId,
     commercialTerms,
+    selectedConditioningSlots: intent.selectedConditioningSlots ??
+      commercialTerms.selectedConditioningSlots ?? [],
     planName: commercialTerms.planName,
     grantsAlphaWodAccess: commercialTerms.grantsAlphaWodAccess,
     participant: intent.participant,
@@ -6703,8 +7540,10 @@ type SubscriptionContractExpectation = {
   stripePriceId: string;
   stripeCustomerId: string;
   billingCycleAnchor: number;
+  appAccessTier?: AppAccessTier;
   intentId?: string;
   participantCount?: number;
+  selectedConditioningSlots?: ConditioningSlotKey[];
   /** Undefined skips legacy validation; null requires no provider discount. */
   discountCouponId?: string | null;
 };
@@ -6726,6 +7565,17 @@ function stripeSubscriptionContractMismatch(
   }
   if (subscription.metadata?.planKey !== expected.planKey) {
     return `Subscription ${subscription.id} has the wrong plan metadata.`;
+  }
+  if (expected.appAccessTier !== undefined &&
+    subscription.metadata?.appAccessTier !== expected.appAccessTier) {
+    return `Subscription ${subscription.id} has the wrong app access tier.`;
+  }
+  if (expected.selectedConditioningSlots) {
+    const expectedSlots = canonicalConditioningSlots(expected.selectedConditioningSlots);
+    if (!expectedSlots ||
+      subscription.metadata?.conditioningSlots !== expectedSlots.join(",")) {
+      return `Subscription ${subscription.id} has different conditioning slots.`;
+    }
   }
   if (expected.intentId && subscription.metadata?.intentId !== expected.intentId) {
     return `Subscription ${subscription.id} has the wrong checkout intent metadata.`;
@@ -6976,10 +7826,15 @@ async function markStripeEventFailed(
 async function processStripeEventUnderLease(
   event: Stripe.Event,
   leaseToken: string,
-  converge: (userId: string) => Promise<void>
+  converge: (userId: string) => Promise<void>,
+  dispatchExternalEvent?: (event: Stripe.Event) => Promise<boolean>
 ): Promise<void> {
   try {
-    await handleStripeEvent(event, converge);
+    const handledExternally = dispatchExternalEvent ?
+      await dispatchExternalEvent(event) : false;
+    if (!handledExternally) {
+      await handleStripeEvent(event, converge);
+    }
     const marked = await markStripeEventProcessed(event.id, leaseToken);
     if (!marked) {
       throw new Error("The Stripe event processing lease changed before completion.");
@@ -7003,9 +7858,13 @@ async function processStripeEventUnderLease(
  * every event is recorded in a recoverable lease ledger so redelivery cannot
  * apply completed work twice while a crashed handler can still be retried.
  */
-export function buildStripeWebhook(converge: (userId: string) => Promise<void>) {
+export function buildStripeWebhook(
+  converge: (userId: string) => Promise<void>,
+  dispatchExternalEvent?: (event: Stripe.Event) => Promise<boolean>,
+  webhookSecrets = MEMBERSHIP_WEBHOOK_SECRETS
+) {
   return onRequest(
-    {region: REGION, secrets: MEMBERSHIP_WEBHOOK_SECRETS, cors: false},
+    {region: REGION, secrets: webhookSecrets, cors: false},
     async (req, res) => {
       if (req.method !== "POST") {
         res.status(405).send("Method Not Allowed");
@@ -7067,7 +7926,12 @@ export function buildStripeWebhook(converge: (userId: string) => Promise<void>) 
       }
 
       try {
-        await processStripeEventUnderLease(event, lease.leaseToken, converge);
+        await processStripeEventUnderLease(
+          event,
+          lease.leaseToken,
+          converge,
+          dispatchExternalEvent
+        );
         res.status(200).send("ok");
       } catch (error) {
         console.error("Stripe webhook handling failed", event.id, event.type, error);
@@ -7081,7 +7945,8 @@ export function buildStripeWebhook(converge: (userId: string) => Promise<void>) 
 async function recoverDueStripeEventsOnce(
   converge: (userId: string) => Promise<void>,
   nowMillis = Date.now(),
-  limit = 50
+  limit = 50,
+  dispatchExternalEvent?: (event: Stripe.Event) => Promise<boolean>
 ): Promise<{processed: number; failed: number; skipped: number}> {
   assertBillingEnvironment();
   const due = await db().collection("stripeEvents")
@@ -7108,7 +7973,12 @@ async function recoverDueStripeEventsOnce(
     try {
       const event = await stripe().events.retrieve(ledger.id);
       assertStripeObjectMode("Event", event.id, event.livemode);
-      await processStripeEventUnderLease(event, lease.leaseToken, converge);
+      await processStripeEventUnderLease(
+        event,
+        lease.leaseToken,
+        converge,
+        dispatchExternalEvent
+      );
       result.processed += 1;
     } catch (error) {
       // Retrieval and handler failures are already recorded by the shared
@@ -7132,16 +8002,23 @@ async function recoverDueStripeEventsOnce(
 }
 
 export function buildRecoverStripeEvents(
-  converge: (userId: string) => Promise<void>
+  converge: (userId: string) => Promise<void>,
+  dispatchExternalEvent?: (event: Stripe.Event) => Promise<boolean>,
+  workerSecrets = MEMBERSHIP_STRIPE_WORKER_SECRETS
 ) {
   return onSchedule({
     region: REGION,
     schedule: "every 5 minutes",
     timeZone: "UTC",
-    secrets: MEMBERSHIP_STRIPE_WORKER_SECRETS,
+    secrets: workerSecrets,
     timeoutSeconds: 540,
   }, async () => {
-    const result = await recoverDueStripeEventsOnce(converge);
+    const result = await recoverDueStripeEventsOnce(
+      converge,
+      Date.now(),
+      50,
+      dispatchExternalEvent
+    );
     console.log("Stripe event recovery result", result);
   });
 }
@@ -7323,6 +8200,7 @@ type AdminCheckoutIssue = {
   intentId: string;
   planKey: PlanKey;
   planName: string;
+  selectedConditioningSlots: ConditioningSlotKey[];
   participantFullNames: string[];
   participantCount: number;
   payerUid: string | null;
@@ -7495,6 +8373,8 @@ export function buildListMemberships(requireAdmin: (request: any) => Promise<voi
         intentId: doc.id,
         planKey: intent.planKey,
         planName: intent.commercialTerms?.planName ?? getPlan(intent.planKey).name,
+        selectedConditioningSlots: intent.selectedConditioningSlots ??
+          intent.commercialTerms?.selectedConditioningSlots ?? [],
         participantFullNames: participants.map(({fullName}) => fullName),
         participantCount: participantCountFor(intent),
         payerUid: intent.payerUid ?? null,
@@ -7539,6 +8419,10 @@ export function buildListMemberships(requireAdmin: (request: any) => Promise<voi
         state: membership.state,
         stripeStatus: membership.stripeStatus,
         grantsAlphaWodAccess: membership.grantsAlphaWodAccess,
+        appAccessTier: membership.commercialTerms?.appAccessTier ??
+          getPlan(membership.planKey).appAccessTier,
+        selectedConditioningSlots: membership.selectedConditioningSlots ??
+          membership.commercialTerms?.selectedConditioningSlots ?? [],
         entitlementTargetUid: membership.entitlementTargetUid,
         participantFullName: membership.participant?.fullName ?? "",
         participantFullNames: participants.map(({fullName}) => fullName),
@@ -8471,6 +9355,7 @@ export const __testing = {
   assertBillingEnvironment,
   assertStripeObjectMode,
   requirePurchaseFlowOpen,
+  requirePlanPurchaseFlowOpen,
   assertCheckoutDocumentModel,
   requireExactCheckoutAcceptanceIds,
   participantKeyFor,
@@ -8566,6 +9451,21 @@ const WELCOME_EMAIL_VARIANTS: Record<PlanKey, WelcomeEmailVariant> = {
       buttonLabel: "Open the Zero Alpha app",
     },
   },
+  adult_conditioning: {
+    eyebrow: "ADULT CONDITIONING",
+    headline: "Your two weekly sessions are set.",
+    summary: "Access to the two recurring conditioning sessions selected at checkout, with limited Zero Alpha App access.",
+    inclusions: [
+      "Booking access for your two fixed weekly conditioning slots",
+      "Class schedule, bookings and profile access in the Zero Alpha App",
+      "A rolling monthly membership with no minimum term",
+    ],
+    accessNote: "Your linked account can book only the two recurring conditioning slots frozen with this membership. WOD, training-log and leaderboard features are not included.",
+    appCta: {
+      title: "Manage your selected sessions in the Zero Alpha app",
+      buttonLabel: "Open the Zero Alpha app",
+    },
+  },
   adult_ladies: {
     eyebrow: "LADIES ONLY",
     headline: "Welcome to Ladies Only.",
@@ -8613,7 +9513,10 @@ const WELCOME_EMAIL_VARIANTS: Record<PlanKey, WelcomeEmailVariant> = {
 function buildConfirmationHtml(details: ConfirmationDetails): string {
   const {membership, initialChargePence, claimUrl} = details;
   const commercialTerms = membership.commercialTerms ??
-    createCommercialPlanSnapshot(membership.planKey);
+    createCommercialPlanSnapshot(
+      membership.planKey,
+      membership.selectedConditioningSlots
+    );
   const isYouthPlan = commercialTerms.audience === "youth";
   const participants = participantsFor(membership);
   const participantCount = participantCountFor(membership);
@@ -8801,7 +9704,10 @@ function buildConfirmationHtml(details: ConfirmationDetails): string {
 
 function buildWelcomeHtml(membership: MembershipDoc): string {
   const commercialTerms = membership.commercialTerms ??
-    createCommercialPlanSnapshot(membership.planKey);
+    createCommercialPlanSnapshot(
+      membership.planKey,
+      membership.selectedConditioningSlots
+    );
   const variant = WELCOME_EMAIL_VARIANTS[membership.planKey];
   const participants = participantsFor(membership);
   const participantNames = participants.map(({fullName}) => fullName).join(", ");
@@ -9073,7 +9979,10 @@ function buildWelcomePayload(membership: MembershipDoc): ConfirmationEmailPayloa
   if (!membership.payerEmail) return null;
   const fromEmail = membershipFromEmail.value().trim() || COMPANY.confirmationSender;
   const commercialTerms = membership.commercialTerms ??
-    createCommercialPlanSnapshot(membership.planKey);
+    createCommercialPlanSnapshot(
+      membership.planKey,
+      membership.selectedConditioningSlots
+    );
   return {
     from: `${COMPANY.tradingName} <${fromEmail}>`,
     to: [membership.payerEmail],

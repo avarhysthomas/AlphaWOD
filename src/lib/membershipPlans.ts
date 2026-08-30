@@ -11,6 +11,9 @@
  * returned by a callable. The browser never calculates a chargeable amount.
  */
 
+import type { AppAccessTier, ConditioningSlotKey } from "../context/authUser";
+export type { AppAccessTier, ConditioningSlotKey } from "../context/authUser";
+
 export const BILLING_TIMEZONE = "Europe/London";
 export const BILLING_CURRENCY = "gbp";
 
@@ -46,7 +49,7 @@ export const SUPPORTED_YOUTH_FAMILY_DISCOUNT_PERCENTAGES = [
 ] as const;
 
 /** Catalogue schema version frozen into every checkout commercial snapshot. */
-export const MEMBERSHIP_SCHEMA_VERSION = 5;
+export const MEMBERSHIP_SCHEMA_VERSION = 6;
 
 export const COMPANY = {
   legalName: "ZERO ALPHA FITNESS LTD",
@@ -61,6 +64,7 @@ export const COMPANY = {
 
 export const PLAN_KEYS = [
   "adult_unlimited",
+  "adult_conditioning",
   "adult_ladies",
   "adult_gym",
   "youth_youngstars",
@@ -79,6 +83,7 @@ export type MembershipPlan = {
   minAge: number;
   maxAge: number | null;
   grantsAlphaWodAccess: boolean;
+  appAccessTier: AppAccessTier;
   stripePriceEnvKey: string;
   cardGroup: "adult" | "youth";
   summary: string;
@@ -94,9 +99,24 @@ export const MEMBERSHIP_PLANS: Record<PlanKey, MembershipPlan> = {
     minAge: 18,
     maxAge: null,
     grantsAlphaWodAccess: true,
+    appAccessTier: "full",
     stripePriceEnvKey: "STRIPE_PRICE_ADULT_UNLIMITED",
     cardGroup: "adult",
     summary: "Full access to sessions and the gym floor. The only membership that automatically includes eligible Zero Alpha App access.",
+  },
+  adult_conditioning: {
+    key: "adult_conditioning",
+    audience: "adult",
+    name: "Adult Conditioning Only Membership",
+    amountPence: 3000,
+    currency: BILLING_CURRENCY,
+    minAge: 18,
+    maxAge: null,
+    grantsAlphaWodAccess: true,
+    appAccessTier: "limited",
+    stripePriceEnvKey: "STRIPE_PRICE_ADULT_CONDITIONING",
+    cardGroup: "adult",
+    summary: "Access to exactly two selected recurring conditioning sessions each week, with limited Zero Alpha App access.",
   },
   adult_ladies: {
     key: "adult_ladies",
@@ -107,6 +127,7 @@ export const MEMBERSHIP_PLANS: Record<PlanKey, MembershipPlan> = {
     minAge: 18,
     maxAge: null,
     grantsAlphaWodAccess: false,
+    appAccessTier: "none",
     stripePriceEnvKey: "STRIPE_PRICE_ADULT_LADIES",
     cardGroup: "adult",
     summary: "Ladies only sessions and gym access. Does not include Zero Alpha App access.",
@@ -120,6 +141,7 @@ export const MEMBERSHIP_PLANS: Record<PlanKey, MembershipPlan> = {
     minAge: 18,
     maxAge: null,
     grantsAlphaWodAccess: false,
+    appAccessTier: "none",
     stripePriceEnvKey: "STRIPE_PRICE_ADULT_GYM",
     cardGroup: "adult",
     summary: "Gym floor access only. Does not include coached sessions or Zero Alpha App access.",
@@ -133,6 +155,7 @@ export const MEMBERSHIP_PLANS: Record<PlanKey, MembershipPlan> = {
     minAge: 0,
     maxAge: 10,
     grantsAlphaWodAccess: false,
+    appAccessTier: "none",
     stripePriceEnvKey: "STRIPE_PRICE_YOUTH_YOUNGSTARS",
     cardGroup: "youth",
     summary: "A strength and conditioning class for 10 and under! Fun, progressive, and challenging.",
@@ -146,6 +169,7 @@ export const MEMBERSHIP_PLANS: Record<PlanKey, MembershipPlan> = {
     minAge: 11,
     maxAge: null,
     grantsAlphaWodAccess: false,
+    appAccessTier: "none",
     stripePriceEnvKey: "STRIPE_PRICE_YOUTH_TEENSTARS",
     cardGroup: "youth",
     summary: "Strength and conditioning for 11 and up! Develop athletic qualities in a supportive environment.",
@@ -321,6 +345,8 @@ export type CommercialPlanSnapshot = {
   vatRegistered: boolean;
   automaticTaxEnabled: boolean;
   grantsAlphaWodAccess: boolean;
+  appAccessTier: AppAccessTier;
+  selectedConditioningSlots: ConditioningSlotKey[];
   minAge: number;
   maxAge: number | null;
   cancellationNoticeDays: number;
@@ -407,8 +433,16 @@ export function resolveCheckoutSignerRole(planKey: PlanKey): CheckoutSignerRole 
     "youth_guardian_and_payer" : "adult_participant_and_payer";
 }
 
-export function createCommercialPlanSnapshot(planKey: PlanKey): CommercialPlanSnapshot {
+export function createCommercialPlanSnapshot(
+  planKey: PlanKey,
+  selectedConditioningSlots: unknown = []
+): CommercialPlanSnapshot {
   const plan = getPlan(planKey);
+  const frozenSlots = planKey === "adult_conditioning" ?
+    canonicalConditioningSlots(selectedConditioningSlots) : [];
+  if (planKey === "adult_conditioning" && !frozenSlots) {
+    throw new Error("adult_conditioning requires exactly two valid recurring slots");
+  }
   return {
     catalogueSchemaVersion: MEMBERSHIP_SCHEMA_VERSION,
     planKey: plan.key,
@@ -426,11 +460,39 @@ export function createCommercialPlanSnapshot(planKey: PlanKey): CommercialPlanSn
     vatRegistered: BILLING_POLICY.vatRegistered,
     automaticTaxEnabled: BILLING_POLICY.automaticTaxEnabled,
     grantsAlphaWodAccess: plan.grantsAlphaWodAccess,
+    appAccessTier: plan.appAccessTier,
+    selectedConditioningSlots: frozenSlots || [],
     minAge: plan.minAge,
     maxAge: plan.maxAge,
     cancellationNoticeDays: BILLING_POLICY.cancellationNoticeDays,
     pauseAllowed: BILLING_POLICY.pauseAllowed,
   };
+}
+
+export const CONDITIONING_SLOT_OPTIONS: ReadonlyArray<{
+  key: ConditioningSlotKey;
+  day: string;
+  time: string;
+  label: string;
+}> = [
+  { key: "monday_0600", day: "Monday", time: "06:00", label: "Monday · 06:00" },
+  { key: "tuesday_1800", day: "Tuesday", time: "18:00", label: "Tuesday · 18:00" },
+  { key: "thursday_1800", day: "Thursday", time: "18:00", label: "Thursday · 18:00" },
+  { key: "friday_0530", day: "Friday", time: "05:30", label: "Friday · 05:30" },
+];
+
+export function canonicalConditioningSlots(value: unknown): ConditioningSlotKey[] | null {
+  if (!Array.isArray(value) || value.length !== 2 ||
+      !value.every((slot) => CONDITIONING_SLOT_OPTIONS.some(({key}) => key === slot))) {
+    return null;
+  }
+  const unique = new Set<ConditioningSlotKey>(value as ConditioningSlotKey[]);
+  if (unique.size !== 2) return null;
+  return CONDITIONING_SLOT_OPTIONS.map(({key}) => key).filter((slot) => unique.has(slot));
+}
+
+export function formatConditioningSlot(slot: ConditioningSlotKey) {
+  return CONDITIONING_SLOT_OPTIONS.find(({key}) => key === slot)?.label ?? slot;
 }
 
 /**

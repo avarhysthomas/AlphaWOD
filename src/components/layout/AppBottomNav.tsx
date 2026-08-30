@@ -5,7 +5,7 @@ import { getUserNavItems } from "./UserTopNav";
 
 export default function AppBottomNav() {
   const { appUser } = useAuth();
-  const navItems = getUserNavItems(appUser?.role);
+  const navItems = getUserNavItems(appUser);
 
   return (
     <nav

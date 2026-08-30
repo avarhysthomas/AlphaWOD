@@ -15,11 +15,16 @@ const {
   PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
   YOUTH_FAMILY_OFFER,
 } = require("../lib/membershipPlans");
+const {
+  APPROVED_TEST_PAYG_CATALOGUE,
+  matchesApprovedLivePaygCatalogueEntry,
+} = require("../lib/stripeLiveCatalog");
 const {redactProviderSecrets, stripeCliTestKey} = require("./stripeCliTestKey");
 
 const TEST_PROJECT_ID = "demo-alphawod-stripe";
 const PRICE_ENV_KEYS = {
   adult_unlimited: "STRIPE_PRICE_ADULT_UNLIMITED",
+  adult_conditioning: "STRIPE_PRICE_ADULT_CONDITIONING",
   adult_ladies: "STRIPE_PRICE_ADULT_LADIES",
   adult_gym: "STRIPE_PRICE_ADULT_GYM",
   youth_youngstars: "STRIPE_PRICE_YOUTH_YOUNGSTARS",
@@ -95,6 +100,25 @@ async function main() {
     }
     verified.push({planKey, priceId: price.id, productId: product.id});
     productsByPlan.set(planKey, product.id);
+  }
+
+  const paygApproved = APPROVED_TEST_PAYG_CATALOGUE;
+  const paygPrice = await stripe.prices.retrieve(
+    required(paygApproved.priceEnvKey),
+    {expand: ["product"]}
+  );
+  const paygProduct = typeof paygPrice.product === "object" &&
+    paygPrice.product && !paygPrice.product.deleted ? paygPrice.product : null;
+  if (paygPrice.livemode !== false || paygPrice.active !== true ||
+    paygPrice.currency.toLowerCase() !== paygApproved.currency ||
+    paygPrice.unit_amount !== paygApproved.amountPence ||
+    paygProduct?.livemode !== false || paygProduct.active !== true ||
+    !matchesApprovedLivePaygCatalogueEntry(
+      paygPrice,
+      paygProduct,
+      paygApproved
+    )) {
+    throw new Error("adult_payg_class does not match the approved test catalogue.");
   }
 
   const couponId = process.env.STRIPE_EXISTING_MEMBER_COUPON_ID?.trim();
@@ -196,6 +220,7 @@ async function main() {
   verified.forEach(({planKey, priceId, productId}) =>
     console.log(`- ${planKey}: ${priceId} -> ${productId}`)
   );
+  console.log(`- adult_payg_class: ${paygPrice.id} -> ${paygProduct.id}`);
   console.log(portalConfigurationId ?
     `- Customer Portal: ${portalConfigurationId}` :
     "- Customer Portal: not configured (Checkout can run; management cannot)");

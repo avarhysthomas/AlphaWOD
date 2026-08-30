@@ -6,6 +6,7 @@ let mockSearchParams = "";
 let mockDocumentsApproved = false;
 let mockFrontendPurchaseEnabled = false;
 let mockLocalJourneyEnabled = true;
+let mockConditioningCheckoutEnabled = false;
 
 jest.mock("../../../context/AuthContext", () => ({
   useAuth: () => ({user: null}),
@@ -21,6 +22,8 @@ jest.mock("../purchaseAvailability", () => ({
       localTestJourneyEnabled: mockLocalJourneyEnabled,
       publicPurchaseEnabled,
       checkoutEnabled: publicPurchaseEnabled || mockLocalJourneyEnabled,
+      conditioningCheckoutEnabled: mockConditioningCheckoutEnabled &&
+        (publicPurchaseEnabled || mockLocalJourneyEnabled),
     };
   },
 }));
@@ -46,6 +49,7 @@ describe("Memberships presale presentation", () => {
     mockDocumentsApproved = false;
     mockFrontendPurchaseEnabled = false;
     mockLocalJourneyEnabled = true;
+    mockConditioningCheckoutEnabled = false;
   });
 
   afterEach(() => {
@@ -69,7 +73,7 @@ describe("Memberships presale presentation", () => {
     expect(screen.getByText(
       "Strength and conditioning for 11 and up! Develop athletic qualities in a supportive environment."
     )).toBeInTheDocument();
-    expect(screen.getByText("£30")).toBeInTheDocument();
+    expect(screen.getAllByText("£30")).toHaveLength(2);
     expect(screen.getByText("£35")).toBeInTheDocument();
     expect(screen.getByText(/Register 2 or more children.*automatic 15% discount/i))
       .toBeInTheDocument();
@@ -80,7 +84,9 @@ describe("Memberships presale presentation", () => {
     expect(screen.queryByText(/discount code during signup for £5 off/i))
       .not.toBeInTheDocument();
     expect(screen.getAllByText(/£0 today · first payment 1 September 2026/i))
-      .toHaveLength(4);
+      .toHaveLength(5);
+    expect(screen.getByRole("link", {name: "View PAYG timetable"}))
+      .toHaveAttribute("href", "/pay-as-you-go");
   });
 
   it("keeps the rolling contract disclosure and labels the local test mode", () => {
@@ -104,7 +110,9 @@ describe("Memberships presale presentation", () => {
       .toHaveLength(5);
     expect(screen.queryAllByRole("link").filter((link) =>
       link.getAttribute("href")?.startsWith("/memberships/checkout/")
-    )).toHaveLength(0);
+    )).toHaveLength(1);
+    expect(screen.getByRole("link", {name: "Preview weekly slots"}))
+      .toHaveAttribute("href", "/memberships/checkout/adult_conditioning");
   });
 
   it("renders checkout links only when legal and production frontend gates are open", () => {
@@ -116,7 +124,9 @@ describe("Memberships presale presentation", () => {
     expect(screen.queryByText(/Not open yet/i)).not.toBeInTheDocument();
     expect(screen.queryAllByRole("link").filter((link) =>
       link.getAttribute("href")?.startsWith("/memberships/checkout/")
-    )).toHaveLength(5);
+    )).toHaveLength(6);
+    expect(screen.getByText(/Coming soon · choose exactly two weekly conditioning slots/i))
+      .toBeInTheDocument();
   });
 
   it("returns to the standard proration journey after presale closes", () => {
@@ -125,11 +135,24 @@ describe("Memberships presale presentation", () => {
 
     expect(screen.queryByText("£0 charged")).not.toBeInTheDocument();
     expect(screen.queryByText("Zero Alpha App after first payment")).not.toBeInTheDocument();
-    expect(screen.getByText("Includes Zero Alpha App access")).toBeInTheDocument();
+    expect(screen.getByText("Full Zero Alpha App access")).toBeInTheDocument();
+    expect(screen.getByText("Limited Zero Alpha App access")).toBeInTheDocument();
     expect(screen.queryByText(/discount code during signup for £5 off/i))
       .not.toBeInTheDocument();
     expect(screen.getAllByText(/After opening, all memberships bill on the first/i).length)
       .toBeGreaterThan(0);
+  });
+
+  it("turns the Conditioning preview into checkout only when its separate gate opens", () => {
+    mockDocumentsApproved = true;
+    mockFrontendPurchaseEnabled = true;
+    mockLocalJourneyEnabled = false;
+    mockConditioningCheckoutEnabled = true;
+    render(<Memberships />);
+
+    expect(screen.queryByText(/Coming soon · choose exactly two/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("link", {name: "Choose Adult Conditioning Only"}))
+      .toHaveAttribute("href", "/memberships/checkout/adult_conditioning");
   });
 
   it("explains that Stripe Back preserves checkout without navigating history", () => {

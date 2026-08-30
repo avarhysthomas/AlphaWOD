@@ -33,6 +33,7 @@ const {
   resolveCancellationOutcome,
   resolveCheckoutSessionExpiry,
   resolveCoolingOffEnd,
+  resolveEntitlementForCommercialTerms,
   resolveEntitlementForMembership,
   resolveMembershipState,
   resolvePastDueGraceEndMillis,
@@ -45,6 +46,7 @@ const {
   resolveCheckoutAcceptanceStatements,
   resolveCheckoutDocuments,
   resolveCheckoutSignerRole,
+  validateCommercialEntitlementPolicy,
 } = require("../lib/membershipPlans");
 
 /** Europe/London instant helper: builds a UTC millis value for a London date. */
@@ -52,10 +54,11 @@ function londonMillis(iso) {
   return new Date(iso).getTime();
 }
 
-test("schema v5 catalogue keeps the youth keys, new copy, and approved prices", () => {
-  assert.equal(MEMBERSHIP_SCHEMA_VERSION, 5);
+test("schema v6 catalogue includes Adult Conditioning and approved prices", () => {
+  assert.equal(MEMBERSHIP_SCHEMA_VERSION, 6);
   assert.deepEqual([...PLAN_KEYS], [
     "adult_unlimited",
+    "adult_conditioning",
     "adult_ladies",
     "adult_gym",
     "youth_youngstars",
@@ -63,6 +66,20 @@ test("schema v5 catalogue keeps the youth keys, new copy, and approved prices", 
   ]);
 
   assert.equal(MEMBERSHIP_PLANS.adult_unlimited.amountPence, 6000);
+  assert.deepEqual(
+    {
+      name: MEMBERSHIP_PLANS.adult_conditioning.name,
+      amountPence: MEMBERSHIP_PLANS.adult_conditioning.amountPence,
+      appAccessTier: MEMBERSHIP_PLANS.adult_conditioning.appAccessTier,
+      stripePriceEnvKey: MEMBERSHIP_PLANS.adult_conditioning.stripePriceEnvKey,
+    },
+    {
+      name: "Adult Conditioning Only Membership",
+      amountPence: 3000,
+      appAccessTier: "limited",
+      stripePriceEnvKey: "STRIPE_PRICE_ADULT_CONDITIONING",
+    }
+  );
   assert.equal(MEMBERSHIP_PLANS.adult_ladies.amountPence, 5000);
   assert.equal(MEMBERSHIP_PLANS.adult_gym.amountPence, 4500);
   assert.deepEqual(
@@ -103,9 +120,11 @@ test("schema v5 catalogue keeps the youth keys, new copy, and approved prices", 
   );
 });
 
-test("only Adult Unlimited automatically includes AlphaWOD access", () => {
+test("full and limited adult plans include base AlphaWOD access", () => {
   const granting = PLAN_KEYS.filter((key) => MEMBERSHIP_PLANS[key].grantsAlphaWodAccess);
-  assert.deepEqual(granting, ["adult_unlimited"]);
+  assert.deepEqual(granting, ["adult_unlimited", "adult_conditioning"]);
+  assert.equal(MEMBERSHIP_PLANS.adult_unlimited.appAccessTier, "full");
+  assert.equal(MEMBERSHIP_PLANS.adult_conditioning.appAccessTier, "limited");
 });
 
 test("registry freezes the approved mixed checkout document bundle", () => {
@@ -172,7 +191,7 @@ test("checkout legal requirements are exact for adult self-signers and youth gua
 
 test("commercial snapshots contain the complete customer-facing plan contract", () => {
   assert.deepEqual(createCommercialPlanSnapshot("adult_unlimited"), {
-    catalogueSchemaVersion: 5,
+    catalogueSchemaVersion: 6,
     planKey: "adult_unlimited",
     planName: "Adult Unlimited Membership",
     audience: "adult",
@@ -188,11 +207,25 @@ test("commercial snapshots contain the complete customer-facing plan contract", 
     vatRegistered: false,
     automaticTaxEnabled: false,
     grantsAlphaWodAccess: true,
+    appAccessTier: "full",
+    selectedConditioningSlots: [],
     minAge: 18,
     maxAge: null,
     cancellationNoticeDays: 14,
     pauseAllowed: false,
   });
+
+  assert.deepEqual(
+    createCommercialPlanSnapshot("adult_conditioning", [
+      "friday_0530",
+      "monday_0600",
+    ]).selectedConditioningSlots,
+    ["monday_0600", "friday_0530"]
+  );
+  assert.throws(
+    () => createCommercialPlanSnapshot("adult_conditioning", ["monday_0600"]),
+    /exactly two valid recurring slots/
+  );
 });
 
 test("past-due grace persists an exact London-calendar deadline across DST", () => {
@@ -550,11 +583,15 @@ test("entitlement follows membership state for the AlphaWOD plan only", () => {
   assert.deepEqual(resolveEntitlementForMembership("adult_unlimited", "active"), {
     entitlementStatus: "active",
     entitlementSource: "stripe",
+    appAccessTier: "full",
+    entitlementClassSlots: [],
     reason: "membership_active",
   });
   assert.deepEqual(resolveEntitlementForMembership("adult_unlimited", "past_due_grace"), {
     entitlementStatus: "active",
     entitlementSource: "stripe",
+    appAccessTier: "full",
+    entitlementClassSlots: [],
     reason: "membership_past_due_grace",
   });
   assert.equal(
@@ -571,6 +608,130 @@ test("entitlement follows membership state for the AlphaWOD plan only", () => {
     assert.equal(resolveEntitlementForMembership(key, "active"), null);
     assert.equal(resolveEntitlementForMembership(key, "revoked"), null);
   }
+
+  assert.deepEqual(resolveEntitlementForMembership(
+    "adult_conditioning",
+    "active",
+    ["tuesday_1800", "monday_0600"]
+  ), {
+    entitlementStatus: "active",
+    entitlementSource: "stripe",
+    appAccessTier: "limited",
+    entitlementClassSlots: ["monday_0600", "tuesday_1800"],
+    reason: "membership_active",
+  });
+  assert.equal(
+    resolveEntitlementForMembership("adult_conditioning", "active", []).reason,
+    "membership_access_policy_invalid"
+  );
+});
+
+test("entitlement convergence honours the validated frozen snapshot across catalogue drift", () => {
+  assert.equal(MEMBERSHIP_PLANS.adult_unlimited.appAccessTier, "full");
+  const historicalSnapshot = {
+    ...createCommercialPlanSnapshot("adult_unlimited"),
+    catalogueSchemaVersion: 6,
+    // This represents the contract frozen before a later catalogue change.
+    appAccessTier: "limited",
+    selectedConditioningSlots: ["thursday_1800", "monday_0600"],
+  };
+
+  assert.deepEqual(validateCommercialEntitlementPolicy(
+    historicalSnapshot,
+    "adult_unlimited"
+  ), {
+    grantsAlphaWodAccess: true,
+    appAccessTier: "limited",
+    entitlementClassSlots: ["monday_0600", "thursday_1800"],
+  });
+  assert.deepEqual(resolveEntitlementForCommercialTerms(
+    historicalSnapshot,
+    "active",
+    "adult_unlimited"
+  ), {
+    entitlementStatus: "active",
+    entitlementSource: "stripe",
+    appAccessTier: "limited",
+    entitlementClassSlots: ["monday_0600", "thursday_1800"],
+    reason: "membership_active",
+  });
+  assert.deepEqual(resolveEntitlementForCommercialTerms(
+    historicalSnapshot,
+    "disputed",
+    "adult_unlimited"
+  ), {
+    entitlementStatus: "restricted",
+    entitlementSource: "stripe",
+    appAccessTier: "limited",
+    entitlementClassSlots: ["monday_0600", "thursday_1800"],
+    reason: "membership_disputed",
+  });
+});
+
+test("real schema-v5 snapshots preserve only their historical full/none policy", () => {
+  const legacyAdultUnlimited = {
+    ...createCommercialPlanSnapshot("adult_unlimited"),
+    catalogueSchemaVersion: 5,
+  };
+  delete legacyAdultUnlimited.appAccessTier;
+  delete legacyAdultUnlimited.selectedConditioningSlots;
+  assert.deepEqual(validateCommercialEntitlementPolicy(
+    legacyAdultUnlimited,
+    "adult_unlimited"
+  ), {
+    grantsAlphaWodAccess: true,
+    appAccessTier: "full",
+    entitlementClassSlots: [],
+  });
+  assert.deepEqual(resolveEntitlementForCommercialTerms(
+    legacyAdultUnlimited,
+    "active",
+    "adult_unlimited"
+  ), {
+    entitlementStatus: "active",
+    entitlementSource: "stripe",
+    appAccessTier: "full",
+    entitlementClassSlots: [],
+    reason: "membership_active",
+  });
+
+  assert.equal(validateCommercialEntitlementPolicy({
+    ...legacyAdultUnlimited,
+    planKey: "adult_conditioning",
+  }, "adult_conditioning"), null);
+  assert.equal(validateCommercialEntitlementPolicy({
+    ...legacyAdultUnlimited,
+    appAccessTier: "limited",
+    selectedConditioningSlots: ["monday_0600", "tuesday_1800"],
+  }, "adult_unlimited"), null);
+});
+
+test("invalid frozen commercial policy fails closed without consulting the catalogue", () => {
+  const malformed = {
+    ...createCommercialPlanSnapshot("adult_conditioning", [
+      "monday_0600", "friday_0530",
+    ]),
+    selectedConditioningSlots: ["monday_0600", "monday_0600"],
+  };
+  assert.equal(validateCommercialEntitlementPolicy(
+    malformed,
+    "adult_conditioning"
+  ), null);
+  assert.deepEqual(resolveEntitlementForCommercialTerms(
+    malformed,
+    "active",
+    "adult_conditioning"
+  ), {
+    entitlementStatus: "restricted",
+    entitlementSource: "stripe",
+    appAccessTier: "none",
+    entitlementClassSlots: [],
+    reason: "membership_access_policy_invalid",
+  });
+  assert.equal(validateCommercialEntitlementPolicy(
+    malformed,
+    "adult_unlimited"
+  ), null);
 });
 
 test("entitled and duplicate-blocking states are distinct sets", () => {

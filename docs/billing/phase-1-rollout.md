@@ -768,20 +768,21 @@ npm run verify:production-armed-config --prefix functions
 npm run verify:stripe-live-config --prefix functions
 ```
 
-The 25 August closed rollout already deployed the fourteen membership services
-in the following two batches and restored their reviewed IAM boundaries. These
-commands are the recorded target manifest and the required order for a future
-Functions change; do not redeploy unchanged Functions merely because the final
-frontend is published. When a repeat deployment is required, keep each batch at
-ten or fewer targets and deploy the signed public webhook and four non-callable
+The 25 August closed rollout deployed the original fourteen membership services
+and restored their reviewed IAM boundaries. The booking-cleanup worker added
+later brings the future reviewed manifest to fifteen. These commands are the
+recorded target manifest and the required order for a future Functions change;
+do not redeploy unchanged Functions merely because the final frontend is
+published. When a repeat deployment is required, keep each batch at
+ten or fewer targets and deploy the signed public webhook and five non-callable
 workers first:
 
 ```sh
-firebase deploy --only functions:stripeWebhook,functions:recoverStripeEvents,functions:recoverMembershipCancellations,functions:reconcilePastDueMemberships,functions:retryMembershipConfirmations --project alphawod-d1f2f
+firebase deploy --only functions:stripeWebhook,functions:recoverStripeEvents,functions:recoverMembershipCancellations,functions:reconcileMembershipBookings,functions:reconcilePastDueMemberships,functions:retryMembershipConfirmations --project alphawod-d1f2f
 ```
 
 Verify that the webhook is public, each worker has only its expected scheduler
-invocation path and all five schedules/triggers are correct. Then deploy the
+invocation path and all six schedules/triggers are correct. Then deploy the
 nine client callables as the second batch:
 
 ```sh

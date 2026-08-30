@@ -41,6 +41,10 @@ service firebase.storage {
       return currentUserExists() &&
         currentUser().approvalStatus == "approved" &&
         currentUser().alphaWodAccess == true &&
+        (
+          currentUser().appAccessTier == "limited" ||
+          currentUser().appAccessTier == "full"
+        ) &&
         (hasStaffEntitlement() || hasMemberEntitlement());
     }
 

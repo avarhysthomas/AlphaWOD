@@ -1,7 +1,7 @@
 /* eslint-disable require-jsdoc, max-len */
 
-export const ACCESS_SCHEMA_VERSION = 1;
-export const CLAIMS_VERSION = 2;
+export const ACCESS_SCHEMA_VERSION = 2;
+export const CLAIMS_VERSION = 3;
 
 export const USER_ROLES = ["admin", "user", "sgpt", "banned"] as const;
 export type UserRole = typeof USER_ROLES[number];
@@ -14,6 +14,17 @@ export type EntitlementStatus = typeof ENTITLEMENT_STATUSES[number];
 
 export const ENTITLEMENT_SOURCES = ["none", "legacy", "manual", "stripe", "staff"] as const;
 export type EntitlementSource = typeof ENTITLEMENT_SOURCES[number];
+
+export const APP_ACCESS_TIERS = ["none", "limited", "full"] as const;
+export type AppAccessTier = typeof APP_ACCESS_TIERS[number];
+
+export const CONDITIONING_SLOT_KEYS = [
+  "monday_0600",
+  "tuesday_1800",
+  "thursday_1800",
+  "friday_0530",
+] as const;
+export type ConditioningSlotKey = typeof CONDITIONING_SLOT_KEYS[number];
 
 export const CURRENT_WAIVER_VERSION = "2026-30-05";
 export const CURRENT_WAIVER_TITLE =
@@ -95,6 +106,9 @@ export type UserAuthorisationInput = {
   approvalStatus?: unknown;
   entitlementStatus?: unknown;
   entitlementSource?: unknown;
+  entitlementPlanKey?: unknown;
+  appAccessTier?: unknown;
+  entitlementClassSlots?: unknown;
 };
 
 export type ResolvedUserAuthorisation = {
@@ -102,6 +116,14 @@ export type ResolvedUserAuthorisation = {
   approvalStatus: ApprovalStatus;
   entitlementStatus: EntitlementStatus;
   entitlementSource: EntitlementSource;
+  /** Frozen policy stored on the profile, even while effective access is gated. */
+  entitlementPolicyAppAccessTier: AppAccessTier;
+  /** Frozen Conditioning slots stored on the profile, even while access is gated. */
+  entitlementPolicyClassSlots: ConditioningSlotKey[];
+  /** Effective tier exposed to claims and runtime authorisation. */
+  appAccessTier: AppAccessTier;
+  /** Effective Conditioning slots exposed to claims and runtime authorisation. */
+  entitlementClassSlots: ConditioningSlotKey[];
   alphaWodAccess: boolean;
   disabled: boolean;
   restricted: boolean;
@@ -114,6 +136,8 @@ export type ManagedClaims = {
   approvalStatus: ApprovalStatus;
   entitlementStatus: EntitlementStatus;
   entitlementSource: EntitlementSource;
+  appAccessTier: AppAccessTier;
+  entitlementClassSlots: ConditioningSlotKey[];
   alphaWodAccess: boolean;
   disabled: boolean;
   restricted: boolean;
@@ -126,6 +150,8 @@ export const MANAGED_CLAIM_KEYS = [
   "approvalStatus",
   "entitlementStatus",
   "entitlementSource",
+  "appAccessTier",
+  "entitlementClassSlots",
   "alphaWodAccess",
   "disabled",
   "restricted",
@@ -150,6 +176,30 @@ export function isEntitlementStatus(value: unknown): value is EntitlementStatus 
 export function isEntitlementSource(value: unknown): value is EntitlementSource {
   return typeof value === "string" &&
     (ENTITLEMENT_SOURCES as readonly string[]).includes(value);
+}
+
+export function isAppAccessTier(value: unknown): value is AppAccessTier {
+  return typeof value === "string" &&
+    (APP_ACCESS_TIERS as readonly string[]).includes(value);
+}
+
+export function isConditioningSlotKey(value: unknown): value is ConditioningSlotKey {
+  return typeof value === "string" &&
+    (CONDITIONING_SLOT_KEYS as readonly string[]).includes(value);
+}
+
+/**
+ * Returns the two fixed Half-membership slots in canonical catalogue order.
+ * Any duplicate, unknown, missing, or additional value fails closed.
+ * @param {unknown} value Candidate stored or submitted slot list.
+ * @return {ConditioningSlotKey[] | null} Canonical slots, or null when invalid.
+ */
+export function canonicalConditioningSlots(value: unknown): ConditioningSlotKey[] | null {
+  if (!Array.isArray(value) || value.length !== 2 ||
+      !value.every(isConditioningSlotKey)) return null;
+  const unique = new Set<ConditioningSlotKey>(value);
+  if (unique.size !== 2) return null;
+  return CONDITIONING_SLOT_KEYS.filter((slot) => unique.has(slot));
 }
 
 export function isValidEntitlementPair(
@@ -182,12 +232,17 @@ export function resolveUserAuthorisation(
   const approvalValid = isApprovalStatus(input?.approvalStatus);
   const entitlementStatusValid = isEntitlementStatus(input?.entitlementStatus);
   const entitlementSourceValid = isEntitlementSource(input?.entitlementSource);
+  const appAccessTierPresent = input?.appAccessTier !== undefined &&
+    input?.appAccessTier !== null;
+  const appAccessTierValid = !appAccessTierPresent ||
+    isAppAccessTier(input?.appAccessTier);
 
   if (!profileExists) issues.push("profile_missing");
   if (!roleValid) issues.push("role_invalid");
   if (!approvalValid) issues.push("approval_status_invalid");
   if (!entitlementStatusValid) issues.push("entitlement_status_invalid");
   if (!entitlementSourceValid) issues.push("entitlement_source_invalid");
+  if (!appAccessTierValid) issues.push("app_access_tier_invalid");
 
   const rawStatus: EntitlementStatus = entitlementStatusValid ?
     input?.entitlementStatus as EntitlementStatus : "none";
@@ -196,29 +251,91 @@ export function resolveUserAuthorisation(
   const pairValid = isValidEntitlementPair(rawStatus, rawSource);
   if (!pairValid) issues.push("entitlement_pair_invalid");
 
-  const valid = profileExists && roleValid && approvalValid &&
-    entitlementStatusValid && entitlementSourceValid && pairValid;
-  const role: UserRole = valid ? input.role as UserRole : "user";
-  const approvalStatus: ApprovalStatus = valid ?
-    input.approvalStatus as ApprovalStatus : "pending";
-  const entitlementStatus: EntitlementStatus = valid ? rawStatus : "none";
-  const entitlementSource: EntitlementSource = valid ? rawSource : "none";
+  const structurallyValid = profileExists && roleValid && approvalValid &&
+    entitlementStatusValid && entitlementSourceValid && pairValid &&
+    appAccessTierValid;
+  const role: UserRole = structurallyValid ? input?.role as UserRole : "user";
+  const approvalStatus: ApprovalStatus = structurallyValid ?
+    input?.approvalStatus as ApprovalStatus : "pending";
+  const entitlementStatus: EntitlementStatus = structurallyValid ? rawStatus : "none";
+  const entitlementSource: EntitlementSource = structurallyValid ? rawSource : "none";
   const explicitlyBanned = roleValid && input?.role === "banned";
-  const disabled = !profileExists || !valid || explicitlyBanned;
-  const staffAccess = (role === "admin" || role === "sgpt") &&
+  const baseStaffAccess = (role === "admin" || role === "sgpt") &&
     entitlementStatus === "active" && entitlementSource === "staff";
-  const memberAccess = role === "user" &&
+  const baseMemberAccess = role === "user" &&
     entitlementStatus === "active" &&
-    (entitlementSource === "legacy" ||
-      entitlementSource === "manual" || entitlementSource === "stripe");
+    (entitlementSource === "legacy" || entitlementSource === "manual" ||
+      entitlementSource === "stripe");
+
+  let accessPolicyValid = true;
+  let entitlementPolicyAppAccessTier: AppAccessTier = "none";
+  let entitlementPolicyClassSlots: ConditioningSlotKey[] = [];
+  if (baseStaffAccess) {
+    entitlementPolicyAppAccessTier = "full";
+  } else if (role === "user" && entitlementSource === "stripe") {
+    // Stripe policy remains meaningful while approval or the membership state
+    // gates effective access. Never erase a paid Conditioning member's frozen
+    // slots merely because their account is pending, suspended, or disputed.
+    const hasNoPolicySlots = input?.entitlementClassSlots === undefined ||
+      input?.entitlementClassSlots === null ||
+      (Array.isArray(input.entitlementClassSlots) &&
+        input.entitlementClassSlots.length === 0);
+    if (entitlementStatus === "restricted" &&
+        input?.appAccessTier === "none" && hasNoPolicySlots) {
+      // An invalid provider/commercial contract is projected as an explicit
+      // fail-closed Stripe restriction. It carries no usable policy.
+      entitlementPolicyAppAccessTier = "none";
+    } else if (input?.entitlementPlanKey === "adult_unlimited" &&
+        (!appAccessTierPresent || input?.appAccessTier === "full")) {
+      entitlementPolicyAppAccessTier = "full";
+    } else if (input?.entitlementPlanKey === "adult_conditioning" &&
+        (!appAccessTierPresent || input?.appAccessTier === "limited")) {
+      const slots = canonicalConditioningSlots(input?.entitlementClassSlots);
+      if (slots) {
+        entitlementPolicyAppAccessTier = "limited";
+        entitlementPolicyClassSlots = slots;
+      } else {
+        accessPolicyValid = false;
+      }
+    } else {
+      // A Stripe entitlement without a recognised plan/tier is never upgraded
+      // by a truthy legacy boolean.
+      accessPolicyValid = false;
+    }
+  } else if (baseMemberAccess) {
+    const requestedTier = appAccessTierPresent ?
+      input?.appAccessTier as AppAccessTier : "full";
+    if (requestedTier === "limited") {
+      const slots = canonicalConditioningSlots(input?.entitlementClassSlots);
+      if (slots) {
+        entitlementPolicyAppAccessTier = "limited";
+        entitlementPolicyClassSlots = slots;
+      } else {
+        accessPolicyValid = false;
+      }
+    } else {
+      entitlementPolicyAppAccessTier = requestedTier;
+    }
+  }
+  if (!accessPolicyValid) issues.push("app_access_policy_invalid");
+
+  const valid = structurallyValid && accessPolicyValid;
+  const disabled = !profileExists || !valid || explicitlyBanned;
   const alphaWodAccess = valid && !explicitlyBanned &&
-    approvalStatus === "approved" && (staffAccess || memberAccess);
+    approvalStatus === "approved" && (baseStaffAccess || baseMemberAccess) &&
+    entitlementPolicyAppAccessTier !== "none";
 
   return {
     role: explicitlyBanned && valid ? "banned" : role,
     approvalStatus,
     entitlementStatus,
     entitlementSource,
+    entitlementPolicyAppAccessTier,
+    entitlementPolicyClassSlots,
+    appAccessTier: alphaWodAccess ? entitlementPolicyAppAccessTier : "none",
+    entitlementClassSlots: alphaWodAccess &&
+      entitlementPolicyAppAccessTier === "limited" ?
+      entitlementPolicyClassSlots : [],
     alphaWodAccess,
     disabled,
     restricted: !alphaWodAccess,
@@ -237,6 +354,8 @@ export function buildManagedClaims(
     approvalStatus: resolved.approvalStatus,
     entitlementStatus: resolved.entitlementStatus,
     entitlementSource: resolved.entitlementSource,
+    appAccessTier: resolved.appAccessTier,
+    entitlementClassSlots: resolved.entitlementClassSlots,
     alphaWodAccess: resolved.alphaWodAccess,
     disabled: resolved.disabled,
     restricted: resolved.restricted,
