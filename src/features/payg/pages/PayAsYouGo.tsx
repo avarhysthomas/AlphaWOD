@@ -3,6 +3,8 @@ import {
   ArrowRight,
   CalendarDays,
   Check,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   LoaderCircle,
   LockKeyhole,
@@ -66,7 +68,60 @@ function formatShortDate(value: string, timezone = LONDON_TZ) {
 }
 
 function dayKey(value: string, timezone = LONDON_TZ) {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: timezone }).format(asDate(value));
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone: timezone,
+  }).formatToParts(asDate(value));
+  const part = (type: "year" | "month" | "day") =>
+    parts.find((valuePart) => valuePart.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+function calendarDate(day: string) {
+  const [year, month, date] = day.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, date, 12));
+}
+
+function shiftDayKey(day: string, amount: number) {
+  const value = calendarDate(day);
+  value.setUTCDate(value.getUTCDate() + amount);
+  return value.toISOString().slice(0, 10);
+}
+
+function weekKey(day: string) {
+  const value = calendarDate(day);
+  const daysSinceMonday = (value.getUTCDay() + 6) % 7;
+  return shiftDayKey(day, -daysSinceMonday);
+}
+
+function sessionWeekKey(session: PaygClass) {
+  return weekKey(dayKey(session.startTime, session.timezone));
+}
+
+function shortMonth(day: string) {
+  return new Intl.DateTimeFormat("en-GB", {
+    month: "short",
+    timeZone: "UTC",
+  }).format(calendarDate(day));
+}
+
+function formatWeekRange(startDay: string, endDay: string) {
+  const start = calendarDate(startDay);
+  const end = calendarDate(endDay);
+  const sameYear = start.getUTCFullYear() === end.getUTCFullYear();
+  const sameMonth = sameYear && start.getUTCMonth() === end.getUTCMonth();
+  const startDate = start.getUTCDate();
+  const endDate = end.getUTCDate();
+
+  if (sameMonth) {
+    return `${startDate}–${endDate} ${shortMonth(endDay)} ${end.getUTCFullYear()}`;
+  }
+  if (sameYear) {
+    return `${startDate} ${shortMonth(startDay)}–${endDate} ${shortMonth(endDay)} ${end.getUTCFullYear()}`;
+  }
+  return `${startDate} ${shortMonth(startDay)} ${start.getUTCFullYear()}–${endDate} ${shortMonth(endDay)} ${end.getUTCFullYear()}`;
 }
 
 function formatPrice(pence: number) {
@@ -91,6 +146,7 @@ function sessionAvailability(session: PaygClass) {
 export default function PayAsYouGo() {
   const [schedule, setSchedule] = useState<PublicPaygSchedule | null>(null);
   const [selected, setSelected] = useState<PaygClass | null>(null);
+  const [visibleWeekIndex, setVisibleWeekIndex] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [submitError, setSubmitError] = useState("");
@@ -125,14 +181,46 @@ export default function PayAsYouGo() {
     };
   }, []);
 
-  const groupedClasses = useMemo(() => {
-    const groups = new Map<string, PaygClass[]>();
+  const weeks = useMemo(() => {
+    const groups = new Map<string, Map<string, PaygClass[]>>();
     for (const session of schedule?.classes ?? []) {
-      const key = dayKey(session.startTime, session.timezone);
-      groups.set(key, [...(groups.get(key) ?? []), session]);
+      const sessionDay = dayKey(session.startTime, session.timezone);
+      const sessionWeek = weekKey(sessionDay);
+      const days = groups.get(sessionWeek) ?? new Map<string, PaygClass[]>();
+      days.set(sessionDay, [...(days.get(sessionDay) ?? []), session]);
+      groups.set(sessionWeek, days);
     }
-    return Array.from(groups.entries());
+    const populatedWeeks = Array.from(groups.keys()).sort();
+    if (populatedWeeks.length === 0) return [];
+
+    const result: Array<{
+      key: string;
+      endKey: string;
+      days: Array<[string, PaygClass[]]>;
+    }> = [];
+    const lastWeek = populatedWeeks[populatedWeeks.length - 1];
+    for (
+      let key = populatedWeeks[0];
+      key <= lastWeek;
+      key = shiftDayKey(key, 7)
+    ) {
+      result.push({
+        key,
+        endKey: shiftDayKey(key, 6),
+        days: Array.from(groups.get(key)?.entries() ?? []).sort(([left], [right]) =>
+          left.localeCompare(right)
+        ),
+      });
+    }
+    return result;
   }, [schedule?.classes]);
+
+  useEffect(() => {
+    setVisibleWeekIndex((index) => Math.min(index, Math.max(weeks.length - 1, 0)));
+  }, [weeks.length]);
+
+  const activeWeekIndex = Math.min(visibleWeekIndex, Math.max(weeks.length - 1, 0));
+  const visibleWeek = weeks[activeWeekIndex] ?? null;
 
   const checkoutOpen = Boolean(
     schedule?.available && schedule.checkoutAvailable && schedule.legal
@@ -148,6 +236,17 @@ export default function PayAsYouGo() {
     if (session.availability !== "available") return;
     setSelected(session);
     resetAttempt();
+  }
+
+  function showWeek(index: number) {
+    const nextIndex = Math.max(0, Math.min(index, weeks.length - 1));
+    const nextWeek = weeks[nextIndex];
+    if (!nextWeek || nextIndex === activeWeekIndex) return;
+    if (selected && sessionWeekKey(selected) !== nextWeek.key) {
+      setSelected(null);
+    }
+    resetAttempt();
+    setVisibleWeekIndex(nextIndex);
   }
 
   function continueToDetails() {
@@ -236,7 +335,7 @@ export default function PayAsYouGo() {
               </div>
             </div>
 
-            <div className="mt-7" aria-live="polite">
+            <div className="mt-7">
               {loading ? (
                 <div className="grid min-h-64 place-items-center rounded-2xl border border-white/10 bg-[#151311]">
                   <LoaderCircle className="h-7 w-7 animate-spin text-[#f4b16d]" aria-label="Loading timetable" />
@@ -253,19 +352,70 @@ export default function PayAsYouGo() {
                     Pay As You Go is being prepared. Membership options are still available to view.
                   </p>
                 </div>
-              ) : groupedClasses.length === 0 ? (
+              ) : weeks.length === 0 ? (
                 <div className="rounded-2xl border border-white/10 bg-[#151311] p-6">
                   <h2 className="font-heading text-3xl uppercase">No sessions listed</h2>
                   <p className="mt-3 text-sm leading-6 text-white/55">Check back when the next timetable is published.</p>
                 </div>
               ) : (
                 <div className="space-y-8">
-                  {groupedClasses.map(([key, sessions]) => (
+                  {visibleWeek ? (
+                    <nav
+                      aria-label="Timetable weeks"
+                      className="grid grid-cols-[44px_minmax(0,1fr)_44px] items-center gap-3 rounded-2xl border border-white/10 bg-[#151311] p-3 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:px-4"
+                    >
+                      <button
+                        type="button"
+                        disabled={activeWeekIndex === 0}
+                        aria-label={activeWeekIndex === 0
+                          ? "No previous timetable week"
+                          : `Show previous week, ${formatWeekRange(weeks[activeWeekIndex - 1].key, weeks[activeWeekIndex - 1].endKey)}`}
+                        onClick={() => showWeek(activeWeekIndex - 1)}
+                        className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-white/15 px-3 text-sm font-black text-white outline-none transition hover:border-white/30 hover:bg-white/[0.05] focus-visible:ring-2 focus-visible:ring-[#f4b16d] disabled:cursor-not-allowed disabled:opacity-30 sm:px-4"
+                      >
+                        <ChevronLeft className="h-5 w-5" aria-hidden="true" />
+                        <span className="hidden sm:inline">Previous</span>
+                      </button>
+
+                      <div className="min-w-0 text-center" aria-live="polite" aria-atomic="true">
+                        <h2 className="font-heading text-2xl uppercase leading-none text-white sm:text-3xl">
+                          {formatWeekRange(visibleWeek.key, visibleWeek.endKey)}
+                        </h2>
+                        <p className="mt-1.5 text-xs font-bold text-white/60">
+                          Week {activeWeekIndex + 1} of {weeks.length}
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        disabled={activeWeekIndex === weeks.length - 1}
+                        aria-label={activeWeekIndex === weeks.length - 1
+                          ? "No next timetable week"
+                          : `Show next week, ${formatWeekRange(weeks[activeWeekIndex + 1].key, weeks[activeWeekIndex + 1].endKey)}`}
+                        onClick={() => showWeek(activeWeekIndex + 1)}
+                        className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-white/15 px-3 text-sm font-black text-white outline-none transition hover:border-white/30 hover:bg-white/[0.05] focus-visible:ring-2 focus-visible:ring-[#f4b16d] disabled:cursor-not-allowed disabled:opacity-30 sm:px-4"
+                      >
+                        <span className="hidden sm:inline">Next</span>
+                        <ChevronRight className="h-5 w-5" aria-hidden="true" />
+                      </button>
+                    </nav>
+                  ) : null}
+
+                  {visibleWeek?.days.length === 0 ? (
+                    <div className="rounded-2xl border border-white/10 bg-[#151311] p-6">
+                      <h2 className="font-heading text-3xl uppercase text-white">No sessions this week</h2>
+                      <p className="mt-3 text-sm leading-6 text-white/60">
+                        Use the week controls to view the next published sessions.
+                      </p>
+                    </div>
+                  ) : null}
+
+                  {visibleWeek?.days.map(([key, sessions]) => (
                     <section key={key} aria-labelledby={`day-${key}`}>
                       <div className="mb-3 flex items-center justify-between gap-3">
-                        <h2 id={`day-${key}`} className="font-heading text-3xl uppercase text-white">
+                        <h3 id={`day-${key}`} className="font-heading text-3xl uppercase text-white">
                           {formatDayHeading(sessions[0].startTime, sessions[0].timezone)}
-                        </h2>
+                        </h3>
                         <span className="text-sm font-bold text-white/55">
                           {sessions.length} {sessions.length === 1 ? "session" : "sessions"}
                         </span>

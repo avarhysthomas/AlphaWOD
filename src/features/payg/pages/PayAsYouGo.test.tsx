@@ -123,6 +123,52 @@ describe("Pay As You Go timetable", () => {
     }));
   });
 
+  it("shows one Monday-to-Sunday week at a time and keeps empty weeks navigable", async () => {
+    mockedSchedule.mockResolvedValueOnce({
+      ...openSchedule,
+      classes: [
+        ...openSchedule.classes,
+        {
+          classId: "class_later",
+          title: "Engine",
+          startTime: "2026-09-21T17:00:00.000Z",
+          endTime: "2026-09-21T18:00:00.000Z",
+          timezone: "Europe/London",
+          coachName: "Coach Jaimie",
+          location: "Main Floor",
+          spacesRemaining: 8,
+          availability: "available" as const,
+        },
+      ],
+    });
+    render(<PayAsYouGo />);
+
+    expect(await screen.findByRole("heading", {name: "7–13 Sept 2026"}))
+      .toBeInTheDocument();
+    const firstWeekSession = screen.getByRole("button", {name: /Conditioning/i});
+    expect(screen.queryByRole("button", {name: /Engine/i})).not.toBeInTheDocument();
+    expect(screen.getByRole("button", {name: "No previous timetable week"}))
+      .toBeDisabled();
+
+    fireEvent.click(firstWeekSession);
+    expect(screen.getByRole("button", {name: "Continue"})).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", {name: /Show next week/i}));
+
+    expect(screen.getByRole("heading", {name: "14–20 Sept 2026"}))
+      .toBeInTheDocument();
+    expect(screen.getByRole("heading", {name: "No sessions this week"}))
+      .toBeInTheDocument();
+    expect(screen.queryByRole("button", {name: "Continue"})).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", {name: /Show next week/i}));
+    expect(screen.getByRole("heading", {name: "21–27 Sept 2026"}))
+      .toBeInTheDocument();
+    expect(screen.getByRole("button", {name: /Engine/i})).toBeInTheDocument();
+    expect(screen.queryByRole("button", {name: /Conditioning/i})).not.toBeInTheDocument();
+    expect(screen.getByRole("button", {name: "No next timetable week"}))
+      .toBeDisabled();
+  });
+
   it("keeps checkout closed when the backend withholds legal release metadata", async () => {
     mockedSchedule.mockResolvedValueOnce({
       ...openSchedule,
