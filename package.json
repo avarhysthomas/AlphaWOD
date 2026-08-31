@@ -36,6 +36,7 @@
     "verify:frontend-production-open": "node scripts/verifyFrontendProductionEnv.js --expect-purchase-open",
     "verify:frontend-conditioning-production-open": "node scripts/verifyFrontendProductionEnv.js --expect-purchase-open --expect-conditioning-open",
     "verify:monitoring": "node scripts/verifyBillingMonitoring.js",
+    "sync:production-schedule": "FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 GCLOUD_PROJECT=demo-alphawod-stripe GOOGLE_CLOUD_PROJECT=demo-alphawod-stripe node scripts/syncProductionScheduleToEmulator.js",
     "sync:published-legal": "node scripts/syncPublishedLegalDocuments.js --write",
     "verify:legal-registry-sync": "node scripts/syncPublishedLegalDocuments.js --check",
     "verify:published-legal": "npm run verify:legal-registry-sync && npm run build --prefix functions && node --env-file-if-exists=functions/.env.alphawod-d1f2f scripts/verifyPublishedLegalDocuments.js",
