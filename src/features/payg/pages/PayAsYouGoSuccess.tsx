@@ -119,12 +119,12 @@ export default function PayAsYouGoSuccess() {
   return (
     <main className="carbon-fiber-bg min-h-screen bg-[#050505] px-5 py-10 font-barlow text-[#f4f0ea] sm:px-8">
       <div className="mx-auto max-w-2xl">
-        <Link to="/" aria-label="Zero Alpha home" className="inline-flex rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-[#f4b16d]">
+        <Link to="/" aria-label="Zero Alpha home" className="inline-flex rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-payg">
           <img src="/ZERO-ALPHA.png" alt="Zero Alpha Fitness" className="h-20 w-auto object-contain" />
         </Link>
 
-        <section className="mt-7 overflow-hidden rounded-2xl border border-[#f4b16d]/25 bg-[#151311] shadow-[0_28px_90px_rgba(0,0,0,0.48)]">
-          <div className="flex items-center justify-between border-b border-dashed border-black/30 bg-[#f4b16d] px-5 py-4 text-black sm:px-7">
+        <section className="mt-7 overflow-hidden rounded-2xl border border-payg/25 bg-[#151311] shadow-[0_28px_90px_rgba(0,0,0,0.48)]">
+          <div className="flex items-center justify-between border-b border-dashed border-black/30 bg-payg px-5 py-4 text-black sm:px-7">
             <span className="flex items-center gap-2 text-sm font-black uppercase tracking-[0.12em]"><Ticket className="h-4 w-4" /> Pay As You Go</span>
             {confirmed ? <Check className="h-6 w-6" aria-label="Confirmed" /> : <span className="font-heading text-2xl">£7.50</span>}
           </div>
@@ -133,7 +133,7 @@ export default function PayAsYouGoSuccess() {
 
             {!settled ? (
               <div className="mt-7 flex items-center gap-3 rounded-xl border border-white/10 bg-black/25 p-4 text-sm text-white/62" role="status">
-                <LoaderCircle className="h-5 w-5 animate-spin text-[#f4b16d]" /> Stripe is confirming the payment. This can take a moment.
+                <LoaderCircle className="h-5 w-5 animate-spin text-payg" /> Stripe is confirming the payment. This can take a moment.
               </div>
             ) : stillConfirming ? (
               <div className="mt-7 rounded-xl border border-amber-300/20 bg-amber-300/10 p-5 text-amber-50" role="status">
@@ -144,7 +144,7 @@ export default function PayAsYouGoSuccess() {
                   <button
                     type="button"
                     onClick={() => setPollGeneration((value) => value + 1)}
-                    className="inline-flex min-h-[46px] items-center justify-center rounded-xl bg-[#f4b16d] px-5 py-3 text-sm font-black text-black outline-none transition hover:bg-[#ffc485] focus-visible:ring-2 focus-visible:ring-white"
+                    className="inline-flex min-h-[46px] items-center justify-center rounded-xl bg-payg px-5 py-3 text-sm font-black text-black outline-none transition hover:bg-payg-hover focus-visible:ring-2 focus-visible:ring-white"
                   >
                     Check again
                   </button>
@@ -185,11 +185,11 @@ export default function PayAsYouGoSuccess() {
                   </div>
                   <div>
                     <dt className="text-xs font-bold uppercase tracking-[0.12em] text-white/38">When</dt>
-                    <dd className="mt-2 flex items-start gap-2 text-sm leading-6 text-white/70"><CalendarDays className="mt-1 h-4 w-4 shrink-0 text-[#f4b16d]" /> {formatDateTime(orderTerminal.order.class.startTime, orderTerminal.order.class.timezone)}</dd>
+                    <dd className="mt-2 flex items-start gap-2 text-sm leading-6 text-white/70"><CalendarDays className="mt-1 h-4 w-4 shrink-0 text-payg" /> {formatDateTime(orderTerminal.order.class.startTime, orderTerminal.order.class.timezone)}</dd>
                   </div>
                   <div>
                     <dt className="text-xs font-bold uppercase tracking-[0.12em] text-white/38">Location</dt>
-                    <dd className="mt-2 flex items-start gap-2 text-sm leading-6 text-white/70"><MapPin className="mt-1 h-4 w-4 shrink-0 text-[#f4b16d]" /> {orderTerminal.order.class.location || "Zero Alpha Fitness"}</dd>
+                    <dd className="mt-2 flex items-start gap-2 text-sm leading-6 text-white/70"><MapPin className="mt-1 h-4 w-4 shrink-0 text-payg" /> {orderTerminal.order.class.location || "Zero Alpha Fitness"}</dd>
                   </div>
                 </dl>
 
@@ -200,7 +200,7 @@ export default function PayAsYouGoSuccess() {
                 {confirmed && orderTerminal.cancellation.token ? (
                   <Link
                     to={`/pay-as-you-go/cancel?token=${encodeURIComponent(orderTerminal.cancellation.token)}`}
-                    className="mt-6 inline-flex min-h-[48px] items-center justify-center rounded-xl border border-white/15 bg-white/[0.04] px-5 py-3 text-sm font-bold text-white outline-none transition hover:bg-white/[0.08] focus-visible:ring-2 focus-visible:ring-[#f4b16d]"
+                    className="mt-6 inline-flex min-h-[48px] items-center justify-center rounded-xl border border-white/15 bg-white/[0.04] px-5 py-3 text-sm font-bold text-white outline-none transition hover:bg-white/[0.08] focus-visible:ring-2 focus-visible:ring-payg"
                   >
                     Cancel this class
                   </Link>
@@ -224,7 +224,7 @@ export default function PayAsYouGoSuccess() {
                 {reviewTerminal.review.supportRequired ? (
                   <a
                     href={`mailto:support@zeroalphafitness.co.uk?subject=${encodeURIComponent(`PAYG support ${reviewTerminal.review.reference}`)}`}
-                    className="mt-6 inline-flex min-h-[48px] items-center justify-center rounded-xl bg-[#f4b16d] px-5 py-3 text-sm font-black text-black outline-none transition hover:bg-[#ffc485] focus-visible:ring-2 focus-visible:ring-white"
+                    className="mt-6 inline-flex min-h-[48px] items-center justify-center rounded-xl bg-payg px-5 py-3 text-sm font-black text-black outline-none transition hover:bg-payg-hover focus-visible:ring-2 focus-visible:ring-white"
                   >
                     Contact support
                   </a>
@@ -237,7 +237,7 @@ export default function PayAsYouGoSuccess() {
         </section>
 
         <div className="mt-7 flex flex-wrap gap-5 text-sm font-bold">
-          <Link to="/pay-as-you-go" className="text-[#f4b16d] underline decoration-[#f4b16d]/40 underline-offset-4">View more classes</Link>
+          <Link to="/pay-as-you-go" className="text-payg underline decoration-payg/40 underline-offset-4">View more classes</Link>
           <a href="mailto:support@zeroalphafitness.co.uk" className="text-white/55 underline decoration-white/20 underline-offset-4">Contact support</a>
         </div>
       </div>

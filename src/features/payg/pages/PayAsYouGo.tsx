@@ -25,7 +25,7 @@ import {
 
 const LONDON_TZ = "Europe/London";
 const FIELD =
-  "mt-2 w-full rounded-xl border border-white/15 bg-black/35 px-4 py-3.5 text-[16px] text-white outline-none transition placeholder:text-white/55 focus:border-[#f4b16d] focus:ring-2 focus:ring-[#f4b16d]/25";
+  "mt-2 w-full rounded-xl border border-white/15 bg-black/35 px-4 py-3.5 text-[16px] text-white outline-none transition placeholder:text-white/55 focus:border-payg focus:ring-2 focus:ring-payg/25";
 
 function asDate(value: string) {
   return new Date(value);
@@ -300,7 +300,7 @@ export default function PayAsYouGo() {
           <Link
             to="/"
             aria-label="Zero Alpha home"
-            className="rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-[#f4b16d]"
+            className="rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-payg"
           >
             <img src="/ZERO-ALPHA.png" alt="Zero Alpha Fitness" className="h-16 w-auto object-contain" />
           </Link>
@@ -308,7 +308,7 @@ export default function PayAsYouGo() {
             <Link className="text-white/65 transition hover:text-white" to="/memberships">
               Memberships
             </Link>
-            <Link className="text-[#f4b16d] transition hover:text-[#ffc485]" to="/">
+            <Link className="text-payg transition hover:text-payg-hover" to="/">
               Member sign in
             </Link>
           </nav>
@@ -330,7 +330,7 @@ export default function PayAsYouGo() {
                 </p>
               </div>
               <div className="shrink-0 text-left sm:text-right">
-                <p className="font-heading text-4xl text-[#f4b16d]">£7.50</p>
+                <p className="font-heading text-4xl text-payg">£7.50</p>
                 <p className="mt-1 text-sm font-bold text-white/60">one class · one attendee</p>
               </div>
             </div>
@@ -338,7 +338,7 @@ export default function PayAsYouGo() {
             <div className="mt-7">
               {loading ? (
                 <div className="grid min-h-64 place-items-center rounded-2xl border border-white/10 bg-[#151311]">
-                  <LoaderCircle className="h-7 w-7 animate-spin text-[#f4b16d]" aria-label="Loading timetable" />
+                  <LoaderCircle className="h-7 w-7 animate-spin text-payg" aria-label="Loading timetable" />
                 </div>
               ) : loadError ? (
                 <div role="alert" className="rounded-2xl border border-red-400/25 bg-red-400/10 p-6 text-red-100">
@@ -371,7 +371,7 @@ export default function PayAsYouGo() {
                           ? "No previous timetable week"
                           : `Show previous week, ${formatWeekRange(weeks[activeWeekIndex - 1].key, weeks[activeWeekIndex - 1].endKey)}`}
                         onClick={() => showWeek(activeWeekIndex - 1)}
-                        className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-white/15 px-3 text-sm font-black text-white outline-none transition hover:border-white/30 hover:bg-white/[0.05] focus-visible:ring-2 focus-visible:ring-[#f4b16d] disabled:cursor-not-allowed disabled:opacity-30 sm:px-4"
+                        className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-white/15 px-3 text-sm font-black text-white outline-none transition hover:border-white/30 hover:bg-white/[0.05] focus-visible:ring-2 focus-visible:ring-payg disabled:cursor-not-allowed disabled:opacity-30 sm:px-4"
                       >
                         <ChevronLeft className="h-5 w-5" aria-hidden="true" />
                         <span className="hidden sm:inline">Previous</span>
@@ -393,7 +393,7 @@ export default function PayAsYouGo() {
                           ? "No next timetable week"
                           : `Show next week, ${formatWeekRange(weeks[activeWeekIndex + 1].key, weeks[activeWeekIndex + 1].endKey)}`}
                         onClick={() => showWeek(activeWeekIndex + 1)}
-                        className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-white/15 px-3 text-sm font-black text-white outline-none transition hover:border-white/30 hover:bg-white/[0.05] focus-visible:ring-2 focus-visible:ring-[#f4b16d] disabled:cursor-not-allowed disabled:opacity-30 sm:px-4"
+                        className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-white/15 px-3 text-sm font-black text-white outline-none transition hover:border-white/30 hover:bg-white/[0.05] focus-visible:ring-2 focus-visible:ring-payg disabled:cursor-not-allowed disabled:opacity-30 sm:px-4"
                       >
                         <span className="hidden sm:inline">Next</span>
                         <ChevronRight className="h-5 w-5" aria-hidden="true" />
@@ -435,9 +435,9 @@ export default function PayAsYouGo() {
                               className={[
                                 "group grid w-full grid-cols-[76px_minmax(0,1fr)_auto] items-center gap-3 border-b border-white/8 px-4 py-5 text-left outline-none transition last:border-b-0 sm:grid-cols-[96px_minmax(0,1fr)_auto] sm:px-5",
                                 isSelected
-                                  ? "bg-[#f4b16d] text-black"
+                                  ? "bg-payg text-black"
                                   : canSelect
-                                  ? "bg-transparent text-white hover:bg-white/[0.045] focus-visible:bg-white/[0.07] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#f4b16d]"
+                                  ? "bg-transparent text-white hover:bg-white/[0.045] focus-visible:bg-white/[0.07] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-payg"
                                   : "cursor-not-allowed bg-black/20 text-white/35",
                               ].join(" ")}
                             >
@@ -464,11 +464,11 @@ export default function PayAsYouGo() {
                                   {isSelected ? `Selected · ${sessionAvailability(session)}` : sessionAvailability(session)}
                                 </span>
                                 {isSelected ? (
-                                  <span className="grid h-8 w-8 place-items-center rounded-full bg-black text-[#f4b16d]">
+                                  <span className="grid h-8 w-8 place-items-center rounded-full bg-black text-payg">
                                     <Check className="h-4 w-4" />
                                   </span>
                                 ) : canSelect ? (
-                                  <ArrowRight className="h-5 w-5 text-white/55 transition group-hover:translate-x-0.5 group-hover:text-[#f4b16d]" />
+                                  <ArrowRight className="h-5 w-5 text-white/55 transition group-hover:translate-x-0.5 group-hover:text-payg" />
                                 ) : (
                                   <LockKeyhole className="h-4 w-4 text-white/25" />
                                 )}
@@ -490,8 +490,8 @@ export default function PayAsYouGo() {
             tabIndex={-1}
             className="scroll-mt-6 outline-none lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto"
           >
-            <div className="overflow-hidden rounded-2xl border border-[#f4b16d]/30 bg-[#151311] shadow-[0_30px_90px_rgba(0,0,0,0.5)]">
-              <div className="flex items-center justify-between border-b border-dashed border-white/18 bg-[#f4b16d] px-5 py-4 text-black">
+            <div className="overflow-hidden rounded-2xl border border-payg/30 bg-[#151311] shadow-[0_30px_90px_rgba(0,0,0,0.5)]">
+              <div className="flex items-center justify-between border-b border-dashed border-white/18 bg-payg px-5 py-4 text-black">
                 <span className="flex items-center gap-2 text-sm font-black uppercase tracking-[0.12em]">
                   <Ticket className="h-4 w-4" /> Your class ticket
                 </span>
@@ -503,10 +503,10 @@ export default function PayAsYouGo() {
                   <div aria-live="polite">
                     <p className="font-heading text-3xl uppercase leading-none text-white">{selected.title}</p>
                     <div className="mt-4 space-y-2 text-sm text-white/65">
-                      <p className="flex items-start gap-2"><CalendarDays className="mt-0.5 h-4 w-4 text-[#f4b16d]" /> {formatLongDate(selected.startTime, selected.timezone)}</p>
-                      <p className="flex items-start gap-2"><Clock3 className="mt-0.5 h-4 w-4 text-[#f4b16d]" /> {formatTime(selected.startTime, selected.timezone)}–{formatTime(selected.endTime, selected.timezone)}</p>
-                      <p className="flex items-start gap-2"><MapPin className="mt-0.5 h-4 w-4 text-[#f4b16d]" /> {selected.location || "Zero Alpha Fitness"}</p>
-                      <p className="flex items-start gap-2"><UsersRound className="mt-0.5 h-4 w-4 text-[#f4b16d]" /> {sessionAvailability(selected)}</p>
+                      <p className="flex items-start gap-2"><CalendarDays className="mt-0.5 h-4 w-4 text-payg" /> {formatLongDate(selected.startTime, selected.timezone)}</p>
+                      <p className="flex items-start gap-2"><Clock3 className="mt-0.5 h-4 w-4 text-payg" /> {formatTime(selected.startTime, selected.timezone)}–{formatTime(selected.endTime, selected.timezone)}</p>
+                      <p className="flex items-start gap-2"><MapPin className="mt-0.5 h-4 w-4 text-payg" /> {selected.location || "Zero Alpha Fitness"}</p>
+                      <p className="flex items-start gap-2"><UsersRound className="mt-0.5 h-4 w-4 text-payg" /> {sessionAvailability(selected)}</p>
                     </div>
                   </div>
                 ) : (
@@ -521,9 +521,9 @@ export default function PayAsYouGo() {
                 <div className="my-6 border-t border-dashed border-white/16" />
 
                 <ul className="space-y-3 text-sm leading-6 text-white/60">
-                  <li className="flex gap-3"><Check className="mt-1 h-4 w-4 shrink-0 text-[#f4b16d]" /> Payment is for this named class, not a reusable credit.</li>
-                  <li className="flex gap-3"><Check className="mt-1 h-4 w-4 shrink-0 text-[#f4b16d]" /> The booking cannot be transferred or rescheduled.</li>
-                  <li className="flex gap-3"><Check className="mt-1 h-4 w-4 shrink-0 text-[#f4b16d]" /> Cancellations inside 24 hours and no-shows are non-refundable.</li>
+                  <li className="flex gap-3"><Check className="mt-1 h-4 w-4 shrink-0 text-payg" /> Payment is for this named class, not a reusable credit.</li>
+                  <li className="flex gap-3"><Check className="mt-1 h-4 w-4 shrink-0 text-payg" /> The booking cannot be transferred or rescheduled.</li>
+                  <li className="flex gap-3"><Check className="mt-1 h-4 w-4 shrink-0 text-payg" /> Cancellations inside 24 hours and no-shows are non-refundable.</li>
                 </ul>
 
                 {!checkoutOpen ? (
@@ -562,10 +562,10 @@ export default function PayAsYouGo() {
                         I confirm I am the named attendee and I am aged 18 or over.
                       </Acceptance>
                       <Acceptance checked={waiverAccepted} onChange={(value) => { setWaiverAccepted(value); resetAttempt(); }}>
-                        I have read and accept the <a className="font-bold text-[#f4b16d] underline underline-offset-4" href={schedule?.legal?.waiver.publicUrl} target="_blank" rel="noreferrer">adult participant waiver</a>.
+                        I have read and accept the <a className="font-bold text-payg underline underline-offset-4" href={schedule?.legal?.waiver.publicUrl} target="_blank" rel="noreferrer">adult participant waiver</a>.
                       </Acceptance>
                       <Acceptance checked={termsAccepted} onChange={(value) => { setTermsAccepted(value); resetAttempt(); }}>
-                        I have read and accept the <a className="font-bold text-[#f4b16d] underline underline-offset-4" href={schedule?.legal?.terms.publicUrl} target="_blank" rel="noreferrer">Pay As You Go terms</a>.
+                        I have read and accept the <a className="font-bold text-payg underline underline-offset-4" href={schedule?.legal?.terms.publicUrl} target="_blank" rel="noreferrer">Pay As You Go terms</a>.
                       </Acceptance>
                       <Acceptance checked={cancellationAccepted} onChange={(value) => { setCancellationAccepted(value); resetAttempt(); }}>
                         I understand this class cannot be transferred or rescheduled, and cancellations made less than 24 hours before it starts or a no-show are non-refundable.
@@ -577,7 +577,7 @@ export default function PayAsYouGo() {
                     <button
                       type="submit"
                       disabled={submitting || !allAccepted}
-                      className="inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-xl bg-[#f4b16d] px-5 py-3.5 text-base font-black text-black outline-none transition hover:bg-[#ffc485] focus-visible:ring-2 focus-visible:ring-[#f4b16d] focus-visible:ring-offset-2 focus-visible:ring-offset-[#151311] disabled:cursor-not-allowed disabled:opacity-40"
+                      className="inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-xl bg-payg px-5 py-3.5 text-base font-black text-black outline-none transition hover:bg-payg-hover focus-visible:ring-2 focus-visible:ring-payg focus-visible:ring-offset-2 focus-visible:ring-offset-[#151311] disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       {submitting ? <LoaderCircle className="h-5 w-5 animate-spin" /> : <ShieldCheck className="h-5 w-5" />}
                       {submitting ? "Opening Stripe…" : "Reserve and pay £7.50"}
@@ -604,7 +604,7 @@ export default function PayAsYouGo() {
               type="button"
               aria-controls="payg-details"
               onClick={continueToDetails}
-              className="shrink-0 rounded-xl bg-[#f4b16d] px-4 py-3 text-sm font-black text-black outline-none focus-visible:ring-2 focus-visible:ring-white"
+              className="shrink-0 rounded-xl bg-payg px-4 py-3 text-sm font-black text-black outline-none focus-visible:ring-2 focus-visible:ring-white"
             >
               Continue
             </button>
@@ -625,13 +625,13 @@ function Acceptance({
   children: React.ReactNode;
 }) {
   return (
-    <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-white/10 bg-black/25 p-3.5 text-sm leading-6 text-white/65 transition hover:border-white/20 focus-within:border-[#f4b16d] focus-within:ring-2 focus-within:ring-[#f4b16d]/20">
+    <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-white/10 bg-black/25 p-3.5 text-sm leading-6 text-white/65 transition hover:border-white/20 focus-within:border-payg focus-within:ring-2 focus-within:ring-payg/20">
       <input
         type="checkbox"
         required
         checked={checked}
         onChange={(event) => onChange(event.target.checked)}
-        className="mt-1 h-4 w-4 shrink-0 accent-[#f4b16d]"
+        className="mt-1 h-4 w-4 shrink-0 accent-payg"
       />
       <span>{children}</span>
     </label>

@@ -14,6 +14,10 @@ module.exports = {
         concrete: '#2c2c2c',
         steel: '#3f3f3f',
         bone: '#f4f4f4',
+        payg: {
+          DEFAULT: '#a9b85f',
+          hover: '#bac96f',
+        },
       },
     },
   },

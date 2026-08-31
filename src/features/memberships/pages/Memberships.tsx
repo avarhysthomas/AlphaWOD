@@ -199,14 +199,14 @@ export default function Memberships() {
           Memberships
         </h1>
 
-        <div className="mt-7 flex flex-col gap-5 border-y border-[#f4b16d]/25 py-6 sm:flex-row sm:items-center sm:justify-between">
+        <div className="mt-7 flex flex-col gap-5 border-y border-payg/25 py-6 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="font-heading text-3xl uppercase text-white">Just want one class?</h2>
             <p className="mt-2 text-sm leading-6 text-white/60">See the live timetable and choose one Pay As You Go session for £7.50. No account or recurring membership.</p>
           </div>
           <Link
             to="/pay-as-you-go"
-            className="inline-flex min-h-[48px] shrink-0 items-center justify-center rounded-xl bg-[#f4b16d] px-5 py-3 text-sm font-black text-black outline-none transition hover:bg-[#ffc485] focus-visible:ring-2 focus-visible:ring-white"
+            className="inline-flex min-h-[48px] shrink-0 items-center justify-center rounded-xl bg-payg px-5 py-3 text-sm font-black text-black outline-none transition hover:bg-payg-hover focus-visible:ring-2 focus-visible:ring-white"
           >
             View PAYG timetable
           </Link>

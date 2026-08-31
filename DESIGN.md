@@ -1,14 +1,14 @@
 ---
 name: "AlphaWOD Adult Purchase and Limited Access"
-description: "A carbon-black, amber-led system for named-class checkout and least-privilege membership access."
+description: "A carbon-black system with olive PAYG transactions and amber membership states."
 colors:
   carbon: "#050505"
   panel: "#151311"
   row: "#11100f"
   bone: "#f4f0ea"
   white: "#ffffff"
-  amber: "#f4b16d"
-  amber-hover: "#ffc485"
+  olive: "#a9b85f"
+  olive-hover: "#bac96f"
   amber-soft: "#fef3c7"
   emerald-soft: "#a7f3d0"
   red-soft: "#fecaca"
@@ -61,13 +61,13 @@ spacing:
   "12": "48px"
 components:
   payg-primary:
-    backgroundColor: "{colors.amber}"
+    backgroundColor: "{colors.olive}"
     textColor: "{colors.carbon}"
     typography: "{typography.body-public}"
     rounded: "{rounded.xl}"
     padding: "14px 20px"
   payg-primary-hover:
-    backgroundColor: "{colors.amber-hover}"
+    backgroundColor: "{colors.olive-hover}"
     textColor: "{colors.carbon}"
     typography: "{typography.body-public}"
     rounded: "{rounded.xl}"
@@ -101,30 +101,30 @@ components:
 
 **Creative North Star: "The Timetable Is the Offer"**
 
-The public Pay As You Go journey is an operational departure board that becomes a class ticket. Real session rows lead; selecting a row visibly binds it to the amber ticket rail and its checkout form. It must never read as a generic membership landing page or as the purchase of a transferable credit.
+The public Pay As You Go journey is an operational departure board that becomes a class ticket. Real session rows lead; selecting a row visibly binds it to the olive ticket rail and its checkout form. It must never read as a generic membership landing page or as the purchase of a transferable credit.
 
-The wider world is matte, direct and gym-floor practical: carbon-black page framing, warm near-black panels, warm-white type, oversized condensed headings and a small amount of amber reserved for selection, price and primary action. Adult Conditioning extends the same decisive selected/unselected/disabled grammar into eligible schedule booking and weekly quota status, while retaining the established recurring-membership checkout treatment.
+The wider world is matte, direct and gym-floor practical: carbon-black page framing, warm near-black panels, warm-white type, oversized condensed headings and a small amount of muted olive reserved for PAYG selection, price and primary action. Adult Conditioning extends the same decisive selected/unselected/disabled grammar into eligible schedule booking and weekly quota status, while retaining its established amber recurring-membership treatment.
 
 **Key Characteristics:**
 
 - Live operational information is the primary visual proof.
-- Amber means selected, actionable or financially important; it is not decoration.
+- Olive means selected, actionable or financially important within PAYG; it is not decoration.
 - Ticket perforations, clipped row stacks and strong time numerals create the signature.
 - Restricted access is clear and quiet: show only the capabilities the plan includes, then explain exclusions where the purchase decision is made.
 
 ## Colors
 
-The palette is predominantly neutral and dark, with warm amber acting as a high-contrast transaction signal.
+The palette is predominantly neutral and dark, with muted olive acting as the high-contrast PAYG transaction signal. Amber remains reserved for warnings and established membership states.
 
 ### Primary
 
-- **Ticket Amber** (`colors.amber`): PAYG price, selected rows, ticket headers, icons, links, form focus and primary actions.
-- **Ticket Amber Hover** (`colors.amber-hover`): PAYG hover only; do not make it a second resting accent.
-- **Membership Amber Soft** (`colors.amber-soft`): enabled recurring-membership actions and booked or selected Conditioning classes. The closed Conditioning preview uses Ticket Amber instead. Preserve this surface distinction unless it is deliberately unified across the whole membership flow.
+- **Ticket Olive** (`colors.olive`): PAYG price, selected rows, ticket headers, icons, links, form focus and primary actions.
+- **Ticket Olive Hover** (`colors.olive-hover`): PAYG hover only; do not make it a second resting accent.
+- **Membership Amber Soft** (`colors.amber-soft`): enabled recurring-membership actions and booked or selected Conditioning classes. Closed or gated membership previews retain their established amber attention treatment. Preserve this surface distinction unless it is deliberately unified across the whole membership flow.
 
 ### Neutral
 
-- **Carbon** (`colors.carbon`): page and safe-area background, and ink on amber/white controls.
+- **Carbon** (`colors.carbon`): page and safe-area background, and ink on olive/white controls.
 - **Warm Panel** (`colors.panel`): transaction cards, forms, notices and limited-access explanatory surfaces.
 - **Departure Row** (`colors.row`): PAYG row stack and the mobile selection bar.
 - **Bone** (`colors.bone`): warm base text. Full white is reserved for headings and the strongest values.
@@ -136,7 +136,7 @@ The palette is predominantly neutral and dark, with warm amber acting as a high-
 - **Amber tints:** release gates, processing and recoverable attention states.
 - **Red Soft** (`colors.red-soft`): destructive cancellation and errors. Never use amber for destructive confirmation.
 
-**The Essential-Copy Rule.** Required policy, legal, availability and error text stays at a readable white/amber/red opacity. White below about 55% is metadata only; the faint 34–45% treatment is never the sole presentation of essential information.
+**The Essential-Copy Rule.** Required policy, legal, availability and error text stays at a readable white/olive/amber/red opacity. White below about 55% is metadata only; the faint 34–45% treatment is never the sole presentation of essential information.
 
 ## Typography
 
@@ -191,17 +191,17 @@ Recurring-membership cards retain their roomier 28px corners and 16px fields. Co
 
 - Use the existing Zero Alpha image with descriptive alt text and a home-link label.
 - Keep the header low and functional: logo at left, Memberships and Member sign-in at right, a subtle bottom border and dark translucent backdrop.
-- The logo link receives a 2px amber focus ring.
+- The logo link receives a 2px olive focus ring on PAYG surfaces.
 
 ### Schedule row
 
 - The entire row is a button with `aria-pressed`; unavailable rows are disabled, visibly muted and show a lock.
-- Available rows are dark with a restrained hover/focus fill. Selected rows invert to amber with carbon text, replace the arrow with a dark circular check, and repeat the availability as selected.
+- Available rows are dark with a restrained hover/focus fill. Selected rows invert to olive with carbon text, replace the arrow with a dark circular check, and repeat the availability as selected.
 - The accessible name must include time, title, availability and selected state. Capacity text comes from the public schedule response, never from a client estimate.
 
 ### Ticket rail and receipt
 
-- The amber header binds the ticket label and fixed offer price. Dashed separators divide identity, conditions and receipt facts.
+- The olive header binds the ticket label and fixed offer price. Dashed separators divide identity, conditions and receipt facts.
 - Before selection, prompt for one session. After selection, pin class, date, time, location and availability above attendee fields.
 - Success reuses the ticket shell for processing, confirmed, refund, cancellation, no-show and dispute states. Preserve the order reference and recorded cancellation cutoff.
 
@@ -215,13 +215,13 @@ Recurring-membership cards retain their roomier 28px corners and 16px fields. Co
 
 ### Inputs and acceptances
 
-- PAYG inputs use 16px text, 12px corners, translucent black fill and a 2px amber focus halo. Keep explicit labels, required state, autocomplete hints, appropriate input type and the E.164 phone example.
-- Acceptance controls are full-row labels with a visible native checkbox, amber accent and `focus-within` treatment. Each legal proposition remains separately accepted.
+- PAYG inputs use 16px text, 12px corners, translucent black fill and a 2px olive focus halo. Keep explicit labels, required state, autocomplete hints, appropriate input type and the E.164 phone example.
+- Acceptance controls are full-row labels with a visible native checkbox, olive accent and `focus-within` treatment. Each legal proposition remains separately accepted.
 - Membership inputs use the established 16px recurring-checkout shape and border-shift focus. Typed signatures must continue to match the named adult and expose mismatch with `aria-invalid` plus linked hint text.
 
 ### Actions and status panels
 
-- PAYG primary actions are amber on carbon, at least 48–52px high, heavy weight and sentence case. Membership purchase actions remain white or soft amber according to their existing flow.
+- PAYG primary actions are olive on carbon, at least 48–52px high, heavy weight and sentence case. Membership purchase actions remain white or soft amber according to their existing flow.
 - Secondary actions are low-opacity dark/transparent with a light border. Destructive cancellation uses red-on-red-soft treatment and explicit confirmation copy.
 - Loading uses a spinner plus text. Errors use `role="alert"`; processing and completed non-error outcomes use `role="status"`. Never communicate state by color alone.
 
@@ -233,7 +233,7 @@ Recurring-membership cards retain their roomier 28px corners and 16px fields. Co
 
 ### Focus, accessibility and motion
 
-- Use the established 2px amber, white or semantic focus ring; add a 2px offset when the control sits on the same color as its ring.
+- Use the established 2px olive, white or semantic focus ring on PAYG surfaces; add a 2px offset when the control sits on the same color as its ring.
 - Preserve section labelling, fieldsets/legends, pressed and disabled semantics, live regions and alert/status roles. Moving focus to the ticket after mobile Continue is part of the interaction contract.
 - The current Continue action scrolls smoothly without checking reduced-motion preference. New motion and any refactor of this behavior must honor `prefers-reduced-motion`.
 
@@ -257,7 +257,7 @@ Recurring-membership cards retain their roomier 28px corners and 16px fields. Co
 ### Do
 
 - **Do** let real schedule rows lead the decision and make the current London-local week's remaining Conditioning allowance easy to understand.
-- **Do** use amber to connect a selected or booked source row to its summary and action.
+- **Do** use olive to connect a selected PAYG source row to its summary and action.
 - **Do** repeat the exact selected class, price and policy boundary at checkout and confirmation.
 - **Do** preserve separate PAYG and recurring-membership typography/action treatments while sharing interaction semantics.
 - **Do** keep faint text to secondary metadata and use readable contrast for every condition of purchase.

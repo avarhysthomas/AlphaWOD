@@ -114,7 +114,7 @@ export default function PayAsYouGoCancellation() {
             </p>
             <Link
               to="/pay-as-you-go"
-              className="mt-7 inline-flex min-h-[48px] items-center rounded-xl bg-[#f4b16d] px-5 py-3 text-sm font-black text-black outline-none focus-visible:ring-2 focus-visible:ring-white"
+              className="mt-7 inline-flex min-h-[48px] items-center rounded-xl bg-payg px-5 py-3 text-sm font-black text-black outline-none focus-visible:ring-2 focus-visible:ring-white"
             >
               View the timetable
             </Link>
@@ -128,7 +128,7 @@ export default function PayAsYouGoCancellation() {
             className="mt-6 flex items-center gap-3 rounded-xl border border-white/10 bg-black/25 p-4 text-sm text-white/70"
             role="status"
           >
-            <LoaderCircle className="h-5 w-5 animate-spin text-[#f4b16d]" />
+            <LoaderCircle className="h-5 w-5 animate-spin text-payg" />
             Checking this booking and its refund deadline…
           </div>
         ) : !preview ? (
@@ -158,14 +158,14 @@ export default function PayAsYouGoCancellation() {
               <div>
                 <dt className="text-xs font-bold uppercase tracking-[0.12em] text-white/45">When</dt>
                 <dd className="mt-2 flex items-start gap-2 text-sm leading-6 text-white/75">
-                  <CalendarDays className="mt-1 h-4 w-4 shrink-0 text-[#f4b16d]" />
+                  <CalendarDays className="mt-1 h-4 w-4 shrink-0 text-payg" />
                   {formatDateTime(preview.class.startTime, preview.class.timezone)}
                 </dd>
               </div>
               <div>
                 <dt className="text-xs font-bold uppercase tracking-[0.12em] text-white/45">Location</dt>
                 <dd className="mt-2 flex items-start gap-2 text-sm leading-6 text-white/75">
-                  <MapPin className="mt-1 h-4 w-4 shrink-0 text-[#f4b16d]" />
+                  <MapPin className="mt-1 h-4 w-4 shrink-0 text-payg" />
                   {preview.class.location || "Zero Alpha Fitness"}
                 </dd>
               </div>
