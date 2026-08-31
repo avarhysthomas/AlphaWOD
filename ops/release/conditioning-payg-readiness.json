@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "verificationMode": "read-only-no-deploy",
+  "release": "adult-conditioning-and-payg",
+  "productionGatesExpectedClosed": true,
+  "ownerDecisions": [
+    {
+      "id": "adult-conditioning-product-terms",
+      "approved": false,
+      "evidence": null
+    },
+    {
+      "id": "payg-product-terms-and-waiver",
+      "approved": false,
+      "evidence": null
+    },
+    {
+      "id": "payg-pii-retention-and-redaction-policy",
+      "approved": true,
+      "evidence": "ops/release/evidence/payg-retention-owner-approval-2026-08-31.json"
+    }
+  ],
+  "operationalEvidence": [
+    {
+      "id": "live-stripe-webhook-exact-event-readback",
+      "verified": false,
+      "evidence": null
+    },
+    {
+      "id": "live-product-catalogue-and-closed-config-readback",
+      "verified": false,
+      "evidence": null
+    },
+    {
+      "id": "billing-alert-policies-and-staffed-notification-route",
+      "verified": false,
+      "evidence": null
+    },
+    {
+      "id": "resend-domain-and-confirmation-delivery",
+      "verified": false,
+      "evidence": null
+    },
+    {
+      "id": "conditioning-stripe-test-purchase-to-booking-journey",
+      "verified": false,
+      "evidence": null,
+      "partialEvidence": "ops/release/evidence/conditioning-stripe-test-purchase-2026-08-31.json"
+    },
+    {
+      "id": "payg-stripe-test-purchase-refund-dispute-email-journey",
+      "verified": false,
+      "evidence": null,
+      "partialEvidence": "ops/release/evidence/payg-stripe-test-catalogue-readback-2026-08-31.json"
+    },
+    {
+      "id": "class-cancellation-quota-and-payg-refund-drill",
+      "verified": false,
+      "evidence": null
+    }
+  ]
+}

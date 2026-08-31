@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "deploymentMode": "template-only",
+  "productionProjectId": "alphawod-d1f2f",
+  "endpointId": "we_1U6SObFzNDZoGGA0cw5Yyqth",
+  "endpointUrl": "https://europe-west1-alphawod-d1f2f.cloudfunctions.net/stripeWebhook",
+  "enabledEventsMode": "exact",
+  "requiredEvents": [
+    "charge.dispute.closed",
+    "charge.dispute.created",
+    "charge.dispute.updated",
+    "charge.refunded",
+    "checkout.session.async_payment_failed",
+    "checkout.session.async_payment_succeeded",
+    "checkout.session.completed",
+    "checkout.session.expired",
+    "customer.subscription.created",
+    "customer.subscription.deleted",
+    "customer.subscription.paused",
+    "customer.subscription.resumed",
+    "customer.subscription.updated",
+    "invoice.paid",
+    "invoice.payment_failed",
+    "refund.created",
+    "refund.failed",
+    "refund.updated"
+  ]
+}

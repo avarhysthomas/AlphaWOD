@@ -42,11 +42,49 @@ Stripe accounts.
 
 ## Run the journey
 
+The new Conditioning Product and Price can be verified independently before
+starting any Checkout or creating a subscription:
+
+```sh
+npm run stripe:test:conditioning-preflight
+```
+
+This read-only scope retrieves only Adult Conditioning and the locked-down
+Customer Portal. It deliberately excludes unrelated coupons, youth products
+and PAYG, and cannot be widened to another plan through its scope input. The
+default full-catalogue preflight remains unchanged and must still fail if any
+existing plan has provider drift.
+
+The one-time PAYG Product and Price have their own equally narrow read-only
+preflight:
+
+```sh
+npm run stripe:test:payg-preflight
+```
+
+That scope retrieves no recurring membership Price, includes only the exact
+`adult_payg_class` Product/Price pair, and skips both the existing-member and
+youth-family offers. It may also read the optional locked-down Customer Portal
+configuration; it creates or changes no Stripe object. Run the separate full
+catalogue preflight when evidence for the whole provider catalogue is required.
+
 Start the complete stack from the repository root:
 
 ```sh
 npm run stripe:test
 ```
+
+To exercise only the new Adult Conditioning provider journey while retaining
+the full catalogue verifier as the default, run:
+
+```bash
+npm run stripe:test:conditioning
+```
+
+That scoped runner verifies only the exact Adult Conditioning Product and
+Price before starting. It cannot select PAYG or silently widen to another
+membership plan; `npm run stripe:test` continues to require the complete test
+catalogue and all shared offers.
 
 That single command builds Functions, starts a real Stripe test-mode listener,
 runs the read-only catalogue/Portal preflight, starts Auth, Firestore and
@@ -72,7 +110,7 @@ shows a prominent test-only notice and presents the same approved, versioned
 legal documents used by the release.
 
 The current frontend calls only `createMembershipCheckoutSessionV2` and sends
-`checkoutSchemaVersion: 4`. MINI ALPHAS - 10 & Under costs £30 per child per month and is
+`checkoutSchemaVersion: 6`. MINI ALPHAS - 10 & Under costs £30 per child per month and is
 designed for ages 10 and under; TEEN ALPHAS - 11 & UP costs £35 per child per month and is
 designed for ages 11 and up. These age descriptions are non-blocking guidance:
 checkout still requires a valid, non-future date of birth, but staff manage

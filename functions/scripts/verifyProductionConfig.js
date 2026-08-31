@@ -158,6 +158,7 @@ function assertPaygLegalEvidence(environment, origin) {
     const version = values[`PAYG_${kind}_VERSION`];
     const digest = values[`PAYG_${kind}_SHA256`];
     if (!/^[A-Za-z0-9._-]{3,120}$/.test(version) ||
+      /(?:^|[-_.])(?:DRAFT|PENDING|REVIEW|CANDIDATE)(?:[-_.]|$)/i.test(version) ||
       !/^[a-f0-9]{64}$/.test(digest)) {
       throw new Error(`PAYG ${kind.toLowerCase()} publication evidence is invalid.`);
     }
@@ -167,7 +168,12 @@ function assertPaygLegalEvidence(environment, origin) {
     } catch {
       throw new Error(`PAYG ${kind.toLowerCase()} publication URL is invalid.`);
     }
+    const expectedPathSuffix = `/${version}.txt`;
     if (url.origin !== origin || !url.pathname.startsWith("/legal/") ||
+      !url.pathname.endsWith(expectedPathSuffix) ||
+      /\/(?:product-)?drafts?\//i.test(url.pathname) ||
+      /(?:^|[-_.\/])(?:DRAFT|PENDING|REVIEW|CANDIDATE)(?:[-_.\/]|$)/i
+        .test(url.pathname) ||
       url.search || url.hash) {
       throw new Error(
         `PAYG ${kind.toLowerCase()} must use an immutable same-origin /legal/ URL.`
@@ -185,13 +191,13 @@ function assertPaygRetentionEvidence(environment) {
   )) {
     throw new Error("PAYG PII retention policy version is invalid.");
   }
-  for (const name of [
-    "PAYG_ORDER_PII_RETENTION_DAYS",
-    "PAYG_WAIVER_PII_RETENTION_DAYS",
-  ]) {
-    if (!/^(0|[1-9]\d{0,4})$/.test(values[name]) ||
-      Number(values[name]) > 36_500) {
-      throw new Error(`${name} must be an approved whole-day value.`);
+  const exactDays = {
+    PAYG_ORDER_PII_RETENTION_DAYS: "90",
+    PAYG_WAIVER_PII_RETENTION_DAYS: "2190",
+  };
+  for (const [name, expected] of Object.entries(exactDays)) {
+    if (values[name] !== expected) {
+      throw new Error(`${name} must match the approved ${expected}-day policy.`);
     }
   }
 }
@@ -301,7 +307,7 @@ function assertProductionConfig(
     environment,
     "PAYG_PII_RETENTION_APPROVED"
   );
-  assertExact(environment, "PAYG_PII_REDACTION_IMPLEMENTED", "false");
+  assertExact(environment, "PAYG_PII_REDACTION_IMPLEMENTED", "true");
   if (conditioningPurchaseEnabled && !membershipPurchaseEnabled) {
     throw new Error(
       "Adult Conditioning purchase requires the shared membership purchase gate."
@@ -357,9 +363,6 @@ function assertProductionConfig(
         "PAYG opening requires approved legal and PII-retention evidence."
       );
     }
-    throw new Error(
-      "PAYG cannot open: approved automated PII redaction has not been implemented."
-    );
   }
   if (!/^1:\d+:web:[a-f0-9]+$/i.test(values.MEMBERSHIP_CHECKOUT_APP_ID)) {
     throw new Error(

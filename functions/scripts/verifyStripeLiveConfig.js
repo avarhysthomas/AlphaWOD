@@ -25,6 +25,9 @@ const {
   matchesApprovedLiveStripeCatalogueEntry,
 } = require("../lib/stripeLiveCatalog");
 const {redactProviderSecrets} = require("./stripeCliTestKey");
+const {
+  retrieveAndAssertLiveWebhookEndpoint,
+} = require("./stripeWebhookConfig");
 
 function couponIdForPromotionCode(promotionCode) {
   return typeof promotionCode.promotion?.coupon === "string" ?
@@ -177,6 +180,7 @@ async function main() {
     portal.features.subscription_pause?.enabled === true) {
     throw new Error("The LIVE Customer Portal configuration is not locked down.");
   }
+  const webhook = await retrieveAndAssertLiveWebhookEndpoint(stripe);
 
   console.log("Stripe LIVE catalogue verified (read-only; purchase gates remain closed):");
   verified.forEach(({planKey, priceId, productId}) =>
@@ -187,6 +191,9 @@ async function main() {
   console.log(`- Shared reusable Promotion Code: ${promotionCode.id}`);
   console.log(`- Youth family Coupon: ${familyCoupon.id}`);
   console.log(`- Customer Portal: ${portal.id}`);
+  console.log(
+    `- Shared webhook: ${webhook.id} (${webhook.enabled_events.length} exact events)`
+  );
 }
 
 main().catch((error) => {

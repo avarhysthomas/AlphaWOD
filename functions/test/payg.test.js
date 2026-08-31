@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const {
+  __testing: paygTesting,
   APPROVED_PAYG_STRIPE_CATALOGUE_IDS,
   PAYG_AMOUNT_PENCE,
   PAYG_CHECKOUT_SCHEMA_VERSION,
@@ -11,14 +12,25 @@ const {
   PAYG_CHECKOUT_RATE_LIMIT_COLLECTION,
   PAYG_CURRENCY,
   PAYG_DUPLICATE_LOCK_COLLECTION,
+  PAYG_BOOKING_PII_FIELDS,
   PAYG_INTENT_PII_FIELDS,
   PAYG_IDEMPOTENT_RETRY_POLICY,
   PAYG_MAX_CONCURRENT_UNPAID_HOLDS_PER_CLASS,
   PAYG_OFFERING_KEY,
+  PAYG_ORDER_PII_FIELDS,
+  PAYG_ORDER_PII_RETENTION_DAYS,
+  PAYG_OUTBOX_PII_FIELDS,
   PAYG_PAYMENT_REVIEW_COLLECTION,
   PAYG_PII_REDACTION_IMPLEMENTED,
+  PAYG_PII_REDACTION_BATCH_SIZE,
+  PAYG_PII_REDACTION_RETRY_FIELD,
+  PAYG_PII_RETENTION_CUTOFF_FIELD,
   PAYG_PRODUCT_NAME,
   PAYG_PURCHASE_KIND,
+  PAYG_UNPAID_INTENT_RETENTION_DAYS,
+  PAYG_WAIVER_PII_FIELDS,
+  PAYG_WAIVER_PII_RETENTION_DAYS,
+  assertPaygCheckoutAppCheck,
   assertPaygStripeCatalogueShape,
   buildPaygCheckoutSessionParams,
   buildPaygCancellationPreviewPayload,
@@ -34,7 +46,9 @@ const {
   derivePaygDuplicateLockCandidates,
   derivePaygDuplicateLockId,
   isPaygMetadata,
+  isPaygOrderPiiClosed,
   isPaygDuplicateLockKeyringConfigured,
+  isActivePaygEmailLease,
   isPaygEmailFailureAmbiguous,
   hasPaygSucceededRefundEvidence,
   isPaygPaymentRefundSafe,
@@ -44,8 +58,10 @@ const {
   paygConfirmationCorrectionOutboxId,
   paygCheckoutRequestFingerprint,
   paygEmailLeaseCorrelation,
+  paygPaymentCompletedBeforePiiCutoff,
   paygPiiRedactionDeadline,
   parsePaygPiiRetentionConfig,
+  publicPaygAttendeeName,
   publicPaygPaymentReviewState,
   resolveAgeAtMillis,
   resolvePaygCancellationDecision,
@@ -252,6 +268,19 @@ test("checkout input normalizes identity/contact and rejects stale or incomplete
   assert.equal(Object.isFrozen(normalized), true);
   assert.equal(Object.isFrozen(normalized.acceptances), true);
 
+  for (const contact of [
+    {email: "ava@example.test"},
+    {email: "ava@example.test", phone: ""},
+    {email: "ava@example.test", phone: "   "},
+  ]) {
+    const withoutPhone = normalizePaygCheckoutRequest(
+      checkoutRequest({contact}),
+      LEGAL
+    );
+    assert.deepEqual(withoutPhone.contact, {email: "ava@example.test"});
+    assert.equal("phone" in withoutPhone.contact, false);
+  }
+
   assert.throws(
     () => normalizePaygCheckoutRequest(checkoutRequest({
       checkoutSchemaVersion: 0,
@@ -284,6 +313,40 @@ test("checkout input normalizes identity/contact and rejects stale or incomplete
   );
 });
 
+test("PAYG checkout App Check accepts only a fresh token from the exact web app", () => {
+  const expectedAppId = "1:123456789:web:abcdef123456";
+  assert.doesNotThrow(() => assertPaygCheckoutAppCheck({
+    app: {appId: expectedAppId, alreadyConsumed: false},
+  }, true, expectedAppId));
+  assert.doesNotThrow(() => assertPaygCheckoutAppCheck({}, false, ""));
+
+  const originalWarn = console.warn;
+  const originalError = console.error;
+  console.warn = () => undefined;
+  console.error = () => undefined;
+  try {
+    for (const request of [
+      {},
+      {app: {appId: "1:987654321:web:anotherapp", alreadyConsumed: false}},
+      {app: {appId: expectedAppId, alreadyConsumed: true}},
+    ]) {
+      assert.throws(
+        () => assertPaygCheckoutAppCheck(request, true, expectedAppId),
+        (error) => error.code === "permission-denied"
+      );
+    }
+    assert.throws(
+      () => assertPaygCheckoutAppCheck({
+        app: {appId: expectedAppId, alreadyConsumed: false},
+      }, true, ""),
+      (error) => error.code === "unavailable"
+    );
+  } finally {
+    console.warn = originalWarn;
+    console.error = originalError;
+  }
+});
+
 test("request fingerprint is deterministic and binds every guest/class/legal field", () => {
   const first = normalizePaygCheckoutRequest(checkoutRequest(), LEGAL);
   const same = normalizePaygCheckoutRequest(checkoutRequest(), LEGAL);
@@ -307,43 +370,50 @@ test("request fingerprint is deterministic and binds every guest/class/legal fie
   );
 });
 
-test("guest PII retention is closed until an explicit versioned policy is approved", () => {
+test("guest PII retention enforces the exact owner-approved schedule", () => {
   assert.equal(
     PAYG_PII_REDACTION_IMPLEMENTED,
-    false,
-    "approved numeric policy cannot bypass the code-owned launch blocker"
+    true,
+    "the code marker changes only with the tested redaction worker"
   );
+  assert.equal(PAYG_UNPAID_INTENT_RETENTION_DAYS, 30);
+  assert.equal(PAYG_ORDER_PII_RETENTION_DAYS, 90);
+  assert.equal(PAYG_WAIVER_PII_RETENTION_DAYS, 2190);
+  assert.equal(PAYG_PII_REDACTION_BATCH_SIZE, 50);
+  assert.equal(PAYG_PII_RETENTION_CUTOFF_FIELD, "piiRetentionCutoffAt");
+  assert.equal(PAYG_PII_REDACTION_RETRY_FIELD, "piiRedactionRetryAt");
   assert.deepEqual(parsePaygPiiRetentionConfig({
     approved: true,
     policyVersion: "payg-retention-v1",
-    orderPiiRetentionDays: "30",
-    waiverPiiRetentionDays: "2555",
+    orderPiiRetentionDays: "90",
+    waiverPiiRetentionDays: "2190",
   }), {
     policyVersion: "payg-retention-v1",
-    orderPiiRetentionDays: 30,
-    waiverPiiRetentionDays: 2555,
+    orderPiiRetentionDays: 90,
+    waiverPiiRetentionDays: 2190,
   });
   for (const invalid of [
-    {approved: false, policyVersion: "payg-v1", orderPiiRetentionDays: "30", waiverPiiRetentionDays: "30"},
-    {approved: true, policyVersion: "", orderPiiRetentionDays: "30", waiverPiiRetentionDays: "30"},
-    {approved: true, policyVersion: "payg-v1", orderPiiRetentionDays: "", waiverPiiRetentionDays: "30"},
-    {approved: true, policyVersion: "payg-v1", orderPiiRetentionDays: "30", waiverPiiRetentionDays: "forever"},
+    {approved: false, policyVersion: "payg-v1", orderPiiRetentionDays: "90", waiverPiiRetentionDays: "2190"},
+    {approved: true, policyVersion: "", orderPiiRetentionDays: "90", waiverPiiRetentionDays: "2190"},
+    {approved: true, policyVersion: "payg-v1", orderPiiRetentionDays: "", waiverPiiRetentionDays: "2190"},
+    {approved: true, policyVersion: "payg-v1", orderPiiRetentionDays: "30", waiverPiiRetentionDays: "2190"},
+    {approved: true, policyVersion: "payg-v1", orderPiiRetentionDays: "90", waiverPiiRetentionDays: "2555"},
   ]) {
     assert.throws(() => parsePaygPiiRetentionConfig(invalid), /not explicitly approved/);
   }
   const classEnd = Date.parse("2026-09-10T19:00:00.000Z");
   assert.equal(
-    paygPiiRedactionDeadline(classEnd, 30),
-    classEnd + 30 * 24 * 60 * 60 * 1000
+    paygPiiRedactionDeadline(classEnd, 90),
+    classEnd + 90 * 24 * 60 * 60 * 1000
   );
   assert.deepEqual(resolveStoredPaygPiiRetentionConfig({
     policyVersion: "payg-retention-v1",
-    orderPiiRetentionDays: 30,
-    waiverPiiRetentionDays: 2555,
+    orderPiiRetentionDays: 90,
+    waiverPiiRetentionDays: 2190,
   }), {
     policyVersion: "payg-retention-v1",
-    orderPiiRetentionDays: 30,
-    waiverPiiRetentionDays: 2555,
+    orderPiiRetentionDays: 90,
+    waiverPiiRetentionDays: 2190,
   });
   assert.equal(resolveStoredPaygPiiRetentionConfig({policyVersion: "payg-v1"}), null);
 
@@ -361,11 +431,215 @@ test("guest PII retention is closed until an explicit versioned policy is approv
   );
 });
 
+test("PAYG PII promotion requires an exact provider success event before cutoff", () => {
+  const intentId = `payg_${"a".repeat(64)}`;
+  const checkoutSessionId = "cs_test_privacy_cutoff";
+  const paymentIntent = {
+    id: "pi_privacy_cutoff",
+    livemode: false,
+    status: "succeeded",
+    amount_received: 750,
+    currency: "gbp",
+    latest_charge: "ch_privacy_cutoff",
+    metadata: {
+      purchaseKind: "payg_class",
+      offeringKey: "adult_payg_class",
+      paygIntentId: intentId,
+      schemaVersion: "1",
+    },
+  };
+  const charge = {
+    id: "ch_privacy_cutoff",
+    livemode: false,
+    payment_intent: paymentIntent.id,
+    paid: true,
+    status: "succeeded",
+    created: 1_800_000_000,
+  };
+  const successEvidence = {
+    providerEventId: "evt_test_privacy_cutoff",
+    providerEventType: "checkout.session.completed",
+    providerEventCreatedSecond: charge.created + 10,
+    checkoutSessionId,
+    paymentIntentId: paymentIntent.id,
+    intentId,
+    livemode: false,
+  };
+  const base = {
+    paymentIntent,
+    charge,
+    successEvidence,
+    checkoutSessionId,
+    intentId,
+    expectedLivemode: false,
+  };
+  assert.equal(paygPaymentCompletedBeforePiiCutoff({
+    ...base,
+    piiRetentionCutoffAtMillis:
+      (successEvidence.providerEventCreatedSecond + 1) * 1000,
+  }), true);
+  assert.equal(paygPaymentCompletedBeforePiiCutoff({
+    ...base,
+    piiRetentionCutoffAtMillis:
+      successEvidence.providerEventCreatedSecond * 1000,
+  }), false, "the success-event cutoff second itself is privacy-closed");
+  assert.equal(paygPaymentCompletedBeforePiiCutoff({
+    ...base,
+    piiRetentionCutoffAtMillis: (charge.created + 5) * 1000,
+  }), false, "an earlier Charge creation cannot prove pre-cutoff success");
+  for (const invalid of [
+    {charge: {...charge, paid: false}},
+    {charge: {...charge, status: "failed"}},
+    {charge: {...charge, payment_intent: "pi_other"}},
+    {charge: null},
+    {successEvidence: null},
+    {successEvidence: {...successEvidence, paymentIntentId: "pi_other"}},
+    {successEvidence: {...successEvidence, checkoutSessionId: "cs_other"}},
+    {successEvidence: {...successEvidence, providerEventCreatedSecond: 0}},
+    {piiRetentionCutoffAtMillis: null},
+  ]) {
+    assert.equal(paygPaymentCompletedBeforePiiCutoff({
+      ...base,
+      piiRetentionCutoffAtMillis:
+        (successEvidence.providerEventCreatedSecond + 2) * 1000,
+      ...invalid,
+    }), false);
+  }
+});
+
+test("PII promotion closes on any scrub marker and at the destination deadline", () => {
+  const classEndMillis = Date.parse("2026-09-01T18:00:00.000Z");
+  const destinationCutoff = classEndMillis +
+    PAYG_ORDER_PII_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  const intentId = `payg_${"a".repeat(64)}`;
+  const paymentIntent = {
+    id: "pi_promotion_privacy",
+    livemode: false,
+    status: "succeeded",
+    amount_received: 750,
+    currency: "gbp",
+    latest_charge: "ch_promotion_privacy",
+    metadata: {
+      purchaseKind: "payg_class",
+      offeringKey: "adult_payg_class",
+      paygIntentId: intentId,
+      schemaVersion: "1",
+    },
+  };
+  const charge = {
+    id: "ch_promotion_privacy",
+    livemode: false,
+    payment_intent: paymentIntent.id,
+    paid: true,
+    status: "succeeded",
+    created: Math.floor(classEndMillis / 1000) - 3_600,
+  };
+  const checkoutSessionId = "cs_test_promotion_privacy";
+  const successEvidence = {
+    providerEventId: "evt_test_promotion_privacy",
+    providerEventType: "checkout.session.completed",
+    providerEventCreatedSecond: charge.created + 1,
+    checkoutSessionId,
+    paymentIntentId: paymentIntent.id,
+    intentId,
+    livemode: false,
+  };
+  const intent = {
+    attendee: {fullName: "Privacy Test", dateOfBirth: "1990-01-01"},
+    contact: {email: "privacy@example.test"},
+    acceptances: {
+      legal: {
+        waiver: {sha256: "a".repeat(64)},
+        terms: {sha256: "b".repeat(64)},
+      },
+    },
+    acceptanceEvidenceDigest: "c".repeat(64),
+    privacy: {
+      policyVersion: "payg-retention-v1",
+      orderPiiRetentionDays: 90,
+      waiverPiiRetentionDays: 2190,
+    },
+    classEndMillis,
+    piiRetentionCutoffAt: {
+      toMillis: () => (successEvidence.providerEventCreatedSecond + 1) * 1000,
+    },
+  };
+  const base = {
+    intent,
+    paymentIntent,
+    charge,
+    successEvidence,
+    checkoutSessionId,
+    intentId,
+    expectedLivemode: false,
+  };
+
+  assert.equal(paygTesting.paygPiiPromotionMismatch({
+    ...base,
+    processingNowMillis: destinationCutoff - 1,
+  }), null);
+  assert.equal(paygTesting.paygPiiPromotionMismatch({
+    ...base,
+    intent: {...intent, piiScrubbedAt: "malformed-legacy-closure-marker"},
+    processingNowMillis: destinationCutoff - 1,
+  }), "intent_pii_already_scrubbed");
+  assert.equal(paygTesting.paygPiiPromotionMismatch({
+    ...base,
+    processingNowMillis: destinationCutoff,
+  }), "destination_pii_retention_cutoff_reached");
+});
+
 test("adult age is resolved in London on the class date", () => {
   const classDate = Date.parse("2026-09-10T17:00:00.000Z");
   assert.equal(resolveAgeAtMillis("2008-09-10", classDate), 18);
   assert.equal(resolveAgeAtMillis("2008-09-11", classDate), 17);
   assert.equal(resolveAgeAtMillis("2027-01-01", classDate), -1);
+});
+
+test("PII redaction defers only an email worker's unexpired active lease", () => {
+  const nowMillis = Date.parse("2026-12-10T12:00:00.000Z");
+  const retentionCutoffAtMillis = nowMillis - 1;
+  const leaseStartedAtMillis = nowMillis - 1_000;
+  const activeLease = {
+    leaseToken: "lease-token-privacy-1234",
+    leaseStartedAtMillis,
+    leaseExpiresAtMillis: leaseStartedAtMillis + 10 * 60 * 1000,
+    retentionCutoffAtMillis,
+    nowMillis,
+  };
+  for (const status of ["sending", "reconciling"]) {
+    assert.equal(isActivePaygEmailLease({
+      ...activeLease,
+      status,
+    }), true);
+    assert.equal(isActivePaygEmailLease({
+      ...activeLease,
+      status,
+      leaseExpiresAtMillis: nowMillis,
+    }), false);
+  }
+  for (const status of ["pending", "sent", "manual_review", "tombstoned"]) {
+    assert.equal(isActivePaygEmailLease({
+      ...activeLease,
+      status,
+    }), false, status);
+  }
+  for (const invalidEvidence of [
+    {leaseToken: ""},
+    {leaseStartedAtMillis: retentionCutoffAtMillis},
+    {retentionCutoffAtMillis: null},
+  ]) {
+    assert.equal(isActivePaygEmailLease({
+      ...activeLease,
+      status: "sending",
+      ...invalidEvidence,
+    }), false);
+  }
+  assert.equal(isActivePaygEmailLease({
+    ...activeLease,
+    status: "sending",
+    leaseExpiresAtMillis: leaseStartedAtMillis + 365 * 24 * 60 * 60 * 1000,
+  }), false);
 });
 
 test("public schedule rows expose only sanitized fields and default PAYG on", () => {
@@ -571,6 +845,36 @@ test("cancellation preview exposes class policy only and never guest PII", () =>
     JSON.stringify(preview),
     /attendee|dateOfBirth|email|phone|waiver|token/i
   );
+});
+
+test("public order projection remains safe after attendee PII redaction", () => {
+  assert.equal(publicPaygAttendeeName({fullName: "Ava Rhys Thomas"}), "Ava Rhys Thomas");
+  assert.equal(
+    publicPaygAttendeeName(
+      {fullName: "Reintroduced Closed Name"},
+      "malformed-legacy-closure-marker"
+    ),
+    "PAYG guest"
+  );
+  for (const redactedOrMalformed of [undefined, null, {}, {fullName: ""}, {
+    fullName: 42,
+  }]) {
+    assert.equal(publicPaygAttendeeName(redactedOrMalformed), "PAYG guest");
+  }
+  const nowMillis = Date.parse("2026-12-10T12:00:00.000Z");
+  const timestamp = (millis) => ({toMillis: () => millis});
+  assert.equal(isPaygOrderPiiClosed({
+    piiRedactedAt: null,
+    piiRetentionCutoffAt: timestamp(nowMillis + 1),
+    nowMillis,
+  }), false);
+  for (const closed of [
+    {piiRedactedAt: "malformed-legacy-closure-marker", piiRetentionCutoffAt: timestamp(nowMillis + 1)},
+    {piiRedactedAt: null, piiRetentionCutoffAt: timestamp(nowMillis)},
+    {piiRedactedAt: null, piiRetentionCutoffAt: undefined},
+  ]) {
+    assert.equal(isPaygOrderPiiClosed({...closed, nowMillis}), true);
+  }
 });
 
 test("Checkout is one card payment and copies non-PII routing metadata to PaymentIntent", () => {
@@ -1491,4 +1795,16 @@ test("abuse, duplicate, review, and privacy storage contracts stay explicit", ()
     "checkoutSessionUrl",
   ]);
   assert.equal(Object.isFrozen(PAYG_INTENT_PII_FIELDS), true);
+  assert.deepEqual(PAYG_ORDER_PII_FIELDS, ["attendee", "contact", "acceptances"]);
+  assert.deepEqual(PAYG_OUTBOX_PII_FIELDS, ["to", "templateData", "lastError"]);
+  assert.deepEqual(PAYG_WAIVER_PII_FIELDS, ["attendee", "acceptances"]);
+  assert.deepEqual(PAYG_BOOKING_PII_FIELDS, ["userName"]);
+  for (const fields of [
+    PAYG_ORDER_PII_FIELDS,
+    PAYG_OUTBOX_PII_FIELDS,
+    PAYG_WAIVER_PII_FIELDS,
+    PAYG_BOOKING_PII_FIELDS,
+  ]) {
+    assert.equal(Object.isFrozen(fields), true);
+  }
 });

@@ -13,17 +13,21 @@ import {
   Ticket,
   UsersRound,
 } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
+  clearPendingPaygCheckout,
   createPaygCheckoutAttemptId,
   createPaygCheckoutSession,
   getPublicPaygSchedule,
   paygErrorMessage,
+  readPendingPaygCheckout,
+  rememberPendingPaygCheckout,
   type PaygClass,
   type PublicPaygSchedule,
 } from "../services/payg";
 
 const LONDON_TZ = "Europe/London";
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const FIELD =
   "mt-2 w-full rounded-xl border border-white/15 bg-black/35 px-4 py-3.5 text-[16px] text-white outline-none transition placeholder:text-white/55 focus:border-payg focus:ring-2 focus:ring-payg/25";
 
@@ -144,10 +148,16 @@ function sessionAvailability(session: PaygClass) {
 }
 
 export default function PayAsYouGo() {
+  const [params] = useSearchParams();
+  const [checkoutCancelled] = useState(() => params.get("checkout") === "cancelled");
+  const [pendingCheckout, setPendingCheckout] = useState(
+    () => readPendingPaygCheckout()
+  );
   const [schedule, setSchedule] = useState<PublicPaygSchedule | null>(null);
   const [selected, setSelected] = useState<PaygClass | null>(null);
   const [visibleWeekIndex, setVisibleWeekIndex] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [loadError, setLoadError] = useState("");
   const [submitError, setSubmitError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -161,9 +171,64 @@ export default function PayAsYouGo() {
   const [cancellationAccepted, setCancellationAccepted] = useState(false);
   const detailsRef = useRef<HTMLElement | null>(null);
   const attemptRef = useRef<string | null>(null);
+  const pendingCheckoutRef = useRef(pendingCheckout);
+  pendingCheckoutRef.current = pendingCheckout;
+
+  useEffect(() => {
+    if (!checkoutCancelled) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("checkout");
+    window.history.replaceState(
+      window.history.state,
+      "",
+      `${url.pathname}${url.search}${url.hash}`
+    );
+  }, [checkoutCancelled]);
+
+  useEffect(() => {
+    if (!pendingCheckout) return;
+    const watchedSessionId = pendingCheckout.sessionId;
+    const watchedExpiry = pendingCheckout.holdExpiresAt;
+    let cancelled = false;
+    let expiryTimer: number | undefined;
+
+    const expireOrSchedule = () => {
+      if (cancelled) return;
+      const remaining = Date.parse(watchedExpiry) - Date.now();
+      if (Number.isFinite(remaining) && remaining > 0) {
+        expiryTimer = window.setTimeout(
+          expireOrSchedule,
+          Math.min(remaining, MAX_TIMER_DELAY_MS)
+        );
+        return;
+      }
+
+      const current = pendingCheckoutRef.current;
+      if (!current || current.sessionId !== watchedSessionId ||
+        current.holdExpiresAt !== watchedExpiry) return;
+
+      pendingCheckoutRef.current = null;
+      clearPendingPaygCheckout();
+      if (attemptRef.current === current.checkoutAttemptId) {
+        attemptRef.current = null;
+      }
+      setSelected((selectedSession) =>
+        selectedSession?.classId === current.class.classId ? null : selectedSession
+      );
+      setPendingCheckout(null);
+    };
+
+    expireOrSchedule();
+    return () => {
+      cancelled = true;
+      if (expiryTimer !== undefined) window.clearTimeout(expiryTimer);
+    };
+  }, [pendingCheckout]);
 
   useEffect(() => {
     let mounted = true;
+    setLoading(true);
+    setLoadError("");
     void getPublicPaygSchedule()
       .then((result) => {
         if (!mounted) return;
@@ -179,7 +244,7 @@ export default function PayAsYouGo() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [loadAttempt]);
 
   const weeks = useMemo(() => {
     const groups = new Map<string, Map<string, PaygClass[]>>();
@@ -222,8 +287,31 @@ export default function PayAsYouGo() {
   const activeWeekIndex = Math.min(visibleWeekIndex, Math.max(weeks.length - 1, 0));
   const visibleWeek = weeks[activeWeekIndex] ?? null;
 
+  const pendingSession = useMemo(
+    () => pendingCheckout ?
+      schedule?.classes.find((session) =>
+        session.classId === pendingCheckout.class.classId
+      ) ?? null : null,
+    [pendingCheckout, schedule?.classes]
+  );
+
+  useEffect(() => {
+    if (!pendingCheckout || !pendingSession) return;
+    attemptRef.current = pendingCheckout.checkoutAttemptId;
+    setSelected(pendingSession);
+    const selectedWeek = sessionWeekKey(pendingSession);
+    const selectedWeekIndex = weeks.findIndex((week) => week.key === selectedWeek);
+    if (selectedWeekIndex >= 0) setVisibleWeekIndex(selectedWeekIndex);
+  }, [pendingCheckout, pendingSession, weeks]);
+
   const checkoutOpen = Boolean(
     schedule?.available && schedule.checkoutAvailable && schedule.legal
+  );
+  const pendingHoldActive = Boolean(
+    pendingCheckout && Date.parse(pendingCheckout.holdExpiresAt) > Date.now()
+  );
+  const canResumePending = Boolean(
+    pendingCheckout && pendingHoldActive && pendingSession && checkoutOpen
   );
   const allAccepted = adultConfirmed && waiverAccepted && termsAccepted && cancellationAccepted;
 
@@ -233,12 +321,15 @@ export default function PayAsYouGo() {
   }
 
   function chooseSession(session: PaygClass) {
-    if (session.availability !== "available") return;
+    const heldForReturn = pendingCheckout?.class.classId === session.classId;
+    if ((!heldForReturn && pendingCheckout) ||
+      (!heldForReturn && session.availability !== "available")) return;
     setSelected(session);
-    resetAttempt();
+    if (!heldForReturn) resetAttempt();
   }
 
   function showWeek(index: number) {
+    if (pendingCheckout) return;
     const nextIndex = Math.max(0, Math.min(index, weeks.length - 1));
     const nextWeek = weeks[nextIndex];
     if (!nextWeek || nextIndex === activeWeekIndex) return;
@@ -252,8 +343,23 @@ export default function PayAsYouGo() {
   function continueToDetails() {
     const details = detailsRef.current;
     if (!details) return;
-    details.scrollIntoView({ behavior: "smooth", block: "start" });
+    const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")
+      .matches ?? false;
+    details.scrollIntoView({ behavior: reducedMotion ? "auto" : "smooth", block: "start" });
     window.requestAnimationFrame(() => details.focus({ preventScroll: true }));
+  }
+
+  function resumePendingCheckout() {
+    if (!pendingCheckout || !canResumePending) return;
+    window.location.assign(pendingCheckout.sessionUrl);
+  }
+
+  function clearEndedPendingCheckout() {
+    pendingCheckoutRef.current = null;
+    clearPendingPaygCheckout();
+    setPendingCheckout(null);
+    attemptRef.current = null;
+    setSelected(null);
   }
 
   async function handleSubmit(event: React.FormEvent) {
@@ -275,7 +381,7 @@ export default function PayAsYouGo() {
         },
         contact: {
           email: email.trim(),
-          phone: phone.trim(),
+          ...(phone.trim() ? {phone: phone.trim()} : {}),
         },
         acceptances: {
           adultConfirmed: true,
@@ -285,6 +391,13 @@ export default function PayAsYouGo() {
           waiverVersion: schedule.legal.waiver.version,
           termsVersion: schedule.legal.terms.version,
         },
+      });
+      rememberPendingPaygCheckout({
+        checkoutAttemptId,
+        sessionUrl: result.sessionUrl,
+        sessionId: result.sessionId,
+        holdExpiresAt: result.holdExpiresAt,
+        class: result.class,
       });
       window.location.assign(result.sessionUrl);
     } catch (error) {
@@ -316,6 +429,19 @@ export default function PayAsYouGo() {
       </header>
 
       <main className="mx-auto max-w-7xl px-5 pb-36 pt-8 sm:px-8 lg:pb-20 lg:pt-12">
+        {checkoutCancelled ? (
+          <div
+            role="status"
+            className="mb-7 rounded-2xl border border-payg/30 bg-payg/10 p-5 text-sm leading-6 text-white/75"
+          >
+            <p className="font-black text-payg">Payment was not completed</p>
+            <p className="mt-1">
+              {pendingCheckout && pendingHoldActive
+                ? "Your original class and checkout are still held briefly. Continue that checkout below—starting another attempt is disabled while this hold is active."
+                : "No payment was taken. The temporary hold has ended, so you can choose an available class below."}
+            </p>
+          </div>
+        ) : null}
         <div className="grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_390px] lg:gap-12">
           <section aria-labelledby="payg-title">
             <div className="flex flex-col gap-5 border-b border-white/10 pb-7 sm:flex-row sm:items-end sm:justify-between">
@@ -344,6 +470,13 @@ export default function PayAsYouGo() {
                 <div role="alert" className="rounded-2xl border border-red-400/25 bg-red-400/10 p-6 text-red-100">
                   <h2 className="font-heading text-3xl uppercase">Timetable unavailable</h2>
                   <p className="mt-3 text-sm leading-6 text-red-100/75">{loadError}</p>
+                  <button
+                    type="button"
+                    onClick={() => setLoadAttempt((attempt) => attempt + 1)}
+                    className="mt-4 inline-flex min-h-[48px] items-center justify-center rounded-xl border border-red-100/30 bg-red-100/10 px-5 py-3 text-sm font-black text-red-50 outline-none transition hover:bg-red-100/15 focus-visible:ring-2 focus-visible:ring-red-100"
+                  >
+                    Try loading the timetable again
+                  </button>
                 </div>
               ) : !schedule?.available ? (
                 <div className="rounded-2xl border border-amber-300/20 bg-amber-300/10 p-6 text-amber-50">
@@ -366,8 +499,10 @@ export default function PayAsYouGo() {
                     >
                       <button
                         type="button"
-                        disabled={activeWeekIndex === 0}
-                        aria-label={activeWeekIndex === 0
+                        disabled={Boolean(pendingCheckout) || activeWeekIndex === 0}
+                        aria-label={pendingCheckout
+                          ? "Finish the held checkout before changing week"
+                          : activeWeekIndex === 0
                           ? "No previous timetable week"
                           : `Show previous week, ${formatWeekRange(weeks[activeWeekIndex - 1].key, weeks[activeWeekIndex - 1].endKey)}`}
                         onClick={() => showWeek(activeWeekIndex - 1)}
@@ -388,8 +523,10 @@ export default function PayAsYouGo() {
 
                       <button
                         type="button"
-                        disabled={activeWeekIndex === weeks.length - 1}
-                        aria-label={activeWeekIndex === weeks.length - 1
+                        disabled={Boolean(pendingCheckout) || activeWeekIndex === weeks.length - 1}
+                        aria-label={pendingCheckout
+                          ? "Finish the held checkout before changing week"
+                          : activeWeekIndex === weeks.length - 1
                           ? "No next timetable week"
                           : `Show next week, ${formatWeekRange(weeks[activeWeekIndex + 1].key, weeks[activeWeekIndex + 1].endKey)}`}
                         onClick={() => showWeek(activeWeekIndex + 1)}
@@ -423,14 +560,19 @@ export default function PayAsYouGo() {
                       <div className="overflow-hidden rounded-2xl border border-white/10 bg-[#11100f]">
                         {sessions.map((session) => {
                           const isSelected = selected?.classId === session.classId;
-                          const canSelect = session.availability === "available";
+                          const heldForReturn =
+                            pendingCheckout?.class.classId === session.classId;
+                          const availability = heldForReturn ?
+                            "Held for you" : sessionAvailability(session);
+                          const canSelect = heldForReturn ||
+                            (!pendingCheckout && session.availability === "available");
                           return (
                             <button
                               key={session.classId}
                               type="button"
                               disabled={!canSelect}
                               aria-pressed={isSelected}
-                              aria-label={`${formatTime(session.startTime, session.timezone)} ${session.title}, ${sessionAvailability(session)}${isSelected ? ", selected" : ""}`}
+                              aria-label={`${formatTime(session.startTime, session.timezone)} ${session.title}, ${availability}${isSelected ? ", selected" : ""}`}
                               onClick={() => chooseSession(session)}
                               className={[
                                 "group grid w-full grid-cols-[76px_minmax(0,1fr)_auto] items-center gap-3 border-b border-white/8 px-4 py-5 text-left outline-none transition last:border-b-0 sm:grid-cols-[96px_minmax(0,1fr)_auto] sm:px-5",
@@ -453,7 +595,7 @@ export default function PayAsYouGo() {
                                   "mt-1.5 block text-xs font-black uppercase tracking-[0.06em] sm:hidden",
                                   isSelected ? "text-black/70" : canSelect ? "text-emerald-200" : "text-white/60",
                                 ].join(" ")}>
-                                  {sessionAvailability(session)}
+                                  {availability}
                                 </span>
                               </span>
                               <span className="flex items-center gap-3">
@@ -461,7 +603,7 @@ export default function PayAsYouGo() {
                                   "hidden text-right text-xs font-black uppercase tracking-[0.08em] sm:block",
                                   isSelected ? "text-black/70" : canSelect ? "text-emerald-200" : "text-white/60",
                                 ].join(" ")}>
-                                  {isSelected ? `Selected · ${sessionAvailability(session)}` : sessionAvailability(session)}
+                                  {isSelected ? `Selected · ${availability}` : availability}
                                 </span>
                                 {isSelected ? (
                                   <span className="grid h-8 w-8 place-items-center rounded-full bg-black text-payg">
@@ -506,7 +648,7 @@ export default function PayAsYouGo() {
                       <p className="flex items-start gap-2"><CalendarDays className="mt-0.5 h-4 w-4 text-payg" /> {formatLongDate(selected.startTime, selected.timezone)}</p>
                       <p className="flex items-start gap-2"><Clock3 className="mt-0.5 h-4 w-4 text-payg" /> {formatTime(selected.startTime, selected.timezone)}–{formatTime(selected.endTime, selected.timezone)}</p>
                       <p className="flex items-start gap-2"><MapPin className="mt-0.5 h-4 w-4 text-payg" /> {selected.location || "Zero Alpha Fitness"}</p>
-                      <p className="flex items-start gap-2"><UsersRound className="mt-0.5 h-4 w-4 text-payg" /> {sessionAvailability(selected)}</p>
+                      <p className="flex items-start gap-2"><UsersRound className="mt-0.5 h-4 w-4 text-payg" /> {pendingCheckout?.class.classId === selected.classId ? "Held for you" : sessionAvailability(selected)}</p>
                     </div>
                   </div>
                 ) : (
@@ -526,7 +668,40 @@ export default function PayAsYouGo() {
                   <li className="flex gap-3"><Check className="mt-1 h-4 w-4 shrink-0 text-payg" /> Cancellations inside 24 hours and no-shows are non-refundable.</li>
                 </ul>
 
-                {!checkoutOpen ? (
+                {pendingCheckout ? (
+                  <div className="mt-6 rounded-xl border border-payg/30 bg-payg/10 p-4 text-sm leading-6 text-white/80">
+                    <p className="font-black text-payg">
+                      {canResumePending ? "Your Stripe checkout is ready to continue" : "This checkout cannot be resumed"}
+                    </p>
+                    <p className="mt-1">
+                      {canResumePending
+                        ? `Your temporary hold ends at ${formatTime(pendingCheckout.holdExpiresAt)}. Returning uses the same checkout and does not create another charge or class hold.`
+                        : !pendingHoldActive
+                        ? "The temporary hold has ended. Choose a new available class to start again."
+                        : !checkoutOpen
+                        ? "Online checkout is currently closed. Your temporary hold will release automatically."
+                        : "That class is no longer on the public timetable. Your temporary hold will release automatically."}
+                    </p>
+                    {canResumePending ? (
+                      <button
+                        type="button"
+                        onClick={resumePendingCheckout}
+                        className="mt-4 inline-flex min-h-[50px] w-full items-center justify-center gap-2 rounded-xl bg-payg px-5 py-3 text-sm font-black text-black outline-none transition hover:bg-payg-hover focus-visible:ring-2 focus-visible:ring-white"
+                      >
+                        Return to secure payment
+                        <ArrowRight className="h-4 w-4" aria-hidden="true" />
+                      </button>
+                    ) : !pendingHoldActive ? (
+                      <button
+                        type="button"
+                        onClick={clearEndedPendingCheckout}
+                        className="mt-4 inline-flex min-h-[48px] w-full items-center justify-center rounded-xl border border-white/15 bg-white/[0.04] px-5 py-3 text-sm font-bold text-white outline-none transition hover:bg-white/[0.08] focus-visible:ring-2 focus-visible:ring-white/70"
+                      >
+                        Choose a new class
+                      </button>
+                    ) : null}
+                  </div>
+                ) : !checkoutOpen ? (
                   <div className="mt-6 rounded-xl border border-amber-300/20 bg-amber-300/10 p-4 text-sm leading-6 text-amber-50/80">
                     <p className="font-black text-amber-100">Checkout not open yet</p>
                     <p className="mt-1">You can view the timetable, but online PAYG purchase remains closed while the release checks are completed.</p>
@@ -540,7 +715,7 @@ export default function PayAsYouGo() {
 
                     <label className="block text-sm font-bold text-white/75">
                       Full name
-                      <input required autoComplete="name" value={fullName} onChange={(event) => { setFullName(event.target.value); resetAttempt(); }} className={FIELD} />
+                      <input required maxLength={160} autoComplete="name" value={fullName} onChange={(event) => { setFullName(event.target.value); resetAttempt(); }} className={FIELD} />
                     </label>
                     <label className="block text-sm font-bold text-white/75">
                       Date of birth
@@ -548,12 +723,12 @@ export default function PayAsYouGo() {
                     </label>
                     <label className="block text-sm font-bold text-white/75">
                       Email
-                      <input required type="email" autoComplete="email" value={email} onChange={(event) => { setEmail(event.target.value); resetAttempt(); }} className={FIELD} />
+                      <input required maxLength={254} type="email" autoComplete="email" value={email} onChange={(event) => { setEmail(event.target.value); resetAttempt(); }} className={FIELD} />
                     </label>
                     <label className="block text-sm font-bold text-white/75">
-                      Mobile number
-                      <input required type="tel" autoComplete="tel" inputMode="tel" pattern="\+[1-9][0-9]{7,14}" placeholder="+447700900000" value={phone} onChange={(event) => { setPhone(event.target.value); resetAttempt(); }} className={FIELD} />
-                      <span className="mt-2 block text-xs font-normal leading-5 text-white/60">Include the country code, for example +44.</span>
+                      Mobile number <span className="font-normal text-white/50">(optional)</span>
+                      <input maxLength={16} type="tel" autoComplete="tel" inputMode="tel" pattern="\+[1-9][0-9]{7,14}" placeholder="+447700900000" value={phone} onChange={(event) => { setPhone(event.target.value); resetAttempt(); }} className={FIELD} />
+                      <span className="mt-2 block text-xs font-normal leading-5 text-white/60">Used only if we need to contact you urgently about this class. Include the country code, for example +44.</span>
                     </label>
 
                     <fieldset className="space-y-3 border-t border-white/10 pt-5">

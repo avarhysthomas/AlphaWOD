@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "deploymentMode": "template-only",
+  "productionProjectId": "alphawod-d1f2f",
+  "firebaseCliVersion": "15.5.1",
+  "purchaseGatesExpectedClosed": true,
+  "maximumTargetsPerBatch": 10,
+  "firestoreConfiguration": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json",
+    "paygIntentWholeDocumentTtlExpected": false
+  },
+  "batches": [
+    {
+      "id": "billing-webhook-and-workers",
+      "invocationBoundary": "mixed-webhook-and-scheduler-review-required",
+      "targets": [
+        "stripeWebhook",
+        "recoverStripeEvents",
+        "recoverMembershipCancellations",
+        "reconcileMembershipBookings",
+        "reconcilePastDueMemberships",
+        "retryMembershipConfirmations",
+        "recoverPaygOperations",
+        "retryPaygConfirmations",
+        "redactPaygPii"
+      ]
+    },
+    {
+      "id": "schedule-and-access-triggers",
+      "invocationBoundary": "scheduler-and-firestore-trigger-review-required",
+      "targets": [
+        "generateClassOccurrencesDaily",
+        "onUserDocWritten",
+        "onLeaderboardEntryWritten"
+      ]
+    },
+    {
+      "id": "membership-callables",
+      "invocationBoundary": "callable-service-iam-restore-required",
+      "targets": [
+        "createMembershipCheckoutSession",
+        "createMembershipCheckoutSessionV2",
+        "createCustomerPortalSession",
+        "getMyMemberships",
+        "requestMembershipCancellation",
+        "claimMembership",
+        "listMemberships",
+        "linkMembershipParticipant",
+        "releaseAbandonedMembershipCheckout"
+      ]
+    },
+    {
+      "id": "payg-callables",
+      "invocationBoundary": "callable-service-iam-restore-required",
+      "targets": [
+        "getPublicPaygSchedule",
+        "createPaygCheckoutSession",
+        "getPaygCancellationPreview",
+        "getPaygCheckoutStatus",
+        "requestPaygCancellation"
+      ]
+    },
+    {
+      "id": "booking-callables",
+      "invocationBoundary": "callable-service-iam-preserve-required",
+      "targets": [
+        "generateClassOccurrences",
+        "bookClass",
+        "cancelBooking",
+        "adminAddBooking",
+        "checkInBooking",
+        "markBookingStatus",
+        "getClassRoster"
+      ]
+    },
+    {
+      "id": "access-callables",
+      "invocationBoundary": "callable-service-iam-preserve-required",
+      "targets": [
+        "getMonthlyLeaderboard",
+        "reconcileMonthlyLeaderboard",
+        "getMonthlyDipLeaderboard",
+        "listStaffUsers",
+        "bootstrapUserProfile",
+        "setMemberEntitlement",
+        "approveUserAccess",
+        "updateMemberRole"
+      ]
+    }
+  ]
+}

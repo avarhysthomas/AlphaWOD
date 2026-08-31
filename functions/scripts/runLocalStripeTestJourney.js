@@ -6,11 +6,15 @@
  */
 
 const {spawn} = require("node:child_process");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
 const {redactProviderSecrets, stripeCliTestKey} = require("./stripeCliTestKey");
+const {
+  resolveStripeTestCatalogueScope,
+} = require("./stripeTestCatalogueScope");
 
 const PROJECT_ID = "demo-alphawod-stripe";
 const APP_PORT = 3002;
@@ -18,6 +22,10 @@ const APP_ORIGIN = `http://localhost:${APP_PORT}`;
 const APP_ID = "1:000000000000:web:localstripetest000000";
 const FUNCTIONS_DIR = path.resolve(__dirname, "..");
 const REPO_ROOT = path.resolve(FUNCTIONS_DIR, "..");
+const WEBHOOK_EVENT_MANIFEST = require(path.join(
+  REPO_ROOT,
+  "ops/stripe/billing-webhook-events.json"
+));
 
 function firebaseCliMetadata(command) {
   try {
@@ -97,23 +105,9 @@ const REQUIRED_PORTS = new Map([
   [9099, "Auth emulator"],
   [9150, "Firebase Emulator UI websocket"],
 ]);
-const STRIPE_EVENTS = [
-  "checkout.session.completed",
-  "checkout.session.async_payment_succeeded",
-  "checkout.session.async_payment_failed",
-  "checkout.session.expired",
-  "customer.subscription.created",
-  "customer.subscription.updated",
-  "customer.subscription.deleted",
-  "customer.subscription.paused",
-  "customer.subscription.resumed",
-  "invoice.paid",
-  "invoice.payment_failed",
-  "charge.dispute.created",
-  "charge.dispute.closed",
-  "charge.refunded",
-].join(",");
+const STRIPE_EVENTS = WEBHOOK_EVENT_MANIFEST.requiredEvents.join(",");
 const SECRET_NAME_PATTERN = /(?:^|_)(?:SECRET|API_KEY|TOKEN|PASSWORD|PRIVATE_KEY|CREDENTIALS?)(?:_|$)/;
+const NON_SECRET_METADATA_NAME_PATTERN = /(?:_KEY_ID|_VALID_UNTIL)$/;
 const SAFE_PARENT_ENVIRONMENT = [
   "HOME",
   "LANG",
@@ -279,7 +273,8 @@ function assertNoDiskSecrets() {
     const contents = fs.readFileSync(path.join(FUNCTIONS_DIR, entry.name), "utf8");
     for (const line of contents.split(/\r?\n/)) {
       const name = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/)?.[1];
-      if (name && SECRET_NAME_PATTERN.test(name)) {
+      if (name && SECRET_NAME_PATTERN.test(name) &&
+        !NON_SECRET_METADATA_NAME_PATTERN.test(name)) {
         throw new Error(
           `${entry.name} must not define ${name}; provider secrets are memory-only. ` +
           "Remove that assignment before running."
@@ -458,6 +453,9 @@ async function waitForFrontend(frontend, isReady) {
 
 async function main() {
   assertNoDiskSecrets();
+  const catalogueScope = resolveStripeTestCatalogueScope(
+    process.env.STRIPE_TEST_PLAN_SCOPE
+  );
   if (!fs.existsSync(path.join(FUNCTIONS_DIR, ".env.local"))) {
     throw new Error("functions/.env.local is missing. Copy .env.local.example first.");
   }
@@ -470,6 +468,9 @@ async function main() {
   const preflightEnvironment = safeEnvironment({
     APP_PUBLIC_ORIGIN: APP_ORIGIN,
     STRIPE_SECRET_KEY: stripeKey,
+    ...(catalogueScope.name === "full" ? {} : {
+      STRIPE_TEST_PLAN_SCOPE: catalogueScope.name,
+    }),
   });
   await runPreflight(preflightEnvironment);
   await assertPortsAvailable();
@@ -478,6 +479,11 @@ async function main() {
     APP_PUBLIC_ORIGIN: APP_ORIGIN,
     FIREBASE_CLI_DISABLE_UPDATE_CHECK: "true",
     MEMBERSHIP_CHECKOUT_APP_ID: APP_ID,
+    // The shared webhook declares this PAYG secret even when this scoped
+    // journey only exercises memberships. Keep it ephemeral and in memory so
+    // the emulator never falls back to the real Secret Manager project.
+    PAYG_CANCELLATION_TOKEN_SECRET:
+      crypto.randomBytes(32).toString("base64url"),
     RESEND_API_KEY: "re_test_local_email_disabled",
     RESEND_FROM_EMAIL: "local-stripe-test@example.invalid",
     STRIPE_SECRET_KEY: stripeKey,
@@ -537,6 +543,7 @@ async function main() {
   );
 
   console.log("\nLocal Stripe test journey is ready:");
+  console.log(`- Catalogue preflight scope: ${catalogueScope.name}`);
   console.log(`- App: ${APP_ORIGIN}/memberships`);
   console.log("- Firebase UI: http://127.0.0.1:4000");
   console.log(`- Stripe forwarding: ${WEBHOOK_URL}`);

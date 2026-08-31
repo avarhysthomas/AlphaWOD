@@ -29,7 +29,7 @@ function validEnvironment() {
     PAYG_FIREBASE_PROJECT_ID: "alphawod-d1f2f",
     PAYG_FROM_EMAIL: "Zero Alpha Fitness <hello@zeroalphafitness.co.uk>",
     PAYG_LEGAL_APPROVED: "false",
-    PAYG_PII_REDACTION_IMPLEMENTED: "false",
+    PAYG_PII_REDACTION_IMPLEMENTED: "true",
     PAYG_PII_RETENTION_APPROVED: "false",
     PAYG_PII_RETENTION_POLICY_VERSION: "payg-retention-2026-01",
     PAYG_ORDER_PII_RETENTION_DAYS: "90",
@@ -43,10 +43,10 @@ function validEnvironment() {
     PAYG_DUPLICATE_LOCK_PREVIOUS_KEY_ID: "",
     PAYG_DUPLICATE_LOCK_PREVIOUS_VALID_UNTIL: "",
     PAYG_WAIVER_VERSION: "PAYG-WAIVER-2026-01",
-    PAYG_WAIVER_PUBLIC_URL: "/legal/payg-waiver-2026-01.txt",
+    PAYG_WAIVER_PUBLIC_URL: "/legal/PAYG-WAIVER-2026-01.txt",
     PAYG_WAIVER_SHA256: "a".repeat(64),
     PAYG_TERMS_VERSION: "PAYG-TERMS-2026-01",
-    PAYG_TERMS_PUBLIC_URL: "/legal/payg-terms-2026-01.txt",
+    PAYG_TERMS_PUBLIC_URL: "/legal/PAYG-TERMS-2026-01.txt",
     PAYG_TERMS_SHA256: "b".repeat(64),
     STRIPE_EXPECTED_MODE: "live",
     STRIPE_PORTAL_CONFIGURATION_ID: "bpc_LivePortal",
@@ -108,26 +108,39 @@ test("supports independent existing-membership and Conditioning opening checks",
   }), /updated membership documents are approved/i);
 });
 
-test("hard-blocks PAYG opening until approved PII redaction exists", () => {
+test("PAYG opening requires the implemented worker and exact approved retention", () => {
   const paygOpening = {
     ...validEnvironment(),
     PAYG_AVAILABILITY_ENABLED: "true",
     PAYG_LEGAL_APPROVED: "true",
     PAYG_PII_RETENTION_APPROVED: "true",
   };
-  assert.throws(() => assertProductionOpeningConfig(paygOpening, {
+  assert.doesNotThrow(() => assertProductionOpeningConfig(paygOpening, {
     documentsApproved: false,
     membershipEnabled: false,
     paygEnabled: true,
-  }), /automated PII redaction has not been implemented/i);
+  }));
   assert.throws(() => assertProductionOpeningConfig({
     ...paygOpening,
-    PAYG_PII_REDACTION_IMPLEMENTED: "true",
+    PAYG_PII_REDACTION_IMPLEMENTED: "false",
   }, {
     documentsApproved: false,
     membershipEnabled: false,
     paygEnabled: true,
-  }), /PAYG_PII_REDACTION_IMPLEMENTED must be false/i);
+  }), /PAYG_PII_REDACTION_IMPLEMENTED must be true/i);
+  for (const mutation of [
+    {PAYG_ORDER_PII_RETENTION_DAYS: "89"},
+    {PAYG_WAIVER_PII_RETENTION_DAYS: "2191"},
+  ]) {
+    assert.throws(() => assertProductionOpeningConfig({
+      ...paygOpening,
+      ...mutation,
+    }, {
+      documentsApproved: false,
+      membershipEnabled: false,
+      paygEnabled: true,
+    }), /must match the approved/i);
+  }
 });
 
 test("accepts the armed state and closed live checks without opening purchase", () => {
@@ -151,6 +164,25 @@ test("accepts the armed state and closed live checks without opening purchase", 
   }));
 });
 
+test("never accepts product review drafts as PAYG publication evidence", () => {
+  for (const mutation of [
+    {
+      PAYG_WAIVER_VERSION: "ZAF-PAYG-WAIVER-DRAFT-2026-08-31-01",
+      PAYG_WAIVER_PUBLIC_URL:
+        "/legal/product-drafts/ZAF-PAYG-WAIVER-DRAFT-2026-08-31-01.txt",
+    },
+    {
+      PAYG_TERMS_PUBLIC_URL: "/legal/other-document.txt",
+    },
+  ]) {
+    assert.throws(() => assertProductionArmedConfig({
+      ...validEnvironment(),
+      PAYG_LEGAL_APPROVED: "true",
+      ...mutation,
+    }, {documentsApproved: true}), /publication evidence|immutable same-origin/i);
+  }
+});
+
 test("rejects missing and placeholder production parameters", () => {
   for (const mutation of [
     {STRIPE_PRICE_ADULT_GYM: ""},
@@ -171,7 +203,7 @@ test("rejects open gates, test mode, local origins and provider overrides", () =
     {PAYG_AVAILABILITY_ENABLED: "true"},
     {PAYG_LEGAL_APPROVED: "true"},
     {PAYG_PII_RETENTION_APPROVED: "true"},
-    {PAYG_PII_REDACTION_IMPLEMENTED: "true"},
+    {PAYG_PII_REDACTION_IMPLEMENTED: "false"},
     {MEMBERSHIP_TEST_JOURNEY_ENABLED: "true"},
     {STRIPE_EXPECTED_MODE: "test"},
     {MEMBERSHIP_FIREBASE_PROJECT_ID: "demo-alphawod-stripe"},

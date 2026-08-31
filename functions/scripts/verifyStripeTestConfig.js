@@ -20,6 +20,9 @@ const {
   matchesApprovedLivePaygCatalogueEntry,
 } = require("../lib/stripeLiveCatalog");
 const {redactProviderSecrets, stripeCliTestKey} = require("./stripeCliTestKey");
+const {
+  resolveStripeTestCatalogueScope,
+} = require("./stripeTestCatalogueScope");
 
 const TEST_PROJECT_ID = "demo-alphawod-stripe";
 const PRICE_ENV_KEYS = {
@@ -46,6 +49,27 @@ function isValidRedemptionCount(value) {
 function couponIdForPromotionCode(promotionCode) {
   return typeof promotionCode.promotion?.coupon === "string" ?
     promotionCode.promotion.coupon : promotionCode.promotion?.coupon?.id;
+}
+
+function recurringCatalogueMismatches(price, product, plan) {
+  const checks = [
+    ["price.livemode", price?.livemode, false],
+    ["price.active", price?.active, true],
+    ["price.currency", price?.currency?.toLowerCase(), plan.currency],
+    ["price.unit_amount", price?.unit_amount, plan.amountPence],
+    ["price.type", price?.type, "recurring"],
+    ["price.recurring.interval", price?.recurring?.interval, "month"],
+    ["price.recurring.interval_count", price?.recurring?.interval_count, 1],
+    ["product.present", Boolean(product), true],
+    ["product.livemode", product?.livemode, false],
+    ["product.active", product?.active, true],
+    ["product.name", product?.name, plan.name],
+  ];
+  return checks
+    .filter(([, actual, expected]) => actual !== expected)
+    .map(([field, actual, expected]) =>
+      `${field} expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`
+    );
 }
 
 function assertLocalTestBoundary() {
@@ -75,64 +99,66 @@ function assertLocalTestBoundary() {
 
 async function main() {
   const key = assertLocalTestBoundary();
+  const scope = resolveStripeTestCatalogueScope(
+    process.env.STRIPE_TEST_PLAN_SCOPE
+  );
   const stripe = new Stripe(key, {maxNetworkRetries: 2, timeout: 20000});
   const verified = [];
   const productsByPlan = new Map();
 
-  for (const planKey of PLAN_KEYS) {
+  for (const planKey of scope.planKeys) {
     const plan = MEMBERSHIP_PLANS[planKey];
     const priceId = required(PRICE_ENV_KEYS[planKey]);
     const price = await stripe.prices.retrieve(priceId, {expand: ["product"]});
     const product = typeof price.product === "object" && price.product &&
       !price.product.deleted ? price.product : null;
-    const valid = price.livemode === false &&
-      price.active === true &&
-      price.currency.toLowerCase() === plan.currency &&
-      price.unit_amount === plan.amountPence &&
-      price.type === "recurring" &&
-      price.recurring?.interval === "month" &&
-      price.recurring?.interval_count === 1 &&
-      product?.livemode === false &&
-      product.active === true &&
-      product.name === plan.name;
-    if (!valid) {
-      throw new Error(`${planKey} does not match the approved test catalogue.`);
+    const mismatches = recurringCatalogueMismatches(price, product, plan);
+    if (mismatches.length) {
+      throw new Error(
+        `${planKey} does not match the approved test catalogue: ` +
+        mismatches.join("; ")
+      );
     }
     verified.push({planKey, priceId: price.id, productId: product.id});
     productsByPlan.set(planKey, product.id);
   }
 
-  const paygApproved = APPROVED_TEST_PAYG_CATALOGUE;
-  const paygPrice = await stripe.prices.retrieve(
-    required(paygApproved.priceEnvKey),
-    {expand: ["product"]}
-  );
-  const paygProduct = typeof paygPrice.product === "object" &&
-    paygPrice.product && !paygPrice.product.deleted ? paygPrice.product : null;
-  if (paygPrice.livemode !== false || paygPrice.active !== true ||
-    paygPrice.currency.toLowerCase() !== paygApproved.currency ||
-    paygPrice.unit_amount !== paygApproved.amountPence ||
-    paygProduct?.livemode !== false || paygProduct.active !== true ||
-    !matchesApprovedLivePaygCatalogueEntry(
-      paygPrice,
-      paygProduct,
-      paygApproved
-    )) {
-    throw new Error("adult_payg_class does not match the approved test catalogue.");
+  let paygPrice = null;
+  let paygProduct = null;
+  if (scope.includePayg) {
+    const paygApproved = APPROVED_TEST_PAYG_CATALOGUE;
+    paygPrice = await stripe.prices.retrieve(
+      required(paygApproved.priceEnvKey),
+      {expand: ["product"]}
+    );
+    paygProduct = typeof paygPrice.product === "object" &&
+      paygPrice.product && !paygPrice.product.deleted ? paygPrice.product : null;
+    if (paygPrice.livemode !== false || paygPrice.active !== true ||
+      paygPrice.currency.toLowerCase() !== paygApproved.currency ||
+      paygPrice.unit_amount !== paygApproved.amountPence ||
+      paygProduct?.livemode !== false || paygProduct.active !== true ||
+      !matchesApprovedLivePaygCatalogueEntry(
+        paygPrice,
+        paygProduct,
+        paygApproved
+      )) {
+      throw new Error("adult_payg_class does not match the approved test catalogue.");
+    }
   }
 
   const couponId = process.env.STRIPE_EXISTING_MEMBER_COUPON_ID?.trim();
   const promotionCodeId = process.env.STRIPE_EXISTING_MEMBER_PROMOTION_CODE_ID?.trim();
   let sharedPromotionCodeVerified = false;
-  if (!couponId && Date.now() < PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS * 1000) {
+  if (scope.verifyExistingMemberOffer && !couponId &&
+    Date.now() < PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS * 1000) {
     throw new Error("STRIPE_EXISTING_MEMBER_COUPON_ID is required during the presale.");
   }
-  if (!couponId && promotionCodeId) {
+  if (scope.verifyExistingMemberOffer && !couponId && promotionCodeId) {
     throw new Error(
       "STRIPE_EXISTING_MEMBER_PROMOTION_CODE_ID requires STRIPE_EXISTING_MEMBER_COUPON_ID."
     );
   }
-  if (couponId) {
+  if (scope.verifyExistingMemberOffer && couponId) {
     if (!promotionCodeId || promotionCodeId.startsWith("replace_")) {
       throw new Error(
         "STRIPE_EXISTING_MEMBER_PROMOTION_CODE_ID is required with the presale Coupon."
@@ -216,21 +242,29 @@ async function main() {
     }
   }
 
-  console.log("Stripe test catalogue verified (read-only):");
+  console.log(`Stripe test catalogue verified (read-only; scope ${scope.name}):`);
   verified.forEach(({planKey, priceId, productId}) =>
     console.log(`- ${planKey}: ${priceId} -> ${productId}`)
   );
-  console.log(`- adult_payg_class: ${paygPrice.id} -> ${paygProduct.id}`);
+  if (paygPrice && paygProduct) {
+    console.log(`- adult_payg_class: ${paygPrice.id} -> ${paygProduct.id}`);
+  }
   console.log(portalConfigurationId ?
     `- Customer Portal: ${portalConfigurationId}` :
     "- Customer Portal: not configured (Checkout can run; management cannot)");
-  console.log(couponId ?
+  console.log(scope.verifyExistingMemberOffer && couponId ?
     `- Existing-member Coupon: ${couponId}` :
-    "- Existing-member offer: disabled (STRIPE_EXISTING_MEMBER_COUPON_ID is unset)");
+    scope.verifyExistingMemberOffer ?
+      "- Existing-member offer: disabled (STRIPE_EXISTING_MEMBER_COUPON_ID is unset)" :
+      "- Existing-member offer: outside the scoped preflight");
   if (sharedPromotionCodeVerified) {
     console.log(`- Shared reusable Promotion Code: ${promotionCodeId}`);
   }
 
+  if (!scope.verifyYouthFamilyOffer) {
+    console.log("- Youth family Coupon: outside the scoped preflight");
+    return;
+  }
   const familyCouponId = required("STRIPE_YOUTH_FAMILY_COUPON_ID");
   const familyCoupon = await stripe.coupons.retrieve(familyCouponId, {
     expand: ["applies_to"],

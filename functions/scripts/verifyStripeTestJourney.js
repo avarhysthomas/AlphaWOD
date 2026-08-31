@@ -1,4 +1,4 @@
-/* eslint-disable no-console, max-len, require-jsdoc */
+/* eslint-disable no-console, max-len, require-jsdoc, @typescript-eslint/no-var-requires */
 
 /**
  * Read-only post-Checkout verifier. It checks a real Stripe test Session and
@@ -8,8 +8,11 @@
 
 const admin = require("firebase-admin");
 const Stripe = require("stripe");
+const {isDeepStrictEqual} = require("node:util");
 const {
+  CONDITIONING_BOOKING_POLICY,
   EXISTING_MEMBER_OFFER,
+  MEMBERSHIP_PLANS,
   PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
   PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
 } = require("../lib/membershipPlans");
@@ -21,6 +24,7 @@ const LOCAL_SUCCESS_PATH = "/memberships/success";
 const CHECKOUT_SESSION_TEMPLATE = "{CHECKOUT_SESSION_ID}";
 const PLAN_KEYS = new Set([
   "adult_unlimited",
+  "adult_conditioning",
   "adult_ladies",
   "adult_gym",
   "youth_youngstars",
@@ -232,6 +236,63 @@ function assertPresaleContract(session, subscription, fulfilment) {
   }
 }
 
+function providerId(value) {
+  if (typeof value === "string") return value;
+  return value && typeof value === "object" ? value.id : null;
+}
+
+function hasExactConditioningCommercialTerms(snapshot, expectedPolicy) {
+  return snapshot.get("commercialTerms.planKey") === "adult_conditioning" &&
+    snapshot.get("commercialTerms.planName") ===
+      MEMBERSHIP_PLANS.adult_conditioning.name &&
+    snapshot.get("commercialTerms.amountPence") ===
+      MEMBERSHIP_PLANS.adult_conditioning.amountPence &&
+    snapshot.get("commercialTerms.appAccessTier") === "limited" &&
+    isDeepStrictEqual(
+      snapshot.get("commercialTerms.conditioningBookingPolicy"),
+      expectedPolicy
+    );
+}
+
+function assertConditioningContract(session, subscription, fulfilment) {
+  if (session.metadata?.planKey !== "adult_conditioning") return false;
+  const expectedPolicy = {
+    ...CONDITIONING_BOOKING_POLICY,
+    eligibleSlotKeys: [...CONDITIONING_BOOKING_POLICY.eligibleSlotKeys],
+  };
+  const expectedMetadata = {
+    appAccessTier: "limited",
+    conditioningPolicyVersion: String(expectedPolicy.version),
+    conditioningWeeklyLimit: String(expectedPolicy.weeklyBookingLimit),
+    conditioningEligibleSlots: expectedPolicy.eligibleSlotKeys.join(","),
+  };
+  for (const [label, metadata] of [
+    ["Checkout Session", session.metadata],
+    ["Subscription", subscription.metadata],
+  ]) {
+    if (!metadata || Object.entries(expectedMetadata)
+      .some(([key, value]) => metadata[key] !== value) ||
+      metadata.conditioningSlots != null) {
+      throw new Error(`${label} does not contain the exact flexible Conditioning policy.`);
+    }
+  }
+
+  const {intent, membership, outbox} = fulfilment;
+  if (intent.get("planKey") !== "adult_conditioning" ||
+    !hasExactConditioningCommercialTerms(intent, expectedPolicy) ||
+    membership.get("planKey") !== "adult_conditioning" ||
+    !hasExactConditioningCommercialTerms(membership, expectedPolicy) ||
+    !hasExactConditioningCommercialTerms(outbox, expectedPolicy)) {
+    throw new Error("Local fulfilment did not preserve the Conditioning contract.");
+  }
+  const items = subscription.items?.data ?? [];
+  if (items.length !== 1 ||
+    providerId(items[0].price) !== intent.get("stripePriceId")) {
+    throw new Error("The Conditioning Subscription does not use its verified Price.");
+  }
+  return true;
+}
+
 async function assertAppliedDiscount(stripe, fulfilment, required) {
   const discount = fulfilment.membership.get("discount");
   if (!discount) {
@@ -328,6 +389,11 @@ async function main() {
     throw new Error("A standard-billing journey must complete with paid status.");
   }
   const discountApplied = await assertAppliedDiscount(stripe, fulfilment, requireDiscount);
+  const conditioningVerified = assertConditioningContract(
+    session,
+    subscription,
+    fulfilment
+  );
 
   console.log("Real Stripe test journey verified:");
   console.log(`- Checkout Session: ${session.id} (${session.payment_status})`);
@@ -337,16 +403,26 @@ async function main() {
   console.log(discountApplied ?
     "- Existing-member offer: £55 for three payments, then £60" :
     "- Existing-member offer: no code applied");
+  if (conditioningVerified) {
+    console.log("- Conditioning policy: limited app access; any 2 eligible classes/week");
+  }
   console.log(`- Confirmation outbox: ${fulfilment.outbox.get("status")}`);
 }
 
-main()
-  .catch((error) => {
-    console.error(
-      `Stripe test journey verification failed: ${redactProviderSecrets(error.message)}`
-    );
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    await Promise.all(admin.apps.map((app) => app.delete()));
-  });
+if (require.main === module) {
+  main()
+    .catch((error) => {
+      console.error(
+        `Stripe test journey verification failed: ${redactProviderSecrets(error.message)}`
+      );
+      process.exitCode = 1;
+    })
+    .finally(async () => {
+      await Promise.all(admin.apps.map((app) => app.delete()));
+    });
+}
+
+module.exports = {
+  assertConditioningContract,
+  isLocalSuccessUrl,
+};

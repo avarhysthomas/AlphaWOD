@@ -1,9 +1,12 @@
 import {httpsCallable} from "firebase/functions";
 import {
+  clearPendingPaygCheckout,
   createPaygCheckoutSession,
   getPaygCancellationPreview,
   getPaygCheckoutStatus,
   getPublicPaygSchedule,
+  readPendingPaygCheckout,
+  rememberPendingPaygCheckout,
   requestPaygCancellation,
   type CreatePaygCheckoutRequest,
 } from "./payg";
@@ -16,7 +19,10 @@ jest.mock("firebase/functions", () => ({
 jest.mock("../../../firebaseApp", () => ({__esModule: true, default: {}}));
 
 describe("PAYG callable client", () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    window.sessionStorage.clear();
+  });
 
   it("uses only the public sanitized timetable callable", async () => {
     const invoke = jest.fn().mockResolvedValue({data: {ok: true, classes: []}});
@@ -79,5 +85,53 @@ describe("PAYG callable client", () => {
       {limitedUseAppCheckTokens: true}
     );
     expect(invoke).toHaveBeenLastCalledWith({token: "signed-token", confirm: true});
+  });
+
+  it("remembers only an active opaque Stripe return without guest PII", () => {
+    const pending = {
+      checkoutAttemptId: "12345678-1234-4123-8123-123456789abc",
+      sessionUrl: "https://checkout.stripe.test/c/pay/cs_test_pending_123",
+      sessionId: "cs_test_pending_123",
+      holdExpiresAt: new Date(Date.now() + 20 * 60 * 1000).toISOString(),
+      class: {
+        classId: "class_1",
+        title: "Conditioning",
+        startTime: "2026-09-07T05:00:00.000Z",
+        endTime: "2026-09-07T06:00:00.000Z",
+        timezone: "Europe/London",
+        location: "Unit 3",
+      },
+    };
+
+    rememberPendingPaygCheckout(pending);
+
+    expect(readPendingPaygCheckout()).toEqual(pending);
+    const stored = window.sessionStorage.getItem("zaf.pendingPaygCheckout.v1") ?? "";
+    expect(stored).not.toContain("email");
+    expect(stored).not.toContain("dateOfBirth");
+    expect(stored).not.toContain("phone");
+
+    clearPendingPaygCheckout();
+    expect(readPendingPaygCheckout()).toBeNull();
+  });
+
+  it("drops expired or tampered PAYG return links instead of redirecting", () => {
+    window.sessionStorage.setItem("zaf.pendingPaygCheckout.v1", JSON.stringify({
+      checkoutAttemptId: "12345678-1234-4123-8123-123456789abc",
+      sessionUrl: "https://attacker.example/checkout",
+      sessionId: "cs_test_pending_123",
+      holdExpiresAt: new Date(Date.now() + 20 * 60 * 1000).toISOString(),
+      class: {
+        classId: "class_1",
+        title: "Conditioning",
+        startTime: "2026-09-07T05:00:00.000Z",
+        endTime: "2026-09-07T06:00:00.000Z",
+        timezone: "Europe/London",
+        location: null,
+      },
+    }));
+
+    expect(readPendingPaygCheckout()).toBeNull();
+    expect(window.sessionStorage.getItem("zaf.pendingPaygCheckout.v1")).toBeNull();
   });
 });

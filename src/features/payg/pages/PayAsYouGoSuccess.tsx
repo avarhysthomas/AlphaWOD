@@ -2,8 +2,10 @@ import React, { useEffect, useState } from "react";
 import { CalendarDays, Check, LoaderCircle, MapPin, Ticket } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
+  clearPendingPaygCheckout,
   getPaygCheckoutStatus,
   paygErrorMessage,
+  readPendingPaygCheckout,
   type PaygCheckoutStatus,
 } from "../services/payg";
 
@@ -93,6 +95,15 @@ export default function PayAsYouGoSuccess() {
     };
   }, [pollGeneration, sessionId]);
 
+  useEffect(() => {
+    if (status && status.state !== "processing") {
+      const pendingCheckout = readPendingPaygCheckout();
+      if (pendingCheckout?.sessionId === sessionId) {
+        clearPendingPaygCheckout();
+      }
+    }
+  }, [sessionId, status]);
+
   const terminal = status && status.state !== "processing" ? status : null;
   const orderTerminal = terminal && "order" in terminal ? terminal : null;
   const reviewTerminal = terminal && "review" in terminal ? terminal : null;
@@ -157,7 +168,16 @@ export default function PayAsYouGoSuccess() {
                 </div>
               </div>
             ) : error ? (
-              <p role="alert" className="mt-7 rounded-xl border border-red-400/25 bg-red-400/10 p-4 text-sm leading-6 text-red-100">{error}</p>
+              <div className="mt-7 rounded-xl border border-red-400/25 bg-red-400/10 p-4 text-red-100">
+                <p role="alert" className="text-sm leading-6">{error}</p>
+                <button
+                  type="button"
+                  onClick={() => setPollGeneration((value) => value + 1)}
+                  className="mt-4 inline-flex min-h-[46px] items-center justify-center rounded-xl bg-[#f2eee8] px-5 py-3 text-sm font-black text-black outline-none transition hover:bg-white focus-visible:ring-2 focus-visible:ring-white"
+                >
+                  Try checking again
+                </button>
+              </div>
             ) : orderTerminal ? (
               <>
                 <p className="mt-5 text-base leading-7 text-white/65">

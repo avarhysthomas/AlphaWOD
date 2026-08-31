@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "status": "DRAFT_NOT_APPROVED",
+  "approvedForPublication": false,
+  "runtimeEligible": false,
+  "draftDate": "2026-08-31",
+  "documents": {
+    "adultConditioningAddendum": {
+      "title": "Adult Conditioning Only Membership Product Addendum",
+      "version": "ZAF-CONDITIONING-ADDENDUM-DRAFT-2026-08-31-01",
+      "filename": "ZAF-CONDITIONING-ADDENDUM-DRAFT-2026-08-31-01.txt",
+      "bytes": 5374,
+      "sha256": "a18186bb8f19167ef49d8024aa87010bbd322b17c9455baf609e76e2ed4c40b3",
+      "approvedForPublication": false,
+      "runtimeEligible": false
+    },
+    "paygTerms": {
+      "title": "Adult Pay As You Go Class Terms",
+      "version": "ZAF-PAYG-TERMS-DRAFT-2026-08-31-01",
+      "filename": "ZAF-PAYG-TERMS-DRAFT-2026-08-31-01.txt",
+      "bytes": 8155,
+      "sha256": "7410405ea5b0b21ae2089f10dcabb0d18b0a6f93298e91fd6a281040c3925000",
+      "approvedForPublication": false,
+      "runtimeEligible": false
+    },
+    "paygWaiver": {
+      "title": "Adult PAYG Participant Waiver and Risk Acknowledgement",
+      "version": "ZAF-PAYG-WAIVER-DRAFT-2026-08-31-01",
+      "filename": "ZAF-PAYG-WAIVER-DRAFT-2026-08-31-01.txt",
+      "bytes": 5197,
+      "sha256": "df23694cbeaf841aadeb92c1dfe2b6cb05b4a38203d6cbd2840c77381f66795c",
+      "approvedForPublication": false,
+      "runtimeEligible": false
+    },
+    "paygPrivacyRetentionDecision": {
+      "title": "PAYG Privacy and Retention Decision Record",
+      "version": "ZAF-PAYG-PRIVACY-RETENTION-DRAFT-2026-08-31-01",
+      "filename": "ZAF-PAYG-PRIVACY-RETENTION-DRAFT-2026-08-31-01.txt",
+      "bytes": 5920,
+      "sha256": "f043689fab97e02fbc44b1bb3c76005c8ac9ca7eebebb6e9b1367b4c8a98f762",
+      "approvedForPublication": false,
+      "runtimeEligible": false
+    }
+  },
+  "paygDraftAcceptance": {
+    "statementId": "payg_specific_date_cancellation_v1",
+    "copyVersion": "ZAF-PAYG-CANCELLATION-STATEMENT-DRAFT-2026-08-31-01",
+    "approved": false,
+    "legalIssue": "Confirm Consumer Contracts Regulations 2013 regulation 28(1)(h) applies to the exact specific-date fitness class offer."
+  },
+  "ownerDecisions": {
+    "conditioningCommercialTermsApproved": false,
+    "paygSpecificDateLeisureExceptionConfirmed": false,
+    "paygTermsApproved": false,
+    "paygWaiverApproved": false,
+    "paygOrderPiiRetentionDays": null,
+    "paygWaiverPiiRetentionDays": null,
+    "paygEmailPiiRetentionDays": null,
+    "paygRetentionPolicyVersion": null,
+    "paygRedactionImplementationAccepted": false
+  },
+  "promotionRequirements": [
+    "Legal reviewer approves exact customer-facing bytes and removes every draft/internal-review marker.",
+    "New immutable final version IDs, filenames, byte counts and SHA-256 digests are recorded; draft IDs must never be reused as final IDs.",
+    "The approved Conditioning wording is incorporated into the membership checkout document set and its durable confirmation evidence.",
+    "The final PAYG terms and waiver are published under same-origin /legal/ URLs containing their exact final version IDs.",
+    "The final PAYG version, URL and SHA-256 values are copied into the production environment only after publication verification.",
+    "Exact PAYG retention periods and policy version are approved, disclosed and copied into production only after automated redaction tests pass.",
+    "All legal and purchase gates remain false through deployment, provider verification and monitored end-to-end test evidence."
+  ],
+  "reviewSources": [
+    "https://www.legislation.gov.uk/uksi/2013/3134/pdfs/uksi_20133134_en.pdf",
+    "https://www.legislation.gov.uk/ukpga/2015/15/pdfs/ukpgaen_20150015_en.pdf",
+    "https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/data-protection-principles/a-guide-to-the-data-protection-principles/storage-limitation/",
+    "https://www.gov.uk/guidance/writing-a-fair-contract-for-customers"
+  ]
+}

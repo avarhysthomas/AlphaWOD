@@ -534,6 +534,7 @@ describe("billing collections are server-only", () => {
     "paygOrders/payg_test",
     "paygWaiverAcceptances/payg_test",
     "paygEmailOutbox/payg_test",
+    "paygPiiRedactionDiscovery/paygIntents",
     "paygCheckoutRateLimits/payg_test",
     "paygCheckoutAdmissions/payg_test",
     "paygCheckoutLocks/payg_test",

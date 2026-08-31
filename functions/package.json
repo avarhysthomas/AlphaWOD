@@ -6,6 +6,8 @@
     "test": "npm run build && node --test test/*.test.js",
     "test:emulator": "npm run build && firebase emulators:exec --config ../firebase.json --project alpha-wod-functions-test --only auth,firestore \"node --test --test-concurrency=1 test-emulator/*.test.js\"",
     "verify:stripe-test-config": "npm run build && node --env-file=.env.local scripts/verifyStripeTestConfig.js",
+    "verify:stripe-test-conditioning-config": "npm run build && STRIPE_TEST_PLAN_SCOPE=adult_conditioning node --env-file=.env.local scripts/verifyStripeTestConfig.js",
+    "verify:stripe-test-payg-config": "npm run build && STRIPE_TEST_PLAN_SCOPE=adult_payg_class node --env-file=.env.local scripts/verifyStripeTestConfig.js",
     "verify:stripe-test-journey": "npm run build && node --env-file=.env.local scripts/verifyStripeTestJourney.js",
     "verify:production-config": "npm run build && node --env-file-if-exists=.env.alphawod-d1f2f scripts/verifyProductionConfig.js",
     "verify:production-armed-config": "npm run build && node --env-file-if-exists=.env.alphawod-d1f2f scripts/verifyProductionConfig.js --armed",

@@ -1,17 +1,21 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "deploymentMode": "template-only",
   "productionProjectId": "alphawod-d1f2f",
   "purchaseGateExpected": false,
   "notificationChannelRequired": true,
   "runbook": "docs/billing/production-operations.md",
+  "sourceFiles": [
+    "functions/src/membership.ts",
+    "functions/src/payg.ts"
+  ],
   "policies": [
     {
       "id": "billing-critical-runtime",
       "priority": "page",
       "windowSeconds": 60,
       "threshold": 1,
-      "cloudLoggingFilter": "resource.type=\"cloud_run_revision\" AND severity>=ERROR AND (textPayload:\"CRITICAL_BILLING_\" OR jsonPayload.message:\"CRITICAL_BILLING_\")",
+      "cloudLoggingFilter": "resource.type=\"cloud_run_revision\" AND severity>=ERROR AND (textPayload:\"CRITICAL_\" OR jsonPayload.message:\"CRITICAL_\")",
       "sourceMarkers": [
         "CRITICAL_BILLING_CANCELLATION_DRIFT",
         "CRITICAL_BILLING_CANCELLATION_ACKNOWLEDGEMENT_MANUAL_REVIEW",
@@ -41,7 +45,32 @@
         "CRITICAL_BILLING_STRIPE_EVENT_DEAD_LETTER",
         "CRITICAL_BILLING_STRIPE_MODE_MISMATCH",
         "CRITICAL_BILLING_UNRESOLVED_CHARGE_MEMBERSHIP",
-        "CRITICAL_BILLING_UNVERIFIED_CHECKOUT_LOCK"
+        "CRITICAL_BILLING_UNVERIFIED_CHECKOUT_LOCK",
+        "CRITICAL_BILLING_PAYG_CONFIRMATION_MANUAL_REVIEW",
+        "CRITICAL_BILLING_PAYG_CONFIRMATION_SENT_AFTER_STATE_CHANGE",
+        "CRITICAL_BILLING_PAYG_DUPLICATE_CHECKOUT_SESSION",
+        "CRITICAL_BILLING_PAYG_DUPLICATE_INTENT_SESSION",
+        "CRITICAL_BILLING_PAYG_DUPLICATE_PAYMENT_INTENT",
+        "CRITICAL_BILLING_PAYG_DUPLICATE_REVIEW_SESSION",
+        "CRITICAL_BILLING_PAYG_ORDER_REVIEW_LINK_MISMATCH",
+        "CRITICAL_BILLING_PAYG_PAID_CONTRACT_MISMATCH",
+        "CRITICAL_BILLING_PAYG_PARTIAL_REFUND",
+        "CRITICAL_BILLING_PAYG_PAYMENT_REVIEW_REQUIRED",
+        "CRITICAL_BILLING_PAYG_REFUND_ID_CONFLICT",
+        "CRITICAL_BILLING_PAYG_REFUND_MANUAL_REVIEW",
+        "CRITICAL_BILLING_PAYG_REFUND_PROVIDER_DISPUTE",
+        "CRITICAL_BILLING_PAYG_REFUND_PROVIDER_PREFLIGHT",
+        "CRITICAL_BILLING_PAYG_REVIEW_CHARGE_REFUND",
+        "CRITICAL_BILLING_PAYG_REVIEW_DISPUTE_MISMATCH",
+        "CRITICAL_BILLING_PAYG_REVIEW_REFUND_ID_CONFLICT",
+        "CRITICAL_BILLING_PAYG_REVIEW_REFUND_MANUAL_REVIEW",
+        "CRITICAL_BILLING_PAYG_REVIEW_REFUND_PROVIDER_DISPUTE",
+        "CRITICAL_BILLING_PAYG_REVIEW_REFUND_PROVIDER_PREFLIGHT",
+        "CRITICAL_BILLING_PAYG_STRIPE_MODE_MISMATCH",
+        "CRITICAL_PAYG_CHECKOUT_ABUSE_CONFIGURATION",
+        "CRITICAL_PAYG_PROVIDER_ACCEPTANCE_PERSISTENCE_FAILED",
+        "CRITICAL_PAYG_RETRY_ADMISSION_INVALID",
+        "CRITICAL_PAYG_UNPAID_HOLD_COUNTER_INVALID"
       ]
     },
     {
@@ -87,6 +116,53 @@
         "MEMBERSHIP_CHECKOUT_RATE_LIMITED",
         "MEMBERSHIP_CHECKOUT_APP_CHECK_REPLAY",
         "MEMBERSHIP_CHECKOUT_APP_CHECK_REJECTED"
+      ]
+    },
+    {
+      "id": "payg-recovery-errors",
+      "priority": "page-after-two",
+      "windowSeconds": 900,
+      "threshold": 2,
+      "cloudLoggingFilter": "resource.type=\"cloud_run_revision\" AND severity>=ERROR AND (textPayload:(\"Could not release PAYG PII discovery lease\" OR \"PAYG PII discovery failed\" OR \"PAYG attendance convergence failed\" OR \"PAYG conflicting-payment refund queued for recovery\" OR \"PAYG hold recovery failed\" OR \"PAYG intent privacy recovery failed\" OR \"PAYG intent privacy state requires manual review\" OR \"PAYG order booking privacy binding requires manual review\" OR \"PAYG order privacy redaction failed\" OR \"PAYG outbox privacy redaction failed\" OR \"PAYG paid-contract refund queued for recovery\" OR \"PAYG payment-review refund queued for recovery\" OR \"PAYG payment-review refund recovery failed\" OR \"PAYG refund queued for recovery\" OR \"PAYG refund recovery failed\" OR \"PAYG waiver privacy redaction failed\") OR jsonPayload.message:(\"Could not release PAYG PII discovery lease\" OR \"PAYG PII discovery failed\" OR \"PAYG attendance convergence failed\" OR \"PAYG conflicting-payment refund queued for recovery\" OR \"PAYG hold recovery failed\" OR \"PAYG intent privacy recovery failed\" OR \"PAYG intent privacy state requires manual review\" OR \"PAYG order booking privacy binding requires manual review\" OR \"PAYG order privacy redaction failed\" OR \"PAYG outbox privacy redaction failed\" OR \"PAYG paid-contract refund queued for recovery\" OR \"PAYG payment-review refund queued for recovery\" OR \"PAYG payment-review refund recovery failed\" OR \"PAYG refund queued for recovery\" OR \"PAYG refund recovery failed\" OR \"PAYG waiver privacy redaction failed\"))",
+      "sourceSignals": [
+        "Could not release PAYG PII discovery lease",
+        "PAYG PII discovery failed",
+        "PAYG attendance convergence failed",
+        "PAYG conflicting-payment refund queued for recovery",
+        "PAYG hold recovery failed",
+        "PAYG intent privacy recovery failed",
+        "PAYG intent privacy state requires manual review",
+        "PAYG order booking privacy binding requires manual review",
+        "PAYG order privacy redaction failed",
+        "PAYG outbox privacy redaction failed",
+        "PAYG paid-contract refund queued for recovery",
+        "PAYG payment-review refund queued for recovery",
+        "PAYG payment-review refund recovery failed",
+        "PAYG refund queued for recovery",
+        "PAYG refund recovery failed",
+        "PAYG waiver privacy redaction failed"
+      ]
+    },
+    {
+      "id": "payg-confirmation-delivery-errors",
+      "priority": "page-after-two",
+      "windowSeconds": 900,
+      "threshold": 2,
+      "cloudLoggingFilter": "resource.type=\"cloud_run_revision\" AND severity>=ERROR AND (textPayload:(\"PAYG confirmation delivery failed\" OR \"PAYG provider acceptance persistence retry\") OR jsonPayload.message:(\"PAYG confirmation delivery failed\" OR \"PAYG provider acceptance persistence retry\"))",
+      "sourceSignals": [
+        "PAYG confirmation delivery failed",
+        "PAYG provider acceptance persistence retry"
+      ]
+    },
+    {
+      "id": "payg-provider-preflight-and-checkout-errors",
+      "priority": "investigate",
+      "windowSeconds": 300,
+      "threshold": 1,
+      "cloudLoggingFilter": "resource.type=\"cloud_run_revision\" AND severity>=ERROR AND (textPayload:(\"PAYG Stripe catalogue preflight failed\" OR \"Stripe rejected PAYG Checkout creation\") OR jsonPayload.message:(\"PAYG Stripe catalogue preflight failed\" OR \"Stripe rejected PAYG Checkout creation\"))",
+      "sourceSignals": [
+        "PAYG Stripe catalogue preflight failed",
+        "Stripe rejected PAYG Checkout creation"
       ]
     }
   ],

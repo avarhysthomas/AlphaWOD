@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "decisionId": "payg-pii-retention-and-redaction-policy",
+  "decisionDate": "2026-08-31",
+  "approved": true,
+  "approvedByRole": "business-owner",
+  "source": "Explicit owner approval recorded in the Codex task on 2026-08-31.",
+  "policyVersion": "ZAF-PAYG-PII-RETENTION-2026-08-31-01",
+  "policy": {
+    "abandonedUnpaidIntent": {
+      "retentionDays": 30,
+      "fieldsRedacted": [
+        "attendee",
+        "contact",
+        "acceptances",
+        "requestFingerprint",
+        "checkoutSessionUrl"
+      ]
+    },
+    "paidOrderAfterClassEnd": {
+      "retentionDays": 90,
+      "orderFieldsRedacted": [
+        "attendee",
+        "contact",
+        "acceptances"
+      ],
+      "emailOutboxFieldsRedacted": [
+        "to",
+        "templateData",
+        "lastError"
+      ],
+      "guestBookingFieldsRedacted": [
+        "userName"
+      ]
+    },
+    "waiverIdentityAfterClassEnd": {
+      "retentionDays": 2190,
+      "fieldsRedacted": [
+        "attendee",
+        "acceptances"
+      ]
+    },
+    "activeEmailLeaseRule": "Defer email-outbox redaction until the active lease expires.",
+    "execution": {
+      "bounded": true,
+      "resumable": true,
+      "idempotent": true
+    },
+    "nonPiiEvidenceRetained": [
+      "provider identifiers",
+      "financial and order state",
+      "class snapshot",
+      "legal version, hash and evidence digest",
+      "refund and dispute audit"
+    ]
+  },
+  "scope": "Owner retention/redaction decision and engineering implementation only.",
+  "legalReviewStatus": "pending",
+  "customerFacingDocumentsApproved": false,
+  "deploymentAuthorized": false,
+  "productionGatesRemainClosed": true
+}

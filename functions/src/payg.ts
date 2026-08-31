@@ -21,6 +21,7 @@ import * as admin from "firebase-admin";
 import {
   DocumentReference,
   DocumentSnapshot,
+  FieldPath,
   FieldValue,
   Firestore,
   QueryDocumentSnapshot,
@@ -52,7 +53,14 @@ export const PAYG_CHECKOUT_RATE_LIMIT_COLLECTION = "paygCheckoutRateLimits";
 export const PAYG_CHECKOUT_ADMISSION_COLLECTION = "paygCheckoutAdmissions";
 export const PAYG_DUPLICATE_LOCK_COLLECTION = "paygCheckoutLocks";
 export const PAYG_PAYMENT_REVIEW_COLLECTION = "paygPaymentReviews";
-export const PAYG_UNPAID_INTENT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+export const PAYG_UNPAID_INTENT_RETENTION_DAYS = 30;
+export const PAYG_ORDER_PII_RETENTION_DAYS = 90;
+export const PAYG_WAIVER_PII_RETENTION_DAYS = 2_190;
+export const PAYG_UNPAID_INTENT_RETENTION_MS =
+  PAYG_UNPAID_INTENT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+export const PAYG_PII_REDACTION_BATCH_SIZE = 50;
+export const PAYG_PII_RETENTION_CUTOFF_FIELD = "piiRetentionCutoffAt";
+export const PAYG_PII_REDACTION_RETRY_FIELD = "piiRedactionRetryAt";
 export const PAYG_INTENT_PII_FIELDS = Object.freeze([
   "attendee",
   "contact",
@@ -60,6 +68,21 @@ export const PAYG_INTENT_PII_FIELDS = Object.freeze([
   "requestFingerprint",
   "checkoutSessionUrl",
 ]);
+export const PAYG_ORDER_PII_FIELDS = Object.freeze([
+  "attendee",
+  "contact",
+  "acceptances",
+]);
+export const PAYG_WAIVER_PII_FIELDS = Object.freeze([
+  "attendee",
+  "acceptances",
+]);
+export const PAYG_OUTBOX_PII_FIELDS = Object.freeze([
+  "to",
+  "templateData",
+  "lastError",
+]);
+export const PAYG_BOOKING_PII_FIELDS = Object.freeze(["userName"]);
 export const PAYG_RATE_LIMITS = Object.freeze({
   attemptsPerMinute: 8,
   attemptsPerHour: 24,
@@ -70,9 +93,9 @@ export const PAYG_IDEMPOTENT_RETRY_POLICY = Object.freeze({
   minimumSpacingMs: 1000,
 });
 export const PAYG_MAX_CONCURRENT_UNPAID_HOLDS_PER_CLASS = 4;
-// Launch blocker: automated, owner-approved guest PII redaction is not yet
-// implemented. This is deliberately code-owned, not an environment switch.
-export const PAYG_PII_REDACTION_IMPLEMENTED = false;
+// Code-owned release evidence. Runtime availability still independently
+// requires the legal, catalogue, project and owner-approved policy gates.
+export const PAYG_PII_REDACTION_IMPLEMENTED = true;
 export const APPROVED_PAYG_STRIPE_CATALOGUE_IDS = Object.freeze({
   test: Object.freeze({
     productId: APPROVED_TEST_PAYG_CATALOGUE.productId,
@@ -116,6 +139,12 @@ const paygWaiverSha256 = defineString("PAYG_WAIVER_SHA256", {default: ""});
 const paygTermsVersion = defineString("PAYG_TERMS_VERSION", {default: ""});
 const paygTermsPublicUrl = defineString("PAYG_TERMS_PUBLIC_URL", {default: ""});
 const paygTermsSha256 = defineString("PAYG_TERMS_SHA256", {default: ""});
+// PAYG is served by the same Firebase web app as membership checkout. Reuse
+// the already-verified production app ID instead of introducing a second
+// security identity that could drift.
+const paygCheckoutAppId = defineString("MEMBERSHIP_CHECKOUT_APP_ID", {
+  default: "",
+});
 const paygPiiRetentionApproved = defineString("PAYG_PII_RETENTION_APPROVED", {
   default: "false",
 });
@@ -227,7 +256,7 @@ export type PaygAttendee = Readonly<{
 
 export type PaygContact = Readonly<{
   email: string;
-  phone: string;
+  phone?: string;
 }>;
 
 export type PaygAcceptances = Readonly<{
@@ -309,7 +338,10 @@ type PaygIntentDoc = {
   paymentIntentId: string | null;
   orderId: string | null;
   holdExpiresAt?: FieldValue | Timestamp;
+  piiRetentionCutoffAt?: FieldValue | Timestamp;
+  piiRedactionRetryAt?: FieldValue | Timestamp;
   piiScrubAt?: FieldValue | Timestamp;
+  piiScrubbedAt?: FieldValue | Timestamp;
   piiDeleteAt?: FieldValue | Timestamp;
   createdAt: FieldValue | Timestamp;
   updatedAt: FieldValue | Timestamp;
@@ -345,7 +377,10 @@ type PaygOrderDoc = {
   cancellationCutoffAt: FieldValue | Timestamp;
   noShowReviewAt?: FieldValue | Timestamp;
   refundRecoveryAt?: FieldValue | Timestamp;
+  piiRetentionCutoffAt?: FieldValue | Timestamp;
+  piiRedactionRetryAt?: FieldValue | Timestamp;
   piiRedactAt?: FieldValue | Timestamp;
+  piiRedactedAt?: FieldValue | Timestamp;
   createdAt: FieldValue | Timestamp;
   updatedAt: FieldValue | Timestamp;
 };
@@ -356,6 +391,25 @@ type PaygRefundReason =
   | "guest_cancellation"
   | "hold_released_before_payment"
   | "paid_contract_mismatch";
+
+export const PAYG_REFUND_ISSUANCE_CLAIM_MS = 2 * 60 * 1000;
+
+type PaygRefundClaimKind = "order" | "payment_review";
+
+type PaygRefundClaimResult =
+  | Readonly<{state: "complete"}>
+  | Readonly<{state: "in_progress"}>
+  | Readonly<{state: "blocked"}>
+  | Readonly<{state: "existing"; refundId: string}>
+  | Readonly<{
+    state: "acquired";
+    token: string;
+    paymentIntentId: string;
+    expectedChargeId: string | null;
+    expectedAmountPence: number | null;
+    expectedCurrency: string | null;
+    intentId: string | null;
+  }>;
 
 export type PaygRefundStateDecision = Readonly<{
   orderStatus: PaygOrderStatus;
@@ -906,7 +960,8 @@ export function parsePaygPiiRetentionConfig(input: Readonly<{
   const waiverDays = parseDays(input.waiverPiiRetentionDays);
   if (input.approved !== true ||
     !/^[A-Za-z0-9._-]{3,120}$/.test(version) ||
-    orderDays < 0 || waiverDays < 0) {
+    orderDays !== PAYG_ORDER_PII_RETENTION_DAYS ||
+    waiverDays !== PAYG_WAIVER_PII_RETENTION_DAYS) {
     throw new Error("PAYG PII retention policy is not explicitly approved.");
   }
   return Object.freeze({
@@ -942,10 +997,8 @@ export function resolveStoredPaygPiiRetentionConfig(
   const orderDays = candidate.orderPiiRetentionDays;
   const waiverDays = candidate.waiverPiiRetentionDays;
   if (!/^[A-Za-z0-9._-]{3,120}$/.test(policyVersion) ||
-    !Number.isSafeInteger(orderDays) || Number(orderDays) < 0 ||
-    Number(orderDays) > 36_500 ||
-    !Number.isSafeInteger(waiverDays) || Number(waiverDays) < 0 ||
-    Number(waiverDays) > 36_500) return null;
+    orderDays !== PAYG_ORDER_PII_RETENTION_DAYS ||
+    waiverDays !== PAYG_WAIVER_PII_RETENTION_DAYS) return null;
   return Object.freeze({
     policyVersion,
     orderPiiRetentionDays: Number(orderDays),
@@ -959,6 +1012,48 @@ function paygError(
   reason?: string
 ): HttpsError {
   return new HttpsError(code, message, reason ? {reason} : undefined);
+}
+
+/**
+ * App Check validates the token signature before the callable runs. This
+ * second check binds anonymous purchase mutations to the intended Firebase
+ * web app and rejects a token replay reported as already consumed.
+ */
+export function assertPaygCheckoutAppCheck(
+  request: any,
+  enforce = !isFirebaseFunctionsEmulatorProcess(),
+  expectedAppId?: string
+): void {
+  if (!enforce) return;
+  const configuredAppId = expectedAppId?.trim() || paygCheckoutAppId.value().trim();
+  if (!configuredAppId) {
+    console.error("CRITICAL_PAYG_CHECKOUT_ABUSE_CONFIGURATION", {
+      reason: "missing_app_id",
+    });
+    throw paygError(
+      "unavailable",
+      "Checkout security is not configured. Try again later.",
+      "checkout_security_unavailable"
+    );
+  }
+  if (request?.app?.alreadyConsumed === true) {
+    console.warn("PAYG_CHECKOUT_APP_CHECK_REPLAY", {reason: "already_consumed"});
+    throw paygError(
+      "permission-denied",
+      "Checkout security verification could not be completed. Refresh and try again.",
+      "app_check_replay"
+    );
+  }
+  if (!request?.app || request.app.appId !== configuredAppId) {
+    console.warn("PAYG_CHECKOUT_APP_CHECK_REJECTED", {
+      reason: request?.app ? "app_id_mismatch" : "missing_context",
+    });
+    throw paygError(
+      "permission-denied",
+      "Checkout security verification could not be completed. Refresh and try again.",
+      "app_check_rejected"
+    );
+  }
 }
 
 function requireBoundedString(
@@ -1001,12 +1096,13 @@ function requireEmail(value: unknown): string {
   return email;
 }
 
-function requireE164Phone(value: unknown): string {
+function optionalE164Phone(value: unknown): string | null {
   const phone = typeof value === "string" ? value.trim().replace(/[\s()-]/g, "") : "";
+  if (!phone) return null;
   if (!/^\+[1-9]\d{7,14}$/.test(phone)) {
     throw paygError(
       "invalid-argument",
-      "contact.phone must use international format, for example +447700900123."
+      "When provided, contact.phone must use international format, for example +447700900123."
     );
   }
   return phone;
@@ -1086,6 +1182,7 @@ export function normalizePaygCheckoutRequest(
       "stale_legal_terms"
     );
   }
+  const phone = optionalE164Phone(contact.phone);
   return Object.freeze({
     checkoutAttemptId: requireCheckoutAttemptId(data.checkoutAttemptId),
     classId: requireClassId(data.classId),
@@ -1095,7 +1192,7 @@ export function normalizePaygCheckoutRequest(
     }),
     contact: Object.freeze({
       email: requireEmail(contact.email),
-      phone: requireE164Phone(contact.phone),
+      ...(phone ? {phone} : {}),
     }),
     acceptances: Object.freeze({
       adultConfirmed: requireTrue(
@@ -1199,6 +1296,51 @@ function timestampMillis(value: unknown): number | null {
     return Number.isFinite(millis) ? millis : null;
   }
   return null;
+}
+
+function hasNonNullDocumentField(
+  snapshot: DocumentSnapshot,
+  field: string
+): boolean {
+  const value = snapshot.get(field);
+  return value !== undefined && value !== null;
+}
+
+function existingPaygIntentPrivacySchedule(
+  snapshot: DocumentSnapshot
+): Record<string, unknown> {
+  const cutoff = timestampMillis(
+    snapshot.get(PAYG_PII_RETENTION_CUTOFF_FIELD)
+  );
+  const retryAt = timestampMillis(
+    snapshot.get(PAYG_PII_REDACTION_RETRY_FIELD)
+  );
+  const privacyAlreadyClosed = hasNonNullDocumentField(
+    snapshot,
+    "piiScrubbedAt"
+  );
+  const piiReintroduced = PAYG_INTENT_PII_FIELDS.some((field) => {
+    const value = snapshot.get(field);
+    return value !== undefined && value !== null;
+  });
+  return {
+    // Remove the ambiguous pre-launch field. It must never authorize recovery
+    // or be mistaken for immutable retention evidence again.
+    piiScrubAt: FieldValue.delete(),
+    ...(privacyAlreadyClosed && piiReintroduced ? {
+      // A stale/manual write reintroduced identity after closure. Ensure the
+      // review-only path itself schedules immediate cleanup instead of waiting
+      // for the bounded collection discovery cursor to revisit this row.
+      [PAYG_PII_REDACTION_RETRY_FIELD]: serverTimestamp(),
+      piiRedactionReintroducedAt: serverTimestamp(),
+    } : privacyAlreadyClosed ? {
+      [PAYG_PII_REDACTION_RETRY_FIELD]: FieldValue.delete(),
+    } : cutoff === null ? {
+      [PAYG_PII_REDACTION_RETRY_FIELD]: serverTimestamp(),
+    } : retryAt === null ? {
+      [PAYG_PII_REDACTION_RETRY_FIELD]: Timestamp.fromMillis(cutoff),
+    } : {}),
+  };
 }
 
 export function sanitizePublicPaygClass(
@@ -2208,6 +2350,19 @@ async function releasePaygHold(
     if (lockRef && lockSnap?.exists && lockSnap.get("intentId") === intentRef.id) {
       tx.delete(lockRef);
     }
+    const piiAlreadyScrubbed = hasNonNullDocumentField(
+      intentSnap,
+      "piiScrubbedAt"
+    );
+    const piiReintroduced = PAYG_INTENT_PII_FIELDS.some((field) =>
+      hasNonNullDocumentField(intentSnap, field)
+    );
+    const piiRetentionCutoff = timestampMillis(
+      intentSnap.get(PAYG_PII_RETENTION_CUTOFF_FIELD)
+    );
+    const piiRedactionRetry = timestampMillis(
+      intentSnap.get(PAYG_PII_REDACTION_RETRY_FIELD)
+    );
     tx.set(intentRef, {
       status: reason === "checkout_create_failed" ? "failed" : "expired",
       capacityState: "released",
@@ -2215,17 +2370,28 @@ async function releasePaygHold(
       releaseReason: reason,
       releasedAt: serverTimestamp(),
       holdExpiresAt: FieldValue.delete(),
-      attendee: FieldValue.delete(),
-      contact: FieldValue.delete(),
-      acceptances: FieldValue.delete(),
-      requestFingerprint: FieldValue.delete(),
-      checkoutSessionUrl: FieldValue.delete(),
+      // Keep the frozen checkout evidence for the approved 30-day unpaid
+      // support window. The bounded privacy worker removes only the approved
+      // PII fields and retains this non-PII provider/capacity audit record.
+      ...(piiAlreadyScrubbed && piiReintroduced ? {
+        [PAYG_PII_REDACTION_RETRY_FIELD]: serverTimestamp(),
+        piiRedactionReintroducedAt: serverTimestamp(),
+      } : piiAlreadyScrubbed ? {
+        [PAYG_PII_REDACTION_RETRY_FIELD]: FieldValue.delete(),
+      } : piiRetentionCutoff === null ? {
+        // Legacy/pre-launch rows without immutable evidence fail closed into
+        // immediate redaction; never invent a later retention cutoff.
+        [PAYG_PII_REDACTION_RETRY_FIELD]: serverTimestamp(),
+      } : piiRedactionRetry === null ? {
+        [PAYG_PII_REDACTION_RETRY_FIELD]:
+          Timestamp.fromMillis(piiRetentionCutoff),
+      } : {}),
       piiScrubAt: FieldValue.delete(),
-      piiScrubbedAt: serverTimestamp(),
-      piiScrubReason: reason,
-      piiDeleteAt: intent.piiDeleteAt ?? Timestamp.fromMillis(
-        Date.now() + PAYG_UNPAID_INTENT_RETENTION_MS
-      ),
+      checkoutRecoveryToken: FieldValue.delete(),
+      checkoutRecoveryLeaseExpiresAt: FieldValue.delete(),
+      // Older pre-launch documents may carry the abandoned whole-document
+      // TTL proposal. Explicitly disarm it so provider and audit state remains.
+      piiDeleteAt: FieldValue.delete(),
       updatedAt: serverTimestamp(),
     }, {merge: true});
     return intent.capacityState !== "released";
@@ -2234,9 +2400,46 @@ async function releasePaygHold(
 
 async function resumeExistingPaygCheckout(
   client: Stripe,
-  intentRef: DocumentReference,
-  intent: PaygIntentDoc
+  intentRef: DocumentReference
 ): Promise<ReturnType<typeof checkoutResponse>> {
+  const readResumableIntent = async (): Promise<PaygIntentDoc> => {
+    const snapshot = await intentRef.get();
+    if (!snapshot.exists) {
+      throw paygError(
+        "deadline-exceeded",
+        "This PAYG checkout ended. Start again with a new checkout attempt."
+      );
+    }
+    const current = snapshot.data() as PaygIntentDoc;
+    const cutoff = timestampMillis(
+      snapshot.get(PAYG_PII_RETENTION_CUTOFF_FIELD)
+    );
+    const privacyAlreadyClosed = hasNonNullDocumentField(
+      snapshot,
+      "piiScrubbedAt"
+    );
+    if (!privacyAlreadyClosed && cutoff !== null && cutoff > Date.now()) {
+      return current;
+    }
+    const piiPresent = PAYG_INTENT_PII_FIELDS.some((field) =>
+      hasNonNullDocumentField(snapshot, field)
+    );
+    await intentRef.set({
+      [PAYG_PII_REDACTION_RETRY_FIELD]: piiPresent ?
+        serverTimestamp() : FieldValue.delete(),
+      ...(privacyAlreadyClosed && piiPresent ? {
+        piiRedactionReintroducedAt: serverTimestamp(),
+      } : {}),
+      piiScrubAt: FieldValue.delete(),
+      piiDeleteAt: FieldValue.delete(),
+      updatedAt: serverTimestamp(),
+    }, {merge: true});
+    throw paygError(
+      "deadline-exceeded",
+      "This PAYG checkout ended. Start again with a new checkout attempt."
+    );
+  };
+  let intent = await readResumableIntent();
   if (!intent.checkoutSessionId) {
     throw paygError(
       "unavailable",
@@ -2254,6 +2457,9 @@ async function resumeExistingPaygCheckout(
   }
   assertSessionBinding(session, intentRef.id, intent);
   if (session.status === "open" && session.expires_at > Math.floor(Date.now() / 1000)) {
+    // Provider I/O can outlive the privacy window. Re-read immediately before
+    // returning the customer-bearing URL and fail closed if closure won.
+    intent = await readResumableIntent();
     return checkoutResponse("resumed", session, intent);
   }
   if (session.status === "complete") {
@@ -2413,6 +2619,7 @@ export function buildCreatePaygCheckoutSession() {
     consumeAppCheckToken: !isFirebaseFunctionsEmulatorProcess(),
     timeoutSeconds: 120,
   }, async (request) => {
+    assertPaygCheckoutAppCheck(request);
     requirePaygAvailability();
     const legal = resolveLegalConfig(true);
     const privacy = resolvePiiRetentionConfig();
@@ -2448,6 +2655,7 @@ export function buildCreatePaygCheckoutSession() {
     );
 
     const reservation = await db().runTransaction(async (tx) => {
+      const reservationNowMillis = Math.max(nowMillis, Date.now());
       const [existing, classSnap, duplicateLocks] = await Promise.all([
         tx.get(intentRef),
         tx.get(db().collection("classes").doc(normalized.classId)),
@@ -2455,6 +2663,30 @@ export function buildCreatePaygCheckoutSession() {
       ]);
       if (existing.exists) {
         const intent = existing.data() as PaygIntentDoc;
+        const piiRetentionCutoff = timestampMillis(
+          existing.get(PAYG_PII_RETENTION_CUTOFF_FIELD)
+        );
+        const privacyAlreadyClosed = hasNonNullDocumentField(
+          existing,
+          "piiScrubbedAt"
+        );
+        const piiPresent = PAYG_INTENT_PII_FIELDS.some((field) =>
+          hasNonNullDocumentField(existing, field)
+        );
+        if (privacyAlreadyClosed || piiRetentionCutoff === null ||
+          piiRetentionCutoff <= reservationNowMillis) {
+          tx.set(existing.ref, {
+            [PAYG_PII_REDACTION_RETRY_FIELD]: piiPresent ?
+              serverTimestamp() : FieldValue.delete(),
+            ...(privacyAlreadyClosed && piiPresent ? {
+              piiRedactionReintroducedAt: serverTimestamp(),
+            } : {}),
+            piiScrubAt: FieldValue.delete(),
+            piiDeleteAt: FieldValue.delete(),
+            updatedAt: serverTimestamp(),
+          }, {merge: true});
+          return {kind: "ended" as const, intent};
+        }
         if (intent.requestFingerprint !== fingerprint ||
           intent.checkoutAttemptHash !== checkoutAttemptHash) {
           throw paygError(
@@ -2575,6 +2807,9 @@ export function buildCreatePaygCheckoutSession() {
         ageAtClass,
       });
       const classSnapshot = classSnapshotFromPublic(publicClass);
+      const intentPiiRetentionCutoffAt = Timestamp.fromMillis(
+        checkoutExpiresAt * 1000 + PAYG_UNPAID_INTENT_RETENTION_MS
+      );
       const intent: PaygIntentDoc = {
         schemaVersion: PAYG_SCHEMA_VERSION,
         checkoutSchemaVersion: PAYG_CHECKOUT_SCHEMA_VERSION,
@@ -2610,12 +2845,10 @@ export function buildCreatePaygCheckoutSession() {
         paymentIntentId: null,
         orderId: null,
         holdExpiresAt: Timestamp.fromMillis(checkoutExpiresAt * 1000),
-        piiScrubAt: Timestamp.fromMillis(
-          checkoutExpiresAt * 1000 + PAYG_UNPAID_INTENT_RETENTION_MS
-        ),
-        piiDeleteAt: Timestamp.fromMillis(
-          checkoutExpiresAt * 1000 + PAYG_UNPAID_INTENT_RETENTION_MS
-        ),
+        // The cutoff is immutable legal/privacy evidence. Only the separate
+        // retry timestamp may move after a transient redaction failure.
+        piiRetentionCutoffAt: intentPiiRetentionCutoffAt,
+        piiRedactionRetryAt: intentPiiRetentionCutoffAt,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       };
@@ -2659,7 +2892,7 @@ export function buildCreatePaygCheckoutSession() {
       );
     }
     if (reservation.kind === "resume") {
-      return resumeExistingPaygCheckout(client, intentRef, reservation.intent);
+      return resumeExistingPaygCheckout(client, intentRef);
     }
 
     const intent = reservation.intent;
@@ -2698,7 +2931,7 @@ export function buildCreatePaygCheckoutSession() {
     if (!session.url) {
       throw paygError("internal", "Stripe did not return a PAYG Checkout URL.");
     }
-    await db().runTransaction(async (tx) => {
+    const sessionWrite = await db().runTransaction(async (tx) => {
       const fresh = await tx.get(intentRef);
       if (!fresh.exists) throw new Error(`PAYG intent ${intentRef.id} disappeared.`);
       const current = fresh.data() as PaygIntentDoc;
@@ -2712,13 +2945,65 @@ export function buildCreatePaygCheckoutSession() {
           "This PAYG hold ended before Stripe returned. Start again."
         );
       }
+      const cutoff = timestampMillis(
+        fresh.get(PAYG_PII_RETENTION_CUTOFF_FIELD)
+      );
+      const privacyAlreadyClosed = hasNonNullDocumentField(
+        fresh,
+        "piiScrubbedAt"
+      );
+      if (privacyAlreadyClosed || cutoff === null || cutoff <= Date.now()) {
+        const piiPresent = PAYG_INTENT_PII_FIELDS.some((field) =>
+          hasNonNullDocumentField(fresh, field)
+        );
+        tx.set(intentRef, {
+          checkoutSessionId: session.id,
+          checkoutSessionUrl: FieldValue.delete(),
+          [PAYG_PII_REDACTION_RETRY_FIELD]: piiPresent ?
+            serverTimestamp() : FieldValue.delete(),
+          ...(privacyAlreadyClosed && piiPresent ? {
+            piiRedactionReintroducedAt: serverTimestamp(),
+          } : {}),
+          piiScrubAt: FieldValue.delete(),
+          piiDeleteAt: FieldValue.delete(),
+          privacyRecoveryBlockedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        }, {merge: true});
+        return "privacy_closed" as const;
+      }
       tx.set(intentRef, {
         status: "checkout_created",
         checkoutSessionId: session.id,
         checkoutSessionUrl: session.url,
         updatedAt: serverTimestamp(),
       }, {merge: true});
+      return "recorded" as const;
     });
+    if (sessionWrite === "privacy_closed") {
+      let finalSession = session;
+      if (finalSession.status === "open") {
+        try {
+          finalSession = await client.checkout.sessions.expire(finalSession.id);
+        } catch (error) {
+          finalSession = await client.checkout.sessions.retrieve(finalSession.id);
+          if (finalSession.status === "open") throw error;
+        }
+      }
+      if (finalSession.status === "complete" &&
+        finalSession.payment_status === "paid") {
+        await fulfilPaygCheckoutSession(finalSession);
+      } else {
+        await releasePaygHold(
+          intentRef,
+          "privacy_redacted_during_checkout_creation",
+          finalSession.id
+        );
+      }
+      throw paygError(
+        "deadline-exceeded",
+        "This PAYG checkout ended before Stripe returned. Start again."
+      );
+    }
     return checkoutResponse("created", session, {
       ...intent,
       status: "checkout_created",
@@ -2815,6 +3100,137 @@ export function isPaygPaymentRefundSafe(
     paymentIntent.metadata?.schemaVersion === String(PAYG_SCHEMA_VERSION);
 }
 
+export type PaygPaymentSuccessEvidence = Readonly<{
+  providerEventId: string;
+  providerEventType:
+    | "checkout.session.completed"
+    | "checkout.session.async_payment_succeeded";
+  providerEventCreatedSecond: number;
+  checkoutSessionId: string;
+  paymentIntentId: string;
+  intentId: string;
+  livemode: boolean;
+}>;
+
+function paygSuccessfulPaymentCompletedSecond(input: Readonly<{
+  paymentIntent: Stripe.PaymentIntent;
+  charge: Stripe.Charge | null;
+  successEvidence: PaygPaymentSuccessEvidence | null;
+  checkoutSessionId: string;
+  intentId: string;
+  expectedLivemode: boolean;
+}>): number | null {
+  const {paymentIntent, charge, successEvidence} = input;
+  if (!charge || !successEvidence ||
+    !isPaygPaymentRefundSafe(
+      paymentIntent,
+      input.intentId,
+      input.expectedLivemode
+    ) ||
+    idOf(paymentIntent.latest_charge) !== charge.id ||
+    idOf(charge.payment_intent) !== paymentIntent.id ||
+    charge.livemode !== input.expectedLivemode ||
+    charge.paid !== true || charge.status !== "succeeded" ||
+    successEvidence.intentId !== input.intentId ||
+    successEvidence.checkoutSessionId !== input.checkoutSessionId ||
+    successEvidence.paymentIntentId !== paymentIntent.id ||
+    successEvidence.livemode !== input.expectedLivemode ||
+    !/^evt_[A-Za-z0-9_]{4,250}$/.test(successEvidence.providerEventId) ||
+    (successEvidence.providerEventType !== "checkout.session.completed" &&
+      successEvidence.providerEventType !==
+        "checkout.session.async_payment_succeeded") ||
+    !Number.isSafeInteger(successEvidence.providerEventCreatedSecond) ||
+    successEvidence.providerEventCreatedSecond <= 0 ||
+    !Number.isSafeInteger(
+      (successEvidence.providerEventCreatedSecond + 1) * 1000
+    )) return null;
+  return successEvidence.providerEventCreatedSecond;
+}
+
+export function paygPaymentCompletedBeforePiiCutoff(input: Readonly<{
+  paymentIntent: Stripe.PaymentIntent;
+  charge: Stripe.Charge | null;
+  successEvidence: PaygPaymentSuccessEvidence | null;
+  checkoutSessionId: string;
+  intentId: string;
+  expectedLivemode: boolean;
+  piiRetentionCutoffAtMillis: number | null;
+}>): boolean {
+  const paymentCompletedSecond = paygSuccessfulPaymentCompletedSecond(input);
+  return paymentCompletedSecond !== null &&
+    input.piiRetentionCutoffAtMillis !== null &&
+    Number.isSafeInteger(input.piiRetentionCutoffAtMillis) &&
+    // Stripe timestamps have whole-second precision. Accept only when the
+    // entire recorded success second precedes the immutable privacy boundary;
+    // a success event in the cutoff second is intentionally rejected.
+    (paymentCompletedSecond + 1) * 1000 <= input.piiRetentionCutoffAtMillis;
+}
+
+function hasCompletePaygIntentPiiEvidence(intent: PaygIntentDoc): boolean {
+  return Boolean(
+    // Once privacy has closed, a stale/manual write that puts identity fields
+    // back on the intent must never reopen promotion into paid-record PII.
+    (intent.piiScrubbedAt === undefined || intent.piiScrubbedAt === null) &&
+    intent.attendee?.fullName && intent.attendee?.dateOfBirth &&
+    intent.contact?.email &&
+    intent.acceptances?.legal?.waiver?.sha256 &&
+    intent.acceptances?.legal?.terms?.sha256 &&
+    /^[a-f0-9]{64}$/.test(intent.acceptanceEvidenceDigest || "") &&
+    resolveStoredPaygPiiRetentionConfig(intent.privacy)
+  );
+}
+
+function paygPiiPromotionMismatch(input: Readonly<{
+  intent: PaygIntentDoc;
+  paymentIntent: Stripe.PaymentIntent;
+  charge: Stripe.Charge | null;
+  successEvidence: PaygPaymentSuccessEvidence | null;
+  checkoutSessionId: string;
+  intentId: string;
+  expectedLivemode: boolean;
+  processingNowMillis: number;
+}>): string | null {
+  if (input.intent.piiScrubbedAt !== undefined &&
+    input.intent.piiScrubbedAt !== null) {
+    return "intent_pii_already_scrubbed";
+  }
+  if (!hasCompletePaygIntentPiiEvidence(input.intent)) {
+    return "intent_evidence_missing";
+  }
+  const privacy = resolveStoredPaygPiiRetentionConfig(input.intent.privacy);
+  if (!privacy) return "intent_evidence_missing";
+  if (!Number.isSafeInteger(input.processingNowMillis) ||
+    input.processingNowMillis <= 0) {
+    return "destination_pii_processing_time_invalid";
+  }
+  let destinationCutoff: number;
+  try {
+    destinationCutoff = paygPiiRedactionDeadline(
+      input.intent.classEndMillis,
+      privacy.orderPiiRetentionDays
+    );
+  } catch {
+    return "destination_pii_retention_cutoff_invalid";
+  }
+  if (destinationCutoff <= input.processingNowMillis) {
+    return "destination_pii_retention_cutoff_reached";
+  }
+  const cutoff = timestampMillis(input.intent.piiRetentionCutoffAt);
+  if (cutoff === null) return "intent_pii_retention_cutoff_missing";
+  const paymentCompletedSecond = paygSuccessfulPaymentCompletedSecond(input);
+  if (paymentCompletedSecond === null) {
+    return "payment_completion_evidence_missing";
+  }
+  return (paymentCompletedSecond + 1) * 1000 <= cutoff ? null :
+    "payment_completed_at_or_after_pii_cutoff";
+}
+
+class PaygPiiPromotionClosedError extends Error {
+  constructor(readonly mismatch: string) {
+    super(`PAYG PII promotion is closed: ${mismatch}.`);
+  }
+}
+
 function buildPaygOrder(
   intentRef: DocumentReference,
   intent: PaygIntentDoc,
@@ -2827,9 +3243,13 @@ function buildPaygOrder(
   const privacy = resolveStoredPaygPiiRetentionConfig(intent.privacy) ??
     Object.freeze({
       policyVersion: "unrecorded-v1",
-      orderPiiRetentionDays: 0,
-      waiverPiiRetentionDays: 0,
+      orderPiiRetentionDays: PAYG_ORDER_PII_RETENTION_DAYS,
+      waiverPiiRetentionDays: PAYG_WAIVER_PII_RETENTION_DAYS,
     });
+  const piiRetentionCutoffAt = Timestamp.fromMillis(paygPiiRedactionDeadline(
+    intent.classEndMillis,
+    privacy.orderPiiRetentionDays
+  ));
   return {
     schemaVersion: PAYG_SCHEMA_VERSION,
     orderId: intentRef.id,
@@ -2860,10 +3280,8 @@ function buildPaygOrder(
     cancellationCutoffAt: Timestamp.fromMillis(
       intent.classStartMillis - PAYG_CANCELLATION_CUTOFF_HOURS * 60 * 60 * 1000
     ),
-    piiRedactAt: Timestamp.fromMillis(paygPiiRedactionDeadline(
-      intent.classEndMillis,
-      privacy.orderPiiRetentionDays
-    )),
+    piiRetentionCutoffAt,
+    piiRedactionRetryAt: piiRetentionCutoffAt,
     ...(status === "confirmed" ? {
       noShowReviewAt: Timestamp.fromMillis(
         intent.classEndMillis + PAYG_NO_SHOW_REVIEW_DELAY_MS
@@ -2896,12 +3314,12 @@ function retainedPaygAcceptanceEvidence(intent: PaygIntentDoc) {
   });
 }
 
-function paygWaiverPiiRedactAt(intent: PaygIntentDoc): Timestamp {
+function paygWaiverPiiRetentionCutoffAt(intent: PaygIntentDoc): Timestamp {
   const privacy = resolveStoredPaygPiiRetentionConfig(intent.privacy) ??
     Object.freeze({
       policyVersion: "unrecorded-v1",
-      orderPiiRetentionDays: 0,
-      waiverPiiRetentionDays: 0,
+      orderPiiRetentionDays: PAYG_ORDER_PII_RETENTION_DAYS,
+      waiverPiiRetentionDays: PAYG_WAIVER_PII_RETENTION_DAYS,
     });
   return Timestamp.fromMillis(paygPiiRedactionDeadline(
     intent.classEndMillis,
@@ -2909,12 +3327,12 @@ function paygWaiverPiiRedactAt(intent: PaygIntentDoc): Timestamp {
   ));
 }
 
-function paygOrderPiiRedactAt(intent: PaygIntentDoc): Timestamp {
+function paygOrderPiiRetentionCutoffAt(intent: PaygIntentDoc): Timestamp {
   const privacy = resolveStoredPaygPiiRetentionConfig(intent.privacy) ??
     Object.freeze({
       policyVersion: "unrecorded-v1",
-      orderPiiRetentionDays: 0,
-      waiverPiiRetentionDays: 0,
+      orderPiiRetentionDays: PAYG_ORDER_PII_RETENTION_DAYS,
+      waiverPiiRetentionDays: PAYG_WAIVER_PII_RETENTION_DAYS,
     });
   return Timestamp.fromMillis(paygPiiRedactionDeadline(
     intent.classEndMillis,
@@ -3117,6 +3535,7 @@ function confirmationOutboxFor(
     orderId: intentRef.id,
     exp: Math.floor((intent.classEndMillis + 24 * 60 * 60 * 1000) / 1000),
   }, signingKey.secret, signingKey.kid);
+  const piiRetentionCutoffAt = paygOrderPiiRetentionCutoffAt(intent);
   return {
     ...buildPaygConfirmationOutboxPayload({
       orderId: intentRef.id,
@@ -3130,7 +3549,8 @@ function confirmationOutboxFor(
       cancellationCutoffAtMillis: intent.classStartMillis -
         PAYG_CANCELLATION_CUTOFF_HOURS * 60 * 60 * 1000,
     }),
-    piiRedactAt: paygOrderPiiRedactAt(intent),
+    piiRetentionCutoffAt,
+    piiRedactionRetryAt: piiRetentionCutoffAt,
   };
 }
 
@@ -3308,6 +3728,7 @@ async function convergePaygRefund(refund: Stripe.Refund): Promise<boolean> {
             "provider_contract_mismatch",
           refundRecoveryAt: FieldValue.delete(),
           refundFailureReason: refund.failure_reason ?? null,
+          ...paygRefundClaimCleanup(),
           updatedAt: serverTimestamp(),
         }, {merge: true});
       }
@@ -3357,6 +3778,7 @@ async function convergePaygRefund(refund: Stripe.Refund): Promise<boolean> {
           refundId: refund.id,
           refundStatus: "succeeded",
           refundRecoveryAt: FieldValue.delete(),
+          ...paygRefundClaimCleanup(),
           updatedAt: serverTimestamp(),
         }, {merge: true});
       }
@@ -3395,6 +3817,7 @@ async function convergePaygRefund(refund: Stripe.Refund): Promise<boolean> {
           refundStatus: "conflicting_refund_id",
           conflictingRefundId: refund.id,
           refundRecoveryAt: FieldValue.delete(),
+          ...paygRefundClaimCleanup(),
           updatedAt: serverTimestamp(),
         }, {merge: true});
       }
@@ -3427,6 +3850,7 @@ async function convergePaygRefund(refund: Stripe.Refund): Promise<boolean> {
         } : {
           refundRecoveryAt: FieldValue.delete(),
         }),
+        ...paygRefundClaimCleanup(),
         updatedAt: serverTimestamp(),
       }, {merge: true});
     }
@@ -3477,77 +3901,389 @@ async function convergePaygRefund(refund: Stripe.Refund): Promise<boolean> {
   return true;
 }
 
+function paygRefundClaimEligible(
+  snapshot: DocumentSnapshot,
+  kind: PaygRefundClaimKind
+): boolean {
+  return snapshot.get("status") === "refund_pending" &&
+    snapshot.get("disputeOpen") !== true &&
+    snapshot.get("refundAutomationStatus") !== "suspended_dispute" &&
+    (kind === "order" || snapshot.get("automaticRefundSafe") === true);
+}
+
+function paygRefundClaimCleanup() {
+  return {
+    refundAutomationClaimToken: FieldValue.delete(),
+    refundAutomationClaimExpiresAt: FieldValue.delete(),
+    refundAutomationClaimedAt: FieldValue.delete(),
+    refundAutomationClaimPaymentIntentId: FieldValue.delete(),
+    refundAutomationClaimProviderCheckedAt: FieldValue.delete(),
+  };
+}
+
+async function acquirePaygRefundIssuanceClaim(
+  ref: DocumentReference,
+  kind: PaygRefundClaimKind,
+  nowMillis = Date.now(),
+  token = randomUUID()
+): Promise<PaygRefundClaimResult> {
+  if (!Number.isSafeInteger(nowMillis) || nowMillis <= 0 ||
+    !/^[A-Za-z0-9-]{16,128}$/.test(token)) {
+    throw new Error("PAYG refund issuance claim input is invalid.");
+  }
+  return db().runTransaction(async (tx) => {
+    const snapshot = await tx.get(ref);
+    if (!snapshot.exists) {
+      throw new Error(`PAYG ${kind.replace("_", " ")} ${ref.id} was not found.`);
+    }
+    if (snapshot.get("status") === "refunded" ||
+      snapshot.get("refundStatus") === "succeeded") {
+      return {state: "complete" as const};
+    }
+    const refundId = snapshot.get("refundId");
+    if (typeof refundId === "string" && refundId.startsWith("re_")) {
+      return {state: "existing" as const, refundId};
+    }
+    if (!paygRefundClaimEligible(snapshot, kind)) {
+      return {state: "blocked" as const};
+    }
+    const paymentIntentId = snapshot.get("paymentIntentId");
+    if (typeof paymentIntentId !== "string" ||
+      !paymentIntentId.startsWith("pi_")) {
+      tx.set(ref, {
+        status: snapshot.get("status") === "disputed" ?
+          "disputed" : "manual_review",
+        refundStatus: "missing_payment_intent",
+        refundRecoveryAt: FieldValue.delete(),
+        ...paygRefundClaimCleanup(),
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+      return {state: "blocked" as const};
+    }
+    const existingToken = snapshot.get("refundAutomationClaimToken");
+    const existingExpiry = timestampMillis(
+      snapshot.get("refundAutomationClaimExpiresAt")
+    );
+    if (typeof existingToken === "string" && existingToken !== token &&
+      existingExpiry !== null && existingExpiry > nowMillis) {
+      return {state: "in_progress" as const};
+    }
+    const claimExpiresAt = nowMillis + PAYG_REFUND_ISSUANCE_CLAIM_MS;
+    tx.set(ref, {
+      refundAutomationClaimToken: token,
+      refundAutomationClaimExpiresAt: Timestamp.fromMillis(claimExpiresAt),
+      refundAutomationClaimedAt: serverTimestamp(),
+      refundAutomationClaimPaymentIntentId: paymentIntentId,
+      // A crashed owner becomes recoverable when its bounded claim expires.
+      refundRecoveryAt: Timestamp.fromMillis(claimExpiresAt),
+      updatedAt: serverTimestamp(),
+    }, {merge: true});
+    const expectedAmount = Number(snapshot.get("refundExpectedAmountPence"));
+    return {
+      state: "acquired" as const,
+      token,
+      paymentIntentId,
+      expectedChargeId: typeof snapshot.get("chargeId") === "string" ?
+        snapshot.get("chargeId") : null,
+      expectedAmountPence: kind === "payment_review" &&
+        Number.isSafeInteger(expectedAmount) && expectedAmount > 0 ?
+        expectedAmount : null,
+      expectedCurrency: typeof snapshot.get("providerCurrency") === "string" ?
+        snapshot.get("providerCurrency") :
+        typeof snapshot.get("currency") === "string" ?
+          snapshot.get("currency") : null,
+      intentId: typeof snapshot.get("intentId") === "string" ?
+        snapshot.get("intentId") : null,
+    };
+  });
+}
+
+type PaygRefundProviderRefresh = Readonly<{
+  disputed: boolean;
+  safe: boolean;
+  reason: string | null;
+}>;
+
+async function refreshPaygRefundProviderState(input: Readonly<{
+  paymentIntentId: string;
+  expectedChargeId: string | null;
+  expectedAmountPence: number | null;
+  expectedCurrency: string | null;
+}>): Promise<PaygRefundProviderRefresh> {
+  const paymentIntent = await stripe().paymentIntents.retrieve(
+    input.paymentIntentId,
+    {expand: ["latest_charge"]}
+  );
+  assertStripeObjectMode(
+    "PaymentIntent",
+    paymentIntent.id,
+    paymentIntent.livemode
+  );
+  const chargeId = idOf(paymentIntent.latest_charge);
+  if (!chargeId) {
+    return {disputed: false, safe: false, reason: "missing_latest_charge"};
+  }
+  const charge = await stripe().charges.retrieve(chargeId);
+  assertStripeObjectMode("Charge", charge.id, charge.livemode);
+  if (charge.disputed === true) {
+    return {disputed: true, safe: false, reason: "provider_dispute_open"};
+  }
+  const mismatches = [
+    paymentIntent.id !== input.paymentIntentId ? "payment_intent_id" : null,
+    paymentIntent.status !== "succeeded" ? "payment_intent_status" : null,
+    !Number.isSafeInteger(paymentIntent.amount_received) ||
+      paymentIntent.amount_received <= 0 ? "payment_intent_amount" : null,
+    idOf(charge.payment_intent) !== paymentIntent.id ?
+      "charge_payment_intent" : null,
+    input.expectedChargeId && input.expectedChargeId !== charge.id ?
+      "charge_id" : null,
+    input.expectedAmountPence !== null &&
+      paymentIntent.amount_received !== input.expectedAmountPence ?
+      "expected_amount" : null,
+    input.expectedCurrency &&
+      paymentIntent.currency !== input.expectedCurrency ? "currency" : null,
+  ].filter((value): value is string => Boolean(value));
+  return {
+    disputed: false,
+    safe: mismatches.length === 0,
+    reason: mismatches.length ? `provider_${mismatches.join("_")}` : null,
+  };
+}
+
+async function confirmPaygRefundIssuanceClaim(
+  ref: DocumentReference,
+  kind: PaygRefundClaimKind,
+  claim: Extract<PaygRefundClaimResult, {state: "acquired"}>,
+  nowMillis = Date.now()
+): Promise<boolean> {
+  return db().runTransaction(async (tx) => {
+    const snapshot = await tx.get(ref);
+    const claimExpiresAt = snapshot.exists ? timestampMillis(
+      snapshot.get("refundAutomationClaimExpiresAt")
+    ) : null;
+    const valid = snapshot.exists &&
+      snapshot.get("refundAutomationClaimToken") === claim.token &&
+      snapshot.get("refundAutomationClaimPaymentIntentId") ===
+        claim.paymentIntentId &&
+      claimExpiresAt !== null && claimExpiresAt > nowMillis &&
+      paygRefundClaimEligible(snapshot, kind);
+    if (!valid) {
+      if (snapshot.exists &&
+        snapshot.get("refundAutomationClaimToken") === claim.token) {
+        tx.set(ref, {
+          ...paygRefundClaimCleanup(),
+          ...(snapshot.get("disputeOpen") === true ||
+            snapshot.get("refundAutomationStatus") === "suspended_dispute" ? {
+              refundRecoveryAt: FieldValue.delete(),
+            } : {}),
+          updatedAt: serverTimestamp(),
+        }, {merge: true});
+      }
+      return false;
+    }
+    tx.set(ref, {
+      refundAutomationClaimProviderCheckedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }, {merge: true});
+    return true;
+  });
+}
+
+async function finishPaygRefundIssuanceClaim(
+  ref: DocumentReference,
+  kind: PaygRefundClaimKind,
+  claimToken: string,
+  update: Record<string, unknown>
+): Promise<boolean> {
+  return db().runTransaction(async (tx) => {
+    const snapshot = await tx.get(ref);
+    if (!snapshot.exists) return false;
+    const ownsClaim = snapshot.get("refundAutomationClaimToken") === claimToken;
+    if (!ownsClaim) return false;
+    if (!paygRefundClaimEligible(snapshot, kind)) {
+      // A dispute/refund terminal transition won the race. Revoke only this
+      // stale claim and preserve every newer status/provider fact.
+      tx.set(ref, {
+        ...paygRefundClaimCleanup(),
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+      return false;
+    }
+    tx.set(ref, {
+      ...update,
+      ...paygRefundClaimCleanup(),
+      updatedAt: serverTimestamp(),
+    }, {merge: true});
+    return true;
+  });
+}
+
+async function persistCreatedPaygRefund(
+  ref: DocumentReference,
+  claimToken: string,
+  refundId: string,
+  reason?: PaygRefundReason
+): Promise<void> {
+  await db().runTransaction(async (tx) => {
+    const snapshot = await tx.get(ref);
+    if (!snapshot.exists) return;
+    const ownsClaim = snapshot.get("refundAutomationClaimToken") === claimToken;
+    const storedRefundId = snapshot.get("refundId");
+    const conflictingRefundId = typeof storedRefundId === "string" &&
+      storedRefundId.startsWith("re_") && storedRefundId !== refundId;
+    tx.set(ref, {
+      ...(conflictingRefundId ? {
+        conflictingRefundId: refundId,
+      } : {
+        refundId,
+      }),
+      ...(reason ? {refundReason: reason} : {}),
+      ...(ownsClaim ? paygRefundClaimCleanup() : {}),
+      updatedAt: serverTimestamp(),
+    }, {merge: true});
+  });
+}
+
+async function recordPaygRefundProviderDispute(
+  ref: DocumentReference,
+  kind: PaygRefundClaimKind,
+  claimToken: string
+): Promise<void> {
+  const suspended = await finishPaygRefundIssuanceClaim(
+    ref,
+    kind,
+    claimToken,
+    {
+      status: "manual_review",
+      refundAutomationStatus: "suspended_dispute",
+      refundStatus: "provider_dispute_detected",
+      providerDisputeDetectedAt: serverTimestamp(),
+      refundRecoveryAt: FieldValue.delete(),
+    }
+  );
+  if (!suspended) {
+    return;
+  }
+  console.error(kind === "order" ?
+    "CRITICAL_BILLING_PAYG_REFUND_PROVIDER_DISPUTE" :
+    "CRITICAL_BILLING_PAYG_REVIEW_REFUND_PROVIDER_DISPUTE", {
+    [`${kind === "order" ? "order" : "paymentReview"}Id`]: ref.id,
+  });
+}
+
+async function recordPaygRefundIssuanceFailure(
+  ref: DocumentReference,
+  kind: PaygRefundClaimKind,
+  claimToken: string,
+  error: unknown
+): Promise<void> {
+  await db().runTransaction(async (tx) => {
+    const snapshot = await tx.get(ref);
+    if (!snapshot.exists ||
+      snapshot.get("refundAutomationClaimToken") !== claimToken) return;
+    const canRetry = paygRefundClaimEligible(snapshot, kind);
+    if (!canRetry) {
+      tx.set(ref, {
+        ...paygRefundClaimCleanup(),
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+      return;
+    }
+    tx.set(ref, {
+      ...paygRefundClaimCleanup(),
+      refundRecoveryAt: Timestamp.fromMillis(Date.now() + 5 * 60 * 1000),
+      refundLastError: error instanceof Error ?
+        error.message.slice(0, 500) : String(error).slice(0, 500),
+      updatedAt: serverTimestamp(),
+    }, {merge: true});
+  });
+}
+
 async function issuePaygRefund(
   orderId: string,
   reason: PaygRefundReason
 ): Promise<void> {
   const orderRef = db().collection("paygOrders").doc(orderId);
-  const orderSnap = await orderRef.get();
-  if (!orderSnap.exists) throw new Error(`PAYG order ${orderId} was not found.`);
-  const order = orderSnap.data() as PaygOrderDoc;
-  const refundId = orderSnap.get("refundId");
-  if (order.status === "refunded" || orderSnap.get("refundStatus") === "succeeded") {
-    return;
-  }
-  const awaitingRefund = order.status === "refund_pending" &&
-    orderSnap.get("disputeOpen") !== true &&
-    orderSnap.get("refundAutomationStatus") !== "suspended_dispute";
-  if (!awaitingRefund) {
+  const claim = await acquirePaygRefundIssuanceClaim(orderRef, "order");
+  if (claim.state === "complete" || claim.state === "in_progress") return;
+  if (claim.state === "blocked") {
     throw new Error(`PAYG order ${orderId} is not awaiting a refund.`);
   }
-  if (!order.paymentIntentId) {
-    await orderRef.set({
-      status: order.status === "disputed" ? "disputed" : "manual_review",
-      refundStatus: "missing_payment_intent",
-      refundRecoveryAt: FieldValue.delete(),
-      updatedAt: serverTimestamp(),
-    }, {merge: true});
-    throw new Error(`PAYG order ${orderId} has no PaymentIntent to refund.`);
+  let refund: Stripe.Refund;
+  if (claim.state === "existing") {
+    refund = await stripe().refunds.retrieve(claim.refundId);
+    if (!await convergePaygRefund(refund)) {
+      throw new Error(`Refund ${refund.id} has no matching PAYG order.`);
+    }
+    return;
   }
 
-  let refund: Stripe.Refund;
+  let provider: PaygRefundProviderRefresh;
   try {
-    if (typeof refundId === "string" && refundId.startsWith("re_")) {
-      refund = await stripe().refunds.retrieve(refundId);
-    } else {
-      // Omitting amount requests the full remaining PaymentIntent amount. This
-      // is essential for a paid-contract mismatch, where the captured amount
-      // itself may differ from the approved PAYG price.
-      refund = await stripe().refunds.create({
-        payment_intent: order.paymentIntentId,
-        metadata: {
-          purchaseKind: PAYG_PURCHASE_KIND,
-          offeringKey: PAYG_OFFERING_KEY,
-          paygOrderId: orderId,
-          refundReason: reason,
-          schemaVersion: String(PAYG_SCHEMA_VERSION),
-        },
-      }, {idempotencyKey: `payg-refund:${orderId}`});
-    }
+    provider = await refreshPaygRefundProviderState(claim);
   } catch (error) {
-    await db().runTransaction(async (tx) => {
-      const fresh = await tx.get(orderRef);
-      if (!fresh.exists) return;
-      const canRetry = fresh.get("status") === "refund_pending" &&
-        fresh.get("disputeOpen") !== true &&
-        fresh.get("refundAutomationStatus") !== "suspended_dispute";
-      tx.set(orderRef, {
-        refundReason: reason,
-        refundRecoveryAt: canRetry ?
-          Timestamp.fromMillis(Date.now() + 5 * 60 * 1000) :
-          FieldValue.delete(),
-        refundLastError: error instanceof Error ?
-          error.message.slice(0, 500) : String(error).slice(0, 500),
-        updatedAt: serverTimestamp(),
-      }, {merge: true});
-    });
+    await recordPaygRefundIssuanceFailure(
+      orderRef,
+      "order",
+      claim.token,
+      error
+    );
     throw error;
   }
-  await orderRef.set({
-    refundId: refund.id,
-    refundReason: reason,
-    updatedAt: serverTimestamp(),
-  }, {merge: true});
+  if (provider.disputed) {
+    await recordPaygRefundProviderDispute(orderRef, "order", claim.token);
+    return;
+  }
+  if (!provider.safe) {
+    const failed = await finishPaygRefundIssuanceClaim(
+      orderRef,
+      "order",
+      claim.token,
+      {
+        status: "manual_review",
+        refundAutomationStatus: "provider_preflight_failed",
+        refundStatus: provider.reason ?? "provider_preflight_failed",
+        refundRecoveryAt: FieldValue.delete(),
+      }
+    );
+    if (failed) {
+      console.error("CRITICAL_BILLING_PAYG_REFUND_PROVIDER_PREFLIGHT", {
+        orderId,
+        reason: provider.reason,
+      });
+    }
+    return;
+  }
+  if (!await confirmPaygRefundIssuanceClaim(
+    orderRef,
+    "order",
+    claim
+  )) return;
+  try {
+    // Omitting amount requests the full remaining PaymentIntent amount. This
+    // is essential for a paid-contract mismatch, where the captured amount
+    // itself may differ from the approved PAYG price. The stable key recovers
+    // a provider-success/local-crash window without issuing a second refund.
+    refund = await stripe().refunds.create({
+      payment_intent: claim.paymentIntentId,
+      metadata: {
+        purchaseKind: PAYG_PURCHASE_KIND,
+        offeringKey: PAYG_OFFERING_KEY,
+        paygOrderId: orderId,
+        refundReason: reason,
+        schemaVersion: String(PAYG_SCHEMA_VERSION),
+      },
+    }, {idempotencyKey: `payg-refund:${orderId}`});
+  } catch (error) {
+    await recordPaygRefundIssuanceFailure(
+      orderRef,
+      "order",
+      claim.token,
+      error
+    );
+    throw error;
+  }
+  await persistCreatedPaygRefund(orderRef, claim.token, refund.id, reason);
   if (!await convergePaygRefund(refund)) {
     throw new Error(`Refund ${refund.id} has no matching PAYG order.`);
   }
@@ -3559,6 +4295,24 @@ function paygPaymentReviewId(
   paymentIntentId: string | null
 ): string {
   return `${intentId}_${sha256(paymentIntentId || sessionId).slice(0, 24)}`;
+}
+
+function isExactPaygPaymentReviewOwner(
+  review: DocumentSnapshot,
+  intentId: string,
+  checkoutSessionId: string,
+  paymentIntentId: string
+): boolean {
+  if (!review.exists) return false;
+  const exact = review.get("intentId") === intentId &&
+    review.get("checkoutSessionId") === checkoutSessionId &&
+    review.get("paymentIntentId") === paymentIntentId;
+  if (!exact) {
+    throw new Error(
+      `PAYG payment review ${review.id} conflicts with its deterministic owner binding.`
+    );
+  }
+  return true;
 }
 
 async function paygPaymentReviewRefForRefund(
@@ -3624,6 +4378,7 @@ async function convergePaygPaymentReviewRefund(
           `unsupported_${String(refund.status)}` : "provider_contract_mismatch",
         refundRecoveryAt: FieldValue.delete(),
         refundFailureReason: refund.failure_reason ?? null,
+        ...paygRefundClaimCleanup(),
         updatedAt: serverTimestamp(),
       }, {merge: true});
       console.error("CRITICAL_BILLING_PAYG_REVIEW_REFUND_MANUAL_REVIEW", {
@@ -3649,6 +4404,7 @@ async function convergePaygPaymentReviewRefund(
         refundId: refund.id,
         refundStatus: "succeeded",
         refundRecoveryAt: FieldValue.delete(),
+        ...paygRefundClaimCleanup(),
         updatedAt: serverTimestamp(),
       }, {merge: true});
       return;
@@ -3669,6 +4425,7 @@ async function convergePaygPaymentReviewRefund(
         refundStatus: "conflicting_refund_id",
         conflictingRefundId: refund.id,
         refundRecoveryAt: FieldValue.delete(),
+        ...paygRefundClaimCleanup(),
         updatedAt: serverTimestamp(),
       }, {merge: true});
       console.error("CRITICAL_BILLING_PAYG_REVIEW_REFUND_ID_CONFLICT", {
@@ -3694,6 +4451,7 @@ async function convergePaygPaymentReviewRefund(
       } : {
         refundRecoveryAt: FieldValue.delete(),
       }),
+      ...paygRefundClaimCleanup(),
       updatedAt: serverTimestamp(),
     }, {merge: true});
   });
@@ -3702,65 +4460,90 @@ async function convergePaygPaymentReviewRefund(
 
 async function issuePaygPaymentReviewRefund(reviewId: string): Promise<void> {
   const reviewRef = db().collection(PAYG_PAYMENT_REVIEW_COLLECTION).doc(reviewId);
-  const review = await reviewRef.get();
-  if (!review.exists) throw new Error(`PAYG payment review ${reviewId} was not found.`);
-  if (review.get("status") === "refunded" ||
-    review.get("refundStatus") === "succeeded") return;
-  if (review.get("status") !== "refund_pending" ||
-    review.get("automaticRefundSafe") !== true) {
+  const claim = await acquirePaygRefundIssuanceClaim(
+    reviewRef,
+    "payment_review"
+  );
+  if (claim.state === "complete" || claim.state === "in_progress") return;
+  if (claim.state === "blocked") {
     throw new Error(`PAYG payment review ${reviewId} is not refund-safe.`);
   }
-  const paymentIntentId = review.get("paymentIntentId");
-  if (typeof paymentIntentId !== "string" || !paymentIntentId.startsWith("pi_")) {
-    await reviewRef.set({
-      status: "manual_review",
-      refundStatus: "missing_payment_intent",
-      refundRecoveryAt: FieldValue.delete(),
-      updatedAt: serverTimestamp(),
-    }, {merge: true});
-    throw new Error(`PAYG payment review ${reviewId} has no PaymentIntent.`);
-  }
   let refund: Stripe.Refund;
-  try {
-    const refundId = review.get("refundId");
-    if (typeof refundId === "string" && refundId.startsWith("re_")) {
-      refund = await stripe().refunds.retrieve(refundId);
-    } else {
-      refund = await stripe().refunds.create({
-        payment_intent: paymentIntentId,
-        metadata: {
-          purchaseKind: PAYG_PURCHASE_KIND,
-          offeringKey: PAYG_OFFERING_KEY,
-          paygIntentId: String(review.get("intentId")),
-          paygPaymentReviewId: reviewId,
-          refundReason: "paid_contract_mismatch",
-          schemaVersion: String(PAYG_SCHEMA_VERSION),
-        },
-      }, {idempotencyKey: `payg-review-refund:${reviewId}`});
+  if (claim.state === "existing") {
+    refund = await stripe().refunds.retrieve(claim.refundId);
+    if (!await convergePaygPaymentReviewRefund(refund)) {
+      throw new Error(`Refund ${refund.id} has no matching PAYG payment review.`);
     }
+    return;
+  }
+
+  let provider: PaygRefundProviderRefresh;
+  try {
+    provider = await refreshPaygRefundProviderState(claim);
   } catch (error) {
-    await db().runTransaction(async (tx) => {
-      const fresh = await tx.get(reviewRef);
-      if (!fresh.exists) return;
-      const canRetry = fresh.get("status") === "refund_pending" &&
-        fresh.get("automaticRefundSafe") === true &&
-        fresh.get("disputeOpen") !== true &&
-        fresh.get("refundAutomationStatus") !== "suspended_dispute";
-      tx.set(reviewRef, {
-        refundRecoveryAt: canRetry ?
-          Timestamp.fromMillis(Date.now() + 5 * 60 * 1000) :
-          FieldValue.delete(),
-        refundLastError: error instanceof Error ?
-          error.message.slice(0, 500) : String(error).slice(0, 500),
-        updatedAt: serverTimestamp(),
-      }, {merge: true});
-    });
+    await recordPaygRefundIssuanceFailure(
+      reviewRef,
+      "payment_review",
+      claim.token,
+      error
+    );
     throw error;
   }
-  await reviewRef.set({
-    refundId: refund.id,
-    updatedAt: serverTimestamp(),
-  }, {merge: true});
+  if (provider.disputed) {
+    await recordPaygRefundProviderDispute(
+      reviewRef,
+      "payment_review",
+      claim.token
+    );
+    return;
+  }
+  if (!provider.safe) {
+    const failed = await finishPaygRefundIssuanceClaim(
+      reviewRef,
+      "payment_review",
+      claim.token,
+      {
+        status: "manual_review",
+        refundAutomationStatus: "provider_preflight_failed",
+        refundStatus: provider.reason ?? "provider_preflight_failed",
+        refundRecoveryAt: FieldValue.delete(),
+      }
+    );
+    if (failed) {
+      console.error("CRITICAL_BILLING_PAYG_REVIEW_REFUND_PROVIDER_PREFLIGHT", {
+        paymentReviewId: reviewId,
+        reason: provider.reason,
+      });
+    }
+    return;
+  }
+  if (!await confirmPaygRefundIssuanceClaim(
+    reviewRef,
+    "payment_review",
+    claim
+  )) return;
+  try {
+    refund = await stripe().refunds.create({
+      payment_intent: claim.paymentIntentId,
+      metadata: {
+        purchaseKind: PAYG_PURCHASE_KIND,
+        offeringKey: PAYG_OFFERING_KEY,
+        paygIntentId: claim.intentId ?? "unrecorded",
+        paygPaymentReviewId: reviewId,
+        refundReason: "paid_contract_mismatch",
+        schemaVersion: String(PAYG_SCHEMA_VERSION),
+      },
+    }, {idempotencyKey: `payg-review-refund:${reviewId}`});
+  } catch (error) {
+    await recordPaygRefundIssuanceFailure(
+      reviewRef,
+      "payment_review",
+      claim.token,
+      error
+    );
+    throw error;
+  }
+  await persistCreatedPaygRefund(reviewRef, claim.token, refund.id);
   if (!await convergePaygPaymentReviewRefund(refund)) {
     throw new Error(`Refund ${refund.id} has no matching PAYG payment review.`);
   }
@@ -3784,19 +4567,38 @@ async function persistPaygPaymentReviewOnly(input: Readonly<{
     paymentIntent?.amount_received ?? null
   );
   const {issueRefund} = disposition;
-  let persistedIssueRefund = issueRefund;
   const orderRef = db().collection("paygOrders").doc(intentRef.id);
   const classRef = db().collection("classes").doc(intent.class.classId);
   const lockRef = paygDuplicateLockRef(intent.duplicateLockId);
-  await db().runTransaction(async (tx) => {
-    const [freshIntent, canonicalOrder, classSnap, lockSnap] = await Promise.all([
-      tx.get(intentRef),
-      tx.get(orderRef),
-      tx.get(classRef),
-      lockRef ? tx.get(lockRef) : Promise.resolve(null),
-    ]);
+  const outcome = await db().runTransaction(async (tx) => {
+    const [freshIntent, canonicalOrder, existingReview, classSnap, lockSnap] =
+      await Promise.all([
+        tx.get(intentRef),
+        tx.get(orderRef),
+        tx.get(reviewRef),
+        tx.get(classRef),
+        lockRef ? tx.get(lockRef) : Promise.resolve(null),
+      ]);
     if (!freshIntent.exists) throw new Error(`PAYG intent ${intentRef.id} disappeared.`);
     const current = freshIntent.data() as PaygIntentDoc;
+    const exactCanonicalOrder = canonicalOrder.exists &&
+      canonicalOrder.get("purchaseKind") === PAYG_PURCHASE_KIND &&
+      canonicalOrder.get("orderId") === intentRef.id &&
+      canonicalOrder.get("checkoutSessionId") === session.id &&
+      typeof paymentIntentId === "string" &&
+      canonicalOrder.get("paymentIntentId") === paymentIntentId;
+    if (exactCanonicalOrder) {
+      return {reviewWritten: false as const, issueRefund: false};
+    }
+    if (typeof paymentIntentId === "string" &&
+      isExactPaygPaymentReviewOwner(
+        existingReview,
+        intentRef.id,
+        session.id,
+        paymentIntentId
+      )) {
+      return {reviewWritten: false as const, issueRefund: false};
+    }
     if (canonicalOrder.exists) {
       const reviewDisposition = resolvePaygCanonicalOrderReviewDisposition({
         canonicalPaymentIntentId: canonicalOrder.get("paymentIntentId"),
@@ -3804,7 +4606,6 @@ async function persistPaygPaymentReviewOnly(input: Readonly<{
         automaticRefundSafe: input.automaticRefundSafe,
         amountReceivedPence: paymentIntent?.amount_received ?? null,
       });
-      persistedIssueRefund = reviewDisposition.issueRefund;
       tx.set(reviewRef, {
         schemaVersion: PAYG_SCHEMA_VERSION,
         status: reviewDisposition.status,
@@ -3830,7 +4631,10 @@ async function persistPaygPaymentReviewOnly(input: Readonly<{
         updatedAt: serverTimestamp(),
         createdAt: serverTimestamp(),
       }, {merge: true});
-      return;
+      return {
+        reviewWritten: true as const,
+        issueRefund: reviewDisposition.issueRefund,
+      };
     }
     if ((current.capacityState === "held" ||
       current.unpaidHoldState === "counted") && classSnap.exists) {
@@ -3857,12 +4661,8 @@ async function persistPaygPaymentReviewOnly(input: Readonly<{
       holdExpiresAt: FieldValue.delete(),
       paidContractMismatches: [...mismatches],
       paymentReviewId: reviewRef.id,
-      piiScrubAt: Timestamp.fromMillis(
-        current.classEndMillis + PAYG_UNPAID_INTENT_RETENTION_MS
-      ),
-      piiDeleteAt: Timestamp.fromMillis(
-        current.classEndMillis + PAYG_UNPAID_INTENT_RETENTION_MS
-      ),
+      ...existingPaygIntentPrivacySchedule(freshIntent),
+      piiDeleteAt: FieldValue.delete(),
       updatedAt: serverTimestamp(),
     }, {merge: true});
     tx.set(reviewRef, {
@@ -3885,15 +4685,19 @@ async function persistPaygPaymentReviewOnly(input: Readonly<{
       updatedAt: serverTimestamp(),
       createdAt: serverTimestamp(),
     }, {merge: true});
+    return {reviewWritten: true as const, issueRefund};
   });
+  if (!outcome.reviewWritten) {
+    return {reviewId: reviewRef.id, issueRefund: false};
+  }
   console.error("CRITICAL_BILLING_PAYG_PAYMENT_REVIEW_REQUIRED", {
     intentId: intentRef.id,
     checkoutSessionId: session.id,
     paymentIntentId,
     mismatches,
-    automaticRefundSafe: persistedIssueRefund,
+    automaticRefundSafe: outcome.issueRefund,
   });
-  return {reviewId: reviewRef.id, issueRefund: persistedIssueRefund};
+  return {reviewId: reviewRef.id, issueRefund: outcome.issueRefund};
 }
 
 async function persistPaygPaidContractMismatch(input: Readonly<{
@@ -3901,6 +4705,10 @@ async function persistPaygPaidContractMismatch(input: Readonly<{
   intent: PaygIntentDoc;
   session: Stripe.Checkout.Session;
   paymentIntent: Stripe.PaymentIntent;
+  charge: Stripe.Charge | null;
+  successEvidence: PaygPaymentSuccessEvidence | null;
+  expectedLivemode: boolean;
+  processingNowMillis: number;
   mismatches: readonly string[];
   automaticRefundSafe: boolean;
 }>): Promise<{issueRefund: boolean; paymentReviewRefundId: string | null}> {
@@ -3917,7 +4725,7 @@ async function persistPaygPaidContractMismatch(input: Readonly<{
   );
   return db().runTransaction(async (tx) => {
     const [freshIntentSnap, existingOrderSnap, bookingSnap, waiverSnap,
-      outboxSnap, classSnap, lockSnap] = await Promise.all([
+      outboxSnap, classSnap, lockSnap, existingReviewSnap] = await Promise.all([
       tx.get(intentRef),
       tx.get(orderRef),
       tx.get(bookingRef),
@@ -3925,13 +4733,34 @@ async function persistPaygPaidContractMismatch(input: Readonly<{
       tx.get(outboxRef),
       tx.get(classRef),
       lockRef ? tx.get(lockRef) : Promise.resolve(null),
+      tx.get(reviewRef),
     ]);
     if (!freshIntentSnap.exists) {
       throw new Error(`PAYG intent ${intentRef.id} disappeared.`);
     }
     const freshIntent = freshIntentSnap.data() as PaygIntentDoc;
+    const transactionPiiProcessingAtMillis = Math.max(
+      input.processingNowMillis,
+      Date.now()
+    );
     const existingOrder = existingOrderSnap.exists ?
       existingOrderSnap.data() as PaygOrderDoc : null;
+    const exactCanonicalOrder = existingOrder !== null &&
+      existingOrder.purchaseKind === PAYG_PURCHASE_KIND &&
+      existingOrder.orderId === intentRef.id &&
+      existingOrder.checkoutSessionId === session.id &&
+      existingOrder.paymentIntentId === paymentIntent.id;
+    if (exactCanonicalOrder) {
+      return {issueRefund: false, paymentReviewRefundId: null};
+    }
+    if (isExactPaygPaymentReviewOwner(
+      existingReviewSnap,
+      intentRef.id,
+      session.id,
+      paymentIntent.id
+    )) {
+      return {issueRefund: false, paymentReviewRefundId: null};
+    }
     const conflictingExistingOrder = existingOrder !== null &&
       (existingOrder.checkoutSessionId !== session.id ||
         existingOrder.paymentIntentId !== paymentIntent.id);
@@ -3974,6 +4803,16 @@ async function persistPaygPaidContractMismatch(input: Readonly<{
       };
     }
 
+    const privacyPromotionMismatch = paygPiiPromotionMismatch({
+      intent: freshIntent,
+      paymentIntent,
+      charge: input.charge,
+      successEvidence: input.successEvidence,
+      checkoutSessionId: session.id,
+      intentId: intentRef.id,
+      expectedLivemode: input.expectedLivemode,
+      processingNowMillis: transactionPiiProcessingAtMillis,
+    });
     const preserveRefunded = existingOrder?.status === "refunded";
     const precedence = existingOrder?.status === "disputed" ||
       existingOrder?.status === "manual_review";
@@ -4012,6 +4851,9 @@ async function persistPaygPaidContractMismatch(input: Readonly<{
         }
       );
     } else {
+      if (privacyPromotionMismatch !== null) {
+        throw new PaygPiiPromotionClosedError(privacyPromotionMismatch);
+      }
       if ((freshIntent.capacityState === "held" ||
         freshIntent.unpaidHoldState === "counted") && classSnap.exists) {
         const bookedCount = Number(classSnap.get("bookedCount") ?? 0);
@@ -4057,7 +4899,9 @@ async function persistPaygPaidContractMismatch(input: Readonly<{
         ...(issueRefund ? {refundReason: "paid_contract_mismatch"} : {}),
       });
     }
-    if (!waiverSnap.exists) {
+    if (!waiverSnap.exists && privacyPromotionMismatch === null) {
+      const waiverPiiRetentionCutoffAt =
+        paygWaiverPiiRetentionCutoffAt(freshIntent);
       tx.create(waiverRef, {
         schemaVersion: PAYG_SCHEMA_VERSION,
         orderId: intentRef.id,
@@ -4069,7 +4913,8 @@ async function persistPaygPaidContractMismatch(input: Readonly<{
         class: freshIntent.class,
         checkoutSessionId: session.id,
         paymentIntentId: paymentIntent.id,
-        piiRedactAt: paygWaiverPiiRedactAt(freshIntent),
+        piiRetentionCutoffAt: waiverPiiRetentionCutoffAt,
+        piiRedactionRetryAt: waiverPiiRetentionCutoffAt,
         recordedAt: serverTimestamp(),
       });
     }
@@ -4084,12 +4929,8 @@ async function persistPaygPaidContractMismatch(input: Readonly<{
       paidContractMismatches: [...mismatches],
       paymentReviewId: reviewRef.id,
       fulfilledAt: serverTimestamp(),
-      piiScrubAt: Timestamp.fromMillis(
-        freshIntent.classEndMillis + PAYG_UNPAID_INTENT_RETENTION_MS
-      ),
-      piiDeleteAt: Timestamp.fromMillis(
-        freshIntent.classEndMillis + PAYG_UNPAID_INTENT_RETENTION_MS
-      ),
+      ...existingPaygIntentPrivacySchedule(freshIntentSnap),
+      piiDeleteAt: FieldValue.delete(),
       updatedAt: serverTimestamp(),
     }, {merge: true});
     tx.set(reviewRef, {
@@ -4116,7 +4957,8 @@ async function persistPaygPaidContractMismatch(input: Readonly<{
  * booking. Exported so the shared Stripe event ledger can dispatch here first.
  */
 export async function fulfilPaygCheckoutSession(
-  session: Stripe.Checkout.Session
+  session: Stripe.Checkout.Session,
+  successEvidence: PaygPaymentSuccessEvidence | null = null
 ): Promise<void> {
   const intentId = paygIntentIdFromCheckoutSession(session);
   if (!intentId) {
@@ -4133,6 +4975,20 @@ export async function fulfilPaygCheckoutSession(
     throw new Error(`PAYG intent ${intentId} belongs to another Stripe environment.`);
   }
   const paymentIntentId = idOf(session.payment_intent);
+  const existingOrder = await db().collection("paygOrders").doc(intentId).get();
+  if (existingOrder.exists &&
+    existingOrder.get("purchaseKind") === PAYG_PURCHASE_KIND &&
+    existingOrder.get("orderId") === intentId &&
+    existingOrder.get("checkoutSessionId") === session.id &&
+    typeof paymentIntentId === "string" &&
+    existingOrder.get("paymentIntentId") === paymentIntentId &&
+    session.livemode === environment.expectedLivemode &&
+    session.mode === "payment") {
+    // A webhook replay can arrive after the retention worker has removed the
+    // intent's guest evidence. The exact immutable provider bindings and the
+    // canonical order are sufficient to treat that replay as converged.
+    return;
+  }
   if (!paymentIntentId) {
     await persistPaygPaymentReviewOnly({
       intentRef,
@@ -4144,6 +5000,20 @@ export async function fulfilPaygCheckoutSession(
     });
     return;
   }
+  const paymentReviewRef = db().collection(PAYG_PAYMENT_REVIEW_COLLECTION).doc(
+    paygPaymentReviewId(intentId, session.id, paymentIntentId)
+  );
+  const existingPaymentReview = await paymentReviewRef.get();
+  if (isExactPaygPaymentReviewOwner(
+    existingPaymentReview,
+    intentId,
+    session.id,
+    paymentIntentId
+  )) {
+    // A recovery path already made the fail-closed payment review the durable
+    // owner. A delayed success event must not create a second owner or refund.
+    return;
+  }
   const [paymentIntent, lineItems] = await Promise.all([
     stripe().paymentIntents.retrieve(paymentIntentId),
     stripe().checkout.sessions.listLineItems(session.id, {
@@ -4151,14 +5021,13 @@ export async function fulfilPaygCheckoutSession(
       expand: ["data.price.product"],
     }),
   ]);
-  const hasIntentEvidence = Boolean(
-    intent.attendee?.fullName && intent.attendee?.dateOfBirth &&
-    intent.contact?.email && intent.contact?.phone &&
-    intent.acceptances?.legal?.waiver?.sha256 &&
-    intent.acceptances?.legal?.terms?.sha256 &&
-    /^[a-f0-9]{64}$/.test(intent.acceptanceEvidenceDigest || "") &&
-    resolveStoredPaygPiiRetentionConfig(intent.privacy)
-  );
+  const chargeId = idOf(paymentIntent.latest_charge);
+  const charge = chargeId ? await stripe().charges.retrieve(chargeId) : null;
+  // Capture once after provider evidence is available. Firestore transactions
+  // may retry, so every privacy check in this fulfillment attempt uses the same
+  // processing instant rather than moving the retention boundary mid-retry.
+  const piiPromotionProcessingAtMillis = Date.now();
+  const hasIntentEvidence = hasCompletePaygIntentPiiEvidence(intent);
   const automaticRefundSafe = isPaygPaymentRefundSafe(
     paymentIntent,
     intentId,
@@ -4175,41 +5044,68 @@ export async function fulfilPaygCheckoutSession(
     exactLineItem: exactPaygLineItem(lineItems, intent),
     expectedLivemode: environment.expectedLivemode,
   });
+  const privacyPromotionMismatch = paygPiiPromotionMismatch({
+    intent,
+    paymentIntent,
+    charge,
+    successEvidence,
+    checkoutSessionId: session.id,
+    intentId,
+    expectedLivemode: environment.expectedLivemode,
+    processingNowMillis: piiPromotionProcessingAtMillis,
+  });
   if (intent.checkoutSessionId && intent.checkoutSessionId !== session.id) {
     mismatches.push("intent_checkout_session_conflict");
   }
   if (!hasIntentEvidence) mismatches.push("intent_evidence_missing");
+  if (privacyPromotionMismatch) mismatches.push(privacyPromotionMismatch);
   const uniqueMismatches = [...new Set(mismatches)];
-  if (uniqueMismatches.length > 0) {
-    if (!hasIntentEvidence) {
-      const paymentReview = await persistPaygPaymentReviewOnly({
-        intentRef,
-        intent,
-        session,
-        paymentIntent,
-        mismatches: uniqueMismatches,
-        automaticRefundSafe,
-      });
-      if (paymentReview.issueRefund) {
-        try {
-          await issuePaygPaymentReviewRefund(paymentReview.reviewId);
-        } catch (error) {
-          console.error("PAYG payment-review refund queued for recovery", {
-            paymentReviewId: paymentReview.reviewId,
-            error,
-          });
-        }
-      }
-      return;
-    }
-    const review = await persistPaygPaidContractMismatch({
+  const routeToPaymentReview = async (
+    reviewMismatches: readonly string[]
+  ): Promise<void> => {
+    const paymentReview = await persistPaygPaymentReviewOnly({
       intentRef,
       intent,
       session,
       paymentIntent,
-      mismatches: uniqueMismatches,
+      mismatches: [...new Set(reviewMismatches)],
       automaticRefundSafe,
     });
+    if (paymentReview.issueRefund) {
+      try {
+        await issuePaygPaymentReviewRefund(paymentReview.reviewId);
+      } catch (error) {
+        console.error("PAYG payment-review refund queued for recovery", {
+          paymentReviewId: paymentReview.reviewId,
+          error,
+        });
+      }
+    }
+  };
+  if (uniqueMismatches.length > 0) {
+    if (!hasIntentEvidence || privacyPromotionMismatch !== null) {
+      await routeToPaymentReview(uniqueMismatches);
+      return;
+    }
+    let review: Awaited<ReturnType<typeof persistPaygPaidContractMismatch>>;
+    try {
+      review = await persistPaygPaidContractMismatch({
+        intentRef,
+        intent,
+        session,
+        paymentIntent,
+        charge,
+        successEvidence,
+        expectedLivemode: environment.expectedLivemode,
+        processingNowMillis: piiPromotionProcessingAtMillis,
+        mismatches: uniqueMismatches,
+        automaticRefundSafe,
+      });
+    } catch (error) {
+      if (!(error instanceof PaygPiiPromotionClosedError)) throw error;
+      await routeToPaymentReview([...uniqueMismatches, error.mismatch]);
+      return;
+    }
     console.error("CRITICAL_BILLING_PAYG_PAID_CONTRACT_MISMATCH", {
       intentId,
       checkoutSessionId: session.id,
@@ -4249,9 +5145,14 @@ export async function fulfilPaygCheckoutSession(
   const duplicateLockRef = db().collection(PAYG_DUPLICATE_LOCK_COLLECTION)
     .doc(intent.duplicateLockId);
   const confirmationOutbox = confirmationOutboxFor(intentRef, intent);
-  const outcome = await db().runTransaction(async (tx) => {
-    const [freshIntentSnap, existingOrder, classSnap, bookingSnap, waiverSnap, outboxSnap, duplicateLockSnap] =
-      await Promise.all([
+  let outcome: Readonly<{
+    status: PaygOrderStatus | "payment_review";
+    alreadyFulfilled: boolean;
+  }>;
+  try {
+    outcome = await db().runTransaction(async (tx) => {
+      const [freshIntentSnap, existingOrder, classSnap, bookingSnap, waiverSnap,
+        outboxSnap, duplicateLockSnap, freshPaymentReview] = await Promise.all([
         tx.get(intentRef),
         tx.get(orderRef),
         tx.get(db().collection("classes").doc(intent.class.classId)),
@@ -4259,73 +5160,174 @@ export async function fulfilPaygCheckoutSession(
         tx.get(waiverRef),
         tx.get(outboxRef),
         tx.get(duplicateLockRef),
+        tx.get(paymentReviewRef),
       ]);
-    if (!freshIntentSnap.exists) throw new Error(`PAYG intent ${intentId} disappeared.`);
-    const freshIntent = freshIntentSnap.data() as PaygIntentDoc;
-    if (existingOrder.exists) {
-      const existing = existingOrder.data() as PaygOrderDoc;
-      if (existing.checkoutSessionId !== session.id ||
-        existing.paymentIntentId !== paymentIntent.id ||
-        existing.class.classId !== freshIntent.class.classId) {
+      if (!freshIntentSnap.exists) throw new Error(`PAYG intent ${intentId} disappeared.`);
+      const freshIntent = freshIntentSnap.data() as PaygIntentDoc;
+      const transactionPiiProcessingAtMillis = Math.max(
+        piiPromotionProcessingAtMillis,
+        Date.now()
+      );
+      const freshPrivacyPromotionMismatch = paygPiiPromotionMismatch({
+        intent: freshIntent,
+        paymentIntent,
+        charge,
+        successEvidence,
+        checkoutSessionId: session.id,
+        intentId,
+        expectedLivemode: environment.expectedLivemode,
+        processingNowMillis: transactionPiiProcessingAtMillis,
+      });
+      if (existingOrder.exists) {
+        const existing = existingOrder.data() as PaygOrderDoc;
+        const exactCanonicalOrder = existing.purchaseKind === PAYG_PURCHASE_KIND &&
+          existing.orderId === intentId &&
+          existing.checkoutSessionId === session.id &&
+          existing.paymentIntentId === paymentIntent.id &&
+          existing.class.classId === freshIntent.class.classId;
+        if (exactCanonicalOrder) {
+          // Exact canonical replay is converged. A missing outbox may be the
+          // result of privacy closure; never reconstruct its recipient/template.
+          return {status: existing.status, alreadyFulfilled: true};
+        }
+        if (isExactPaygPaymentReviewOwner(
+          freshPaymentReview,
+          intentId,
+          session.id,
+          paymentIntent.id
+        )) {
+          return {status: "payment_review" as const, alreadyFulfilled: true};
+        }
         throw new Error(`PAYG order ${intentId} conflicts with a replayed payment.`);
       }
-      if (existing.status === "confirmed" && !outboxSnap.exists) {
-        tx.create(outboxRef, {
-          ...confirmationOutbox,
-          status: "pending",
-          attemptCount: 0,
-          nextAttemptAt: serverTimestamp(),
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-        tx.set(orderRef, {
-          confirmationEmailStatus: "pending",
-          updatedAt: serverTimestamp(),
-        }, {merge: true});
+      if (isExactPaygPaymentReviewOwner(
+        freshPaymentReview,
+        intentId,
+        session.id,
+        paymentIntent.id
+      )) {
+        return {status: "payment_review" as const, alreadyFulfilled: true};
       }
-      return {status: existing.status, alreadyFulfilled: true};
-    }
-    const classUnavailable = !classSnap.exists ||
+      if (freshPrivacyPromotionMismatch !== null) {
+        throw new PaygPiiPromotionClosedError(freshPrivacyPromotionMismatch);
+      }
+      const classUnavailable = !classSnap.exists ||
       classSnap.get("status") !== "scheduled" ||
       classSnap.get("paygEligible") === false;
-    const duplicateLockInvalid = !duplicateLockSnap.exists ||
+      const duplicateLockInvalid = !duplicateLockSnap.exists ||
       duplicateLockSnap.get("intentId") !== intentId ||
       duplicateLockSnap.get("status") !== "held";
-    const cannotUseHeldPlace = freshIntent.capacityState !== "held" ||
+      const cannotUseHeldPlace = freshIntent.capacityState !== "held" ||
       classUnavailable || duplicateLockInvalid;
-    if (cannotUseHeldPlace) {
-      if ((freshIntent.capacityState === "held" ||
+      if (cannotUseHeldPlace) {
+        if ((freshIntent.capacityState === "held" ||
         freshIntent.unpaidHoldState === "counted") && classSnap.exists) {
-        const bookedCount = Number(classSnap.get("bookedCount") ?? 0);
-        const unpaidHoldCount = Number(classSnap.get("paygUnpaidHoldCount") ?? 0);
-        tx.set(classSnap.ref, {
-          ...(freshIntent.capacityState === "held" ? {
-            bookedCount: FieldValue.increment(bookedCount > 0 ? -1 : 0),
-          } : {}),
-          ...(freshIntent.unpaidHoldState === "counted" ? {
-            paygUnpaidHoldCount: FieldValue.increment(unpaidHoldCount > 0 ? -1 : 0),
-          } : {}),
+          const bookedCount = Number(classSnap.get("bookedCount") ?? 0);
+          const unpaidHoldCount = Number(classSnap.get("paygUnpaidHoldCount") ?? 0);
+          tx.set(classSnap.ref, {
+            ...(freshIntent.capacityState === "held" ? {
+              bookedCount: FieldValue.increment(bookedCount > 0 ? -1 : 0),
+            } : {}),
+            ...(freshIntent.unpaidHoldState === "counted" ? {
+              paygUnpaidHoldCount: FieldValue.increment(unpaidHoldCount > 0 ? -1 : 0),
+            } : {}),
+            updatedAt: serverTimestamp(),
+          }, {merge: true});
+        }
+        if (duplicateLockSnap.exists &&
+        duplicateLockSnap.get("intentId") === intentId) {
+          tx.delete(duplicateLockRef);
+        }
+        const order = buildPaygOrder(
+          intentRef,
+          freshIntent,
+          session,
+          paymentIntent,
+          "refund_pending",
+          "released",
+          null
+        );
+        tx.create(orderRef, {
+          ...order,
+          refundReason: "hold_released_before_payment",
+        });
+        if (!waiverSnap.exists) {
+          const waiverPiiRetentionCutoffAt =
+          paygWaiverPiiRetentionCutoffAt(freshIntent);
+          tx.create(waiverRef, {
+            schemaVersion: PAYG_SCHEMA_VERSION,
+            orderId: intentId,
+            attendee: freshIntent.attendee,
+            acceptances: freshIntent.acceptances,
+            retainedAcceptanceEvidence: retainedPaygAcceptanceEvidence(freshIntent),
+            acceptanceEvidenceDigest: freshIntent.acceptanceEvidenceDigest,
+            privacy: resolveStoredPaygPiiRetentionConfig(freshIntent.privacy),
+            class: freshIntent.class,
+            checkoutSessionId: session.id,
+            paymentIntentId: paymentIntent.id,
+            piiRetentionCutoffAt: waiverPiiRetentionCutoffAt,
+            piiRedactionRetryAt: waiverPiiRetentionCutoffAt,
+            recordedAt: serverTimestamp(),
+          });
+        }
+        tx.set(intentRef, {
+          status: "fulfilled",
+          capacityState: "released",
+          unpaidHoldState: "released",
+          checkoutSessionId: session.id,
+          paymentIntentId: paymentIntent.id,
+          orderId: intentId,
+          holdExpiresAt: FieldValue.delete(),
+          fulfilledAt: serverTimestamp(),
+          ...existingPaygIntentPrivacySchedule(freshIntentSnap),
+          piiDeleteAt: FieldValue.delete(),
           updatedAt: serverTimestamp(),
         }, {merge: true});
+        return {status: "refund_pending" as const, alreadyFulfilled: false};
       }
-      if (duplicateLockSnap.exists &&
-        duplicateLockSnap.get("intentId") === intentId) {
-        tx.delete(duplicateLockRef);
+      if (bookingSnap.exists) {
+        throw new Error(`PAYG guest booking ${bookingId} already exists without its order.`);
       }
       const order = buildPaygOrder(
         intentRef,
         freshIntent,
         session,
         paymentIntent,
-        "refund_pending",
-        "released",
-        null
+        "confirmed",
+        "held",
+        bookingId
       );
-      tx.create(orderRef, {
-        ...order,
-        refundReason: "hold_released_before_payment",
+      tx.create(orderRef, order);
+      tx.create(bookingRef, {
+        classId: freshIntent.class.classId,
+        userId: paygGuestUserId(intentId),
+        userName: freshIntent.attendee.fullName,
+        status: "booked",
+        bookingKind: "payg_guest",
+        isGuestBooking: true,
+        paygOrderId: intentId,
+        attendanceStatus: "none",
+        attended: false,
+        checkedInAt: null,
+        checkedInBy: null,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       });
+      if (freshIntent.unpaidHoldState === "counted") {
+        const unpaidHoldCount = Number(classSnap.get("paygUnpaidHoldCount") ?? 0);
+        tx.set(classSnap.ref, {
+          paygUnpaidHoldCount: FieldValue.increment(unpaidHoldCount > 0 ? -1 : 0),
+          updatedAt: serverTimestamp(),
+        }, {merge: true});
+      }
+      tx.set(duplicateLockRef, {
+        status: "booked",
+        activeUntil: Timestamp.fromMillis(freshIntent.classEndMillis),
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
       if (!waiverSnap.exists) {
+        const waiverPiiRetentionCutoffAt =
+        paygWaiverPiiRetentionCutoffAt(freshIntent);
         tx.create(waiverRef, {
           schemaVersion: PAYG_SCHEMA_VERSION,
           orderId: intentId,
@@ -4337,113 +5339,40 @@ export async function fulfilPaygCheckoutSession(
           class: freshIntent.class,
           checkoutSessionId: session.id,
           paymentIntentId: paymentIntent.id,
-          piiRedactAt: paygWaiverPiiRedactAt(freshIntent),
+          piiRetentionCutoffAt: waiverPiiRetentionCutoffAt,
+          piiRedactionRetryAt: waiverPiiRetentionCutoffAt,
           recordedAt: serverTimestamp(),
+        });
+      }
+      if (!outboxSnap.exists) {
+        tx.create(outboxRef, {
+          ...confirmationOutbox,
+          status: "pending",
+          attemptCount: 0,
+          nextAttemptAt: serverTimestamp(),
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
         });
       }
       tx.set(intentRef, {
         status: "fulfilled",
-        capacityState: "released",
         unpaidHoldState: "released",
         checkoutSessionId: session.id,
         paymentIntentId: paymentIntent.id,
         orderId: intentId,
         holdExpiresAt: FieldValue.delete(),
         fulfilledAt: serverTimestamp(),
-        piiScrubAt: Timestamp.fromMillis(
-          freshIntent.classEndMillis + PAYG_UNPAID_INTENT_RETENTION_MS
-        ),
-        piiDeleteAt: Timestamp.fromMillis(
-          freshIntent.classEndMillis + PAYG_UNPAID_INTENT_RETENTION_MS
-        ),
+        ...existingPaygIntentPrivacySchedule(freshIntentSnap),
+        piiDeleteAt: FieldValue.delete(),
         updatedAt: serverTimestamp(),
       }, {merge: true});
-      return {status: "refund_pending" as const, alreadyFulfilled: false};
-    }
-    if (bookingSnap.exists) {
-      throw new Error(`PAYG guest booking ${bookingId} already exists without its order.`);
-    }
-    const order = buildPaygOrder(
-      intentRef,
-      freshIntent,
-      session,
-      paymentIntent,
-      "confirmed",
-      "held",
-      bookingId
-    );
-    tx.create(orderRef, order);
-    tx.create(bookingRef, {
-      classId: freshIntent.class.classId,
-      userId: paygGuestUserId(intentId),
-      userName: freshIntent.attendee.fullName,
-      status: "booked",
-      bookingKind: "payg_guest",
-      isGuestBooking: true,
-      paygOrderId: intentId,
-      attendanceStatus: "none",
-      attended: false,
-      checkedInAt: null,
-      checkedInBy: null,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
+      return {status: "confirmed" as const, alreadyFulfilled: false};
     });
-    if (freshIntent.unpaidHoldState === "counted") {
-      const unpaidHoldCount = Number(classSnap.get("paygUnpaidHoldCount") ?? 0);
-      tx.set(classSnap.ref, {
-        paygUnpaidHoldCount: FieldValue.increment(unpaidHoldCount > 0 ? -1 : 0),
-        updatedAt: serverTimestamp(),
-      }, {merge: true});
-    }
-    tx.set(duplicateLockRef, {
-      status: "booked",
-      activeUntil: Timestamp.fromMillis(freshIntent.classEndMillis),
-      updatedAt: serverTimestamp(),
-    }, {merge: true});
-    if (!waiverSnap.exists) {
-      tx.create(waiverRef, {
-        schemaVersion: PAYG_SCHEMA_VERSION,
-        orderId: intentId,
-        attendee: freshIntent.attendee,
-        acceptances: freshIntent.acceptances,
-        retainedAcceptanceEvidence: retainedPaygAcceptanceEvidence(freshIntent),
-        acceptanceEvidenceDigest: freshIntent.acceptanceEvidenceDigest,
-        privacy: resolveStoredPaygPiiRetentionConfig(freshIntent.privacy),
-        class: freshIntent.class,
-        checkoutSessionId: session.id,
-        paymentIntentId: paymentIntent.id,
-        piiRedactAt: paygWaiverPiiRedactAt(freshIntent),
-        recordedAt: serverTimestamp(),
-      });
-    }
-    if (!outboxSnap.exists) {
-      tx.create(outboxRef, {
-        ...confirmationOutbox,
-        status: "pending",
-        attemptCount: 0,
-        nextAttemptAt: serverTimestamp(),
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-    }
-    tx.set(intentRef, {
-      status: "fulfilled",
-      unpaidHoldState: "released",
-      checkoutSessionId: session.id,
-      paymentIntentId: paymentIntent.id,
-      orderId: intentId,
-      holdExpiresAt: FieldValue.delete(),
-      fulfilledAt: serverTimestamp(),
-      piiScrubAt: Timestamp.fromMillis(
-        freshIntent.classEndMillis + PAYG_UNPAID_INTENT_RETENTION_MS
-      ),
-      piiDeleteAt: Timestamp.fromMillis(
-        freshIntent.classEndMillis + PAYG_UNPAID_INTENT_RETENTION_MS
-      ),
-      updatedAt: serverTimestamp(),
-    }, {merge: true});
-    return {status: "confirmed" as const, alreadyFulfilled: false};
-  });
+  } catch (error) {
+    if (!(error instanceof PaygPiiPromotionClosedError)) throw error;
+    await routeToPaymentReview([...uniqueMismatches, error.mismatch]);
+    return;
+  }
 
   if (outcome.status === "refund_pending") {
     await issuePaygRefund(intentId, "hold_released_before_payment");
@@ -4480,6 +5409,29 @@ export function publicPaygPaymentReviewState(
     return "refund_pending";
   }
   return "disputed";
+}
+
+export function publicPaygAttendeeName(
+  value: unknown,
+  piiRedactedAt?: unknown
+): string {
+  if (piiRedactedAt !== undefined && piiRedactedAt !== null) {
+    return "PAYG guest";
+  }
+  if (!value || typeof value !== "object") return "PAYG guest";
+  const name = (value as {fullName?: unknown}).fullName;
+  return typeof name === "string" && name.length >= 2 && name.length <= 160 ?
+    name : "PAYG guest";
+}
+
+export function isPaygOrderPiiClosed(input: Readonly<{
+  piiRedactedAt: unknown;
+  piiRetentionCutoffAt: unknown;
+  nowMillis: number;
+}>): boolean {
+  const cutoff = timestampMillis(input.piiRetentionCutoffAt);
+  return input.piiRedactedAt !== undefined && input.piiRedactedAt !== null ||
+    cutoff === null || cutoff <= input.nowMillis;
 }
 
 export function buildPaygCancellationPreviewPayload(input: Readonly<{
@@ -4519,6 +5471,7 @@ export function buildGetPaygCancellationPreview() {
     enforceAppCheck: !isFirebaseFunctionsEmulatorProcess(),
     consumeAppCheckToken: !isFirebaseFunctionsEmulatorProcess(),
   }, async (request) => {
+    assertPaygCheckoutAppCheck(request);
     assertPaygFirebaseProject();
     assertCancellationTokenSecretConfigured();
     const token = requireBoundedString(request.data?.token, "token", 40, 2048);
@@ -4562,6 +5515,11 @@ function publicOrderProjection(
   signingKey: PaygVerificationKey,
   nowMillis = Date.now()
 ) {
+  const privacyClosed = isPaygOrderPiiClosed({
+    piiRedactedAt: order.piiRedactedAt,
+    piiRetentionCutoffAt: order.piiRetentionCutoffAt,
+    nowMillis,
+  });
   const decision = resolvePaygCancellationDecision(order.classStartMillis, nowMillis);
   const tokenExpiresAt = Math.floor(
     (order.classEndMillis + 24 * 60 * 60 * 1000) / 1000
@@ -4577,7 +5535,10 @@ function publicOrderProjection(
     state,
     order: {
       reference: order.orderId,
-      attendeeName: order.attendee.fullName,
+      attendeeName: publicPaygAttendeeName(
+        order.attendee,
+        privacyClosed ? true : null
+      ),
       amountPence: order.amountPence,
       currency: order.currency,
       class: order.class,
@@ -4858,6 +5819,7 @@ export function buildRequestPaygCancellation() {
     consumeAppCheckToken: !isFirebaseFunctionsEmulatorProcess(),
     timeoutSeconds: 120,
   }, async (request) => {
+    assertPaygCheckoutAppCheck(request);
     if (request.data?.confirm !== true) {
       throw paygError(
         "failed-precondition",
@@ -5031,6 +5993,7 @@ async function releasePaidOrderCapacity(
     confirmationEmailStatus: "not_required",
     noShowReviewAt: FieldValue.delete(),
     ...update,
+    ...paygRefundClaimCleanup(),
     updatedAt: serverTimestamp(),
   }, {merge: true});
 }
@@ -5060,6 +6023,7 @@ async function applyPaygPaymentReviewChargeRefund(
     )) {
       tx.set(review.ref, {
         refundRecoveryAt: FieldValue.delete(),
+        ...paygRefundClaimCleanup(),
         updatedAt: serverTimestamp(),
       }, {merge: true});
       return;
@@ -5075,6 +6039,7 @@ async function applyPaygPaymentReviewChargeRefund(
       refundedAmountPence: charge.amount_refunded,
       refundRecoveryAt: FieldValue.delete(),
       refundedAt: fullyRefunded ? serverTimestamp() : FieldValue.delete(),
+      ...paygRefundClaimCleanup(),
       updatedAt: serverTimestamp(),
     }, {merge: true});
     if (!fullyRefunded) {
@@ -5137,6 +6102,7 @@ async function applyPaygChargeRefund(
     if (orderRefundSucceeded) {
       tx.set(orderRef, {
         refundRecoveryAt: FieldValue.delete(),
+        ...paygRefundClaimCleanup(),
         updatedAt: serverTimestamp(),
       }, {merge: true});
       if (linkedReview && !linkedReviewRefundSucceeded) {
@@ -5144,6 +6110,7 @@ async function applyPaygChargeRefund(
           status: "refunded",
           refundStatus: "succeeded",
           refundRecoveryAt: FieldValue.delete(),
+          ...paygRefundClaimCleanup(),
           updatedAt: serverTimestamp(),
         }, {merge: true});
       }
@@ -5162,6 +6129,7 @@ async function applyPaygChargeRefund(
         refundedAmountPence: charge.amount_refunded,
         refundedAt: fullyRefunded ? serverTimestamp() : FieldValue.delete(),
         refundRecoveryAt: FieldValue.delete(),
+        ...paygRefundClaimCleanup(),
         updatedAt: serverTimestamp(),
       }, {merge: true});
     }
@@ -5242,6 +6210,7 @@ async function applyPaygPaymentReviewDispute(
       tx.set(review.ref, {
         refundRecoveryAt: FieldValue.delete(),
         refundAutomationStatus: "suspended_dispute",
+        ...paygRefundClaimCleanup(),
         updatedAt: serverTimestamp(),
       }, {merge: true});
       return;
@@ -5254,6 +6223,7 @@ async function applyPaygPaymentReviewDispute(
         refundRecoveryAt: FieldValue.delete(),
         refundAutomationStatus: "suspended_dispute",
         refundObligationReviewRequired: true,
+        ...paygRefundClaimCleanup(),
         updatedAt: serverTimestamp(),
       }, {merge: true});
       return;
@@ -5273,6 +6243,7 @@ async function applyPaygPaymentReviewDispute(
       refundRecoveryAt: FieldValue.delete(),
       refundAutomationStatus: "suspended_dispute",
       refundObligationReviewRequired: true,
+      ...paygRefundClaimCleanup(),
       updatedAt: serverTimestamp(),
     }, {merge: true});
     if (!exact) {
@@ -5341,6 +6312,7 @@ async function applyPaygDispute(
         tx.set(reviewSnap.ref, {
           refundRecoveryAt: FieldValue.delete(),
           refundAutomationStatus: "suspended_dispute",
+          ...paygRefundClaimCleanup(),
           updatedAt: serverTimestamp(),
         }, {merge: true});
       }
@@ -5373,6 +6345,7 @@ async function applyPaygDispute(
           refundRecoveryAt: FieldValue.delete(),
           refundAutomationStatus: "suspended_dispute",
           refundObligationReviewRequired: true,
+          ...paygRefundClaimCleanup(),
           updatedAt: serverTimestamp(),
         }, {merge: true});
       }
@@ -5392,6 +6365,7 @@ async function applyPaygDispute(
         refundRecoveryAt: FieldValue.delete(),
         refundAutomationStatus: "suspended_dispute",
         refundObligationReviewRequired: true,
+        ...paygRefundClaimCleanup(),
         updatedAt: serverTimestamp(),
       }, {merge: true});
     }
@@ -5451,6 +6425,33 @@ async function paygPaymentIntentForCharge(
   return orders.size === 1 || reviews.size === 1 ? paymentIntent : null;
 }
 
+function paygPaymentSuccessEvidenceFromEvent(
+  event: Stripe.Event
+): PaygPaymentSuccessEvidence | null {
+  if (event.type !== "checkout.session.completed" &&
+    event.type !== "checkout.session.async_payment_succeeded") return null;
+  const session = event.data.object as Stripe.Checkout.Session;
+  const intentId = paygIntentIdFromCheckoutSession(session);
+  const paymentIntentId = idOf(session.payment_intent);
+  if (!intentId || !paymentIntentId ||
+    session.object !== "checkout.session" ||
+    session.mode !== "payment" || session.status !== "complete" ||
+    session.payment_status !== "paid" ||
+    session.livemode !== event.livemode ||
+    typeof event.id !== "string" ||
+    !/^evt_[A-Za-z0-9_]{4,250}$/.test(event.id) ||
+    !Number.isSafeInteger(event.created) || event.created <= 0) return null;
+  return Object.freeze({
+    providerEventId: event.id,
+    providerEventType: event.type,
+    providerEventCreatedSecond: event.created,
+    checkoutSessionId: session.id,
+    paymentIntentId,
+    intentId,
+    livemode: event.livemode,
+  });
+}
+
 /**
  * Dispatches PAYG-owned events before the membership webhook switch. Returns
  * false for unrelated events so the existing subscription domain can handle
@@ -5462,11 +6463,14 @@ export async function dispatchPaygStripeEvent(event: Stripe.Event): Promise<bool
   case "checkout.session.async_payment_succeeded": {
     const trigger = event.data.object as Stripe.Checkout.Session;
     if (!paygIntentIdFromCheckoutSession(trigger)) return false;
+    const successEvidence = paygPaymentSuccessEvidenceFromEvent(event);
     const session = await stripe().checkout.sessions.retrieve(trigger.id);
-    if (session.payment_status === "unpaid") {
+    if (session.payment_status === "unpaid" ||
+      (successEvidence === null && event.type === "checkout.session.completed" &&
+        trigger.payment_status === "unpaid")) {
       await markPaygPaymentPending(session);
     } else {
-      await fulfilPaygCheckoutSession(session);
+      await fulfilPaygCheckoutSession(session, successEvidence);
     }
     return true;
   }
@@ -5515,24 +6519,166 @@ export async function dispatchPaygStripeEvent(event: Stripe.Event): Promise<bool
   }
 }
 
+const PAYG_CHECKOUT_RECOVERY_LEASE_MS = 5 * 60 * 1000;
+let paygSessionRecoveryAfterReadTestBarrier: Readonly<{
+  markReached: () => void;
+  waitForRelease: Promise<void>;
+}> | null = null;
+
+function pauseNextPaygSessionRecoveryAfterRead(): Readonly<{
+  reached: Promise<void>;
+  release: () => void;
+}> {
+  if (!isFirebaseFunctionsEmulatorProcess()) {
+    throw new Error("PAYG session recovery read pause is emulator-only.");
+  }
+  if (paygSessionRecoveryAfterReadTestBarrier !== null) {
+    throw new Error("A PAYG session recovery read pause is already active.");
+  }
+  let markReached!: () => void;
+  let release!: () => void;
+  const reached = new Promise<void>((resolve) => {
+    markReached = resolve;
+  });
+  const waitForRelease = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  paygSessionRecoveryAfterReadTestBarrier = {markReached, waitForRelease};
+  return Object.freeze({reached, release});
+}
+
+async function maybePausePaygSessionRecoveryAfterReadForTest(): Promise<void> {
+  const barrier = paygSessionRecoveryAfterReadTestBarrier;
+  if (!barrier) return;
+  paygSessionRecoveryAfterReadTestBarrier = null;
+  barrier.markReached();
+  await barrier.waitForRelease;
+}
+
+type RecoveredPaygSessionWrite =
+  | "recorded"
+  | "privacy_expired"
+  | "claim_lost"
+  | "terminal";
+
+type PaygSessionRecoveryClaim =
+  | Readonly<{outcome: "claimed"; intent: PaygIntentDoc; token: string}>
+  | Readonly<{
+    outcome:
+      | "deferred"
+      | "privacy_expired"
+      | "fulfilled"
+      | "released"
+      | "session_recorded";
+    intent: PaygIntentDoc;
+  }>;
+
+function hasRecoverablePaygIntentPii(
+  intent: PaygIntentDoc,
+  nowMillis: number
+): boolean {
+  const piiRetentionCutoffMillis = timestampMillis(
+    intent.piiRetentionCutoffAt
+  );
+  return (intent.piiScrubbedAt === undefined || intent.piiScrubbedAt === null) &&
+    typeof intent.contact?.email === "string" &&
+    intent.contact.email.trim().length > 0 &&
+    piiRetentionCutoffMillis !== null &&
+    piiRetentionCutoffMillis > nowMillis;
+}
+
+async function claimPaygSessionRecovery(
+  intentRef: DocumentReference,
+  nowMillis: number
+): Promise<PaygSessionRecoveryClaim> {
+  const token = randomUUID();
+  return db().runTransaction(async (tx) => {
+    const snap = await tx.get(intentRef);
+    await maybePausePaygSessionRecoveryAfterReadForTest();
+    // Re-evaluate after the transactional read on every attempt. A slow read
+    // or retry that crosses the immutable cutoff must never create a late
+    // provider-recovery claim from the stale pre-read time.
+    const checkedAt = Math.max(nowMillis, Date.now());
+    if (!snap.exists) throw new Error(`PAYG intent ${intentRef.id} disappeared.`);
+    const intent = snap.data() as PaygIntentDoc;
+    if (intent.status === "fulfilled") return {outcome: "fulfilled", intent};
+    if (intent.capacityState === "released") return {outcome: "released", intent};
+    if (intent.checkoutSessionId) return {outcome: "session_recorded", intent};
+    if (!hasRecoverablePaygIntentPii(intent, checkedAt)) {
+      return {outcome: "privacy_expired", intent};
+    }
+    const activeLeaseToken = snap.get("checkoutRecoveryToken");
+    const activeLeaseExpiresAt = timestampMillis(
+      snap.get("checkoutRecoveryLeaseExpiresAt")
+    );
+    if (typeof activeLeaseToken === "string" && activeLeaseToken.length > 0 &&
+      activeLeaseExpiresAt !== null && activeLeaseExpiresAt > checkedAt) {
+      return {outcome: "deferred", intent};
+    }
+    tx.set(intentRef, {
+      checkoutRecoveryToken: token,
+      checkoutRecoveryClaimedAt: serverTimestamp(),
+      checkoutRecoveryLeaseExpiresAt: Timestamp.fromMillis(
+        checkedAt + PAYG_CHECKOUT_RECOVERY_LEASE_MS
+      ),
+      updatedAt: serverTimestamp(),
+    }, {merge: true});
+    return {outcome: "claimed", intent, token};
+  });
+}
+
 async function recordRecoveredSession(
   intentRef: DocumentReference,
-  session: Stripe.Checkout.Session
-): Promise<void> {
-  await db().runTransaction(async (tx) => {
+  session: Stripe.Checkout.Session,
+  recoveryToken: string,
+  nowMillis: number
+): Promise<RecoveredPaygSessionWrite> {
+  return db().runTransaction(async (tx) => {
     const snap = await tx.get(intentRef);
     if (!snap.exists) throw new Error(`PAYG intent ${intentRef.id} disappeared.`);
     const intent = snap.data() as PaygIntentDoc;
     if (intent.checkoutSessionId && intent.checkoutSessionId !== session.id) {
       throw new Error(`PAYG intent ${intentRef.id} has conflicting Checkout Sessions.`);
     }
-    if (intent.status === "fulfilled" || intent.capacityState === "released") return;
+    if (intent.status === "fulfilled" || intent.capacityState === "released") {
+      if (snap.get("checkoutRecoveryToken") === recoveryToken) {
+        tx.set(intentRef, {
+          checkoutRecoveryToken: FieldValue.delete(),
+          checkoutRecoveryLeaseExpiresAt: FieldValue.delete(),
+          updatedAt: serverTimestamp(),
+        }, {merge: true});
+      }
+      return "terminal";
+    }
+    if (snap.get("checkoutRecoveryToken") !== recoveryToken) {
+      return "claim_lost";
+    }
+    if (!hasRecoverablePaygIntentPii(
+      intent,
+      Math.max(nowMillis, Date.now())
+    )) {
+      // Privacy redaction can win after the recovery query but before Stripe
+      // answers. Retain only the provider identifier needed for reconciliation;
+      // never recreate the customer-bearing Checkout URL from that stale read.
+      tx.set(intentRef, {
+        checkoutSessionId: session.id,
+        checkoutSessionUrl: FieldValue.delete(),
+        checkoutRecoveryToken: FieldValue.delete(),
+        checkoutRecoveryLeaseExpiresAt: FieldValue.delete(),
+        privacyRecoveryBlockedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+      return "privacy_expired";
+    }
     tx.set(intentRef, {
       status: "checkout_created",
       checkoutSessionId: session.id,
       checkoutSessionUrl: session.url,
+      checkoutRecoveryToken: FieldValue.delete(),
+      checkoutRecoveryLeaseExpiresAt: FieldValue.delete(),
       updatedAt: serverTimestamp(),
     }, {merge: true});
+    return "recorded";
   });
 }
 
@@ -5541,33 +6687,67 @@ async function recoverPaygHold(
   nowMillis: number
 ): Promise<"fulfilled" | "released" | "deferred"> {
   const intentRef = intentDoc.ref;
-  const intent = intentDoc.data() as PaygIntentDoc;
+  let intent = intentDoc.data() as PaygIntentDoc;
   if (intent.status === "fulfilled" || intent.capacityState === "released") {
     await intentRef.set({holdExpiresAt: FieldValue.delete()}, {merge: true});
     return intent.status === "fulfilled" ? "fulfilled" : "released";
   }
-  let session: Stripe.Checkout.Session;
+  let privacyExpiredDuringRecovery = false;
+  let session: Stripe.Checkout.Session | null = null;
   try {
     if (intent.checkoutSessionId) {
       session = await stripe().checkout.sessions.retrieve(intent.checkoutSessionId);
     } else {
-      // Replaying the exact create request recovers an accepted response after
-      // a process crash. If Stripe never accepted it, the worker creates an
-      // unreachable Session and expires it immediately before releasing.
-      const params = buildPaygCheckoutSessionParams({
-        intentId: intentRef.id,
-        classId: intent.class.classId,
-        classTitle: intent.class.title,
-        email: intent.contact.email,
-        priceId: intent.stripePriceId,
-        publicOrigin: intent.publicOrigin,
-        checkoutExpiresAt: intent.checkoutExpiresAt,
-      });
-      session = await stripe().checkout.sessions.create(params, {
-        idempotencyKey: `payg-checkout:${intent.checkoutAttemptHash}`,
-      });
-      assertSessionBinding(session, intentRef.id, intent);
-      await recordRecoveredSession(intentRef, session);
+      const claim = await claimPaygSessionRecovery(intentRef, nowMillis);
+      intent = claim.intent;
+      if (claim.outcome === "fulfilled" || claim.outcome === "released") {
+        await intentRef.set({holdExpiresAt: FieldValue.delete()}, {merge: true});
+        return claim.outcome;
+      }
+      if (claim.outcome === "deferred") return "deferred";
+      if (claim.outcome === "privacy_expired") {
+        // The approved privacy deadline can outlive a persistently failed
+        // create/recovery attempt. Once its PII is redacted, no new Checkout
+        // may be reconstructed; release the stale hold while preserving the
+        // non-PII recovery/audit record. A provider event for a payment that
+        // somehow completed still follows the missing-evidence review/refund
+        // path in fulfilPaygCheckoutSession.
+        await releasePaygHold(
+          intentRef,
+          "privacy_redacted_before_session_recovery"
+        );
+        return "released";
+      }
+      if (claim.outcome === "session_recorded") {
+        session = await stripe().checkout.sessions.retrieve(
+          String(intent.checkoutSessionId)
+        );
+      } else if (claim.outcome === "claimed") {
+        // Replaying the exact create request recovers an accepted response after
+        // a process crash. If Stripe never accepted it, the worker creates an
+        // unreachable Session and expires it immediately before releasing.
+        const params = buildPaygCheckoutSessionParams({
+          intentId: intentRef.id,
+          classId: intent.class.classId,
+          classTitle: intent.class.title,
+          email: intent.contact.email,
+          priceId: intent.stripePriceId,
+          publicOrigin: intent.publicOrigin,
+          checkoutExpiresAt: intent.checkoutExpiresAt,
+        });
+        session = await stripe().checkout.sessions.create(params, {
+          idempotencyKey: `payg-checkout:${intent.checkoutAttemptHash}`,
+        });
+        assertSessionBinding(session, intentRef.id, intent);
+        const writeOutcome = await recordRecoveredSession(
+          intentRef,
+          session,
+          claim.token,
+          nowMillis
+        );
+        if (writeOutcome === "claim_lost") return "deferred";
+        privacyExpiredDuringRecovery = writeOutcome === "privacy_expired";
+      }
     }
   } catch (error) {
     if (isDefinitiveStripeCreateFailure(error)) {
@@ -5576,12 +6756,16 @@ async function recoverPaygHold(
     }
     throw error;
   }
+  if (!session) {
+    throw new Error(`PAYG intent ${intentRef.id} recovery produced no Checkout Session.`);
+  }
   assertSessionBinding(session, intentRef.id, intent);
   if (session.status === "complete" && session.payment_status === "paid") {
     await fulfilPaygCheckoutSession(session);
     return "fulfilled";
   }
-  if (session.status === "complete" && session.payment_status === "unpaid" &&
+  if (!privacyExpiredDuringRecovery &&
+    session.status === "complete" && session.payment_status === "unpaid" &&
     intent.classStartMillis > nowMillis) {
     await markPaygPaymentPending(session);
     return "deferred";
@@ -5602,7 +6786,13 @@ async function recoverPaygHold(
       if (session.status === "open") throw error;
     }
   }
-  await releasePaygHold(intentRef, "recovery_confirmed_session_ended", session.id);
+  await releasePaygHold(
+    intentRef,
+    privacyExpiredDuringRecovery ?
+      "privacy_redacted_during_session_recovery" :
+      "recovery_confirmed_session_ended",
+    session.id
+  );
   return "released";
 }
 
@@ -5626,46 +6816,802 @@ async function recoverDuePaygHolds(
   return result;
 }
 
+type PaygPiiRedactionResult = {
+  redacted: number;
+  deferred: number;
+  skipped: number;
+  failed: number;
+};
+
+export type PaygPiiRedactionSweepResult = Readonly<{
+  intents: Readonly<PaygPiiRedactionResult>;
+  orders: Readonly<PaygPiiRedactionResult>;
+  outbox: Readonly<PaygPiiRedactionResult>;
+  waivers: Readonly<PaygPiiRedactionResult>;
+}>;
+
+const PAYG_PII_REDACTION_FAILURE_RETRY_MS = 60 * 60 * 1000;
+const PAYG_PII_DISCOVERY_STATE_COLLECTION = "paygPiiRedactionDiscovery";
+const PAYG_PII_DISCOVERY_LEASE_MS = 5 * 60 * 1000;
+const injectedPaygPiiRedactionFailures = new Set<string>();
+
+type PaygPiiDiscoveryConfig = Readonly<{
+  collectionId:
+    | "paygIntents"
+    | "paygOrders"
+    | "paygEmailOutbox"
+    | "paygWaiverAcceptances";
+  piiFields: readonly string[];
+  legacyScheduleField: "piiScrubAt" | "piiRedactAt";
+  redactedAtField: "piiScrubbedAt" | "piiRedactedAt";
+  discoversBookingBinding?: boolean;
+}>;
+
+function injectPaygPiiRedactionFailureOnce(
+  collectionId: PaygPiiDiscoveryConfig["collectionId"],
+  documentId: string
+): void {
+  if (!isFirebaseFunctionsEmulatorProcess()) {
+    throw new Error("PAYG PII redaction failure injection is emulator-only.");
+  }
+  if (!PAYG_PII_DISCOVERY_CONFIGS.some(
+    (config) => config.collectionId === collectionId
+  ) || !documentId || documentId.includes("/")) {
+    throw new Error("PAYG PII redaction failure injection target is invalid.");
+  }
+  injectedPaygPiiRedactionFailures.add(`${collectionId}/${documentId}`);
+}
+
+function maybeThrowInjectedPaygPiiRedactionFailure(
+  collectionId: PaygPiiDiscoveryConfig["collectionId"],
+  documentId: string
+): void {
+  const key = `${collectionId}/${documentId}`;
+  if (!injectedPaygPiiRedactionFailures.delete(key)) return;
+  throw new Error(`Injected PAYG PII redaction failure for ${key}.`);
+}
+
+const PAYG_PII_DISCOVERY_CONFIGS = Object.freeze([
+  Object.freeze({
+    collectionId: "paygIntents",
+    piiFields: PAYG_INTENT_PII_FIELDS,
+    legacyScheduleField: "piiScrubAt",
+    redactedAtField: "piiScrubbedAt",
+  }),
+  Object.freeze({
+    collectionId: "paygOrders",
+    piiFields: PAYG_ORDER_PII_FIELDS,
+    legacyScheduleField: "piiRedactAt",
+    redactedAtField: "piiRedactedAt",
+    discoversBookingBinding: true,
+  }),
+  Object.freeze({
+    collectionId: "paygEmailOutbox",
+    piiFields: PAYG_OUTBOX_PII_FIELDS,
+    legacyScheduleField: "piiRedactAt",
+    redactedAtField: "piiRedactedAt",
+  }),
+  Object.freeze({
+    collectionId: "paygWaiverAcceptances",
+    piiFields: PAYG_WAIVER_PII_FIELDS,
+    legacyScheduleField: "piiRedactAt",
+    redactedAtField: "piiRedactedAt",
+  }),
+] satisfies readonly PaygPiiDiscoveryConfig[]);
+
+function emptyPaygPiiRedactionResult(): PaygPiiRedactionResult {
+  return {redacted: 0, deferred: 0, skipped: 0, failed: 0};
+}
+
+function assertPaygPiiSweepInput(nowMillis: number, limit: number): void {
+  if (!Number.isSafeInteger(nowMillis) || nowMillis <= 0 ||
+    !Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error("PAYG PII redaction sweep bounds are invalid.");
+  }
+}
+
+const PAYG_EMAIL_LEASE_MS = 10 * 60 * 1000;
+
+export function isActivePaygEmailLease(input: Readonly<{
+  status: unknown;
+  leaseToken: unknown;
+  leaseStartedAtMillis: number | null;
+  leaseExpiresAtMillis: number | null;
+  retentionCutoffAtMillis: number | null;
+  nowMillis: number;
+}>): boolean {
+  return (input.status === "sending" || input.status === "reconciling") &&
+    typeof input.leaseToken === "string" &&
+    /^[A-Za-z0-9-]{16,128}$/.test(input.leaseToken) &&
+    input.leaseStartedAtMillis !== null &&
+    Number.isSafeInteger(input.leaseStartedAtMillis) &&
+    input.leaseStartedAtMillis > 0 &&
+    input.leaseStartedAtMillis <= Number.MAX_SAFE_INTEGER -
+      PAYG_EMAIL_LEASE_MS &&
+    input.retentionCutoffAtMillis !== null &&
+    Number.isSafeInteger(input.retentionCutoffAtMillis) &&
+    input.leaseStartedAtMillis < input.retentionCutoffAtMillis &&
+    input.leaseExpiresAtMillis !== null &&
+    Number.isSafeInteger(input.leaseExpiresAtMillis) &&
+    input.leaseExpiresAtMillis > input.leaseStartedAtMillis &&
+    input.leaseExpiresAtMillis <= input.leaseStartedAtMillis +
+      PAYG_EMAIL_LEASE_MS &&
+    input.leaseExpiresAtMillis > input.nowMillis;
+}
+
+type PaygPiiDiscoveryLease = Readonly<{
+  token: string;
+  cursorDocumentId: string | null;
+}>;
+
+function paygPiiDiscoveryStateRef(
+  config: PaygPiiDiscoveryConfig
+): DocumentReference {
+  return db().collection(PAYG_PII_DISCOVERY_STATE_COLLECTION)
+    .doc(config.collectionId);
+}
+
+async function acquirePaygPiiDiscoveryLease(
+  config: PaygPiiDiscoveryConfig,
+  nowMillis: number
+): Promise<PaygPiiDiscoveryLease | null> {
+  const stateRef = paygPiiDiscoveryStateRef(config);
+  return db().runTransaction(async (tx) => {
+    const state = await tx.get(stateRef);
+    const leaseExpiresAt = timestampMillis(state.get("leaseExpiresAt"));
+    if (leaseExpiresAt !== null && leaseExpiresAt > nowMillis) return null;
+    const storedCursor = state.get("cursorDocumentId");
+    const cursorDocumentId = typeof storedCursor === "string" && storedCursor ?
+      storedCursor : null;
+    const token = randomUUID();
+    tx.set(stateRef, {
+      schemaVersion: 1,
+      collectionId: config.collectionId,
+      cursorDocumentId,
+      leaseToken: token,
+      leaseExpiresAt: Timestamp.fromMillis(
+        nowMillis + PAYG_PII_DISCOVERY_LEASE_MS
+      ),
+      lastStartedAt: serverTimestamp(),
+      ...(state.exists ? {} : {createdAt: serverTimestamp()}),
+      updatedAt: serverTimestamp(),
+    }, {merge: true});
+    return {token, cursorDocumentId};
+  });
+}
+
+function paygDocumentHasDiscoverablePii(
+  snapshot: DocumentSnapshot,
+  config: PaygPiiDiscoveryConfig
+): boolean {
+  return config.piiFields.some((field) => {
+    const value = snapshot.get(field);
+    return value !== undefined && value !== null;
+  });
+}
+
+async function hasExactBoundPaygBookingPii(
+  tx: Transaction,
+  order: DocumentSnapshot,
+  config: PaygPiiDiscoveryConfig
+): Promise<boolean> {
+  if (config.discoversBookingBinding !== true) return false;
+  const bookingId = order.get("bookingId");
+  if (typeof bookingId !== "string" || !bookingId ||
+    bookingId.includes("/")) return false;
+  const booking = await tx.get(db().collection("bookings").doc(bookingId));
+  return booking.exists && booking.get("bookingKind") === "payg_guest" &&
+    booking.get("paygOrderId") === order.id &&
+    hasNonNullDocumentField(booking, "userName");
+}
+
+function hasLegitimatePaygPiiRetryDeferral(
+  candidate: DocumentSnapshot,
+  config: PaygPiiDiscoveryConfig,
+  cutoff: number | null,
+  retryAt: number,
+  nowMillis: number
+): boolean {
+  if (timestampMillis(candidate.get("piiRedactionLastFailedAt")) !== null &&
+    retryAt <= nowMillis + PAYG_PII_REDACTION_FAILURE_RETRY_MS) return true;
+  if (config.collectionId !== "paygEmailOutbox" || cutoff === null ||
+    candidate.get("piiRedactionDeferredReason") !== "active_email_lease") {
+    return false;
+  }
+  const leaseExpiresAt = timestampMillis(candidate.get("leaseExpiresAt"));
+  return leaseExpiresAt === retryAt && isActivePaygEmailLease({
+    status: candidate.get("status"),
+    leaseToken: candidate.get("leaseToken"),
+    leaseStartedAtMillis: timestampMillis(candidate.get("lastAttemptAt")),
+    leaseExpiresAtMillis: leaseExpiresAt,
+    retentionCutoffAtMillis: cutoff,
+    nowMillis,
+  });
+}
+
+async function scheduleDiscoveredPaygPiiCandidate(
+  candidateRef: DocumentReference,
+  config: PaygPiiDiscoveryConfig,
+  nowMillis: number
+): Promise<boolean> {
+  return db().runTransaction(async (tx) => {
+    const candidate = await tx.get(candidateRef);
+    if (!candidate.exists) return false;
+    const hasInlinePii = paygDocumentHasDiscoverablePii(candidate, config);
+    const hasBookingPii = hasInlinePii ? false :
+      await hasExactBoundPaygBookingPii(tx, candidate, config);
+    if (!hasInlinePii && !hasBookingPii) return false;
+    const retryAt = timestampMillis(
+      candidate.get(PAYG_PII_REDACTION_RETRY_FIELD)
+    );
+    const cutoff = timestampMillis(
+      candidate.get(PAYG_PII_RETENTION_CUTOFF_FIELD)
+    );
+    const privacyAlreadyClosed = hasNonNullDocumentField(
+      candidate,
+      config.redactedAtField
+    );
+    let normalizedRetryAt: number | null = null;
+    if (privacyAlreadyClosed) {
+      if (retryAt === null || retryAt > nowMillis) normalizedRetryAt = nowMillis;
+    } else if (cutoff !== null && cutoff > nowMillis) {
+      if (retryAt !== cutoff) normalizedRetryAt = cutoff;
+    } else if (retryAt === null) {
+      normalizedRetryAt = nowMillis;
+    } else if (retryAt > nowMillis && !hasLegitimatePaygPiiRetryDeferral(
+      candidate,
+      config,
+      cutoff,
+      retryAt,
+      nowMillis
+    )) {
+      normalizedRetryAt = nowMillis;
+    }
+    const hasLegacySchedule =
+      candidate.get(config.legacyScheduleField) !== undefined;
+    const hasAbandonedIntentTtl = config.collectionId === "paygIntents" &&
+      candidate.get("piiDeleteAt") !== undefined;
+    if (normalizedRetryAt === null && !hasLegacySchedule &&
+      !hasAbandonedIntentTtl) return false;
+
+    tx.set(candidateRef, {
+      ...(normalizedRetryAt === null ? {} : {
+        [PAYG_PII_REDACTION_RETRY_FIELD]:
+          Timestamp.fromMillis(normalizedRetryAt),
+      }),
+      [config.legacyScheduleField]: FieldValue.delete(),
+      ...(config.collectionId === "paygIntents" ? {
+        // Disarm the abandoned whole-document TTL proposal as soon as an old
+        // row is encountered, even if its canonical cutoff is still future.
+        piiDeleteAt: FieldValue.delete(),
+      } : {}),
+      piiRedactionDiscoveredAt: serverTimestamp(),
+      piiRedactionDiscoveryReason: privacyAlreadyClosed ?
+        "pii_reintroduced_after_redaction" : cutoff === null ?
+          "retention_cutoff_missing" : retryAt === null ?
+            "retry_marker_missing" : normalizedRetryAt !== null ?
+              "retry_marker_normalized" : "legacy_schedule_removed",
+      ...(privacyAlreadyClosed ? {
+        piiRedactionReintroducedAt: serverTimestamp(),
+      } : {}),
+      updatedAt: serverTimestamp(),
+    }, {merge: true});
+    return true;
+  });
+}
+
+async function finishPaygPiiDiscoveryPage(
+  config: PaygPiiDiscoveryConfig,
+  lease: PaygPiiDiscoveryLease,
+  pageSize: number,
+  limit: number,
+  lastDocumentId: string | null,
+  scheduledCount: number
+): Promise<void> {
+  const stateRef = paygPiiDiscoveryStateRef(config);
+  await db().runTransaction(async (tx) => {
+    const state = await tx.get(stateRef);
+    if (!state.exists || state.get("leaseToken") !== lease.token) return;
+    const cycleComplete = pageSize < limit;
+    tx.set(stateRef, {
+      cursorDocumentId: cycleComplete ? null : lastDocumentId,
+      scannedCount: FieldValue.increment(pageSize),
+      scheduledCount: FieldValue.increment(scheduledCount),
+      ...(cycleComplete ? {completedCycleCount: FieldValue.increment(1)} : {}),
+      leaseToken: FieldValue.delete(),
+      leaseExpiresAt: FieldValue.delete(),
+      lastError: FieldValue.delete(),
+      lastCompletedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }, {merge: true});
+  });
+}
+
+async function releaseFailedPaygPiiDiscoveryLease(
+  config: PaygPiiDiscoveryConfig,
+  lease: PaygPiiDiscoveryLease,
+  error: unknown
+): Promise<void> {
+  const stateRef = paygPiiDiscoveryStateRef(config);
+  const message = error instanceof Error ? error.message : String(error);
+  await db().runTransaction(async (tx) => {
+    const state = await tx.get(stateRef);
+    if (!state.exists || state.get("leaseToken") !== lease.token) return;
+    tx.set(stateRef, {
+      leaseToken: FieldValue.delete(),
+      leaseExpiresAt: FieldValue.delete(),
+      lastError: message.slice(0, 1000),
+      lastFailedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }, {merge: true});
+  });
+}
+
+async function discoverPaygPiiCandidates(
+  config: PaygPiiDiscoveryConfig,
+  nowMillis: number,
+  limit: number
+): Promise<void> {
+  const lease = await acquirePaygPiiDiscoveryLease(config, nowMillis);
+  if (!lease) return;
+  try {
+    const baseQuery = db().collection(config.collectionId)
+      .orderBy(FieldPath.documentId())
+      .limit(limit);
+    const page = lease.cursorDocumentId ?
+      await baseQuery.startAfter(lease.cursorDocumentId).get() :
+      await baseQuery.get();
+    let scheduledCount = 0;
+    for (const candidate of page.docs) {
+      if (await scheduleDiscoveredPaygPiiCandidate(
+        candidate.ref,
+        config,
+        nowMillis
+      )) scheduledCount += 1;
+    }
+    await finishPaygPiiDiscoveryPage(
+      config,
+      lease,
+      page.size,
+      limit,
+      page.docs.length > 0 ? page.docs[page.docs.length - 1].id : null,
+      scheduledCount
+    );
+  } catch (error) {
+    await releaseFailedPaygPiiDiscoveryLease(config, lease, error)
+      .catch((releaseError) => console.error(
+        "Could not release PAYG PII discovery lease",
+        {collectionId: config.collectionId, releaseError}
+      ));
+    throw error;
+  }
+}
+
+async function deferPaygPiiRedactionAfterFailure(
+  ref: DocumentReference,
+  nowMillis: number
+): Promise<void> {
+  await ref.set({
+    [PAYG_PII_REDACTION_RETRY_FIELD]: Timestamp.fromMillis(
+      nowMillis + PAYG_PII_REDACTION_FAILURE_RETRY_MS
+    ),
+    piiRedactionFailureCount: FieldValue.increment(1),
+    piiRedactionLastFailedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }, {merge: true});
+}
+
 async function recoverDuePaygIntentPrivacy(
   nowMillis: number,
   limit: number
-): Promise<{scrubbed: number; skipped: number; failed: number}> {
+): Promise<PaygPiiRedactionResult> {
   const due = await db().collection("paygIntents")
-    .where("piiScrubAt", "<=", Timestamp.fromMillis(nowMillis))
+    .where(PAYG_PII_REDACTION_RETRY_FIELD, "<=", Timestamp.fromMillis(nowMillis))
     .limit(limit)
     .get();
-  const result = {scrubbed: 0, skipped: 0, failed: 0};
+  const result = emptyPaygPiiRedactionResult();
   for (const intent of due.docs) {
     try {
-      const scrubbed = await db().runTransaction(async (tx) => {
+      const outcome = await db().runTransaction(async (tx) => {
         const fresh = await tx.get(intent.ref);
-        if (!fresh.exists || timestampMillis(fresh.get("piiScrubAt")) === null) {
-          return false;
+        const retryAt = fresh.exists ? timestampMillis(
+          fresh.get(PAYG_PII_REDACTION_RETRY_FIELD)
+        ) : null;
+        if (!fresh.exists || retryAt === null || retryAt > nowMillis) {
+          return "skipped" as const;
         }
+        const cutoff = timestampMillis(
+          fresh.get(PAYG_PII_RETENTION_CUTOFF_FIELD)
+        );
+        const privacyAlreadyClosed = hasNonNullDocumentField(
+          fresh,
+          "piiScrubbedAt"
+        );
+        if (!privacyAlreadyClosed && cutoff !== null && cutoff > nowMillis) {
+          tx.set(intent.ref, {
+            [PAYG_PII_REDACTION_RETRY_FIELD]: Timestamp.fromMillis(cutoff),
+            updatedAt: serverTimestamp(),
+          }, {merge: true});
+          return "skipped" as const;
+        }
+        const status = fresh.get("status");
+        const knownOperationalStatus = status === "reserved" ||
+          status === "checkout_created" ||
+          status === "payment_pending" || status === "expired" ||
+          status === "failed" || status === "fulfilled" ||
+          status === "manual_review";
+        maybeThrowInjectedPaygPiiRedactionFailure("paygIntents", intent.id);
         tx.set(intent.ref, {
           attendee: FieldValue.delete(),
           contact: FieldValue.delete(),
           acceptances: FieldValue.delete(),
           requestFingerprint: FieldValue.delete(),
           checkoutSessionUrl: FieldValue.delete(),
+          [PAYG_PII_REDACTION_RETRY_FIELD]: FieldValue.delete(),
           piiScrubAt: FieldValue.delete(),
+          piiDeleteAt: FieldValue.delete(),
           piiScrubbedAt: serverTimestamp(),
-          piiScrubReason: "retention_expired",
+          piiScrubReason: cutoff === null ?
+            "retention_cutoff_missing" : "retention_expired",
+          piiRedactionPolicyVersion:
+            fresh.get("privacy.policyVersion") ?? "unrecorded-v1",
+          piiRedactionDeferredAt: FieldValue.delete(),
+          piiRedactionDeferredReason: FieldValue.delete(),
+          piiRedactionLastFailedAt: FieldValue.delete(),
+          ...(knownOperationalStatus ? {
+            piiRedactionOperationalWarning: FieldValue.delete(),
+            piiRedactionOperationalWarningAt: FieldValue.delete(),
+          } : {
+            // Operational corruption must not become authority to retain guest
+            // identity. Preserve a non-PII warning while redacting regardless.
+            piiRedactionOperationalWarning: "unknown_intent_status",
+            piiRedactionOperationalWarningAt: serverTimestamp(),
+          }),
           updatedAt: serverTimestamp(),
         }, {merge: true});
-        return true;
+        return knownOperationalStatus ?
+          "redacted" as const : "redacted_operational_warning" as const;
       });
-      if (scrubbed) result.scrubbed += 1;
-      else result.skipped += 1;
+      if (outcome === "redacted_operational_warning") {
+        result.redacted += 1;
+        console.error("PAYG intent privacy state requires manual review", {
+          intentId: intent.id,
+          warning: "unknown_intent_status",
+        });
+      } else {
+        result[outcome] += 1;
+      }
     } catch (error) {
       result.failed += 1;
       console.error("PAYG intent privacy recovery failed", {
         intentId: intent.id,
         error,
       });
+      await deferPaygPiiRedactionAfterFailure(
+        intent.ref,
+        nowMillis
+      ).catch(() => undefined);
     }
   }
   return result;
+}
+
+async function recoverDuePaygOrderPrivacy(
+  nowMillis: number,
+  limit: number
+): Promise<PaygPiiRedactionResult> {
+  const due = await db().collection("paygOrders")
+    .where(PAYG_PII_REDACTION_RETRY_FIELD, "<=", Timestamp.fromMillis(nowMillis))
+    .limit(limit)
+    .get();
+  const result = emptyPaygPiiRedactionResult();
+  for (const order of due.docs) {
+    try {
+      const outcome = await db().runTransaction(async (tx) => {
+        const fresh = await tx.get(order.ref);
+        const retryAt = fresh.exists ? timestampMillis(
+          fresh.get(PAYG_PII_REDACTION_RETRY_FIELD)
+        ) : null;
+        if (!fresh.exists || retryAt === null || retryAt > nowMillis) {
+          return "skipped" as const;
+        }
+        const cutoff = timestampMillis(
+          fresh.get(PAYG_PII_RETENTION_CUTOFF_FIELD)
+        );
+        const privacyAlreadyClosed = hasNonNullDocumentField(
+          fresh,
+          "piiRedactedAt"
+        );
+        if (!privacyAlreadyClosed && cutoff !== null && cutoff > nowMillis) {
+          tx.set(order.ref, {
+            [PAYG_PII_REDACTION_RETRY_FIELD]: Timestamp.fromMillis(cutoff),
+            updatedAt: serverTimestamp(),
+          }, {merge: true});
+          return "skipped" as const;
+        }
+        const bookingId = fresh.get("bookingId");
+        const bookingIdIsAbsent = bookingId === null || bookingId === undefined;
+        const bookingIdIsValid = typeof bookingId === "string" &&
+          bookingId.length > 0 && !bookingId.includes("/");
+        const bookingRef = bookingIdIsValid ?
+          db().collection("bookings").doc(bookingId) : null;
+        const booking = bookingRef ? await tx.get(bookingRef) : null;
+        const bookingBindingConflict = booking?.exists === true &&
+          (booking.get("bookingKind") !== "payg_guest" ||
+            booking.get("paygOrderId") !== order.id);
+        const bookingWarning = !bookingIdIsAbsent && !bookingIdIsValid ?
+          "invalid_booking_binding" : bookingBindingConflict ?
+            "conflicting_booking_binding" : null;
+        maybeThrowInjectedPaygPiiRedactionFailure("paygOrders", order.id);
+        tx.set(order.ref, {
+          attendee: FieldValue.delete(),
+          contact: FieldValue.delete(),
+          acceptances: FieldValue.delete(),
+          [PAYG_PII_REDACTION_RETRY_FIELD]: FieldValue.delete(),
+          piiRedactAt: FieldValue.delete(),
+          piiRedactedAt: serverTimestamp(),
+          piiRedactionReason: cutoff === null ?
+            "retention_cutoff_missing" : "retention_expired",
+          piiRedactionPolicyVersion:
+            fresh.get("privacy.policyVersion") ?? "unrecorded-v1",
+          piiRedactionLastFailedAt: FieldValue.delete(),
+          piiRedactionBookingWarning:
+            bookingWarning ?? FieldValue.delete(),
+          piiRedactionBookingWarningAt: bookingWarning ?
+            serverTimestamp() : FieldValue.delete(),
+          updatedAt: serverTimestamp(),
+        }, {merge: true});
+        if (booking?.exists && bookingRef && !bookingBindingConflict) {
+          tx.set(bookingRef, {
+            userName: FieldValue.delete(),
+            paygPiiRedactedAt: serverTimestamp(),
+            paygPiiRedactionReason: cutoff === null ?
+              "retention_cutoff_missing" : "retention_expired",
+            updatedAt: serverTimestamp(),
+          }, {merge: true});
+        }
+        return bookingWarning ?
+          "redacted_booking_warning" as const : "redacted" as const;
+      });
+      if (outcome === "redacted_booking_warning") {
+        result.redacted += 1;
+        console.error("PAYG order booking privacy binding requires manual review", {
+          orderId: order.id,
+        });
+      } else {
+        result[outcome] += 1;
+      }
+    } catch (error) {
+      result.failed += 1;
+      console.error("PAYG order privacy redaction failed", {
+        orderId: order.id,
+        error,
+      });
+      await deferPaygPiiRedactionAfterFailure(
+        order.ref,
+        nowMillis
+      ).catch(() => undefined);
+    }
+  }
+  return result;
+}
+
+async function recoverDuePaygOutboxPrivacy(
+  nowMillis: number,
+  limit: number
+): Promise<PaygPiiRedactionResult> {
+  const due = await db().collection("paygEmailOutbox")
+    .where(PAYG_PII_REDACTION_RETRY_FIELD, "<=", Timestamp.fromMillis(nowMillis))
+    .limit(limit)
+    .get();
+  const result = emptyPaygPiiRedactionResult();
+  for (const outbox of due.docs) {
+    try {
+      const outcome = await db().runTransaction(async (tx) => {
+        const fresh = await tx.get(outbox.ref);
+        const retryAt = fresh.exists ? timestampMillis(
+          fresh.get(PAYG_PII_REDACTION_RETRY_FIELD)
+        ) : null;
+        if (!fresh.exists || retryAt === null || retryAt > nowMillis) {
+          return "skipped" as const;
+        }
+        const cutoff = timestampMillis(
+          fresh.get(PAYG_PII_RETENTION_CUTOFF_FIELD)
+        );
+        const privacyAlreadyClosed = hasNonNullDocumentField(
+          fresh,
+          "piiRedactedAt"
+        );
+        if (cutoff === null) {
+          // Missing immutable evidence is already privacy-closed. Unlike an
+          // approved canonical cutoff, an active or stale lease cannot justify
+          // retaining or using this payload for another moment.
+          maybeThrowInjectedPaygPiiRedactionFailure(
+            "paygEmailOutbox",
+            outbox.id
+          );
+          redactAndTombstonePaygOutbox(
+            tx,
+            fresh,
+            "retention_deadline_missing"
+          );
+          return "redacted" as const;
+        }
+        if (!privacyAlreadyClosed && cutoff > nowMillis) {
+          tx.set(outbox.ref, {
+            [PAYG_PII_REDACTION_RETRY_FIELD]: Timestamp.fromMillis(cutoff),
+            updatedAt: serverTimestamp(),
+          }, {merge: true});
+          return "skipped" as const;
+        }
+        const leaseStartedAt = timestampMillis(fresh.get("lastAttemptAt"));
+        const leaseExpiresAt = timestampMillis(fresh.get("leaseExpiresAt"));
+        if (!privacyAlreadyClosed && isActivePaygEmailLease({
+          status: fresh.get("status"),
+          leaseToken: fresh.get("leaseToken"),
+          leaseStartedAtMillis: leaseStartedAt,
+          leaseExpiresAtMillis: leaseExpiresAt,
+          retentionCutoffAtMillis: cutoff,
+          nowMillis,
+        })) {
+          tx.set(outbox.ref, {
+            [PAYG_PII_REDACTION_RETRY_FIELD]:
+              Timestamp.fromMillis(leaseExpiresAt as number),
+            piiRedactionDeferredAt: serverTimestamp(),
+            piiRedactionDeferredReason: "active_email_lease",
+            updatedAt: serverTimestamp(),
+          }, {merge: true});
+          return "deferred" as const;
+        }
+        maybeThrowInjectedPaygPiiRedactionFailure(
+          "paygEmailOutbox",
+          outbox.id
+        );
+        tx.set(outbox.ref, {
+          to: FieldValue.delete(),
+          templateData: FieldValue.delete(),
+          lastError: FieldValue.delete(),
+          [PAYG_PII_REDACTION_RETRY_FIELD]: FieldValue.delete(),
+          piiRedactAt: FieldValue.delete(),
+          piiRedactedAt: serverTimestamp(),
+          piiRedactionReason: cutoff === null ?
+            "retention_cutoff_missing" : "retention_expired",
+          piiRedactionDeferredAt: FieldValue.delete(),
+          piiRedactionDeferredReason: FieldValue.delete(),
+          piiRedactionLastFailedAt: FieldValue.delete(),
+          updatedAt: serverTimestamp(),
+        }, {merge: true});
+        return "redacted" as const;
+      });
+      result[outcome] += 1;
+    } catch (error) {
+      result.failed += 1;
+      console.error("PAYG outbox privacy redaction failed", {
+        outboxId: outbox.id,
+        error,
+      });
+      await deferPaygPiiRedactionAfterFailure(
+        outbox.ref,
+        nowMillis
+      ).catch(() => undefined);
+    }
+  }
+  return result;
+}
+
+async function recoverDuePaygWaiverPrivacy(
+  nowMillis: number,
+  limit: number
+): Promise<PaygPiiRedactionResult> {
+  const due = await db().collection("paygWaiverAcceptances")
+    .where(PAYG_PII_REDACTION_RETRY_FIELD, "<=", Timestamp.fromMillis(nowMillis))
+    .limit(limit)
+    .get();
+  const result = emptyPaygPiiRedactionResult();
+  for (const waiver of due.docs) {
+    try {
+      const outcome = await db().runTransaction(async (tx) => {
+        const fresh = await tx.get(waiver.ref);
+        const retryAt = fresh.exists ? timestampMillis(
+          fresh.get(PAYG_PII_REDACTION_RETRY_FIELD)
+        ) : null;
+        if (!fresh.exists || retryAt === null || retryAt > nowMillis) {
+          return "skipped" as const;
+        }
+        const cutoff = timestampMillis(
+          fresh.get(PAYG_PII_RETENTION_CUTOFF_FIELD)
+        );
+        const privacyAlreadyClosed = hasNonNullDocumentField(
+          fresh,
+          "piiRedactedAt"
+        );
+        if (!privacyAlreadyClosed && cutoff !== null && cutoff > nowMillis) {
+          tx.set(waiver.ref, {
+            [PAYG_PII_REDACTION_RETRY_FIELD]: Timestamp.fromMillis(cutoff),
+            updatedAt: serverTimestamp(),
+          }, {merge: true});
+          return "skipped" as const;
+        }
+        maybeThrowInjectedPaygPiiRedactionFailure(
+          "paygWaiverAcceptances",
+          waiver.id
+        );
+        tx.set(waiver.ref, {
+          attendee: FieldValue.delete(),
+          acceptances: FieldValue.delete(),
+          [PAYG_PII_REDACTION_RETRY_FIELD]: FieldValue.delete(),
+          piiRedactAt: FieldValue.delete(),
+          piiRedactedAt: serverTimestamp(),
+          piiRedactionReason: cutoff === null ?
+            "retention_cutoff_missing" : "retention_expired",
+          piiRedactionPolicyVersion:
+            fresh.get("privacy.policyVersion") ?? "unrecorded-v1",
+          piiRedactionLastFailedAt: FieldValue.delete(),
+          updatedAt: serverTimestamp(),
+        }, {merge: true});
+        return "redacted" as const;
+      });
+      result[outcome] += 1;
+    } catch (error) {
+      result.failed += 1;
+      console.error("PAYG waiver privacy redaction failed", {
+        waiverId: waiver.id,
+        error,
+      });
+      await deferPaygPiiRedactionAfterFailure(
+        waiver.ref,
+        nowMillis
+      ).catch(() => undefined);
+    }
+  }
+  return result;
+}
+
+export async function runPaygPiiRedactionSweep(
+  nowMillis = Date.now(),
+  limit = PAYG_PII_REDACTION_BATCH_SIZE
+): Promise<PaygPiiRedactionSweepResult> {
+  assertPaygPiiSweepInput(nowMillis, limit);
+  const recoverWithDiscovery = async (
+    config: PaygPiiDiscoveryConfig,
+    recoverDue: (
+      recoveryNowMillis: number,
+      recoveryLimit: number
+    ) => Promise<PaygPiiRedactionResult>
+  ): Promise<PaygPiiRedactionResult> => {
+    let discoveryFailures = 0;
+    try {
+      await discoverPaygPiiCandidates(config, nowMillis, limit);
+    } catch (error) {
+      discoveryFailures = 1;
+      console.error("PAYG PII discovery failed", {
+        collectionId: config.collectionId,
+        error,
+      });
+    }
+    const result = await recoverDue(nowMillis, limit);
+    result.failed += discoveryFailures;
+    return result;
+  };
+  const [intents, orders, outbox, waivers] = await Promise.all([
+    recoverWithDiscovery(
+      PAYG_PII_DISCOVERY_CONFIGS[0],
+      recoverDuePaygIntentPrivacy
+    ),
+    recoverWithDiscovery(
+      PAYG_PII_DISCOVERY_CONFIGS[1],
+      recoverDuePaygOrderPrivacy
+    ),
+    recoverWithDiscovery(
+      PAYG_PII_DISCOVERY_CONFIGS[2],
+      recoverDuePaygOutboxPrivacy
+    ),
+    recoverWithDiscovery(
+      PAYG_PII_DISCOVERY_CONFIGS[3],
+      recoverDuePaygWaiverPrivacy
+    ),
+  ]);
+  return Object.freeze({intents, orders, outbox, waivers});
 }
 
 async function recoverDuePaygRefunds(
@@ -5983,8 +7929,136 @@ type PaygEmailLease =
   }>
   | Readonly<{state: "sent" | "terminal" | "in_progress" | "deferred" | "missing"}>;
 
-const PAYG_EMAIL_LEASE_MS = 10 * 60 * 1000;
 const PAYG_EMAIL_RETRY_WINDOW_MS = 23 * 60 * 60 * 1000;
+let paygEmailPreflightTestBarrier: Readonly<{
+  markReached: () => void;
+  waitForRelease: Promise<void>;
+}> | null = null;
+let paygEmailFailureAfterReadsTestBarrier: Readonly<{
+  markReached: () => void;
+  waitForRelease: Promise<void>;
+}> | null = null;
+
+function pauseNextPaygEmailPreflight(): Readonly<{
+  reached: Promise<void>;
+  release: () => void;
+}> {
+  if (!isFirebaseFunctionsEmulatorProcess()) {
+    throw new Error("PAYG email preflight pause is emulator-only.");
+  }
+  if (paygEmailPreflightTestBarrier !== null) {
+    throw new Error("A PAYG email preflight pause is already active.");
+  }
+  let markReached!: () => void;
+  let release!: () => void;
+  const reached = new Promise<void>((resolve) => {
+    markReached = resolve;
+  });
+  const waitForRelease = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  paygEmailPreflightTestBarrier = {markReached, waitForRelease};
+  return Object.freeze({reached, release});
+}
+
+async function maybePausePaygEmailPreflightForTest(): Promise<void> {
+  const barrier = paygEmailPreflightTestBarrier;
+  if (!barrier) return;
+  paygEmailPreflightTestBarrier = null;
+  barrier.markReached();
+  await barrier.waitForRelease;
+}
+
+function pauseNextPaygEmailFailureAfterReads(): Readonly<{
+  reached: Promise<void>;
+  release: () => void;
+}> {
+  if (!isFirebaseFunctionsEmulatorProcess()) {
+    throw new Error("PAYG email failure read pause is emulator-only.");
+  }
+  if (paygEmailFailureAfterReadsTestBarrier !== null) {
+    throw new Error("A PAYG email failure read pause is already active.");
+  }
+  let markReached!: () => void;
+  let release!: () => void;
+  const reached = new Promise<void>((resolve) => {
+    markReached = resolve;
+  });
+  const waitForRelease = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  paygEmailFailureAfterReadsTestBarrier = {markReached, waitForRelease};
+  return Object.freeze({reached, release});
+}
+
+async function maybePausePaygEmailFailureAfterReadsForTest(): Promise<void> {
+  const barrier = paygEmailFailureAfterReadsTestBarrier;
+  if (!barrier) return;
+  paygEmailFailureAfterReadsTestBarrier = null;
+  barrier.markReached();
+  await barrier.waitForRelease;
+}
+
+type PaygOutboxPrivacyClosureReason =
+  | "retention_expired"
+  | "retention_deadline_missing";
+
+function paygOutboxPrivacyClosureReason(
+  outbox: DocumentSnapshot,
+  nowMillis: number
+): PaygOutboxPrivacyClosureReason | null {
+  if (hasNonNullDocumentField(outbox, "piiRedactedAt")) {
+    return "retention_expired";
+  }
+  const deadline = timestampMillis(
+    outbox.get(PAYG_PII_RETENTION_CUTOFF_FIELD)
+  );
+  if (deadline === null) return "retention_deadline_missing";
+  return deadline <= nowMillis ? "retention_expired" : null;
+}
+
+function redactAndTombstonePaygOutbox(
+  tx: Transaction,
+  outbox: DocumentSnapshot,
+  reason: PaygOutboxPrivacyClosureReason,
+  auditUpdate: Record<string, unknown> = {}
+): void {
+  tx.set(outbox.ref, {
+    status: "tombstoned",
+    deliveryStateBeforeTombstone:
+      outbox.get("deliveryStateBeforeTombstone") ?? outbox.get("status") ?? null,
+    tombstoneReason: `pii_${reason}`,
+    tombstonedAt: serverTimestamp(),
+    ...auditUpdate,
+    // These fields can contain guest PII. Privacy closure always wins over a
+    // stale worker payload, including an expired or malformed legacy lease.
+    to: FieldValue.delete(),
+    templateData: FieldValue.delete(),
+    lastError: FieldValue.delete(),
+    [PAYG_PII_REDACTION_RETRY_FIELD]: FieldValue.delete(),
+    piiRedactAt: FieldValue.delete(),
+    piiRedactedAt: serverTimestamp(),
+    piiRedactionReason: reason,
+    piiRedactionDeferredAt: FieldValue.delete(),
+    piiRedactionDeferredReason: FieldValue.delete(),
+    piiRedactionLastFailedAt: FieldValue.delete(),
+    leaseToken: FieldValue.delete(),
+    leaseExpiresAt: FieldValue.delete(),
+    nextAttemptAt: FieldValue.delete(),
+    tombstonedLeaseCorrelation: FieldValue.delete(),
+    ambiguousLeaseCorrelation: FieldValue.delete(),
+    reconcileAfterStateChange: FieldValue.delete(),
+    updatedAt: serverTimestamp(),
+  }, {merge: true});
+}
+
+function paygPrivacyClosedOrderEmailUpdate(kind: unknown) {
+  return kind === "payg_guest_confirmation" ? {
+    confirmationEmailStatus: "not_required",
+  } : kind === "payg_guest_confirmation_correction" ? {
+    confirmationCorrectionEmailStatus: "not_required",
+  } : {};
+}
 
 function paygEmailRetryAt(attemptCount: number, nowMillis: number): number {
   const delay = Math.min(60, 5 * Math.pow(2, Math.max(0, attemptCount - 1)));
@@ -6034,6 +8108,28 @@ async function acquirePaygEmailLease(
   return db().runTransaction(async (tx) => {
     const outbox = await tx.get(outboxRef);
     if (!outbox.exists) return {state: "missing" as const};
+    const effectiveNow = Math.max(nowMillis, Date.now());
+    const privacyClosure = paygOutboxPrivacyClosureReason(
+      outbox,
+      effectiveNow
+    );
+    if (privacyClosure !== null) {
+      const orderId = outbox.get("orderId");
+      const orderRef = typeof orderId === "string" &&
+        /^payg_[a-f0-9]{64}$/.test(orderId) ?
+        db().collection("paygOrders").doc(orderId) : null;
+      const order = orderRef ? await tx.get(orderRef) : null;
+      redactAndTombstonePaygOutbox(tx, outbox, privacyClosure);
+      if (orderRef && order?.exists &&
+        order.get("purchaseKind") === PAYG_PURCHASE_KIND &&
+        order.get("orderId") === orderId) {
+        tx.set(orderRef, {
+          ...paygPrivacyClosedOrderEmailUpdate(outbox.get("kind")),
+          updatedAt: serverTimestamp(),
+        }, {merge: true});
+      }
+      return {state: "terminal" as const};
+    }
     const rawPayload: unknown = {
       schemaVersion: outbox.get("schemaVersion"),
       kind: outbox.get("kind"),
@@ -6064,6 +8160,21 @@ async function acquirePaygEmailLease(
         deadLetterReason: "PAYG email outbox has no matching order.",
         deadLetteredAt: serverTimestamp(),
         nextAttemptAt: FieldValue.delete(),
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+      return {state: "terminal" as const};
+    }
+    const orderPiiDeadline = timestampMillis(
+      order.get(PAYG_PII_RETENTION_CUTOFF_FIELD)
+    );
+    if (hasNonNullDocumentField(order, "piiRedactedAt") ||
+      orderPiiDeadline === null || orderPiiDeadline <= effectiveNow) {
+      const privacyClosure = orderPiiDeadline !== null ||
+        hasNonNullDocumentField(order, "piiRedactedAt") ?
+        "retention_expired" : "retention_deadline_missing";
+      redactAndTombstonePaygOutbox(tx, outbox, privacyClosure);
+      tx.set(orderRef, {
+        ...paygPrivacyClosedOrderEmailUpdate(payload.kind),
         updatedAt: serverTimestamp(),
       }, {merge: true});
       return {state: "terminal" as const};
@@ -6154,8 +8265,8 @@ async function acquirePaygEmailLease(
     tx.set(outboxRef, {
       status: reconcileAfterStateChange ? "reconciling" : "sending",
       leaseToken,
-      leaseExpiresAt: Timestamp.fromMillis(nowMillis + PAYG_EMAIL_LEASE_MS),
-      nextAttemptAt: Timestamp.fromMillis(nowMillis + PAYG_EMAIL_LEASE_MS),
+      leaseExpiresAt: Timestamp.fromMillis(effectiveNow + PAYG_EMAIL_LEASE_MS),
+      nextAttemptAt: Timestamp.fromMillis(effectiveNow + PAYG_EMAIL_LEASE_MS),
       ...(reconcileAfterStateChange ? {
         providerAcceptanceState: "unknown_in_flight",
         reconcileAfterStateChange: true,
@@ -6164,9 +8275,9 @@ async function acquirePaygEmailLease(
       attemptCount: attemptCount + 1,
       lastAttemptAt: serverTimestamp(),
       ...(firstAttemptAt === null ? {
-        firstAttemptAt: Timestamp.fromMillis(nowMillis),
+        firstAttemptAt: Timestamp.fromMillis(effectiveNow),
         retryDeadlineAt: Timestamp.fromMillis(
-          nowMillis + PAYG_EMAIL_RETRY_WINDOW_MS
+          effectiveNow + PAYG_EMAIL_RETRY_WINDOW_MS
         ),
       } : {}),
       updatedAt: serverTimestamp(),
@@ -6249,6 +8360,7 @@ async function processPaygConfirmationOutbox(
 ): Promise<"sent" | "failed" | "systemic_failure" | PaygEmailLease["state"]> {
   const lease = await acquirePaygEmailLease(outboxId, nowMillis);
   if (lease.state !== "acquired") return lease.state;
+  await maybePausePaygEmailPreflightForTest();
   const outboxRef = db().collection("paygEmailOutbox").doc(outboxId);
   const orderRef = db().collection("paygOrders").doc(lease.orderId);
   const preflight = await db().runTransaction(async (tx) => {
@@ -6263,6 +8375,38 @@ async function processPaygConfirmationOutbox(
     const matchingOrder = order.exists &&
       order.get("purchaseKind") === PAYG_PURCHASE_KIND &&
       order.get("orderId") === lease.orderId;
+    const privacyClosure = paygOutboxPrivacyClosureReason(
+      outbox,
+      Math.max(nowMillis, Date.now())
+    );
+    if (privacyClosure !== null) {
+      redactAndTombstonePaygOutbox(tx, outbox, privacyClosure);
+      if (matchingOrder) {
+        tx.set(orderRef, {
+          ...paygPrivacyClosedOrderEmailUpdate(lease.payload.kind),
+          updatedAt: serverTimestamp(),
+        }, {merge: true});
+      }
+      return "terminal" as const;
+    }
+    const preflightNow = Math.max(nowMillis, Date.now());
+    const orderPiiDeadline = matchingOrder ? timestampMillis(
+      order.get(PAYG_PII_RETENTION_CUTOFF_FIELD)
+    ) : null;
+    const orderPrivacyClosed = matchingOrder &&
+      (hasNonNullDocumentField(order, "piiRedactedAt") ||
+        orderPiiDeadline === null || orderPiiDeadline <= preflightNow);
+    if (orderPrivacyClosed) {
+      const orderPrivacyClosure = orderPiiDeadline !== null ||
+        hasNonNullDocumentField(order, "piiRedactedAt") ?
+        "retention_expired" : "retention_deadline_missing";
+      redactAndTombstonePaygOutbox(tx, outbox, orderPrivacyClosure);
+      tx.set(orderRef, {
+        ...paygPrivacyClosedOrderEmailUpdate(lease.payload.kind),
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+      return "terminal" as const;
+    }
     const currentlyDeliverable = matchingOrder && isPaygEmailPayloadDeliverable(
       lease.payload,
       order.get("status") as PaygOrderStatus
@@ -6332,11 +8476,80 @@ async function processPaygConfirmationOutbox(
             enqueueCorrection: false,
           });
       if (decision.disposition === "lost") return "lost" as const;
+      const acceptanceNow = Date.now();
+      const outboxPrivacyClosure = paygOutboxPrivacyClosureReason(
+        outbox,
+        acceptanceNow
+      );
+      const orderPiiDeadline = order.exists ? timestampMillis(
+        order.get(PAYG_PII_RETENTION_CUTOFF_FIELD)
+      ) : null;
+      const orderPrivacyClosed = !order.exists || orderPiiDeadline === null ||
+        hasNonNullDocumentField(order, "piiRedactedAt") ||
+        orderPiiDeadline <= acceptanceNow;
+      if (outboxPrivacyClosure !== null || orderPrivacyClosed) {
+        const privacyClosure = outboxPrivacyClosure ??
+          (order.exists && (hasNonNullDocumentField(order, "piiRedactedAt") ||
+            (orderPiiDeadline !== null && orderPiiDeadline <= acceptanceNow)) ?
+            "retention_expired" : "retention_deadline_missing");
+        const acceptedAfterStateChange =
+          decision.disposition === "accepted_after_state_change";
+        redactAndTombstonePaygOutbox(tx, outbox, privacyClosure, {
+          deliveryStateBeforeTombstone: "sent",
+          deliveredAfterStateChange: acceptedAfterStateChange ||
+            FieldValue.delete(),
+          providerAcceptanceState: acceptedAfterStateChange ?
+            "accepted_after_state_change" : "accepted",
+          providerMessageId,
+          providerAcceptedAt: serverTimestamp(),
+          acceptedLeaseCorrelation: paygEmailLeaseCorrelation(
+            lease.leaseToken
+          ),
+          ...(acceptedAfterStateChange ? {} : {
+            sentAt: serverTimestamp(),
+          }),
+        });
+        if (correctionRef && correction?.exists) {
+          redactAndTombstonePaygOutbox(
+            tx,
+            correction,
+            privacyClosure
+          );
+        }
+        if (order.exists) {
+          tx.set(orderRef, {
+            ...(lease.payload.kind === "payg_guest_confirmation" ?
+              acceptedAfterStateChange ? {
+                confirmationEmailStatus: "not_required",
+                confirmationAcceptedAfterStateChange: true,
+                confirmationCorrectionEmailStatus: "not_required",
+              } : {
+                confirmationEmailStatus: "sent",
+                confirmationEmailSentAt: serverTimestamp(),
+                confirmationEmailProviderId: providerMessageId,
+                confirmationEmailError: FieldValue.delete(),
+                confirmationCorrectionEmailStatus: "not_required",
+              } : acceptedAfterStateChange ? {
+                confirmationCorrectionEmailStatus: "not_required",
+                confirmationCorrectionAcceptedAfterStateChange: true,
+              } : {
+                confirmationCorrectionEmailStatus: "sent",
+                confirmationCorrectionEmailSentAt: serverTimestamp(),
+                confirmationCorrectionEmailProviderId: providerMessageId,
+                confirmationCorrectionEmailError: FieldValue.delete(),
+              }),
+            updatedAt: serverTimestamp(),
+          }, {merge: true});
+        }
+        return acceptedAfterStateChange ?
+          "state_changed" as const : "sent" as const;
+      }
       if (decision.disposition === "accepted_after_state_change") {
         let correctionOutboxId: string | null = correction?.exists ? correction.id : null;
         if (decision.enqueueCorrection && correctionRef && orderStatus !== null &&
           shouldEnqueuePaygConfirmationCorrection(orderStatus) &&
-          lease.payload.kind === "payg_guest_confirmation") {
+          lease.payload.kind === "payg_guest_confirmation" &&
+          orderPiiDeadline !== null && orderPiiDeadline > acceptanceNow) {
           const correctionPayload = buildPaygConfirmationCorrectionOutboxPayload({
             orderId: lease.orderId,
             recipientEmail: lease.payload.to[0],
@@ -6349,7 +8562,8 @@ async function processPaygConfirmationOutbox(
             status: "pending",
             attemptCount: 0,
             nextAttemptAt: serverTimestamp(),
-            piiRedactAt: order.get("piiRedactAt") ?? serverTimestamp(),
+            piiRetentionCutoffAt: Timestamp.fromMillis(orderPiiDeadline),
+            piiRedactionRetryAt: Timestamp.fromMillis(orderPiiDeadline),
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
           });
@@ -6469,6 +8683,11 @@ async function processPaygConfirmationOutbox(
         tx.get(outboxRef),
         tx.get(orderRef),
       ]);
+      await maybePausePaygEmailFailureAfterReadsForTest();
+      // Recompute after both transactional reads on every callback attempt.
+      // A slow read or Firestore retry that crosses the retention deadline
+      // must tombstone PII instead of authorizing a late requeue.
+      const transactionFailureNow = Math.max(failureNow, Date.now());
       if (!outbox.exists) return null;
       const ownsActiveLease = (outbox.get("status") === "sending" ||
         outbox.get("status") === "reconciling") &&
@@ -6478,6 +8697,37 @@ async function processPaygConfirmationOutbox(
         outbox.get("tombstonedLeaseCorrelation") ===
           paygEmailLeaseCorrelation(lease.leaseToken);
       if (!ownsActiveLease && !ownsTombstonedLease) return null;
+      const outboxPrivacyClosure = paygOutboxPrivacyClosureReason(
+        outbox,
+        transactionFailureNow
+      );
+      const orderPiiDeadline = order.exists ? timestampMillis(
+        order.get(PAYG_PII_RETENTION_CUTOFF_FIELD)
+      ) : null;
+      const orderPrivacyClosed = !order.exists || orderPiiDeadline === null ||
+        hasNonNullDocumentField(order, "piiRedactedAt") ||
+        orderPiiDeadline <= transactionFailureNow;
+      if (outboxPrivacyClosure !== null || orderPrivacyClosed) {
+        const privacyClosure = outboxPrivacyClosure ??
+          (order.exists && (hasNonNullDocumentField(order, "piiRedactedAt") ||
+            (orderPiiDeadline !== null &&
+              orderPiiDeadline <= transactionFailureNow)) ?
+            "retention_expired" : "retention_deadline_missing");
+        redactAndTombstonePaygOutbox(tx, outbox, privacyClosure, {
+          providerAcceptanceState: ambiguous ?
+            "unknown_at_privacy_deadline" : "rejected",
+          lastHttpStatus: status,
+          lastProviderErrorName: providerName,
+          failedAt: serverTimestamp(),
+        });
+        if (order.exists) {
+          tx.set(orderRef, {
+            ...paygPrivacyClosedOrderEmailUpdate(lease.payload.kind),
+            updatedAt: serverTimestamp(),
+          }, {merge: true});
+        }
+        return {terminal: true, privacyExpired: true};
+      }
       const failureAfterStateChange = resolvePaygEmailFailureAfterStateChange({
         ownsTombstonedLease,
         reconcileAfterStateChange: lease.reconcileAfterStateChange,
@@ -6486,7 +8736,8 @@ async function processPaygConfirmationOutbox(
       });
       if (failureAfterStateChange === "reconcile_unknown") {
         const retryDeadline = timestampMillis(outbox.get("retryDeadlineAt"));
-        const terminal = retryDeadline !== null && failureNow >= retryDeadline;
+        const terminal = retryDeadline !== null &&
+          transactionFailureNow >= retryDeadline;
         tx.set(outboxRef, {
           status: terminal ? "manual_review" : "tombstoned",
           providerAcceptanceState: terminal ?
@@ -6507,7 +8758,7 @@ async function processPaygConfirmationOutbox(
             nextAttemptAt: FieldValue.delete(),
           } : {
             nextAttemptAt: Timestamp.fromMillis(
-              paygEmailRetryAt(lease.attemptCount, failureNow)
+              paygEmailRetryAt(lease.attemptCount, transactionFailureNow)
             ),
           }),
           updatedAt: serverTimestamp(),
@@ -6558,7 +8809,7 @@ async function processPaygConfirmationOutbox(
       }
       const retryDeadline = timestampMillis(outbox.get("retryDeadlineAt"));
       const terminal = permanent ||
-        (retryDeadline !== null && failureNow >= retryDeadline);
+        (retryDeadline !== null && transactionFailureNow >= retryDeadline);
       tx.set(outboxRef, {
         status: terminal ? "manual_review" : "pending",
         providerAcceptanceState: terminal ? "manual_review" : ambiguous ?
@@ -6576,7 +8827,7 @@ async function processPaygConfirmationOutbox(
           nextAttemptAt: FieldValue.delete(),
         } : {
           nextAttemptAt: Timestamp.fromMillis(
-            paygEmailRetryAt(lease.attemptCount, failureNow)
+            paygEmailRetryAt(lease.attemptCount, transactionFailureNow)
           ),
         }),
         updatedAt: serverTimestamp(),
@@ -6595,6 +8846,7 @@ async function processPaygConfirmationOutbox(
       }
       return {terminal};
     });
+    if (outcome?.privacyExpired) return "terminal";
     if (outcome?.terminal) {
       console.error("CRITICAL_BILLING_PAYG_CONFIRMATION_MANUAL_REVIEW", {
         orderId: lease.orderId,
@@ -6676,30 +8928,61 @@ export function buildRecoverPaygOperations() {
   }, async () => {
     assertPaygBillingEnvironment();
     const nowMillis = Date.now();
-    // Capacity/payment recovery must inspect intact intent evidence before the
-    // independent retention worker removes redundant PII from old intents.
     const holds = await recoverDuePaygHolds(nowMillis, 50);
-    const [refunds, paymentReviewRefunds, attendance, privacy] = await Promise.all([
+    const [refunds, paymentReviewRefunds, attendance] = await Promise.all([
       recoverDuePaygRefunds(nowMillis, 50),
       recoverDuePaygPaymentReviewRefunds(nowMillis, 50),
       recoverDuePaygNoShows(nowMillis, 50),
-      recoverDuePaygIntentPrivacy(nowMillis, 50),
     ]);
     console.log("PAYG recovery result", {
       holds,
       refunds,
       paymentReviewRefunds,
       attendance,
-      privacy,
     });
+  });
+}
+
+export function buildRedactPaygPii() {
+  return onSchedule({
+    region: REGION,
+    schedule: "every 60 minutes",
+    timeZone: "UTC",
+    timeoutSeconds: 540,
+    retryCount: 3,
+    minBackoffSeconds: 60,
+    maxBackoffSeconds: 300,
+  }, async () => {
+    // Redaction must continue while checkout is closed and does not need
+    // Stripe or Resend. Bind only to the configured Firebase data plane.
+    assertPaygFirebaseProject();
+    const result = await runPaygPiiRedactionSweep();
+    console.log("PAYG PII redaction result", result);
+    const failures = Object.values(result)
+      .reduce((total, item) => total + item.failed, 0);
+    if (failures > 0) {
+      throw new Error(`PAYG PII redaction failed for ${failures} record(s).`);
+    }
   });
 }
 
 export const __testing = Object.freeze({
   buildPaygCheckoutSessionParams,
   buildPaygConfirmationOutboxPayload,
+  claimPaygSessionRecovery,
+  hasRecoverablePaygIntentPii,
+  injectPaygPiiRedactionFailureOnce,
+  issuePaygPaymentReviewRefund,
+  issuePaygRefund,
   normalizePaygCheckoutRequest,
   paygCheckoutRequestFingerprint,
+  paygPiiPromotionMismatch,
+  pauseNextPaygEmailFailureAfterReads,
+  pauseNextPaygEmailPreflight,
+  pauseNextPaygSessionRecoveryAfterRead,
+  processPaygConfirmationOutbox,
+  recordRecoveredSession,
+  recoverPaygHold,
   resolveAgeAtMillis,
   resolvePaygCancellationDecision,
   resolvePaygCatalogueIds,

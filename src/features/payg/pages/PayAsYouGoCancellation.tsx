@@ -48,15 +48,39 @@ function terminalStateMessage(state: PaygCancellationPreview["currentOrderState"
   return "";
 }
 
+function cancellationResultMessage(result: PaygCancellationResult) {
+  const capacity = result.capacityReleased
+    ? "Your class place has been released."
+    : "No additional class place needed to be released.";
+  if (result.outcome === "refund_pending") {
+    return `${capacity} Your eligible refund is being processed.`;
+  }
+  if (result.outcome === "cancelled_non_refundable") {
+    return `${capacity} The request was inside the 24-hour cutoff, so the payment is non-refundable.`;
+  }
+  return `${capacity} This booking was already handled, so no second cancellation was created.`;
+}
+
 export default function PayAsYouGoCancellation() {
   const [params] = useSearchParams();
-  const token = params.get("token") || "";
+  const [token] = useState(() => params.get("token") || "");
   const [preview, setPreview] = useState<PaygCancellationPreview | null>(null);
   const [loading, setLoading] = useState(Boolean(token));
   const [previewAttempt, setPreviewAttempt] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<PaygCancellationResult | null>(null);
+
+  useEffect(() => {
+    if (!token) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("token");
+    window.history.replaceState(
+      window.history.state,
+      "",
+      `${url.pathname}${url.search}${url.hash}`
+    );
+  }, [token]);
 
   useEffect(() => {
     if (!token) return;
@@ -106,11 +130,7 @@ export default function PayAsYouGoCancellation() {
         {result ? (
           <div className="mt-6" role="status">
             <p className="text-base leading-7 text-white/70">
-              {result.outcome === "refund_pending"
-                ? "Your place has been released and the eligible refund is being processed."
-                : result.outcome === "cancelled_non_refundable"
-                ? "Your place has been cancelled. It was inside the 24-hour cutoff, so the payment is non-refundable."
-                : "This booking was already cancelled; no second cancellation was created."}
+              {cancellationResultMessage(result)}
             </p>
             <Link
               to="/pay-as-you-go"
@@ -147,7 +167,7 @@ export default function PayAsYouGoCancellation() {
         ) : (
           <>
             <p className="mt-5 text-base leading-7 text-white/70">
-              Review the exact class and refund position below before releasing the place. A PAYG booking cannot be moved or transferred.
+              Review the exact class and refund position below before cancelling. A PAYG booking cannot be moved or transferred.
             </p>
 
             <dl className="mt-6 grid gap-5 rounded-xl border border-white/10 bg-black/20 p-5 sm:grid-cols-2">
@@ -186,7 +206,7 @@ export default function PayAsYouGoCancellation() {
                 <p className="mt-1 opacity-80">
                   {preview.refundEligibleNow
                     ? `Cancel by ${formatDateTime(preview.cancellationCutoffAt, preview.class.timezone)} for a refund.`
-                    : `The refund deadline was ${formatDateTime(preview.cancellationCutoffAt, preview.class.timezone)}. Cancelling now releases the place but does not refund or create credit.`}
+                    : `The refund deadline was ${formatDateTime(preview.cancellationCutoffAt, preview.class.timezone)}. Cancelling now does not refund the payment or create credit. We’ll confirm the booking and capacity outcome after you submit.`}
                 </p>
               </div>
             ) : (

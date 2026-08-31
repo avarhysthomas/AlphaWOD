@@ -285,8 +285,10 @@ test("flexible Conditioning quota serializes weekly bookings and every cancellat
     ["flex-thursday", "2099-01-08T18:00:00.000Z", "thursday_1800"],
     ["flex-friday", "2099-01-09T05:30:00.000Z", "friday_0530"],
     ["flex-next-monday", "2099-01-12T06:00:00.000Z", "monday_0600"],
+    ["flex-cancelled-member", "2099-01-08T18:00:00.000Z", "thursday_1800", "cancelled"],
+    ["flex-cancelled-admin", "2099-01-09T05:30:00.000Z", "friday_0530", "cancelled"],
   ];
-  await Promise.all(classes.map(async ([id, startIso, conditioningSlotKey]) => {
+  await Promise.all(classes.map(async ([id, startIso, conditioningSlotKey, status = "scheduled"]) => {
     const start = new Date(startIso);
     await db.collection("classes").doc(id).set({
       templateId: `template_${id}`,
@@ -299,11 +301,37 @@ test("flexible Conditioning quota serializes weekly bookings and every cancellat
       capacity: 10,
       bookedCount: 0,
       location: "Gym",
-      status: "scheduled",
+      status,
       conditioningSlotKey,
       createdAt: admin.firestore.Timestamp.now(),
     });
   }));
+
+  for (const [call, classId] of [
+    [() => bookClass(request({classId: "flex-cancelled-member"}, "flexible")), "flex-cancelled-member"],
+    [() => adminAddBooking(request({
+      classId: "flex-cancelled-admin",
+      userId: "flexible",
+    }, "admin")), "flex-cancelled-admin"],
+  ]) {
+    await assert.rejects(
+      call,
+      (error) => error.code === "failed-precondition" &&
+        error.details?.reason === "class_unavailable"
+    );
+    const cancelledClass = await db.collection("classes").doc(classId).get();
+    assert.equal(cancelledClass.get("bookedCount"), 0);
+  }
+  assert.equal(
+    (await db.collection("conditioningWeeklyBookingUsage").get()).size,
+    0
+  );
+  assert.equal(
+    (await db.collection("bookings")
+      .where("userId", "==", "flexible")
+      .get()).size,
+    0
+  );
 
   const initial = await Promise.all([
     bookClass(request({classId: "flex-monday"}, "flexible")),

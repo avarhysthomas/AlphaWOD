@@ -70,6 +70,7 @@ import {
   buildGetPaygCancellationPreview,
   buildGetPaygCheckoutStatus,
   buildGetPublicPaygSchedule,
+  buildRedactPaygPii,
   buildRecoverPaygOperations,
   buildRequestPaygCancellation,
   buildRetryPaygConfirmations,
@@ -526,6 +527,16 @@ function assertBookingWindowOpen(classData: Partial<ClassDoc>, message: string) 
   }
 }
 
+function assertClassScheduledForBooking(classData: Partial<ClassDoc>) {
+  if (classData.status !== "scheduled") {
+    throw new HttpsError(
+      "failed-precondition",
+      "This class is not available for booking.",
+      {reason: "class_unavailable"}
+    );
+  }
+}
+
 async function updateDipLeaderboardCount(
   tx: admin.firestore.Transaction,
   monthKey: string,
@@ -966,6 +977,7 @@ export const bookClass = onCall(async (request) => {
     const member = assertApprovedMember(userSnap.data() as UserDoc | undefined);
 
     const classData = classSnap.data() as Partial<ClassDoc>;
+    assertClassScheduledForBooking(classData);
     const conditioningClassSlot = assertClassBookingEntitlement(
       member,
       classData
@@ -1133,6 +1145,7 @@ export const adminAddBooking = onCall(async (request) => {
     const userData = assertApprovedMember(userSnap.data() as UserDoc);
 
     const classData = classSnap.data() as Partial<ClassDoc>;
+    assertClassScheduledForBooking(classData);
     const conditioningClassSlot = assertClassBookingEntitlement(
       userData,
       classData
@@ -2909,3 +2922,4 @@ export const getPaygCheckoutStatus = buildGetPaygCheckoutStatus();
 export const requestPaygCancellation = buildRequestPaygCancellation();
 export const recoverPaygOperations = buildRecoverPaygOperations();
 export const retryPaygConfirmations = buildRetryPaygConfirmations();
+export const redactPaygPii = buildRedactPaygPii();

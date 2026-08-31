@@ -315,6 +315,13 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Durable cursors and leases for bounded discovery of malformed or legacy
+    // PAYG PII rows. Clients must not move a cursor past retained guest data or
+    // forge a lease that suppresses the scheduled privacy worker.
+    match /paygPiiRedactionDiscovery/{collectionId} {
+      allow read, write: if false;
+    }
+
     // Anonymous checkout abuse controls, active attendee/class locks, and
     // paid-contract mismatch review records are trusted-server state only.
     match /paygCheckoutRateLimits/{bucketId} {

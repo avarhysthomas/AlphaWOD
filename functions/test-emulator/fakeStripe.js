@@ -47,6 +47,17 @@ function formEncodedToObject(body) {
   return out;
 }
 
+function metadataFromPayload(payload, prefix) {
+  const metadata = {};
+  const start = `${prefix}[`;
+  for (const [key, value] of Object.entries(payload)) {
+    if (key.startsWith(start) && key.endsWith("]")) {
+      metadata[key.slice(start.length, -1)] = value;
+    }
+  }
+  return metadata;
+}
+
 function createFakeStripe() {
   const prices = new Map([
     ["price_unlimited", {amount: 6000, name: "Adult Unlimited Membership"}],
@@ -72,6 +83,28 @@ function createFakeStripe() {
       name: value.name,
     },
   }]));
+  prices.set("price_1UA49JFzNDZoGGA0ciTM2OOQ", {
+    id: "price_1UA49JFzNDZoGGA0ciTM2OOQ",
+    object: "price",
+    active: true,
+    livemode: false,
+    currency: "gbp",
+    unit_amount: 750,
+    type: "one_time",
+    billing_scheme: "per_unit",
+    recurring: null,
+    custom_unit_amount: null,
+    transform_quantity: null,
+    tax_behavior: "unspecified",
+    product: {
+      id: "prod_VAOxXxpax1MuRt",
+      object: "product",
+      active: true,
+      livemode: false,
+      name: "Adult Pay as You Go Class",
+      tax_code: "txcd_50021001",
+    },
+  });
   const state = {
     subscriptions: new Map(),
     invoices: new Map(),
@@ -79,12 +112,16 @@ function createFakeStripe() {
     invoicePayments: [],
     customers: new Map(),
     checkoutSessions: new Map(),
+    paymentIntents: new Map(),
+    refunds: new Map(),
+    refundByIdempotencyKey: new Map(),
     disputes: new Map(),
     portalSessions: [],
     events: new Map(),
     delayedSubscriptionRetrieves: new Map(),
     failedSubscriptionRetrieves: new Map(),
     subscriptionRetrieveCounts: new Map(),
+    pausedPaymentIntentRetrieves: new Map(),
     prices,
     coupons: new Map([["coupon_existing_member_5x3", {
       id: "coupon_existing_member_5x3",
@@ -282,6 +319,11 @@ function createFakeStripe() {
           });
         }
         const id = `cs_fake_${state.checkoutSessions.size + 1}`;
+        const sessionMetadata = metadataFromPayload(payload, "metadata");
+        const paymentIntentMetadata = metadataFromPayload(
+          payload,
+          "payment_intent_data[metadata]"
+        );
         const promotionCodeId = payload["discounts[0][promotion_code]"] || null;
         const directCouponId = payload["discounts[0][coupon]"] || null;
         const promotionCode = promotionCodeId ?
@@ -311,6 +353,7 @@ function createFakeStripe() {
           livemode: false,
           url: `https://checkout.stripe.test/${id}`,
           metadata: {
+            ...sessionMetadata,
             intentId: payload["metadata[intentId]"],
             planKey: payload["metadata[planKey]"],
             participantCount: payload["metadata[participantCount]"],
@@ -331,12 +374,17 @@ function createFakeStripe() {
             } : {}),
           },
           client_reference_id: payload.client_reference_id || null,
+          customer_email: payload.customer_email || null,
+          customer_details: payload.customer_email ? {
+            email: payload.customer_email,
+          } : null,
           subscription_data_anchor: payload["subscription_data[billing_cycle_anchor]"],
           proration_behavior: payload["subscription_data[proration_behavior]"],
           expires_at: Number(payload.expires_at),
           customer: payload.customer || null,
           status: "open",
           payment_status: "unpaid",
+          payment_intent: null,
           payment_method_collection: payload.payment_method_collection || null,
           allow_promotion_codes: payload.allow_promotion_codes === "true",
           discounts: couponId ? [{
@@ -348,10 +396,41 @@ function createFakeStripe() {
             quantity: Number(payload["line_items[0][quantity]"]),
           }],
           mode: payload.mode,
+          currency: state.prices.get(payload["line_items[0][price]"])?.currency ?? null,
+          amount_total: state.prices.get(payload["line_items[0][price]"])?.unit_amount ?? null,
+          total_details: {amount_discount: 0},
+          subscription: null,
+          payment_intent_metadata: paymentIntentMetadata,
         };
         state.checkoutSessions.set(id, session);
         state.updates.push({path, payload});
         return send(200, session);
+      }
+      const checkoutLineItemsMatch = path.match(
+        /^\/v1\/checkout\/sessions\/([^/]+)\/line_items$/
+      );
+      if (checkoutLineItemsMatch && req.method === "GET") {
+        const session = state.checkoutSessions.get(checkoutLineItemsMatch[1]);
+        if (!session) {
+          return notFound(`No such checkout session: ${checkoutLineItemsMatch[1]}`);
+        }
+        const data = session.line_items.map((item, index) => {
+          const price = state.prices.get(item.price);
+          return {
+            id: `li_${session.id}_${index + 1}`,
+            object: "item",
+            amount_total: (price?.unit_amount ?? 0) * item.quantity,
+            currency: price?.currency ?? "gbp",
+            quantity: item.quantity,
+            price: price ?? item.price,
+          };
+        });
+        return send(200, {
+          object: "list",
+          data,
+          has_more: false,
+          url: `/v1/checkout/sessions/${session.id}/line_items`,
+        });
       }
       const checkoutMatch = path.match(/^\/v1\/checkout\/sessions\/([^/]+)$/);
       if (checkoutMatch && req.method === "GET") {
@@ -459,6 +538,64 @@ function createFakeStripe() {
         return send(200, {object: "list", data, has_more: false});
       }
 
+      // --- One-time PaymentIntents and refunds (PAYG) ---
+      const paymentIntentMatch = path.match(/^\/v1\/payment_intents\/([^/]+)$/);
+      if (paymentIntentMatch && req.method === "GET") {
+        const paymentIntentId = paymentIntentMatch[1];
+        const paymentIntent = state.paymentIntents.get(paymentIntentId);
+        if (!paymentIntent) {
+          return notFound(`No such payment_intent: ${paymentIntentId}`);
+        }
+        const pause = state.pausedPaymentIntentRetrieves.get(paymentIntentId);
+        if (pause) {
+          state.pausedPaymentIntentRetrieves.delete(paymentIntentId);
+          pause.markReached();
+          return pause.waitForRelease.then(() => {
+            const refreshed = state.paymentIntents.get(paymentIntentId);
+            return refreshed ? send(200, refreshed) :
+              notFound(`No such payment_intent: ${paymentIntentId}`);
+          });
+        }
+        return send(200, paymentIntent);
+      }
+      if (path === "/v1/refunds" && req.method === "POST") {
+        const idempotencyKey = req.headers["idempotency-key"];
+        const existingRefundId = typeof idempotencyKey === "string" ?
+          state.refundByIdempotencyKey.get(idempotencyKey) : null;
+        if (existingRefundId) {
+          return send(200, state.refunds.get(existingRefundId));
+        }
+        const paymentIntent = state.paymentIntents.get(payload.payment_intent);
+        if (!paymentIntent) {
+          return notFound(`No such payment_intent: ${payload.payment_intent}`);
+        }
+        const id = `re_fake_${state.refunds.size + 1}`;
+        const refund = {
+          id,
+          object: "refund",
+          livemode: false,
+          amount: paymentIntent.amount_received,
+          currency: paymentIntent.currency,
+          payment_intent: paymentIntent.id,
+          charge: paymentIntent.latest_charge,
+          status: "succeeded",
+          failure_reason: null,
+          metadata: metadataFromPayload(payload, "metadata"),
+        };
+        state.refunds.set(id, refund);
+        if (typeof idempotencyKey === "string") {
+          state.refundByIdempotencyKey.set(idempotencyKey, id);
+        }
+        state.updates.push({path, payload});
+        return send(200, refund);
+      }
+      const refundMatch = path.match(/^\/v1\/refunds\/([^/]+)$/);
+      if (refundMatch && req.method === "GET") {
+        const refund = state.refunds.get(refundMatch[1]);
+        if (!refund) return notFound(`No such refund: ${refundMatch[1]}`);
+        return send(200, refund);
+      }
+
       // --- Charges ---
       const chargeMatch = path.match(/^\/v1\/charges\/([^/]+)$/);
       if (chargeMatch) {
@@ -490,7 +627,10 @@ function createFakeStripe() {
   return {
     state,
     listen(port) {
-      return new Promise((resolve) => server.listen(port, "127.0.0.1", resolve));
+      return new Promise((resolve) => server.listen(port, "127.0.0.1", () => {
+        const address = server.address();
+        resolve(typeof address === "object" && address ? address.port : port);
+      }));
     },
     close() {
       return new Promise((resolve) => server.close(resolve));
@@ -532,6 +672,22 @@ function createFakeStripe() {
     delayNextSubscriptionRetrieve(id, delayMs) {
       state.delayedSubscriptionRetrieves.set(id, delayMs);
     },
+    /** Pauses one PaymentIntent GET until a test releases the exact barrier. */
+    pauseNextPaymentIntentRetrieve(id) {
+      let markReached;
+      let release;
+      const reached = new Promise((resolve) => {
+        markReached = resolve;
+      });
+      const waitForRelease = new Promise((resolve) => {
+        release = resolve;
+      });
+      state.pausedPaymentIntentRetrieves.set(id, {
+        markReached,
+        waitForRelease,
+      });
+      return {reached, release};
+    },
     /** Fails one authoritative GET, optionally after holding the lease. */
     failNextSubscriptionRetrieve(id, {
       delayMs = 0,
@@ -559,6 +715,60 @@ function createFakeStripe() {
         state.invoices.set(object.id, object);
       }
       return event;
+    },
+    /** Completes one fake one-time Checkout Session with an exact PAYG PI. */
+    completePaygCheckout(sessionId, overrides = {}) {
+      const session = state.checkoutSessions.get(sessionId);
+      if (!session) throw new Error(`No fake Checkout Session ${sessionId}.`);
+      const price = state.prices.get(session.line_items[0]?.price);
+      const paymentIntentId = overrides.paymentIntentId ??
+        `pi_fake_payg_${state.paymentIntents.size + 1}`;
+      const chargeId = overrides.chargeId ?? `ch_fake_payg_${state.charges.size + 1}`;
+      const paymentIntent = {
+        id: paymentIntentId,
+        object: "payment_intent",
+        livemode: false,
+        status: "succeeded",
+        amount: price?.unit_amount ?? session.amount_total,
+        amount_received: price?.unit_amount ?? session.amount_total,
+        currency: price?.currency ?? session.currency,
+        latest_charge: chargeId,
+        metadata: {...session.payment_intent_metadata},
+        ...overrides.paymentIntent,
+      };
+      state.paymentIntents.set(paymentIntentId, paymentIntent);
+      const charge = {
+        id: chargeId,
+        object: "charge",
+        livemode: false,
+        amount: paymentIntent.amount_received,
+        amount_refunded: 0,
+        currency: paymentIntent.currency,
+        payment_intent: paymentIntentId,
+        customer: session.customer,
+        paid: true,
+        status: "succeeded",
+        created: Math.floor(Date.now() / 1000),
+        disputed: false,
+        refunded: false,
+        ...overrides.charge,
+      };
+      state.charges.set(chargeId, charge);
+      Object.assign(session, {
+        status: "complete",
+        payment_status: "paid",
+        payment_intent: paymentIntentId,
+        amount_total: paymentIntent.amount_received,
+        currency: paymentIntent.currency,
+        total_details: {amount_discount: 0},
+        subscription: null,
+        customer_details: session.customer_email ? {
+          email: session.customer_email,
+        } : null,
+        ...overrides.session,
+      });
+      state.checkoutSessions.set(sessionId, session);
+      return {session, paymentIntent, charge};
     },
     setDispute(id, overrides = {}) {
       const dispute = {

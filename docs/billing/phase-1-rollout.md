@@ -57,7 +57,7 @@ endpoint and four scheduled functions:
 `recoverStripeEvents`, `recoverMembershipCancellations`,
 `reconcilePastDueMemberships`, and
 `retryMembershipConfirmations`. The new frontend calls only the V2 intake and
-sends `checkoutSchemaVersion: 4`; V1 is retained for stale-client safety and is
+sends `checkoutSchemaVersion: 6`; V1 is retained for stale-client safety and is
 not an opening target.
 
 New Firestore collections, all denied to every client: `memberships`,
@@ -223,7 +223,7 @@ sign-in at any point. Membership Terms 8 describes exactly this: an existing
 account holder "should sign in and **claim the purchase**".
 
 `createMembershipCheckoutSessionV2` therefore accepts an unauthenticated call
-with `checkoutSchemaVersion: 4`. The compatible frontend targets only that
+with `checkoutSchemaVersion: 6`. The compatible frontend targets only that
 versioned intake. The legacy `createMembershipCheckoutSession` export remains
 for stale-client rollout safety but must remain closed and is not used by the
 new UI.
@@ -374,7 +374,7 @@ separate and is not inferred from membership-waiver acceptance.
 
 The checkout intake refuses to run unless **both** are true. The release opens
 only `createMembershipCheckoutSessionV2`, which additionally requires
-`checkoutSchemaVersion: 4`:
+`checkoutSchemaVersion: 6`:
 
 1. `CHECKOUT_DOCUMENTS_APPROVED_FOR_PUBLICATION` is `true` in
    `functions/src/membershipPlans.ts`. Backend/frontend parity and publication
@@ -705,8 +705,8 @@ apply to any deployment that touches the existing functions.
   rule was modified.
 - Deploy the `memberships` composite index on `state` and
   `nextReconcileAt` before the grace-reconciliation worker is enabled.
-- Stored membership records now use schema version 5; the browser-to-callable
-  checkout request contract uses version 4. The cutover audit found existing
+- Stored membership records now use schema version 7; the browser-to-callable
+  checkout request contract uses version 6. The cutover audit found existing
   billing records, including five active or scheduled family memberships frozen
   on their original 15% terms. The release deliberately supports frozen 10% and
   15% discount policies while writing the current 15% policy. Retaining the V1
@@ -721,7 +721,7 @@ apply to any deployment that touches the existing functions.
   0 restoration manifest, never use a project-level invoker grant, and keep the
   webhook's public HTTP IAM and scheduler identities separate.
 - Before maintenance ends, inspect IAM and smoke-test each restored callable
-  through the real Firebase client transport. V2 checkout with schema version 4
+  through the real Firebase client transport. V2 checkout with schema version 6
   must reach its handler and fail at the still-closed runtime gate, not at Cloud
   Run IAM or CORS; V1 must remain blocked. Signed-in, owner-only and admin
   callables must reach their handlers and enforce their respective
@@ -770,10 +770,13 @@ npm run verify:stripe-live-config --prefix functions
 
 The 25 August closed rollout deployed the original fourteen membership services
 and restored their reviewed IAM boundaries. The booking-cleanup worker added
-later brings the future reviewed manifest to fifteen. These commands are the
-recorded target manifest and the required order for a future Functions change;
-do not redeploy unchanged Functions merely because the final frontend is
-published. When a repeat deployment is required, keep each batch at
+later brought that membership-only manifest to fifteen. These commands preserve
+the historical membership rollout and must not be used as the current
+Conditioning/PAYG target list. That release's complete, tested manifest is
+`ops/deployment/conditioning-payg-functions.json` and is checked with
+`npm run verify:deployment-manifest`. Do not redeploy unchanged Functions merely
+because the final frontend is published. For a membership-only repeat deployment,
+keep each batch at
 ten or fewer targets and deploy the signed public webhook and five non-callable
 workers first:
 
@@ -794,7 +797,7 @@ Phase 0 service-level IAM procedure before any other rollout step. Do not apply
 that callable IAM block to `stripeWebhook` or the scheduled workers. Once the
 closed compatible frontend is confirmed, restore only the reviewed
 service-level transport for V2 and the seven non-checkout callables; keep V1
-blocked. V2 checkout with `checkoutSchemaVersion: 4` must reach its handler but
+blocked. V2 checkout with `checkoutSchemaVersion: 6` must reach its handler but
 fail at the still-closed runtime gate; it must not create a Stripe Session. This
 order makes a new frontend fail safely if it arrives before V2 and prevents a
 cached V1 client from bypassing the schema boundary. The final
@@ -1076,7 +1079,7 @@ It covers:
 Separate frontend service and page tests prove that checkout persistence keeps
 raw form data out of storage, rotates when chargeable details or payer identity
 change, validates and presents 1–10 same-plan youth participants and family
-pricing, sends schema version 4 only to the V2 intake, and waits for Auth to
+pricing, sends schema version 6 only to the V2 intake, and waits for Auth to
 resolve before making post-checkout routing and claim decisions. They also cover
 the separate checkout-claim verifier, per-tab
 24-hour pending-claim expiry, immediate success-query stripping, session-scoped

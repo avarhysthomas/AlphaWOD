@@ -50,7 +50,7 @@ export type CreatePaygCheckoutRequest = {
   };
   contact: {
     email: string;
-    phone: string;
+    phone?: string;
   };
   acceptances: {
     adultConfirmed: true;
@@ -75,6 +75,111 @@ export type CreatePaygCheckoutResult = {
   holdExpiresAt: string;
   class: PaygClassReceipt;
 };
+
+export type PendingPaygCheckout = Pick<
+  CreatePaygCheckoutResult,
+  "sessionUrl" | "sessionId" | "holdExpiresAt" | "class"
+> & {
+  checkoutAttemptId: string;
+};
+
+const PENDING_PAYG_CHECKOUT_KEY = "zaf.pendingPaygCheckout.v1";
+
+function isOpaqueCheckoutAttempt(value: unknown): value is string {
+  return typeof value === "string" && value.length >= 24 && value.length <= 128 &&
+    /^[A-Za-z0-9_-]+$/.test(value);
+}
+
+function isStripeCheckoutUrl(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  try {
+    const url = new URL(value);
+    const testHostAllowed = process.env.NODE_ENV !== "production" &&
+      url.hostname === "checkout.stripe.test";
+    return url.protocol === "https:" &&
+      (url.hostname === "checkout.stripe.com" || testHostAllowed) &&
+      !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
+function isPaygClassReceipt(value: unknown): value is PaygClassReceipt {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<PaygClassReceipt>;
+  return typeof candidate.classId === "string" && candidate.classId.length >= 3 &&
+    typeof candidate.title === "string" && candidate.title.trim().length > 0 &&
+    typeof candidate.startTime === "string" &&
+    Number.isFinite(Date.parse(candidate.startTime)) &&
+    typeof candidate.endTime === "string" &&
+    Number.isFinite(Date.parse(candidate.endTime)) &&
+    typeof candidate.timezone === "string" && candidate.timezone.length > 0 &&
+    (candidate.location === null || typeof candidate.location === "string");
+}
+
+function pendingCheckoutStorage(): Storage | null {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+function isPendingPaygCheckout(value: unknown): value is PendingPaygCheckout {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<PendingPaygCheckout>;
+  const holdExpiresAt = typeof candidate.holdExpiresAt === "string" ?
+    Date.parse(candidate.holdExpiresAt) : Number.NaN;
+  return isOpaqueCheckoutAttempt(candidate.checkoutAttemptId) &&
+    isStripeCheckoutUrl(candidate.sessionUrl) &&
+    typeof candidate.sessionId === "string" &&
+    candidate.sessionId.length >= 12 && candidate.sessionId.length <= 255 &&
+    /^cs_[A-Za-z0-9_]+$/.test(candidate.sessionId) &&
+    Number.isFinite(holdExpiresAt) && holdExpiresAt > Date.now() &&
+    isPaygClassReceipt(candidate.class);
+}
+
+/**
+ * Keeps only the short-lived opaque attempt and Stripe return link needed when
+ * the guest chooses "Back" from hosted Checkout. No attendee/contact data is
+ * written to browser storage.
+ */
+export function rememberPendingPaygCheckout(value: PendingPaygCheckout): void {
+  const storage = pendingCheckoutStorage();
+  if (!storage || !isPendingPaygCheckout(value)) return;
+  try {
+    storage.setItem(PENDING_PAYG_CHECKOUT_KEY, JSON.stringify(value));
+  } catch {
+    // The same render can still navigate to Stripe; the hold expires server-side.
+  }
+}
+
+export function clearPendingPaygCheckout(): void {
+  try {
+    pendingCheckoutStorage()?.removeItem(PENDING_PAYG_CHECKOUT_KEY);
+  } catch {
+    // Expiry and the server-side hold remain the recovery boundary.
+  }
+}
+
+export function readPendingPaygCheckout(): PendingPaygCheckout | null {
+  const storage = pendingCheckoutStorage();
+  if (!storage) return null;
+  try {
+    const value = JSON.parse(
+      storage.getItem(PENDING_PAYG_CHECKOUT_KEY) || "null"
+    ) as unknown;
+    if (isPendingPaygCheckout(value)) return value;
+    storage.removeItem(PENDING_PAYG_CHECKOUT_KEY);
+  } catch {
+    try {
+      storage.removeItem(PENDING_PAYG_CHECKOUT_KEY);
+    } catch {
+      // Ignore browsers that revoke storage between reads.
+    }
+  }
+  return null;
+}
 
 export type PaygOrderState =
   | "confirmed"

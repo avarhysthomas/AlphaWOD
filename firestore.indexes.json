@@ -89,12 +89,6 @@
       "fieldPath": "deleteAt",
       "indexes": [],
       "ttl": true
-    },
-    {
-      "collectionGroup": "paygIntents",
-      "fieldPath": "piiDeleteAt",
-      "indexes": [],
-      "ttl": true
     }
   ]
 }

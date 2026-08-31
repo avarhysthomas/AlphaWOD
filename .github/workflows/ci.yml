@@ -26,6 +26,8 @@ jobs:
       - run: npm run lint
       - run: npm run test:infrastructure
       - run: npm run verify:monitoring
+      - run: npm run verify:webhook-events
+      - run: npm run verify:deployment-manifest
       - run: npm run test:ci
         env:
           CI: "true"

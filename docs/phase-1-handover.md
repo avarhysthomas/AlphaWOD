@@ -101,7 +101,7 @@ The new Functions surface is:
   `requestMembershipCancellation`, `claimMembership`, `listMemberships`,
   `linkMembershipParticipant`, and admin-only
   `releaseAbandonedMembershipCheckout`. The compatible frontend calls only V2 with
-  `checkoutSchemaVersion: 4`; V1 remains for stale-client fail-safe rollout and
+  `checkoutSchemaVersion: 6`; V1 remains for stale-client fail-safe rollout and
   is not an opening target;
 - one public HTTP endpoint: `stripeWebhook`;
 - four scheduled workers: `recoverStripeEvents`,
@@ -125,8 +125,8 @@ Every one is denied to clients in `firestore.rules`. The memberships
 reconciler also requires the composite index in `firestore.indexes.json` on
 `state` and `nextReconcileAt`.
 
-Stored membership records now use schema version 5; the browser-to-callable
-checkout request contract uses version 4. The cutover audit found existing
+Stored membership records now use schema version 7; the browser-to-callable
+checkout request contract uses version 6. The cutover audit found existing
 billing records, including five active or scheduled family memberships frozen
 on their original 15% terms. The implementation preserves and renders those
 frozen 15% policies and defensively supports frozen 10% policies while writing
@@ -429,11 +429,15 @@ The sequence below records completed steps as well as the work still required:
    protection, privacy-safe fixed-window throttles and stable-attempt admission
    are implemented and tested. App Check alone is not evidence that a buyer is
    human.
-3. Approve a lawful retention and cleanup policy for terminal intents and
-   redundant outbox PII. Automated cleanup must wait for authoritative Stripe
-   settlement and checkout-lock release, preserve required final evidence, and
-   route uncertain/orphaned records to monitoring/manual review rather than
-   deleting the lock blindly.
+3. Complete legal/privacy sign-off and production evidence for the implemented
+   PAYG retention policy. `redactPaygPii` now performs bounded, resumable and
+   idempotent field redaction: 30 days for checkout-intent PII, 90 days after
+   class end for order/outbox/guest-booking PII, and 2,190 days after class end
+   for waiver identity. It defers an outbox only for a valid pre-cutoff email
+   lease bounded to ten minutes, requires an exactly bound paid-Checkout event
+   before promoting delayed payment PII, preserves provider/financial/class/
+   legal/refund/dispute evidence, and never deletes the whole intent. The
+   approval and availability gates remain false.
 4. Create an isolated staging Firebase project/data plane and app origin, wired
    only to Stripe test-mode catalogue, portal and webhook configuration. The
    runtime project/key/object-mode guard is now implemented and locally covered;

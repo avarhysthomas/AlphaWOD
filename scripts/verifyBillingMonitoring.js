@@ -5,7 +5,6 @@ const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
 const manifestPath = path.join(root, "ops/monitoring/billing-alerts.json");
-const sourcePath = path.join(root, "functions/src/membership.ts");
 const productionExamplePath = path.join(
   root,
   "functions/.env.production.example"
@@ -21,13 +20,28 @@ function assertSameValues(actual, expected, label) {
   }
 }
 
+function consoleErrorSignals(source) {
+  return uniqueSorted(
+    [...source.matchAll(/console\.error\(\s*"([^"]+)"/g)]
+      .map((match) => match[1])
+  );
+}
+
 function verifyBillingMonitoring() {
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-  const source = fs.readFileSync(sourcePath, "utf8");
+  const sourceByFile = new Map((manifest.sourceFiles ?? []).map((relativePath) => [
+    relativePath,
+    fs.readFileSync(path.join(root, relativePath), "utf8"),
+  ]));
+  const source = [...sourceByFile.values()].join("\n");
+  const paygSource = sourceByFile.get("functions/src/payg.ts") ?? "";
   const productionExample = fs.readFileSync(productionExamplePath, "utf8");
 
-  if (manifest.schemaVersion !== 1 || manifest.deploymentMode !== "template-only") {
+  if (manifest.schemaVersion !== 2 || manifest.deploymentMode !== "template-only") {
     throw new Error("Monitoring manifest must remain an explicit versioned template.");
+  }
+  if (!sourceByFile.has("functions/src/membership.ts") || !paygSource) {
+    throw new Error("Monitoring must cover both membership and PAYG runtime sources.");
   }
   if (manifest.purchaseGateExpected !== false ||
     !/^MEMBERSHIP_PURCHASE_ENABLED=false$/m.test(productionExample)) {
@@ -38,12 +52,30 @@ function verifyBillingMonitoring() {
   }
 
   const sourceMarkers = uniqueSorted(
-    source.match(/CRITICAL_BILLING_[A-Z0-9_]+/g) ?? []
+    source.match(/CRITICAL_(?:BILLING_)?[A-Z0-9_]+/g) ?? []
   );
   const configuredMarkers = manifest.policies.flatMap(
     (policy) => policy.sourceMarkers ?? []
   );
   assertSameValues(configuredMarkers, sourceMarkers, "Critical billing marker coverage");
+
+  // Every explicit PAYG error is operationally significant: critical integrity
+  // markers page immediately, while recovery/provider/email failures use their
+  // own thresholds. Keeping exact coverage here prevents a newly added worker
+  // or outbox error from silently shipping without a corresponding alert.
+  const paygErrorSignals = uniqueSorted([
+    ...consoleErrorSignals(paygSource),
+    ...(paygSource.match(/CRITICAL_(?:BILLING_)?PAYG_[A-Z0-9_]+/g) ?? []),
+  ]);
+  const configuredPaygSignals = manifest.policies.flatMap((policy) => [
+    ...(policy.sourceMarkers ?? []),
+    ...(policy.sourceSignals ?? []),
+  ]).filter((signal) => signal.includes("PAYG"));
+  assertSameValues(
+    configuredPaygSignals,
+    paygErrorSignals,
+    "PAYG error signal coverage"
+  );
 
   for (const policy of manifest.policies) {
     if (!policy.id || !Number.isSafeInteger(policy.windowSeconds) ||
@@ -62,7 +94,8 @@ function verifyBillingMonitoring() {
 
   console.log(
     `Billing monitoring template verified: ${manifest.policies.length} policies cover ` +
-    `${sourceMarkers.length} critical runtime markers.`
+    `${sourceMarkers.length} critical runtime markers and ` +
+    `${paygErrorSignals.length} PAYG error signals.`
   );
 }
 
@@ -75,4 +108,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = {verifyBillingMonitoring};
+module.exports = {consoleErrorSignals, verifyBillingMonitoring};

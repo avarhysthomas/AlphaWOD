@@ -1856,6 +1856,8 @@ test("the shared Promotion Code id allowlist is required before reservation", as
   const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
     () => undefined
   );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
   const configuredId = process.env.STRIPE_EXISTING_MEMBER_PROMOTION_CODE_ID;
   const sessionsBefore = fakeStripe.state.checkoutSessions.size;
   try {
@@ -1871,6 +1873,7 @@ test("the shared Promotion Code id allowlist is required before reservation", as
     assert.equal((await db.collection("membershipIntents").get()).size, 0);
   } finally {
     process.env.STRIPE_EXISTING_MEMBER_PROMOTION_CODE_ID = configuredId;
+    Date.now = realNow;
   }
 });
 
@@ -1878,6 +1881,8 @@ test("unknown and unrelated campaign codes fail before reservation or Stripe", a
   const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
     () => undefined
   );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
   const sessionsBefore = fakeStripe.state.checkoutSessions.size;
   fakeStripe.state.promotionCodes.set("promo_unrelated_campaign", {
     id: "promo_unrelated_campaign",
@@ -1951,6 +1956,7 @@ test("unknown and unrelated campaign codes fail before reservation or Stripe", a
     fakeStripe.state.promotionCodes.delete("promo_unrelated_campaign");
     fakeStripe.state.promotionCodes.delete("promo_currency_minimum");
     fakeStripe.state.promotionCodes.delete("promo_matching_not_allowlisted");
+    Date.now = realNow;
   }
 });
 
@@ -1959,6 +1965,7 @@ test("the shared code is rejected outside the Adult Unlimited presale", async ()
     () => undefined
   );
   const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
   try {
     await assert.rejects(
       () => handler(request({
@@ -3091,16 +3098,22 @@ test("a retry never returns a Checkout Session frozen in another Stripe mode", a
   const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
     () => undefined
   );
-  const data = validCheckoutData("attempt_cross_mode_retry_123456");
-  await handler(request(data));
-  const intents = await db.collection("membershipIntents").get();
-  assert.equal(intents.size, 1);
-  await intents.docs[0].ref.set({stripeMode: "live"}, {merge: true});
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  try {
+    const data = validCheckoutData("attempt_cross_mode_retry_123456");
+    await handler(request(data));
+    const intents = await db.collection("membershipIntents").get();
+    assert.equal(intents.size, 1);
+    await intents.docs[0].ref.set({stripeMode: "live"}, {merge: true});
 
-  await assert.rejects(
-    () => handler(request(data)),
-    /another Stripe environment/i
-  );
+    await assert.rejects(
+      () => handler(request(data)),
+      /another Stripe environment/i
+    );
+  } finally {
+    Date.now = realNow;
+  }
 });
 
 test("a signed-in buyer without a profile cannot leave a checkout lock", async () => {
@@ -3124,6 +3137,8 @@ test("a mismatched Stripe price is rejected before checkout reserves identity", 
   const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
     () => undefined
   );
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
   const price = fakeStripe.state.prices.get("price_unlimited");
   const originalAmount = price.unit_amount;
   price.unit_amount = 1;
@@ -3136,6 +3151,7 @@ test("a mismatched Stripe price is rejected before checkout reserves identity", 
     assert.equal((await db.collection("membershipCheckoutLocks").get()).size, 0);
   } finally {
     price.unit_amount = originalAmount;
+    Date.now = realNow;
   }
 });
 
@@ -6724,63 +6740,69 @@ test("admin recovery never retro-queues naturally terminal checkout intents", as
   const handler = membershipTesting.buildCreateMembershipCheckoutHandler(
     () => undefined
   );
-  await createMember("checkoutterminaladmin", {
-    profile: {
-      role: "admin",
-      approvalStatus: "approved",
-      entitlementStatus: "active",
-      entitlementSource: "staff",
-      alphaWodAccess: true,
-    },
-  });
-  const checkout = await handler(request(
-    validCheckoutData("attempt_natural_terminal_no_retro_email_123456")
-  ));
-  const intent = (await db.collection("membershipIntents").get()).docs[0];
-  const session = fakeStripe.state.checkoutSessions.get(checkout.sessionId);
-  session.status = "expired";
-  session.customer_details = {email: "natural@example.test"};
-  fakeStripe.state.checkoutSessions.set(checkout.sessionId, session);
-  assert.equal(await membershipTesting.transitionCheckoutReservation(
-    intent.ref,
-    "expired",
-    {verifiedTerminalAt: admin.firestore.Timestamp.now()},
-    true,
-    {
-      sessionId: session.id,
-      mode: session.mode,
-      planKey: session.metadata.planKey,
-    }
-  ), true);
+  const realNow = Date.now;
+  Date.now = () => new Date("2026-08-18T10:00:00Z").getTime();
+  try {
+    await createMember("checkoutterminaladmin", {
+      profile: {
+        role: "admin",
+        approvalStatus: "approved",
+        entitlementStatus: "active",
+        entitlementSource: "staff",
+        alphaWodAccess: true,
+      },
+    });
+    const checkout = await handler(request(
+      validCheckoutData("attempt_natural_terminal_no_retro_email_123456")
+    ));
+    const intent = (await db.collection("membershipIntents").get()).docs[0];
+    const session = fakeStripe.state.checkoutSessions.get(checkout.sessionId);
+    session.status = "expired";
+    session.customer_details = {email: "natural@example.test"};
+    fakeStripe.state.checkoutSessions.set(checkout.sessionId, session);
+    assert.equal(await membershipTesting.transitionCheckoutReservation(
+      intent.ref,
+      "expired",
+      {verifiedTerminalAt: admin.firestore.Timestamp.now()},
+      true,
+      {
+        sessionId: session.id,
+        mode: session.mode,
+        planKey: session.metadata.planKey,
+      }
+    ), true);
 
-  const result = await releaseAbandonedMembershipCheckout(request(
-    {intentId: intent.id},
-    "checkoutterminaladmin"
-  ));
+    const result = await releaseAbandonedMembershipCheckout(request(
+      {intentId: intent.id},
+      "checkoutterminaladmin"
+    ));
 
-  assert.equal(result.outcome, "already_released");
-  assert.equal(result.recoveryEmailStatus, "not_applicable");
-  assert.equal(result.recoveryEmailRecipient, null);
-  assert.equal(
-    (await db.collection("membershipEmailOutbox")
-      .where("intentId", "==", intent.id).get()).size,
-    0
-  );
-  assert.equal(
-    (await db.collection("membershipAudit")
-      .where("type", "==", "abandoned_checkout_released").get()).size,
-    0
-  );
-  await db.collection("membershipIntents").doc().set({
-    status: "expired",
-    createdAt: admin.firestore.Timestamp.now(),
-    checkoutRecoveryReleaseClaimId: "legacy-noncanonical-claim",
-  });
-  const listWithLegacyIntent = await listMemberships(request(
-    {},
-    "checkoutterminaladmin"
-  ));
-  assert.equal(listWithLegacyIntent.checkoutIssues.length, 0);
+    assert.equal(result.outcome, "already_released");
+    assert.equal(result.recoveryEmailStatus, "not_applicable");
+    assert.equal(result.recoveryEmailRecipient, null);
+    assert.equal(
+      (await db.collection("membershipEmailOutbox")
+        .where("intentId", "==", intent.id).get()).size,
+      0
+    );
+    assert.equal(
+      (await db.collection("membershipAudit")
+        .where("type", "==", "abandoned_checkout_released").get()).size,
+      0
+    );
+    await db.collection("membershipIntents").doc().set({
+      status: "expired",
+      createdAt: admin.firestore.Timestamp.now(),
+      checkoutRecoveryReleaseClaimId: "legacy-noncanonical-claim",
+    });
+    const listWithLegacyIntent = await listMemberships(request(
+      {},
+      "checkoutterminaladmin"
+    ));
+    assert.equal(listWithLegacyIntent.checkoutIssues.length, 0);
+  } finally {
+    Date.now = realNow;
+  }
 });
 
 test("admin recovery never queues an expired checkout with paid evidence", async () => {
