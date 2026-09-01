@@ -248,7 +248,9 @@ the default full-catalogue preflight remains the release-wide drift check.
    separately authorised maintenance change with gates closed, run the reviewed claims
    backfill so every existing entitled account has an explicit tier, verify a
    sample of staff/member claims, and only then deploy the stricter Firestore
-   and Storage rules. Include the `reconcileMembershipBookings` scheduled
+   and Storage rules. The access batch must include `acceptCurrentWaiver` so the
+   deployed handler accepts the same canonical one-statement adult waiver that
+   the new frontend presents. Include the `reconcileMembershipBookings` scheduled
    worker so ended memberships release future class capacity in bounded,
    resumable pages. Deploy PAYG recovery/email workers before its schedule,
    checkout, status, cancellation-preview and cancellation callables. Include

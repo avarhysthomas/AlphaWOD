@@ -78,6 +78,7 @@
       "id": "access-callables",
       "invocationBoundary": "callable-service-iam-preserve-required",
       "targets": [
+        "acceptCurrentWaiver",
         "getMonthlyLeaderboard",
         "reconcileMonthlyLeaderboard",
         "getMonthlyDipLeaderboard",

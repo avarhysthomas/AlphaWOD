@@ -41,6 +41,7 @@ const REQUIRED_PAYG_TARGETS = Object.freeze([
 ]);
 
 const REQUIRED_BOOKING_ACCESS_TARGETS = Object.freeze([
+  "acceptCurrentWaiver",
   "adminAddBooking",
   "approveUserAccess",
   "bookClass",
