@@ -40,6 +40,7 @@ const EXPECTED_OPERATIONAL_EVIDENCE = Object.freeze([
   "live-stripe-delivery-backlog-cleared",
   "live-stripe-webhook-exact-event-readback",
   "payg-stripe-test-purchase-refund-dispute-email-journey",
+  "production-access-tier-backfill-and-claims-readback",
   "product-legal-publication-and-runtime-binding",
   "resend-domain-and-confirmation-delivery",
 ]);
@@ -113,6 +114,17 @@ const OPERATIONAL_EVIDENCE_REQUIREMENTS = Object.freeze({
       "refund-converged",
       "dispute-converged",
       "emails-delivered",
+    ]),
+  }),
+  "production-access-tier-backfill-and-claims-readback": Object.freeze({
+    evidenceType: "production-access-tier-backfill-and-claims-readback",
+    verifiedControls: Object.freeze([
+      "dry-run-reviewed",
+      "exact-report-applied",
+      "zero-unresolved-users",
+      "profiles-read-back",
+      "custom-claims-read-back",
+      "rules-deployed-after-backfill",
     ]),
   }),
   "product-legal-publication-and-runtime-binding": Object.freeze({
@@ -377,6 +389,34 @@ function assertOperationalGateSpecificContent(item, evidence, options = {}) {
         evidence.verification?.disputeEmailDelivered === true &&
         evidence.verification?.noAccountJourneyVerified === true &&
         evidence.liveProviderMutation === false;
+      break;
+    case "production-access-tier-backfill-and-claims-readback":
+      valid = evidence.firebaseProjectId === "alphawod-d1f2f" &&
+        evidence.accessSchemaVersion === 3 &&
+        /^[0-9a-f]{40}$/.test(evidence.sourceCommit || "") &&
+        /^[a-f0-9]{64}$/.test(evidence.dryRun?.reportSha256 || "") &&
+        Number.isSafeInteger(evidence.dryRun?.scannedProfiles) &&
+        evidence.dryRun.scannedProfiles >= 0 &&
+        Number.isSafeInteger(evidence.dryRun?.scannedAuthUsers) &&
+        evidence.dryRun.scannedAuthUsers >= 0 &&
+        evidence.dryRun.invalidCount === 0 &&
+        evidence.dryRun.missingAuthUsersCount === 0 &&
+        evidence.dryRun.incompleteLegacyWaiverCount === 0 &&
+        evidence.dryRun.reviewedByRole === "Zero Alpha Fitness operations" &&
+        evidence.apply?.approvedReportSha256 ===
+          evidence.dryRun.reportSha256 &&
+        evidence.apply?.mode === "apply" &&
+        isIsoTimestamp(evidence.apply?.completedAt) &&
+        evidence.readback?.allProfilesHaveValidAppAccessTier === true &&
+        evidence.readback?.allManagedClaimsMatchProfiles === true &&
+        evidence.readback?.unresolvedCount === 0 &&
+        Number.isSafeInteger(evidence.readback?.profilesVerified) &&
+        evidence.readback.profilesVerified === evidence.dryRun.scannedProfiles &&
+        evidence.rulesDeployment?.firestoreRulesDeployedAfterApply === true &&
+        evidence.rulesDeployment?.storageRulesDeployedAfterApply === true &&
+        isIsoTimestamp(evidence.rulesDeployment?.completedAt) &&
+        Date.parse(evidence.rulesDeployment.completedAt) >=
+          Date.parse(evidence.apply.completedAt);
       break;
     case "class-cancellation-quota-and-payg-refund-drill":
       valid = evidence.environment === "isolated-test" &&

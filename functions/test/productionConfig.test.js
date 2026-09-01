@@ -31,7 +31,8 @@ function validEnvironment() {
     PAYG_LEGAL_APPROVED: "false",
     PAYG_PII_REDACTION_IMPLEMENTED: "true",
     PAYG_PII_RETENTION_APPROVED: "false",
-    PAYG_PII_RETENTION_POLICY_VERSION: "payg-retention-2026-01",
+    PAYG_PII_RETENTION_POLICY_VERSION:
+      "ZAF-PAYG-PII-RETENTION-2026-08-31-01",
     PAYG_ORDER_PII_RETENTION_DAYS: "90",
     PAYG_WAIVER_PII_RETENTION_DAYS: "2190",
     PAYG_PRODUCT_TAX_CODE: "txcd_50021001",
@@ -42,16 +43,22 @@ function validEnvironment() {
     PAYG_DUPLICATE_LOCK_KEY_ID: "lock-v1",
     PAYG_DUPLICATE_LOCK_PREVIOUS_KEY_ID: "",
     PAYG_DUPLICATE_LOCK_PREVIOUS_VALID_UNTIL: "",
-    PAYG_WAIVER_VERSION: "PAYG-WAIVER-2026-01",
-    PAYG_WAIVER_PUBLIC_URL: "/legal/PAYG-WAIVER-2026-01.txt",
-    PAYG_WAIVER_SHA256: "a".repeat(64),
-    PAYG_TERMS_VERSION: "PAYG-TERMS-2026-01",
-    PAYG_TERMS_PUBLIC_URL: "/legal/PAYG-TERMS-2026-01.txt",
-    PAYG_TERMS_SHA256: "b".repeat(64),
-    PAYG_PRIVACY_NOTICE_VERSION: "PAYG-PRIVACY-NOTICE-2026-01",
+    PAYG_WAIVER_VERSION: "ZAF-PAYG-WAIVER-2026-09-01-01",
+    PAYG_WAIVER_PUBLIC_URL:
+      "/legal/products/ZAF-PAYG-WAIVER-2026-09-01-01.txt",
+    PAYG_WAIVER_SHA256:
+      "137bf54c92eedb244114c525b6351400933a42d6e775d848576ff0c3e96a213d",
+    PAYG_TERMS_VERSION: "ZAF-PAYG-TERMS-2026-09-01-01",
+    PAYG_TERMS_PUBLIC_URL:
+      "/legal/products/ZAF-PAYG-TERMS-2026-09-01-01.txt",
+    PAYG_TERMS_SHA256:
+      "7b209af1b23144ce8f3e7fda38f09c0806d05be5f558b0d751e6a37d5ecbdb05",
+    PAYG_PRIVACY_NOTICE_VERSION:
+      "ZAF-PAYG-PRIVACY-NOTICE-2026-09-01-01",
     PAYG_PRIVACY_NOTICE_PUBLIC_URL:
-      "/legal/PAYG-PRIVACY-NOTICE-2026-01.txt",
-    PAYG_PRIVACY_NOTICE_SHA256: "c".repeat(64),
+      "/legal/products/ZAF-PAYG-PRIVACY-NOTICE-2026-09-01-01.txt",
+    PAYG_PRIVACY_NOTICE_SHA256:
+      "6091e9d8259815928da440528d1cea12a4703f691c00bfa6aa43c60fb8450377",
     STRIPE_EXPECTED_MODE: "live",
     STRIPE_PORTAL_CONFIGURATION_ID: "bpc_LivePortal",
     STRIPE_PRICE_ADULT_UNLIMITED:
@@ -190,6 +197,36 @@ test("never accepts product review drafts as PAYG publication evidence", () => {
       PAYG_LEGAL_APPROVED: "true",
       ...mutation,
     }, {documentsApproved: true}), /publication evidence|immutable same-origin/i);
+  }
+});
+
+test("rejects shape-valid PAYG legal or retention values not frozen in the approved manifest", () => {
+  for (const mutation of [
+    {
+      PAYG_WAIVER_VERSION: "ZAF-PAYG-WAIVER-2026-09-02-01",
+      PAYG_WAIVER_PUBLIC_URL:
+        "/legal/products/ZAF-PAYG-WAIVER-2026-09-02-01.txt",
+    },
+    {PAYG_TERMS_SHA256: "d".repeat(64)},
+    {
+      PAYG_PRIVACY_NOTICE_VERSION:
+        "ZAF-PAYG-PRIVACY-NOTICE-2026-09-02-01",
+      PAYG_PRIVACY_NOTICE_PUBLIC_URL:
+        "/legal/products/ZAF-PAYG-PRIVACY-NOTICE-2026-09-02-01.txt",
+    },
+    {PAYG_PII_RETENTION_POLICY_VERSION: "ZAF-PAYG-PII-RETENTION-2099-01"},
+  ]) {
+    assert.throws(() => assertProductionOpeningConfig({
+      ...validEnvironment(),
+      PAYG_AVAILABILITY_ENABLED: "true",
+      PAYG_LEGAL_APPROVED: "true",
+      PAYG_PII_RETENTION_APPROVED: "true",
+      ...mutation,
+    }, {
+      documentsApproved: false,
+      membershipEnabled: false,
+      paygEnabled: true,
+    }), /approved product legal manifest/i);
   }
 });
 

@@ -297,6 +297,33 @@ the default full-catalogue preflight remains the release-wide drift check.
 9. Open only one product at a time, perform a reviewed low-risk smoke test, and
    retain its rollback owner and evidence before considering the second.
 
+## Exact opening and rollback commands
+
+Existing memberships are already open in production, so preserve
+`MEMBERSHIP_PURCHASE_ENABLED=true`. To open Conditioning first, set its legal
+and purchase parameters true, run
+`npm run verify:production-open-conditioning-config --prefix functions`, and
+redeploy only `createMembershipCheckoutSessionV2`. Open its two Vercel controls
+only after the backend handler is verified.
+
+PAYG has no browser build-time gate. Once the deployed legal bytes and runtime
+bindings are verified, set `PAYG_LEGAL_APPROVED=true` and
+`PAYG_AVAILABILITY_ENABLED=true`, run
+`npm run verify:production-open-conditioning-payg-config`, then deploy only
+`createPaygCheckoutSession` first. While `getPublicPaygSchedule` still has its
+closed revision, no public class is advertised for purchase. Verify the checkout
+handler's open configuration, then deploy `getPublicPaygSchedule` and smoke-test
+the public timetable.
+
+Rollback PAYG in the reverse exposure order: set
+`PAYG_AVAILABILITY_ENABLED=false`, verify the existing-membership/Conditioning
+state with the production configuration checker, deploy
+`getPublicPaygSchedule` first so the public list closes, then deploy
+`createPaygCheckoutSession`. Keep webhook and recovery workers active for paid
+or in-flight orders. Roll back Conditioning backend-first by closing its two
+backend parameters and redeploying V2, then close its Vercel control and deploy
+the same reviewed frontend commit.
+
 ## Rollback boundary
 
 If pricing, capacity, entitlement, legal evidence, confirmation delivery or

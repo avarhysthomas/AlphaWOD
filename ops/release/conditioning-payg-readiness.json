@@ -45,6 +45,18 @@
       "evidenceSha256": "cc1e112717c6d614d80a89243520b3df1ee0baad6aa4953cf230e335cd50a417"
     },
     {
+      "id": "production-access-tier-backfill-and-claims-readback",
+      "verified": false,
+      "evidence": null,
+      "remainingControls": [
+        "production-dry-run-reviewed",
+        "exact-approved-report-applied",
+        "zero-unresolved-user-records",
+        "profile-and-custom-claim-readback",
+        "stricter-rules-deployed-after-backfill"
+      ]
+    },
+    {
       "id": "product-legal-publication-and-runtime-binding",
       "verified": false,
       "evidence": null,

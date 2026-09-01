@@ -36,6 +36,14 @@ test("Vercel production builds are preflighted and preserve SPA deep links", () 
     "node scripts/verifyFrontendProductionEnv.js --expect-purchase-open " +
       "--expect-conditioning-open"
   );
+  assert.equal(
+    packageJson.scripts["verify:production-open-payg-config"],
+    "npm run verify:production-open-payg-config --prefix functions"
+  );
+  assert.equal(
+    packageJson.scripts["verify:production-open-conditioning-payg-config"],
+    "npm run verify:production-open-conditioning-payg-config --prefix functions"
+  );
   assert.equal(packageJson.engines?.node, "24.x");
 });
 

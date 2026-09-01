@@ -391,6 +391,42 @@ test("pending operational gates require concrete journey, drill, and publication
       },
     },
     {
+      id: "production-access-tier-backfill-and-claims-readback",
+      evidence: {
+        firebaseProjectId: "alphawod-d1f2f",
+        accessSchemaVersion: 3,
+        sourceCommit: "d".repeat(40),
+        dryRun: {
+          reportSha256: "e".repeat(64),
+          scannedProfiles: 12,
+          scannedAuthUsers: 13,
+          invalidCount: 0,
+          missingAuthUsersCount: 0,
+          incompleteLegacyWaiverCount: 0,
+          reviewedByRole: "Zero Alpha Fitness operations",
+        },
+        apply: {
+          approvedReportSha256: "e".repeat(64),
+          mode: "apply",
+          completedAt: "2026-09-01T11:00:00.000Z",
+        },
+        readback: {
+          allProfilesHaveValidAppAccessTier: true,
+          allManagedClaimsMatchProfiles: true,
+          unresolvedCount: 0,
+          profilesVerified: 12,
+        },
+        rulesDeployment: {
+          firestoreRulesDeployedAfterApply: true,
+          storageRulesDeployedAfterApply: true,
+          completedAt: "2026-09-01T11:30:00.000Z",
+        },
+      },
+      invalidate: (evidence) => {
+        evidence.readback.allManagedClaimsMatchProfiles = false;
+      },
+    },
+    {
       id: "product-legal-publication-and-runtime-binding",
       evidence: {
         productionOrigin: "https://alpha-wod.vercel.app",

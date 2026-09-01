@@ -6,6 +6,9 @@ const {
   APPROVED_LIVE_STRIPE_CATALOGUE,
   APPROVED_TEST_PAYG_CATALOGUE,
 } = require("../lib/stripeLiveCatalog");
+const APPROVED_PRODUCT_LEGAL_MANIFEST = require(
+  "../../public/legal/products/manifest.json"
+);
 
 const PRICE_ENV_KEYS = Object.values(APPROVED_LIVE_STRIPE_CATALOGUE)
   .map(({priceEnvKey}) => priceEnvKey);
@@ -157,9 +160,22 @@ function assertPaygLegalEvidence(environment, origin) {
   const values = Object.fromEntries(
     PAYG_LEGAL_EVIDENCE_KEYS.map((name) => [name, required(environment, name)])
   );
+  const manifestDocumentByKind = {
+    WAIVER: APPROVED_PRODUCT_LEGAL_MANIFEST.documents?.paygWaiver,
+    TERMS: APPROVED_PRODUCT_LEGAL_MANIFEST.documents?.paygTerms,
+    PRIVACY_NOTICE:
+      APPROVED_PRODUCT_LEGAL_MANIFEST.documents?.paygPrivacyNotice,
+  };
+  if (APPROVED_PRODUCT_LEGAL_MANIFEST.approvedForPublication !== true ||
+    APPROVED_PRODUCT_LEGAL_MANIFEST.ownerDecisions
+      ?.paygPrivacyNoticeApproved !== true) {
+    throw new Error("The approved PAYG legal manifest is not publishable.");
+  }
   for (const kind of ["WAIVER", "TERMS", "PRIVACY_NOTICE"]) {
     const version = values[`PAYG_${kind}_VERSION`];
     const digest = values[`PAYG_${kind}_SHA256`];
+    const publicUrl = values[`PAYG_${kind}_PUBLIC_URL`];
+    const manifestDocument = manifestDocumentByKind[kind];
     if (!/^[A-Za-z0-9._-]{3,120}$/.test(version) ||
       /(?:^|[-_.])(?:DRAFT|PENDING|REVIEW|CANDIDATE)(?:[-_.]|$)/i.test(version) ||
       !/^[a-f0-9]{64}$/.test(digest)) {
@@ -169,7 +185,7 @@ function assertPaygLegalEvidence(environment, origin) {
     }
     let url;
     try {
-      url = new URL(values[`PAYG_${kind}_PUBLIC_URL`], origin);
+      url = new URL(publicUrl, origin);
     } catch {
       throw new Error(
         `PAYG ${kind.toLowerCase().replace(/_/g, " ")} publication URL is invalid.`
@@ -186,6 +202,15 @@ function assertPaygLegalEvidence(environment, origin) {
         `PAYG ${kind.toLowerCase().replace(/_/g, " ")} must use an immutable same-origin /legal/ URL.`
       );
     }
+    if (manifestDocument?.approvedForPublication !== true ||
+      manifestDocument.runtimeEligible !== true ||
+      version !== manifestDocument.version ||
+      publicUrl !== manifestDocument.publicUrl ||
+      digest !== manifestDocument.sha256) {
+      throw new Error(
+        `PAYG ${kind.toLowerCase().replace(/_/g, " ")} must exactly match the approved product legal manifest.`
+      );
+    }
   }
 }
 
@@ -193,14 +218,18 @@ function assertPaygRetentionEvidence(environment) {
   const values = Object.fromEntries(
     PAYG_RETENTION_EVIDENCE_KEYS.map((name) => [name, required(environment, name)])
   );
-  if (!/^[A-Za-z0-9._-]{3,120}$/.test(
-    values.PAYG_PII_RETENTION_POLICY_VERSION
-  )) {
-    throw new Error("PAYG PII retention policy version is invalid.");
+  const ownerDecisions = APPROVED_PRODUCT_LEGAL_MANIFEST.ownerDecisions ?? {};
+  if (values.PAYG_PII_RETENTION_POLICY_VERSION !==
+    ownerDecisions.paygRetentionPolicyVersion) {
+    throw new Error(
+      "PAYG PII retention policy version must match the approved product legal manifest."
+    );
   }
   const exactDays = {
-    PAYG_ORDER_PII_RETENTION_DAYS: "90",
-    PAYG_WAIVER_PII_RETENTION_DAYS: "2190",
+    PAYG_ORDER_PII_RETENTION_DAYS:
+      String(ownerDecisions.paygOrderPiiRetentionDays),
+    PAYG_WAIVER_PII_RETENTION_DAYS:
+      String(ownerDecisions.paygWaiverPiiRetentionDays),
   };
   for (const [name, expected] of Object.entries(exactDays)) {
     if (values[name] !== expected) {

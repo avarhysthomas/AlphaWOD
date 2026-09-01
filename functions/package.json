@@ -15,6 +15,8 @@
     "verify:production-armed-config": "npm run build && node --env-file-if-exists=.env.alphawod-d1f2f scripts/verifyProductionConfig.js --armed",
     "verify:production-open-config": "npm run build && node --env-file-if-exists=.env.alphawod-d1f2f scripts/verifyProductionConfig.js --opening",
     "verify:production-open-conditioning-config": "npm run build && node --env-file-if-exists=.env.alphawod-d1f2f scripts/verifyProductionConfig.js --opening --open-conditioning",
+    "verify:production-open-payg-config": "npm run build && node --env-file-if-exists=.env.alphawod-d1f2f scripts/verifyProductionConfig.js --opening --open-payg",
+    "verify:production-open-conditioning-payg-config": "npm run build && node --env-file-if-exists=.env.alphawod-d1f2f scripts/verifyProductionConfig.js --opening --open-conditioning --open-payg",
     "verify:stripe-live-config": "npm run build && node --env-file-if-exists=.env.alphawod-d1f2f scripts/verifyStripeLiveConfig.js",
     "run:stripe-test-journey": "npm run build && node scripts/runLocalStripeTestJourney.js",
     "build:watch": "tsc --watch",

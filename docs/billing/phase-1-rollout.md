@@ -703,8 +703,12 @@ apply to any deployment that touches the existing functions.
 - The `functions` package's old blanket `npm run deploy` command is deliberately
   blocked. Use the selective manifest in this runbook with the Phase 0-pinned
   Firebase CLI 15.5.1; the workstation's older global CLI is not release proof.
-- Rules changes are additive: ten new deny-all collection blocks. No existing
-  rule was modified.
+- Rules add server-only collection blocks and also tighten existing access:
+  profiles without a valid `appAccessTier` no longer satisfy AlphaWOD access,
+  while training logs, WODs and WOD templates require `full` access. Run and
+  approve the exact production claims/profile backfill, verify profile and Auth
+  claim readback, and only then deploy Firestore and Storage rules. Reversing
+  that order can lock legitimate existing members out.
 - Deploy the `memberships` composite index on `state` and
   `nextReconcileAt` before the grace-reconciliation worker is enabled.
 - Stored membership records now use schema version 7; the browser-to-callable
