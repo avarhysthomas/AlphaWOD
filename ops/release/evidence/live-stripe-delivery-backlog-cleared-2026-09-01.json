@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 2,
+  "evidenceType": "stripe-live-delivery-backlog-cleared-readback",
+  "readinessItemId": "live-stripe-delivery-backlog-cleared",
+  "verified": true,
+  "newProductPurchaseGatesRemainClosed": true,
+  "customerPiiRecorded": false,
+  "recordedAt": "2026-09-01T21:39:28.000Z",
+  "verifiedControls": [
+    "compatible-code-deployed",
+    "exact-event-reconciled",
+    "redelivery-acknowledged",
+    "zero-unsuccessful-events-full-readback"
+  ],
+  "deployment": {
+    "compatibleCodeDeployed": true,
+    "environment": "production",
+    "firebaseProjectId": "alphawod-d1f2f",
+    "sourceCommit": "e1a253c97c74fbad3c5f47d768c49b39a573167f",
+    "compatibilitySourceSha256": "54eafe8403d764f86405d4d74470056ae0729b9f6a87b7ef7152eed639914a8c",
+    "stripeWebhookRevision": "stripewebhook-00009-bum",
+    "reconcilePastDueMembershipsRevision": "reconcilepastduememberships-00006-qir",
+    "completedAt": "2026-09-01T21:00:41.380Z"
+  },
+  "reconciliation": {
+    "eventId": "evt_1UAgFqFzNDZoGGA0UDdTWXmb",
+    "eventCreated": 1788225169,
+    "invoiceId": "in_1UAfI7FzNDZoGGA0axkViBtH",
+    "subscriptionIdSha256": "603678ab7502208430a4b7ce131e220ece946adccca58e35d28baca51e27386a",
+    "eventAndCustomerStateSafelyReconciled": true,
+    "reconciliationFunction": "reconcilePastDueMemberships",
+    "reconciliationFunctionRevision": "reconcilepastduememberships-00006-qir",
+    "applicationLedgerState": "dead_letter",
+    "applicationLedgerResolution": "authoritative_state_reconciled",
+    "resolutionAuditId": "legacy-presale-discount-recovery-in_1UAfI7FzNDZoGGA0axkViBtH",
+    "membershipProviderContractStatus": "verified",
+    "firstPaymentRecorded": true,
+    "firstPaidInvoiceId": "in_1UAfI7FzNDZoGGA0axkViBtH",
+    "legacyPresaleDiscountRecoveryVersion": 1,
+    "completedAt": "2026-09-01T21:02:41.145Z"
+  },
+  "deliveryAcknowledgement": {
+    "eventId": "evt_1UAgFqFzNDZoGGA0UDdTWXmb",
+    "deliveryAttemptId": "wc_1UAzNTFzNDZoGGA0zOxjuJmN",
+    "deliveryMode": "manual_post_reconciliation",
+    "handler": "stripeWebhook",
+    "handlerRevision": "stripewebhook-00009-bum",
+    "httpStatus": 200,
+    "disposition": "accepted_for_manual_review_after_reconciliation",
+    "responseBodyExactMatch": true,
+    "completedAt": "2026-09-01T21:37:59.000Z"
+  },
+  "readback": {
+    "stripeAccountId": "acct_1Q1PQcFzNDZoGGA0",
+    "stripeMode": "live",
+    "deliverySuccess": false,
+    "windowStart": "2026-08-25T00:00:00.000Z",
+    "windowEnd": "2026-09-01T21:39:28.000Z",
+    "paginationComplete": true,
+    "pagesRead": 1,
+    "unsuccessfulEventCount": 0,
+    "events": [],
+    "completedAt": "2026-09-01T21:39:28.000Z"
+  }
+}

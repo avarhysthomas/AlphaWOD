@@ -34,9 +34,9 @@
     },
     {
       "id": "live-stripe-delivery-backlog-cleared",
-      "verified": false,
-      "evidence": null,
-      "partialEvidence": "ops/release/evidence/live-stripe-delivery-backlog-2026-09-01.json"
+      "verified": true,
+      "evidence": "ops/release/evidence/live-stripe-delivery-backlog-cleared-2026-09-01.json",
+      "evidenceSha256": "79ff1ccf4da3cfe85d44752523a9bcc96a14dbc0baf99b65e2c781244a430a71"
     },
     {
       "id": "live-product-catalogue-and-closed-config-readback",
@@ -58,9 +58,9 @@
     },
     {
       "id": "product-legal-publication-and-runtime-binding",
-      "verified": false,
-      "evidence": null,
-      "partialEvidence": "ops/release/evidence/payg-privacy-runtime-binding-readiness-2026-09-01.json",
+      "verified": true,
+      "evidence": "ops/release/evidence/product-legal-publication-and-runtime-binding-2026-09-01.json",
+      "evidenceSha256": "41cbea81eb6159d2922dbff746ceefa2836536cb26fa3b2cd2eb014173bbb439",
       "supportingEvidence": [
         "ops/release/evidence/product-terms-owner-approval-2026-09-01.json",
         "ops/release/evidence/payg-privacy-notice-owner-approval-2026-09-01.json"
