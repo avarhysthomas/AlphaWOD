@@ -157,6 +157,8 @@ const CONDITIONING_BROWSER_PARTIAL_EVIDENCE =
   "ops/release/evidence/conditioning-stripe-test-and-local-browser-2026-09-01.json";
 const PAYG_BROWSER_PARTIAL_EVIDENCE =
   "ops/release/evidence/payg-stripe-test-browser-purchase-2026-09-01.json";
+const BILLING_ALERT_PARTIAL_EVIDENCE =
+  "ops/release/evidence/billing-alert-policy-suite-2026-09-01.json";
 const PAYG_RETENTION_POLICY_VERSION =
   "ZAF-PAYG-PII-RETENTION-2026-08-31-01";
 const LIVE_STRIPE_DELIVERY_BACKLOG_ID =
@@ -845,6 +847,30 @@ function paygRedactionImplemented() {
   return match[1] === "true";
 }
 
+function assertPendingRecordedGate(gate, expectations = {}) {
+  if (!gate || typeof gate.verified !== "boolean") {
+    throw new Error("Partial browser evidence is missing a required gate.");
+  }
+  if (gate.verified) return false;
+
+  const {
+    partialEvidence,
+    remainingControls = [],
+    syntheticDeliveryAcknowledged,
+  } = expectations;
+  if (gate.evidence !== null ||
+    (partialEvidence !== undefined &&
+      gate.partialEvidence !== partialEvidence) ||
+    remainingControls.some((control) =>
+      !gate.remainingControls?.includes(control)
+    ) ||
+    (syntheticDeliveryAcknowledged !== undefined &&
+      gate.syntheticDeliveryAcknowledged !== syntheticDeliveryAcknowledged)) {
+    throw new Error("Partial browser evidence must retain every external blocker.");
+  }
+  return true;
+}
+
 function assertRecordedBrowserEvidence(operationalEvidence) {
   const conditioningGate = operationalEvidence.find(
     ({id}) => id === "conditioning-stripe-test-purchase-to-booking-journey"
@@ -865,160 +891,177 @@ function assertRecordedBrowserEvidence(operationalEvidence) {
     ({id}) => id === "product-legal-publication-and-runtime-binding"
   );
 
-  if (conditioningGate?.verified !== false ||
-    conditioningGate.evidence !== null ||
-    conditioningGate.partialEvidence !== CONDITIONING_BROWSER_PARTIAL_EVIDENCE ||
-    !conditioningGate.remainingControls?.includes("confirmation-email-delivered") ||
-    paygGate?.verified !== false || paygGate.evidence !== null ||
-    paygGate.partialEvidence !== PAYG_BROWSER_PARTIAL_EVIDENCE ||
-    !paygGate.remainingControls?.includes("confirmation-email-delivered") ||
-    !paygGate.remainingControls?.includes("refund-converged-and-email-delivered") ||
-    !paygGate.remainingControls?.includes("dispute-converged-and-email-delivered") ||
-    cancellationDrill?.verified !== false || cancellationDrill.evidence !== null ||
-    cancellationDrill.partialEvidence !== CONDITIONING_BROWSER_PARTIAL_EVIDENCE ||
-    alertGate?.verified !== false || alertGate.evidence !== null ||
-    alertGate.syntheticDeliveryAcknowledged !== false ||
-    !alertGate.remainingControls?.includes(
-      "synthetic-alert-delivery-test-and-human-acknowledgement"
-    ) ||
-    backlogGate?.verified !== false || backlogGate.evidence !== null ||
-    publicationGate?.verified !== false || publicationGate.evidence !== null) {
-    throw new Error("Partial browser evidence must retain every external blocker.");
+  const conditioningPending = assertPendingRecordedGate(conditioningGate, {
+    partialEvidence: CONDITIONING_BROWSER_PARTIAL_EVIDENCE,
+    remainingControls: ["confirmation-email-delivered"],
+  });
+  const paygPending = assertPendingRecordedGate(paygGate, {
+    partialEvidence: PAYG_BROWSER_PARTIAL_EVIDENCE,
+    remainingControls: [
+      "confirmation-email-delivered",
+      "refund-converged-and-email-delivered",
+      "dispute-converged-and-email-delivered",
+    ],
+  });
+  const cancellationPending = assertPendingRecordedGate(cancellationDrill, {
+    partialEvidence: CONDITIONING_BROWSER_PARTIAL_EVIDENCE,
+  });
+  const alertPending = assertPendingRecordedGate(alertGate, {
+    partialEvidence: BILLING_ALERT_PARTIAL_EVIDENCE,
+    remainingControls: [
+      "synthetic-alert-delivery-test-and-human-acknowledgement",
+    ],
+    syntheticDeliveryAcknowledged: false,
+  });
+  assertPendingRecordedGate(backlogGate);
+  assertPendingRecordedGate(publicationGate);
+
+  if (conditioningPending || cancellationPending) {
+    const conditioning = readEvidence(
+      CONDITIONING_BROWSER_PARTIAL_EVIDENCE,
+      "Conditioning Stripe/browser partial evidence"
+    );
+    const conditioningSequence = conditioning.localBrowserRerun?.bookingSequence;
+    if (conditioning.schemaVersion !== 1 ||
+      conditioning.evidenceType !==
+        "conditioning-stripe-test-and-local-browser-partial" ||
+      conditioning.readinessItemId !== conditioningGate.id ||
+      conditioning.customerPiiRecorded !== false ||
+      conditioning.stripeReadback?.mode !== "test" ||
+      conditioning.stripeReadback?.planKey !== "adult_conditioning" ||
+      conditioning.stripeReadback?.checkoutSessionId !==
+        "cs_test_a1SfbXmndUQS5DBMWcx95iFdk2xXLU2tucJO7DzhERuGDuIQB69oanwIXj" ||
+      conditioning.stripeReadback?.subscriptionId !==
+        "sub_1UAroiFzNDZoGGA04ISXiiwj" ||
+      conditioning.stripeReadback?.amountPence !== 3000 ||
+      conditioning.stripeReadback?.currency !== "gbp" ||
+      conditioning.stripeReadback?.checkoutPaymentStatus !== "paid" ||
+      conditioning.stripeReadback?.subscriptionStatus !== "active" ||
+      conditioning.stripeReadback?.appAccessTier !== "limited" ||
+      conditioning.stripeReadback?.weeklyBookingLimit !== 2 ||
+      conditioning.stripeReadback?.flexibleEligibleClassSelection !== true ||
+      conditioning.stripeReadback?.confirmationOutboxState !== "pending" ||
+      conditioning.stripeReadback?.confirmationDeliveryEnabled !== false ||
+      conditioning.stripeReadback?.confirmationDelivered !== false ||
+      conditioning.localBrowserRerun?.environment !== "local-emulator-fixture" ||
+      conditioning.localBrowserRerun
+        ?.fixtureBoundToRecordedCheckoutAndSubscription !== true ||
+      conditioning.localBrowserRerun?.newStripeRequestPerformed !== false ||
+      conditioning.localBrowserRerun?.newStripeObjectCreatedOrChanged !== false ||
+      conditioning.localBrowserRerun?.productionWritePerformed !== false ||
+      conditioning.localBrowserRerun?.waiver?.version !==
+        "ZAF-ADULT-WAIVER-2026-08-23-01" ||
+      conditioning.localBrowserRerun?.waiver?.currentMarkerObserved !== true ||
+      conditioning.localBrowserRerun?.waiver?.requiredAcknowledgementCount !== 1 ||
+      conditioning.localBrowserRerun?.waiver?.storedAcknowledgementCount !== 1 ||
+      conditioning.localBrowserRerun?.waiver?.exactAcknowledgementSetMatched !==
+        true ||
+      !Array.isArray(conditioningSequence) || conditioningSequence.length !== 5 ||
+      conditioningSequence[2]?.result !== "blocked-weekly-quota" ||
+      conditioningSequence[3]?.result !==
+        "succeeded-capacity-and-quota-released" ||
+      conditioningSequence[4]?.result !== "succeeded" ||
+      conditioning.localBrowserRerun?.finalEmulatorReadback?.quotaBookedCount !==
+        2 ||
+      conditioning.localBrowserRerun?.finalEmulatorReadback
+        ?.allObservedUnbookedCandidateBookedCountsZero !== true ||
+      conditioning.releaseGateAssessment
+        ?.fullConditioningOperationalGateVerified !== false ||
+      conditioning.releaseGateAssessment?.confirmationDeliveryVerified !== false ||
+      conditioning.releaseGateAssessment
+        ?.classCancellationOperationsDrillVerified !== false ||
+      conditioning.liveProviderMutation !== false ||
+      conditioning.productionWritePerformed !== false ||
+      conditioning.deploymentPerformed !== false) {
+      throw new Error(
+        "Conditioning Stripe/browser partial evidence is stale or unsafe."
+      );
+    }
+    assertSameValues(
+      conditioning.localBrowserRerun.finalEmulatorReadback
+        .activeBookingFixtureLabels,
+      ["Thursday A", "Friday D"],
+      "Conditioning active browser fixtures"
+    );
+    assertSameValues(
+      conditioning.localBrowserRerun.finalEmulatorReadback
+        .cancelledBookingFixtureLabels,
+      ["Friday C"],
+      "Conditioning cancelled browser fixtures"
+    );
+    assertSameValues(
+      conditioning.localBrowserRerun.finalEmulatorReadback
+        .quotaActiveBookingFixtureLabels,
+      ["Thursday A", "Friday D"],
+      "Conditioning quota browser fixtures"
+    );
+    assertSameValues(
+      conditioning.localBrowserRerun.accessReadback.available,
+      ["Schedule", "Profile", "Membership"],
+      "Conditioning available app surfaces"
+    );
+    assertSameValues(
+      conditioning.localBrowserRerun.accessReadback.notIncluded,
+      ["Dashboard", "Training", "Leaderboard"],
+      "Conditioning excluded app surfaces"
+    );
+    if (conditioning.localBrowserRerun.accessReadback.notIncludedCopy !==
+      "Not included") {
+      throw new Error("Conditioning excluded app copy is stale.");
+    }
   }
 
-  const conditioning = readEvidence(
-    CONDITIONING_BROWSER_PARTIAL_EVIDENCE,
-    "Conditioning Stripe/browser partial evidence"
-  );
-  const conditioningSequence = conditioning.localBrowserRerun?.bookingSequence;
-  if (conditioning.schemaVersion !== 1 ||
-    conditioning.evidenceType !==
-      "conditioning-stripe-test-and-local-browser-partial" ||
-    conditioning.readinessItemId !== conditioningGate.id ||
-    conditioning.customerPiiRecorded !== false ||
-    conditioning.stripeReadback?.mode !== "test" ||
-    conditioning.stripeReadback?.planKey !== "adult_conditioning" ||
-    conditioning.stripeReadback?.checkoutSessionId !==
-      "cs_test_a1SfbXmndUQS5DBMWcx95iFdk2xXLU2tucJO7DzhERuGDuIQB69oanwIXj" ||
-    conditioning.stripeReadback?.subscriptionId !==
-      "sub_1UAroiFzNDZoGGA04ISXiiwj" ||
-    conditioning.stripeReadback?.amountPence !== 3000 ||
-    conditioning.stripeReadback?.currency !== "gbp" ||
-    conditioning.stripeReadback?.checkoutPaymentStatus !== "paid" ||
-    conditioning.stripeReadback?.subscriptionStatus !== "active" ||
-    conditioning.stripeReadback?.appAccessTier !== "limited" ||
-    conditioning.stripeReadback?.weeklyBookingLimit !== 2 ||
-    conditioning.stripeReadback?.flexibleEligibleClassSelection !== true ||
-    conditioning.stripeReadback?.confirmationOutboxState !== "pending" ||
-    conditioning.stripeReadback?.confirmationDeliveryEnabled !== false ||
-    conditioning.stripeReadback?.confirmationDelivered !== false ||
-    conditioning.localBrowserRerun?.environment !== "local-emulator-fixture" ||
-    conditioning.localBrowserRerun?.fixtureBoundToRecordedCheckoutAndSubscription !==
-      true ||
-    conditioning.localBrowserRerun?.newStripeRequestPerformed !== false ||
-    conditioning.localBrowserRerun?.newStripeObjectCreatedOrChanged !== false ||
-    conditioning.localBrowserRerun?.productionWritePerformed !== false ||
-    conditioning.localBrowserRerun?.waiver?.version !==
-      "ZAF-ADULT-WAIVER-2026-08-23-01" ||
-    conditioning.localBrowserRerun?.waiver?.currentMarkerObserved !== true ||
-    conditioning.localBrowserRerun?.waiver?.requiredAcknowledgementCount !== 1 ||
-    conditioning.localBrowserRerun?.waiver?.storedAcknowledgementCount !== 1 ||
-    conditioning.localBrowserRerun?.waiver?.exactAcknowledgementSetMatched !== true ||
-    !Array.isArray(conditioningSequence) || conditioningSequence.length !== 5 ||
-    conditioningSequence[2]?.result !== "blocked-weekly-quota" ||
-    conditioningSequence[3]?.result !==
-      "succeeded-capacity-and-quota-released" ||
-    conditioningSequence[4]?.result !== "succeeded" ||
-    conditioning.localBrowserRerun?.finalEmulatorReadback?.quotaBookedCount !== 2 ||
-    conditioning.localBrowserRerun?.finalEmulatorReadback
-      ?.allObservedUnbookedCandidateBookedCountsZero !== true ||
-    conditioning.releaseGateAssessment?.fullConditioningOperationalGateVerified !==
-      false ||
-    conditioning.releaseGateAssessment?.confirmationDeliveryVerified !== false ||
-    conditioning.releaseGateAssessment?.classCancellationOperationsDrillVerified !==
-      false ||
-    conditioning.liveProviderMutation !== false ||
-    conditioning.productionWritePerformed !== false ||
-    conditioning.deploymentPerformed !== false) {
-    throw new Error("Conditioning Stripe/browser partial evidence is stale or unsafe.");
-  }
-  assertSameValues(
-    conditioning.localBrowserRerun.finalEmulatorReadback
-      .activeBookingFixtureLabels,
-    ["Thursday A", "Friday D"],
-    "Conditioning active browser fixtures"
-  );
-  assertSameValues(
-    conditioning.localBrowserRerun.finalEmulatorReadback
-      .cancelledBookingFixtureLabels,
-    ["Friday C"],
-    "Conditioning cancelled browser fixtures"
-  );
-  assertSameValues(
-    conditioning.localBrowserRerun.finalEmulatorReadback
-      .quotaActiveBookingFixtureLabels,
-    ["Thursday A", "Friday D"],
-    "Conditioning quota browser fixtures"
-  );
-  assertSameValues(
-    conditioning.localBrowserRerun.accessReadback.available,
-    ["Schedule", "Profile", "Membership"],
-    "Conditioning available app surfaces"
-  );
-  assertSameValues(
-    conditioning.localBrowserRerun.accessReadback.notIncluded,
-    ["Dashboard", "Training", "Leaderboard"],
-    "Conditioning excluded app surfaces"
-  );
-  if (conditioning.localBrowserRerun.accessReadback.notIncludedCopy !==
-    "Not included") {
-    throw new Error("Conditioning excluded app copy is stale.");
+  if (paygPending) {
+    const payg = readEvidence(
+      PAYG_BROWSER_PARTIAL_EVIDENCE,
+      "PAYG Stripe/browser partial evidence"
+    );
+    if (payg.schemaVersion !== 1 ||
+      payg.evidenceType !== "payg-stripe-test-browser-purchase-partial" ||
+      payg.readinessItemId !== paygGate.id ||
+      payg.customerPiiRecorded !== false ||
+      payg.stripeMode !== "test" || payg.productKey !== "adult_payg_class" ||
+      payg.providerReferences?.checkoutSessionId !==
+        "cs_test_a1xQ0XbmZ4PBZ95tdA0plOVJinI7RcSVnMg7X8i90v7CF78gEfLB6roPe2" ||
+      payg.providerReferences?.refundIdRecorded !== false ||
+      payg.providerReferences?.disputeIdRecorded !== false ||
+      payg.catalogue?.approvedTestPriceId !==
+        "price_1UAmVVFzNDZoGGA04z8hX10N" ||
+      payg.catalogue?.amountPence !== 700 ||
+      payg.catalogue?.currency !== "gbp" ||
+      payg.catalogue?.exactApprovedTestPriceVerified !== true ||
+      payg.localApplicationReadback?.hostedCheckoutCompleted !== true ||
+      payg.localApplicationReadback?.accountRequired !== false ||
+      payg.localApplicationReadback?.authenticationAccountCreated !== false ||
+      payg.localApplicationReadback?.orderConfirmed !== true ||
+      payg.localApplicationReadback?.bookingCreated !== true ||
+      payg.localApplicationReadback?.bookingKind !== "payg_guest" ||
+      payg.localApplicationReadback?.confirmationOutboxState !== "pending" ||
+      payg.localApplicationReadback?.confirmationDeliveryEnabled !== false ||
+      payg.localApplicationReadback?.confirmationEmailDelivered !== false ||
+      payg.localApplicationReadback?.productionWrites !== false ||
+      payg.releaseGateAssessment?.fullPaygOperationalGateVerified !== false ||
+      payg.releaseGateAssessment?.confirmationDeliveryVerified !== false ||
+      payg.releaseGateAssessment?.refundVerified !== false ||
+      payg.releaseGateAssessment?.disputeVerified !== false ||
+      payg.releaseGateAssessment?.classCancellationOperationsDrillVerified !==
+        false ||
+      payg.liveProviderMutation !== false ||
+      payg.productionWritePerformed !== false ||
+      payg.deploymentPerformed !== false) {
+      throw new Error("PAYG Stripe/browser partial evidence is stale or unsafe.");
+    }
   }
 
-  const payg = readEvidence(
-    PAYG_BROWSER_PARTIAL_EVIDENCE,
-    "PAYG Stripe/browser partial evidence"
-  );
-  if (payg.schemaVersion !== 1 ||
-    payg.evidenceType !== "payg-stripe-test-browser-purchase-partial" ||
-    payg.readinessItemId !== paygGate.id || payg.customerPiiRecorded !== false ||
-    payg.stripeMode !== "test" || payg.productKey !== "adult_payg_class" ||
-    payg.providerReferences?.checkoutSessionId !==
-      "cs_test_a1xQ0XbmZ4PBZ95tdA0plOVJinI7RcSVnMg7X8i90v7CF78gEfLB6roPe2" ||
-    payg.providerReferences?.refundIdRecorded !== false ||
-    payg.providerReferences?.disputeIdRecorded !== false ||
-    payg.catalogue?.approvedTestPriceId !==
-      "price_1UAmVVFzNDZoGGA04z8hX10N" ||
-    payg.catalogue?.amountPence !== 700 || payg.catalogue?.currency !== "gbp" ||
-    payg.catalogue?.exactApprovedTestPriceVerified !== true ||
-    payg.localApplicationReadback?.hostedCheckoutCompleted !== true ||
-    payg.localApplicationReadback?.accountRequired !== false ||
-    payg.localApplicationReadback?.authenticationAccountCreated !== false ||
-    payg.localApplicationReadback?.orderConfirmed !== true ||
-    payg.localApplicationReadback?.bookingCreated !== true ||
-    payg.localApplicationReadback?.bookingKind !== "payg_guest" ||
-    payg.localApplicationReadback?.confirmationOutboxState !== "pending" ||
-    payg.localApplicationReadback?.confirmationDeliveryEnabled !== false ||
-    payg.localApplicationReadback?.confirmationEmailDelivered !== false ||
-    payg.localApplicationReadback?.productionWrites !== false ||
-    payg.releaseGateAssessment?.fullPaygOperationalGateVerified !== false ||
-    payg.releaseGateAssessment?.confirmationDeliveryVerified !== false ||
-    payg.releaseGateAssessment?.refundVerified !== false ||
-    payg.releaseGateAssessment?.disputeVerified !== false ||
-    payg.releaseGateAssessment?.classCancellationOperationsDrillVerified !==
-      false ||
-    payg.liveProviderMutation !== false || payg.productionWritePerformed !== false ||
-    payg.deploymentPerformed !== false) {
-    throw new Error("PAYG Stripe/browser partial evidence is stale or unsafe.");
-  }
-
-  const alertEvidence = readEvidence(
-    alertGate.partialEvidence,
-    "Billing alert partial evidence"
-  );
-  if (alertEvidence.verification?.syntheticDeliveryTestPerformed !== false ||
-    alertEvidence.verification?.namedPrimaryAndBackupRosterRecorded !== false) {
-    throw new Error("Alert evidence must not claim synthetic acknowledgement.");
+  if (alertPending) {
+    const alertEvidence = readEvidence(
+      BILLING_ALERT_PARTIAL_EVIDENCE,
+      "Billing alert partial evidence"
+    );
+    if (alertEvidence.verification?.syntheticDeliveryTestPerformed !== false ||
+      alertEvidence.verification?.namedPrimaryAndBackupRosterRecorded !== false) {
+      throw new Error("Alert evidence must not claim synthetic acknowledgement.");
+    }
   }
 }
 

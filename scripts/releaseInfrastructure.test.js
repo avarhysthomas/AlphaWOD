@@ -65,7 +65,9 @@ test("release readiness remains read-only with every production gate closed", ()
   assert.equal(readiness.verificationMode, "read-only-no-deploy");
   assert.equal(readiness.productionGatesExpectedClosed, true);
   assert.ok(readiness.ownerDecisions.every((decision) => decision.approved));
-  assert.ok(readiness.operationalEvidence.some((check) => !check.verified));
+  assert.ok(readiness.operationalEvidence.every(
+    (check) => typeof check.verified === "boolean"
+  ));
 });
 
 test("recorded Stripe/browser evidence stays PII-free and partial", () => {
@@ -99,6 +101,115 @@ test("recorded Stripe/browser evidence stays PII-free and partial", () => {
   assert.equal(payg.releaseGateAssessment.fullPaygOperationalGateVerified, false);
 });
 
+test("pending recorded gate still requires its exact partial evidence", () => {
+  const readiness = JSON.parse(fs.readFileSync(
+    path.join(root, "ops/release/conditioning-payg-readiness.json"),
+    "utf8"
+  ));
+  const operationalEvidence = JSON.parse(JSON.stringify(
+    readiness.operationalEvidence
+  ));
+  const gateIndex = operationalEvidence.findIndex(
+    ({id}) => id === "conditioning-stripe-test-purchase-to-booking-journey"
+  );
+  operationalEvidence[gateIndex] = {
+    ...operationalEvidence[gateIndex],
+    verified: false,
+    evidence: null,
+    partialEvidence:
+      "ops/release/evidence/conditioning-stripe-test-and-local-browser-2026-09-01.json",
+    remainingControls: ["confirmation-email-delivered"],
+  };
+  assert.doesNotThrow(
+    () => assertRecordedBrowserEvidence(operationalEvidence)
+  );
+
+  delete operationalEvidence[gateIndex].partialEvidence;
+  assert.throws(
+    () => assertRecordedBrowserEvidence(operationalEvidence),
+    /must retain every external blocker/
+  );
+});
+
+test("completed recorded gate relies on full evidence without partial evidence", () => {
+  const readiness = JSON.parse(fs.readFileSync(
+    path.join(root, "ops/release/conditioning-payg-readiness.json"),
+    "utf8"
+  ));
+  const operationalEvidence = JSON.parse(JSON.stringify(
+    readiness.operationalEvidence
+  ));
+  const evidence = {
+    schemaVersion: 1,
+    evidenceType: "gcp-billing-and-payg-alert-policy-suite",
+    readinessItemId: "billing-alert-policies-and-staffed-notification-route",
+    verified: true,
+    newProductPurchaseGatesRemainClosed: true,
+    customerPiiRecorded: false,
+    recordedAt: "2026-09-01T15:00:00.000Z",
+    verifiedControls: [
+      "nine-policies-enabled",
+      "primary-route-delivery-acknowledged",
+      "independent-backup-route-delivery-acknowledged",
+      "named-primary-responder",
+      "named-backup-responder",
+    ],
+    googleCloudProjectId: "alphawod-d1f2f",
+    policyCountExpected: 9,
+    policyCountVerified: 9,
+    notificationRoutes: [
+      {
+        providerId: "primary-route",
+        enabled: true,
+        recipientConfiguredInProvider: true,
+      },
+      {
+        providerId: "backup-route",
+        enabled: true,
+        recipientConfiguredInProvider: true,
+      },
+    ],
+    verification: {
+      allManifestPoliciesCreated: true,
+      allPoliciesEnabled: true,
+      allFiltersMatchCheckedInManifest: true,
+      allThresholdWindowsVerified: true,
+      primaryEmailAttachedToEveryPolicy: true,
+      twoIndependentRoutesAttachedToEveryPolicy: true,
+      namedPrimaryAndBackupRosterRecorded: true,
+      syntheticDeliveryTestPerformed: true,
+    },
+  };
+  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "release-evidence-"));
+  const evidenceFile = path.join(tempDirectory, "completed-alert.json");
+  fs.writeFileSync(evidenceFile, `${JSON.stringify(evidence)}\n`);
+  const completedGate = {
+    id: "billing-alert-policies-and-staffed-notification-route",
+    verified: true,
+    evidence: "ops/release/evidence/completed-alert.json",
+    evidenceSha256: crypto.createHash("sha256")
+      .update(fs.readFileSync(evidenceFile))
+      .digest("hex"),
+  };
+
+  try {
+    assert.doesNotThrow(
+      () => assertOperationalEvidenceContent(completedGate, evidence, evidenceFile)
+    );
+    const gateIndex = operationalEvidence.findIndex(
+      ({id}) => id === completedGate.id
+    );
+    operationalEvidence[gateIndex] = completedGate;
+    assert.equal(operationalEvidence[gateIndex].partialEvidence, undefined);
+    assert.doesNotThrow(
+      () => assertRecordedBrowserEvidence(operationalEvidence)
+    );
+  } finally {
+    fs.unlinkSync(evidenceFile);
+    fs.rmdirSync(tempDirectory);
+  }
+});
+
 test("product terms approval remains separate from publication and runtime binding", () => {
   const readiness = JSON.parse(fs.readFileSync(
     path.join(root, "ops/release/conditioning-payg-readiness.json"),
@@ -114,19 +225,25 @@ test("product terms approval remains separate from publication and runtime bindi
   const publication = readiness.operationalEvidence.find(
     ({id}) => id === "product-legal-publication-and-runtime-binding"
   );
-  assert.equal(publication?.verified, false);
-  assert.equal(publication?.evidence, null);
-  assert.equal(
-    publication?.partialEvidence,
-    "ops/release/evidence/payg-privacy-runtime-binding-readiness-2026-09-01.json"
-  );
+  if (publication?.verified) {
+    assert.equal(publication.partialEvidence, undefined);
+    assert.doesNotThrow(
+      () => assertEvidence([publication], "verified", "Operational evidence")
+    );
+  } else {
+    assert.equal(publication?.evidence, null);
+    assert.equal(
+      publication?.partialEvidence,
+      "ops/release/evidence/payg-privacy-runtime-binding-readiness-2026-09-01.json"
+    );
+  }
   assert.deepEqual(publication?.supportingEvidence, [
     decisions[0].evidence,
     "ops/release/evidence/payg-privacy-notice-owner-approval-2026-09-01.json",
   ]);
 });
 
-test("live Stripe delivery backlog remains an explicit release blocker", () => {
+test("live Stripe delivery backlog has pending or completed evidence", () => {
   const readiness = JSON.parse(fs.readFileSync(
     path.join(root, "ops/release/conditioning-payg-readiness.json"),
     "utf8"
@@ -134,7 +251,13 @@ test("live Stripe delivery backlog remains an explicit release blocker", () => {
   const blocker = readiness.operationalEvidence.find(
     ({id}) => id === "live-stripe-delivery-backlog-cleared"
   );
-  assert.equal(blocker?.verified, false);
+  if (blocker?.verified) {
+    assert.equal(blocker.partialEvidence, undefined);
+    assert.doesNotThrow(
+      () => assertEvidence([blocker], "verified", "Operational evidence")
+    );
+    return;
+  }
   assert.equal(blocker?.evidence, null);
   const pending = JSON.parse(fs.readFileSync(
     path.join(root, blocker.partialEvidence),
