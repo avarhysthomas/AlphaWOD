@@ -296,11 +296,15 @@ it ignores the migration's unrelated access fields but aborts before archiving
 or clearing if any waiver field was added, removed, or changed. Firestore then
 retries/aborts the transaction if the profile changes again before commit. An
 already-present quarantine document must also exactly match the audited payload.
-The only rerun exception is a minimally validated, server-only legacy quarantine
+One rerun exception accepts a minimally validated, server-only legacy quarantine
 when the live profile has no legacy detail fields and its two markers exactly
-match a fully validated canonical current-version acceptance. Full or incomplete
-live legacy evidence still requires exact quarantine equality, so the migration
-never clears those profiles behind conflicting archived evidence.
+match a fully validated canonical current-version acceptance. A second,
+preservation-only exception handles a marker-only profile whose version matches
+an existing richer valid legacy quarantine but whose timestamp conflicts: the
+richer quarantine remains unchanged, the exact marker evidence is created at
+the deterministic `__legacy__phase0_marker_conflict` record, and only then are
+the non-authoritative profile markers cleared. All other full, incomplete, or
+conflicting live evidence still requires exact quarantine equality.
 
 ### 7. Create the four new hardened callables, then re-block them
 

@@ -15,6 +15,7 @@ const {
   currentAuthOnlyClaims,
   currentProfileApplyState,
   desiredHistoricalAccess,
+  isPreservableLegacyMarkerConflict,
   isProvenLegacyWaiverCleanupRerun,
   isValidLegacyWaiverQuarantine,
   legacyWaiverFieldSnapshot,
@@ -488,6 +489,72 @@ test(
       canonicalMarkerOnlyProfile,
       canonical,
       {...fullLegacyArchive, eligibleAsAuthoritative: true}
+    ), false);
+  }
+);
+
+test(
+  "a mismatched marker is preserved separately from a richer quarantine",
+  () => {
+    const profileAcceptedAt = {seconds: 2, nanoseconds: 0};
+    const archivedAcceptedAt = {seconds: 1, nanoseconds: 0};
+    const profile = {
+      waiverAcceptedVersion: "legacy-v1",
+      waiverAcceptedAt: profileAcceptedAt,
+    };
+    const markerEvidence = {
+      acceptanceSchemaVersion: 1,
+      userId: "uid-1",
+      source: "legacy_user_doc_migration",
+      evidenceStatus: "legacy_client_marker_unverified",
+      eligibleAsAuthoritative: false,
+      suppliedFields: {
+        waiverAcceptedVersion: "legacy-v1",
+        waiverAcceptedAt: profileAcceptedAt,
+      },
+    };
+    const richerQuarantine = {
+      acceptanceSchemaVersion: 1,
+      userId: "uid-1",
+      version: "legacy-v1",
+      acceptedAt: archivedAcceptedAt,
+      acceptedName: "Legacy Member",
+      acknowledgements: ["legacy acknowledgement"],
+      mediaConsent: false,
+      source: "legacy_user_doc_migration",
+      evidenceStatus: "legacy_client_record_unverified",
+      eligibleAsAuthoritative: false,
+    };
+
+    assert.equal(isPreservableLegacyMarkerConflict(
+      "uid-1", profile, markerEvidence, richerQuarantine
+    ), true);
+    assert.equal(isPreservableLegacyMarkerConflict(
+      "uid-1", profile, markerEvidence,
+      {...richerQuarantine, acceptedAt: profileAcceptedAt}
+    ), false);
+    assert.equal(isPreservableLegacyMarkerConflict(
+      "uid-1", profile,
+      {
+        ...markerEvidence,
+        suppliedFields: {
+          ...markerEvidence.suppliedFields,
+          waiverAcceptedName: "Unexpected detail",
+        },
+      },
+      richerQuarantine
+    ), false);
+    assert.equal(isPreservableLegacyMarkerConflict(
+      "uid-1", {...profile, waiverAcceptedEmail: "member@example.test"},
+      markerEvidence, richerQuarantine
+    ), false);
+    assert.equal(isPreservableLegacyMarkerConflict(
+      "uid-1", profile, markerEvidence,
+      {...richerQuarantine, version: "other-version"}
+    ), false);
+    assert.equal(isPreservableLegacyMarkerConflict(
+      "uid-1", profile, markerEvidence,
+      {...richerQuarantine, userId: "other-user"}
     ), false);
   }
 );

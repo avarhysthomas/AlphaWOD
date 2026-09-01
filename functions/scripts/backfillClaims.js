@@ -590,6 +590,33 @@ function isProvenLegacyWaiverCleanupRerun(
     isValidLegacyWaiverQuarantine(userId, quarantine);
 }
 
+function isPreservableLegacyMarkerConflict(
+  userId,
+  profile,
+  auditedEvidence,
+  quarantine
+) {
+  const suppliedFields = auditedEvidence?.suppliedFields;
+  const suppliedKeys = suppliedFields && typeof suppliedFields === "object" &&
+    !Array.isArray(suppliedFields) ? Object.keys(suppliedFields).sort() : [];
+  const markerKeys = [...LEGACY_WAIVER_MARKER_FIELDS].sort();
+  return auditedEvidence?.evidenceStatus ===
+      "legacy_client_marker_unverified" &&
+    isValidLegacyWaiverQuarantine(userId, auditedEvidence) &&
+    suppliedKeys.length === markerKeys.length &&
+    suppliedKeys.every((key, index) => key === markerKeys[index]) &&
+    presentFields(profile, LEGACY_WAIVER_DETAIL_FIELDS).length === 0 &&
+    profile.waiverAcceptedVersion === suppliedFields.waiverAcceptedVersion &&
+    firestoreValueEquals(
+      profile.waiverAcceptedAt,
+      suppliedFields.waiverAcceptedAt
+    ) &&
+    quarantine?.evidenceStatus === "legacy_client_record_unverified" &&
+    isValidLegacyWaiverQuarantine(userId, quarantine) &&
+    profile.waiverAcceptedVersion === quarantine.version &&
+    !firestoreValueEquals(profile.waiverAcceptedAt, quarantine.acceptedAt);
+}
+
 async function loadCanonicalCurrentWaivers(db, userIds) {
   const results = new Map();
   const refs = userIds.map((userId) => db.collection("waiverAcceptances")
@@ -917,12 +944,20 @@ async function main({credential} = {}) {
     for (const waiver of waiverOperations) {
       const quarantineRef = db.collection("waiverAcceptances")
         .doc(`${waiver.userId}__legacy__phase0`);
+      const markerConflictRef = db.collection("waiverAcceptances")
+        .doc(`${waiver.userId}__legacy__phase0_marker_conflict`);
       const canonicalRef = db.collection("waiverAcceptances")
         .doc(`${waiver.userId}__${CURRENT_WAIVER_VERSION}`);
       await db.runTransaction(async (tx) => {
-        const [currentUser, existingQuarantine, canonicalSnapshot] = await Promise.all([
+        const [
+          currentUser,
+          existingQuarantine,
+          existingMarkerConflict,
+          canonicalSnapshot,
+        ] = await Promise.all([
           tx.get(waiver.userRef),
           tx.get(quarantineRef),
+          tx.get(markerConflictRef),
           tx.get(canonicalRef),
         ]);
         if (!currentUser.exists || !legacyWaiverFieldsMatch(
@@ -941,22 +976,46 @@ async function main({credential} = {}) {
           waiver.userId,
           canonicalAcceptance
         );
+        let preserveMarkerConflict = false;
         if (existingQuarantine.exists && !firestoreValueEquals(
           existingQuarantine.data(),
           waiver.evidence
-        ) && !isProvenLegacyWaiverCleanupRerun(
-          waiver.userId,
-          currentUserData,
-          canonicalAcceptance,
-          existingQuarantine.data()
         )) {
-          throw new Error(
-            `Legacy waiver quarantine changed concurrently for ${waiver.userId}. ` +
-            "Stop and re-audit before applying."
+          const provenRerun = isProvenLegacyWaiverCleanupRerun(
+            waiver.userId,
+            currentUserData,
+            canonicalAcceptance,
+            existingQuarantine.data()
           );
+          preserveMarkerConflict = isPreservableLegacyMarkerConflict(
+            waiver.userId,
+            currentUserData,
+            waiver.evidence,
+            existingQuarantine.data()
+          );
+          if (!provenRerun && !preserveMarkerConflict) {
+            throw new Error(
+              `Legacy waiver quarantine changed concurrently for ${waiver.userId}. ` +
+              "Stop and re-audit before applying."
+            );
+          }
         }
         if (!existingQuarantine.exists) {
           tx.create(quarantineRef, waiver.evidence);
+        }
+        if (preserveMarkerConflict) {
+          if (existingMarkerConflict.exists && !firestoreValueEquals(
+            existingMarkerConflict.data(),
+            waiver.evidence
+          )) {
+            throw new Error(
+              `Legacy waiver marker-conflict archive changed concurrently for ` +
+              `${waiver.userId}. Stop and re-audit before applying.`
+            );
+          }
+          if (!existingMarkerConflict.exists) {
+            tx.create(markerConflictRef, waiver.evidence);
+          }
         }
         const markerPatch = canonicalMarker || {
           waiverAcceptedVersion: admin.firestore.FieldValue.delete(),
@@ -1043,6 +1102,7 @@ module.exports = {
   currentProfileApplyState,
   desiredHistoricalAccess,
   isProvenLegacyWaiverCleanupRerun,
+  isPreservableLegacyMarkerConflict,
   isValidLegacyWaiverQuarantine,
   legacyWaiverFieldSnapshot,
   legacyWaiverFieldsMatch,
