@@ -18,6 +18,10 @@ production project
 
 ## One-time local setup
 
+The browser harness requires macOS or Linux because its complete child-tree
+cleanup relies on POSIX process groups. It fails closed on Windows instead of
+risking leaving Firebase emulator descendants running.
+
 From the repository root:
 
 ```sh
@@ -86,12 +90,49 @@ Price before starting. It cannot select PAYG or silently widen to another
 membership plan; `npm run stripe:test` continues to require the complete test
 catalogue and all shared offers.
 
-That single command builds Functions, starts a real Stripe test-mode listener,
-runs the read-only catalogue/Portal preflight, starts Auth, Firestore and
-Functions emulators in `demo-alphawod-stripe`, and finally starts the frontend
-on the fixed test port. Provider credentials are redacted from output, are never
-passed to the browser process and are not written by the runner. Press Ctrl-C
-once to stop the whole stack.
+To exercise the anonymous PAYG browser journey against the exact £7 Stripe
+sandbox Product and Price, start the stack in **Terminal 1**:
+
+```bash
+npm run stripe:test:payg
+```
+
+That command builds Functions, starts a real Stripe test-mode listener, runs
+the read-only PAYG catalogue preflight, starts Auth, Firestore and Functions
+emulators in `demo-alphawod-stripe`, and finally starts the frontend on the
+fixed test port. Keep Terminal 1 and the stack running throughout Checkout and
+verification.
+
+This scope loads only the owner-approved immutable PAYG documents into the
+isolated emulator process, creates three random in-memory abuse/cancellation
+secrets, and seeds one future class into local Firestore. It opens only the
+local PAYG gate; production gates and production Firebase data are untouched.
+Because Firebase's emulator gives `.env.local` precedence for non-secret
+parameters, the runner installs an exclusively locked, journalled, non-secret
+PAYG overlay there for the life of the process. It recovers an interrupted
+prior overlay and restores the original file byte-for-byte when it stops,
+provided no operator has edited the active overlay. Provider and abuse-control
+secrets remain process-memory-only.
+The frontend is available at `http://localhost:3002/pay-as-you-go`. The Stripe
+CLI forwards the real test-mode webhook back to the local Function. Email
+delivery stays disabled: fulfilment may create a local confirmation outbox row,
+but the runner cannot send it to Resend. Firebase and child-process debug logs
+are confined to a private temporary runtime directory and removed on shutdown.
+
+After Stripe returns to the local success page, verify the exact Session,
+PaymentIntent, one-time Product and Price, £7 total, seeded class and capacity
+counts, webhook-created guest booking, approved legal receipt, zero Auth
+accounts and disabled-email outbox. While Terminal 1 is still running, use
+**Terminal 2**:
+
+```bash
+npm run verify:stripe-test-payg-journey --prefix functions -- \
+  --session=cs_test_...
+```
+
+Only after the verifier passes should you return to Terminal 1 and press Ctrl-C
+once to stop the whole stack. Provider credentials are redacted from output,
+are never passed to the browser process and are not written by the runner.
 
 The preflight retrieves every configured Price and expanded Product from Stripe
 and checks test mode, active state, Product name, GBP amount and monthly
@@ -186,6 +227,43 @@ forever family Coupon and expected recurring total. Also inspect the emulator
 intent, membership and confirmation outbox for every participant name, the
 matching count, frozen discount schedule and accepted statements. Do not cite
 the existing verifier alone as evidence of the family offer.
+
+## Recorded partial browser evidence — 1 September 2026
+
+The exact Conditioning test Session
+`cs_test_a1SfbXmndUQS5DBMWcx95iFdk2xXLU2tucJO7DzhERuGDuIQB69oanwIXj`
+and Subscription `sub_1UAroiFzNDZoGGA04ISXiiwj` were read back as a paid,
+active £30 `adult_conditioning` membership with limited app access and the
+flexible two-class weekly allowance. A later app-only browser rerun used a
+local emulator fixture bound to those verified references; it did not contact
+Stripe or create or change another provider object.
+
+That browser rerun showed the current
+`ZAF-ADULT-WAIVER-2026-08-23-01` marker and retained exactly its one required
+acknowledgement. It booked Thursday A and Friday C, blocked a third eligible
+class in the same Europe/London week, cancelled Friday C with capacity and
+quota released, and booked Friday D as the replacement. The final emulator
+readback contained active Thursday A and Friday D bookings, cancelled Friday C,
+and `bookedCount=2` bound to the two active fixtures; every observed unbooked
+candidate remained at zero. Schedule, Profile and Membership remained
+available, while Dashboard, Training and Leaderboard each rendered
+`Not included`.
+
+The earlier real PAYG browser journey used test Session
+`cs_test_a1xQ0XbmZ4PBZ95tdA0plOVJinI7RcSVnMg7X8i90v7CF78gEfLB6roPe2`
+and the approved £7 one-time test Price. It required no AlphaWOD account, and
+the local readback confirmed an order and a `payg_guest` booking. Its
+confirmation outbox stayed `pending`; email delivery was disabled. No
+production write occurred.
+
+The PII-free durable records are
+`ops/release/evidence/conditioning-stripe-test-and-local-browser-2026-09-01.json`
+and
+`ops/release/evidence/payg-stripe-test-browser-purchase-2026-09-01.json`.
+They are partial evidence only. Neither proves delivered email, PAYG refund or
+dispute convergence, the ordered whole-class cancellation operations drill,
+synthetic alert acknowledgement by named responders, live backlog clearance,
+deployment or production legal publication.
 
 ## Historical provider baseline — 19 August 2026
 

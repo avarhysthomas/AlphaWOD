@@ -4,16 +4,24 @@
   "recordedAt": "2026-09-01",
   "engineeringReady": true,
   "launchReady": false,
-  "privacyNoticeApproved": false,
+  "privacyNoticeApproved": true,
   "productionPurchaseGatesRemainClosed": true,
   "deploymentAuthorized": false,
   "customerPiiRecorded": false,
-  "draft": {
+  "sourceDraft": {
     "version": "ZAF-PAYG-PRIVACY-NOTICE-DRAFT-2026-09-01-01",
     "path": "public/legal/product-drafts/ZAF-PAYG-PRIVACY-NOTICE-DRAFT-2026-09-01-01.txt",
     "bytes": 13622,
     "sha256": "b337333f2d7439ac011633add9a30f659f912bf8577084cd95630edf8ebddba0"
   },
+  "approvedFinal": {
+    "version": "ZAF-PAYG-PRIVACY-NOTICE-2026-09-01-01",
+    "path": "public/legal/products/ZAF-PAYG-PRIVACY-NOTICE-2026-09-01-01.txt",
+    "publicUrl": "/legal/products/ZAF-PAYG-PRIVACY-NOTICE-2026-09-01-01.txt",
+    "bytes": 13220,
+    "sha256": "6091e9d8259815928da440528d1cea12a4703f691c00bfa6aa43c60fb8450377"
+  },
+  "ownerApprovalEvidence": "ops/release/evidence/payg-privacy-notice-owner-approval-2026-09-01.json",
   "requiredEnvironmentParameters": [
     "PAYG_PRIVACY_NOTICE_VERSION",
     "PAYG_PRIVACY_NOTICE_PUBLIC_URL",
@@ -28,5 +36,5 @@
     "durable-presented-notice-evidence",
     "missing-or-stale-notice-fails-closed"
   ],
-  "releaseBoundary": "The draft is not publication evidence. PAYG legal resolution and checkout fail closed until one approved immutable Privacy Notice version, URL and SHA-256 are configured together and all operational gates pass."
+  "releaseBoundary": "Owner approval and the immutable final candidate are recorded. PAYG legal resolution and checkout still fail closed until the final URL is deployed, its bytes are read back, the exact version/URL/SHA-256 production binding is verified and every operational gate passes."
 }

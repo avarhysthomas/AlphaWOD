@@ -21,15 +21,20 @@ const PUBLICATION_DIRECTORY = path.join(
   "products"
 );
 const MANIFEST_PATH = path.join(PUBLICATION_DIRECTORY, "manifest.json");
-const EXPECTED_DOCUMENT_KEYS = [
+const PRODUCT_TERMS_DOCUMENT_KEYS = Object.freeze([
   "adultConditioningAddendum",
   "paygTerms",
   "paygWaiver",
-];
+]);
+const EXPECTED_DOCUMENT_KEYS = Object.freeze([
+  ...PRODUCT_TERMS_DOCUMENT_KEYS,
+  "paygPrivacyNotice",
+]);
 const DECISION_ID_BY_DOCUMENT_KEY = Object.freeze({
   adultConditioningAddendum: "adult-conditioning-product-terms",
   paygTerms: "payg-product-terms",
   paygWaiver: "payg-waiver",
+  paygPrivacyNotice: "payg-privacy-notice",
 });
 const PRIVACY_RUNTIME_EVIDENCE_PATH = path.join(
   REPOSITORY_ROOT,
@@ -73,6 +78,20 @@ const REQUIRED_COPY = {
     /death or personal injury caused by negligence/,
     /2,190 days after the scheduled class end/,
   ],
+  paygPrivacyNotice: [
+    /No account is required or created/,
+    /mobile number is optional/i,
+    /urgent operational contact about that class/,
+    /30 days after the checkout expires/,
+    /90 days after the scheduled class end/,
+    /2,190 days after the scheduled class end/,
+    /Stripe, payment networks, banks and payment-method providers/,
+    /Google Firebase and Google Cloud/,
+    /Vercel for website delivery/,
+    /Resend for essential transactional email delivery/,
+    /RIGHT TO OBJECT/,
+    /Information Commissioner's Office \(ICO\)/,
+  ],
 };
 
 function sha256(bytes) {
@@ -87,7 +106,7 @@ function assertCanonicalFinalDocument(directory, key, entry, draftEntry) {
   if (!entry || typeof entry !== "object" || !draftEntry) {
     throw new Error(`Approved product document ${key} is missing.`);
   }
-  const expectedRuntimeEligibility = key === "adultConditioningAddendum";
+  const expectedRuntimeEligibility = true;
   if (entry.approvedForPublication !== true ||
     entry.runtimeEligible !== expectedRuntimeEligibility) {
     throw new Error(
@@ -162,7 +181,7 @@ function assertOwnerApprovalEvidence(
     throw new Error("Product legal approval evidence path is invalid.");
   }
   const evidence = readJson(evidencePath);
-  const expectedReview = EXPECTED_DOCUMENT_KEYS.map((key) => {
+  const expectedReview = PRODUCT_TERMS_DOCUMENT_KEYS.map((key) => {
     const entry = draftManifest.documents[key];
     return {
       decision: DECISION_ID_BY_DOCUMENT_KEY[key],
@@ -171,7 +190,7 @@ function assertOwnerApprovalEvidence(
       sha256: entry.sha256,
     };
   });
-  const expectedFinal = EXPECTED_DOCUMENT_KEYS.map((key) => {
+  const expectedFinal = PRODUCT_TERMS_DOCUMENT_KEYS.map((key) => {
     const entry = manifest.documents[key];
     return {
       decision: DECISION_ID_BY_DOCUMENT_KEY[key],
@@ -197,6 +216,96 @@ function assertOwnerApprovalEvidence(
   }
 }
 
+function assertPrivacyOwnerApprovalEvidence(
+  manifest,
+  repositoryRoot = REPOSITORY_ROOT,
+  draftManifest = readDraftManifest()
+) {
+  const relativeEvidencePath = manifest.privacyApprovalEvidence || "";
+  const evidencePath = path.resolve(repositoryRoot, relativeEvidencePath);
+  const evidenceRoot = `${path.join(repositoryRoot, "ops", "release", "evidence")}${path.sep}`;
+  if (!evidencePath.startsWith(evidenceRoot) || !fs.existsSync(evidencePath)) {
+    throw new Error("PAYG Privacy Notice approval evidence path is invalid.");
+  }
+  const evidence = readJson(evidencePath);
+  const source = draftManifest.documents?.paygPrivacyNotice;
+  const final = manifest.documents?.paygPrivacyNotice;
+  const expectedReview = {
+    decision: DECISION_ID_BY_DOCUMENT_KEY.paygPrivacyNotice,
+    version: source?.version,
+    bytes: source?.bytes,
+    sha256: source?.sha256,
+  };
+  const expectedFinal = {
+    decision: DECISION_ID_BY_DOCUMENT_KEY.paygPrivacyNotice,
+    version: final?.version,
+    bytes: final?.bytes,
+    sha256: final?.sha256,
+  };
+  if (evidence.schemaVersion !== 1 || evidence.approved !== true ||
+    evidence.decisionId !== "payg-privacy-notice-owner-approval" ||
+    evidence.approvedByRole !== "business-owner" ||
+    JSON.stringify(evidence.approvedReviewDocument) !==
+      JSON.stringify(expectedReview) ||
+    JSON.stringify(evidence.approvedFinalPublicationCandidate) !==
+      JSON.stringify(expectedFinal) ||
+    evidence.customerFacingSectionsUnchanged !== true ||
+    JSON.stringify(evidence.customerFacingSectionsByteEvidence) !==
+      JSON.stringify({
+        startMarker: "1. How this addendum works\n",
+        bytes: 13059,
+        sourceDraftSha256:
+          "e4180eb07e52af8cb768898a86d10eac0b7b2fbce6624dd00469cd8a8ea68f0d",
+        finalSha256:
+          "e4180eb07e52af8cb768898a86d10eac0b7b2fbce6624dd00469cd8a8ea68f0d",
+      }) ||
+    JSON.stringify(evidence.approvedRetentionScheduleDays) !== JSON.stringify({
+      abandonedOrExpiredUnpaidCheckout: 30,
+      confirmedCancelledOrRefundedOrder: 90,
+      paygWaiver: 2190,
+    }) ||
+    evidence.optionalPhoneRestrictedToUrgentClassOperations !== true ||
+    evidence.customerPiiRecorded !== false ||
+    evidence.runtimePublicationComplete !== false ||
+    evidence.deploymentAuthorized !== false ||
+    evidence.productionPurchaseGatesRemainClosed !== true) {
+    throw new Error("PAYG Privacy Notice owner-approval evidence is stale or unsafe.");
+  }
+
+  const sourceBytes = fs.readFileSync(path.join(
+    repositoryRoot,
+    "public",
+    "legal",
+    "product-drafts",
+    source.filename
+  ));
+  const finalBytes = fs.readFileSync(path.join(
+    repositoryRoot,
+    "public",
+    "legal",
+    "products",
+    final.filename
+  ));
+  if (sourceBytes.length !== source.bytes || sha256(sourceBytes) !== source.sha256 ||
+    finalBytes.length !== final.bytes || sha256(finalBytes) !== final.sha256) {
+    throw new Error("PAYG Privacy Notice owner approval lost its byte binding.");
+  }
+  const bodyMarker = Buffer.from("1. How this addendum works\n", "utf8");
+  const sourceBodyIndex = sourceBytes.indexOf(bodyMarker);
+  const finalBodyIndex = finalBytes.indexOf(bodyMarker);
+  const sourceBody = sourceBytes.subarray(sourceBodyIndex);
+  const finalBody = finalBytes.subarray(finalBodyIndex);
+  if (sourceBodyIndex < 0 || finalBodyIndex < 0 ||
+    sourceBody.length !== 13059 || !sourceBody.equals(finalBody) ||
+    sha256(sourceBody) !==
+      evidence.customerFacingSectionsByteEvidence.sourceDraftSha256 ||
+    sha256(finalBody) !== evidence.customerFacingSectionsByteEvidence.finalSha256) {
+    throw new Error(
+      "PAYG Privacy Notice final changed approved customer-facing sections."
+    );
+  }
+}
+
 function readDotenv(filePath) {
   return Object.fromEntries(fs.readFileSync(filePath, "utf8")
     .split("\n")
@@ -214,9 +323,12 @@ function assertPrivacyRuntimeEngineeringReadiness(
   repositoryRoot = REPOSITORY_ROOT
 ) {
   const privacyDraft = draftManifest.documents?.paygPrivacyNotice;
+  const privacyFinal = manifest.documents?.paygPrivacyNotice;
   if (!privacyDraft || privacyDraft.approvedForPublication !== false ||
     privacyDraft.runtimeEligible !== false ||
-    manifest.ownerDecisions?.paygPrivacyNoticeApproved !== false) {
+    !privacyFinal || privacyFinal.approvedForPublication !== true ||
+    privacyFinal.runtimeEligible !== true ||
+    manifest.ownerDecisions?.paygPrivacyNoticeApproved !== true) {
     throw new Error(
       "PAYG Privacy Notice approval state must remain explicit and fail closed."
     );
@@ -232,6 +344,13 @@ function assertPrivacyRuntimeEngineeringReadiness(
     bytes: privacyDraft.bytes,
     sha256: privacyDraft.sha256,
   };
+  const expectedFinal = {
+    version: privacyFinal.version,
+    path: `public/legal/products/${privacyFinal.filename}`,
+    publicUrl: privacyFinal.publicUrl,
+    bytes: privacyFinal.bytes,
+    sha256: privacyFinal.sha256,
+  };
   const expectedControls = [
     "required-runtime-parameters",
     "public-schedule-privacy-notice-projection",
@@ -245,9 +364,11 @@ function assertPrivacyRuntimeEngineeringReadiness(
     evidence.evidenceType !==
       "payg-privacy-notice-runtime-binding-engineering-readiness" ||
     evidence.engineeringReady !== true || evidence.launchReady !== false ||
-    evidence.privacyNoticeApproved !== false ||
+    evidence.privacyNoticeApproved !== true ||
     evidence.productionPurchaseGatesRemainClosed !== true ||
-    JSON.stringify(evidence.draft) !== JSON.stringify(expectedDraft) ||
+    JSON.stringify(evidence.sourceDraft) !== JSON.stringify(expectedDraft) ||
+    JSON.stringify(evidence.approvedFinal) !== JSON.stringify(expectedFinal) ||
+    evidence.ownerApprovalEvidence !== manifest.privacyApprovalEvidence ||
     JSON.stringify(evidence.requiredEnvironmentParameters) !==
       JSON.stringify(PAYG_PRIVACY_ENV_KEYS) ||
     JSON.stringify(evidence.verifiedControls) !==
@@ -314,9 +435,9 @@ function assertRuntimeBindings(manifest, repositoryRoot = REPOSITORY_ROOT) {
     PAYG_WAIVER_VERSION: waiver.version,
     PAYG_WAIVER_PUBLIC_URL: waiver.publicUrl,
     PAYG_WAIVER_SHA256: waiver.sha256,
-    PAYG_PRIVACY_NOTICE_VERSION: "",
-    PAYG_PRIVACY_NOTICE_PUBLIC_URL: "",
-    PAYG_PRIVACY_NOTICE_SHA256: "",
+    PAYG_PRIVACY_NOTICE_VERSION: manifest.documents.paygPrivacyNotice.version,
+    PAYG_PRIVACY_NOTICE_PUBLIC_URL: manifest.documents.paygPrivacyNotice.publicUrl,
+    PAYG_PRIVACY_NOTICE_SHA256: manifest.documents.paygPrivacyNotice.sha256,
   };
   for (const [name, value] of Object.entries(expected)) {
     if (production[name] !== value) {
@@ -381,7 +502,7 @@ function verifyApprovedProductLegalDocuments({
   if (decisions?.conditioningCommercialTermsApproved !== true ||
     decisions.paygSpecificDateLeisureExceptionConfirmed !== true ||
     decisions.paygTermsApproved !== true || decisions.paygWaiverApproved !== true ||
-    decisions.paygPrivacyNoticeApproved !== false ||
+    decisions.paygPrivacyNoticeApproved !== true ||
     decisions.paygOrderPiiRetentionDays !== 90 ||
     decisions.paygWaiverPiiRetentionDays !== 2190 ||
     decisions.paygEmailPiiRetentionDays !== 90 ||
@@ -390,11 +511,15 @@ function verifyApprovedProductLegalDocuments({
     decisions.paygRedactionImplementationAccepted !== true) {
     throw new Error("Approved product owner decisions are incomplete.");
   }
-  if (!Array.isArray(manifest.runtimeBlockers) || manifest.runtimeBlockers.length !== 2 ||
-    !manifest.runtimeBlockers.some((blocker) => /PAYG Privacy Notice/.test(blocker))) {
+  if (!Array.isArray(manifest.runtimeBlockers) || manifest.runtimeBlockers.length !== 1 ||
+    !manifest.runtimeBlockers.some((blocker) =>
+      /deployed, bound in production configuration and read back byte-for-byte/.test(
+        blocker
+      ))) {
     throw new Error("Product legal runtime blockers are incomplete.");
   }
   assertOwnerApprovalEvidence(manifest, repositoryRoot, draftManifest);
+  assertPrivacyOwnerApprovalEvidence(manifest, repositoryRoot, draftManifest);
   assertPrivacyRuntimeEngineeringReadiness(
     manifest,
     draftManifest,
@@ -414,10 +539,12 @@ function main() {
       `sha256 ${document.sha256}`
     );
   }
-  console.log("- Runtime eligibility: false; all product purchase gates remain closed");
   console.log(
-    "- PAYG Privacy Notice runtime binding: engineered and fail-closed; " +
-    "final owner approval/publication remains required"
+    "- Bundle runtime eligibility: false; all product purchase gates remain closed"
+  );
+  console.log(
+    "- PAYG Privacy Notice: owner-approved immutable final candidate; " +
+    "production publication/readback remains required"
   );
 }
 
@@ -437,6 +564,7 @@ module.exports = {
   PRIVACY_RUNTIME_EVIDENCE_PATH,
   PUBLICATION_DIRECTORY,
   assertOwnerApprovalEvidence,
+  assertPrivacyOwnerApprovalEvidence,
   assertPrivacyRuntimeEngineeringReadiness,
   verifyApprovedProductLegalDocuments,
 };

@@ -165,10 +165,10 @@ npm run verify:approved-product-legal
 ```
 
 The Adult Conditioning addendum is bound into the immutable membership
-checkout/confirmation registry. The approved PAYG terms and waiver have final
-same-origin URLs and digests in the closed production configuration. PAYG
-remains runtime-ineligible until an approved customer-facing PAYG Privacy
-Notice exists and the complete final bundle is deployed and read back
+checkout/confirmation registry. The approved PAYG terms, waiver and Privacy
+Notice have final same-origin URLs and digests in the closed production
+configuration template. PAYG remains closed until the complete final bundle is
+deployed, bound in the actual production configuration and read back
 byte-for-byte. Legal approval does not itself open a purchase gate.
 
 Run the offline release-candidate gate first:
@@ -185,6 +185,19 @@ owner decisions or external operational proofs in
 `ops/release/conditioning-payg-readiness.json` are still pending. Do not replace
 evidence with an unsupported `true` value.
 
+The 1 September browser and emulator reruns are retained as partial, PII-free
+evidence in
+`ops/release/evidence/conditioning-stripe-test-and-local-browser-2026-09-01.json`
+and
+`ops/release/evidence/payg-stripe-test-browser-purchase-2026-09-01.json`.
+They prove the paid/active £30 Conditioning test readback, the current adult
+waiver acknowledgement, limited navigation, two-per-week block/cancel/rebook
+behavior, and the prior £7 no-account PAYG purchase through a local
+`payg_guest` booking. Both confirmation outboxes remained `pending` with email
+delivery disabled. They do not close either end-to-end journey gate, the
+whole-class cancellation/refund drill, alert acknowledgement, live delivery
+backlog, deployment or publication gates.
+
 Before either gate is opened:
 
 The Stripe test catalogue can be checked without opening Checkout or creating
@@ -196,11 +209,12 @@ the default full-catalogue preflight remains the release-wide drift check.
 1. Publish and verify the approved product-specific legal wording. The owner
    approval is recorded in
    `ops/release/evidence/product-terms-owner-approval-2026-09-01.json`. The
-   Conditioning addendum and PAYG terms/waiver have separate final IDs, but the
-   PAYG customer-facing Privacy Notice is still awaiting approved final bytes.
+   Conditioning addendum, PAYG terms/waiver and PAYG Privacy Notice have
+   separate final IDs. Privacy approval is recorded in
+   `ops/release/evidence/payg-privacy-notice-owner-approval-2026-09-01.json`.
    Deploy the completed bundle with purchase closed, read every immutable URL
    back byte-for-byte, then attach durable publication evidence. Approval of
-   product terms does not by itself set any runtime gate.
+   product terms or privacy wording does not by itself set any runtime gate.
 2. Run the production configuration verifier and read-only Stripe live catalogue
    verifier against the exact environment that will be deployed. With gates
    closed, use `npm run verify:production-config --prefix functions`. Once the

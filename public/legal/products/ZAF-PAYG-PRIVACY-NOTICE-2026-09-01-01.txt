@@ -1,0 +1,175 @@
+PAYG Privacy Notice Addendum
+
+Adult account-free Pay As You Go class bookings
+
+VERSION DATE
+1 September 2026
+
+DOCUMENT ID
+ZAF-PAYG-PRIVACY-NOTICE-2026-09-01-01
+
+1. How this addendum works
+
+This addendum explains the personal-information processing that is specific to an adult Pay As You Go (PAYG) class booking. It supplements the Zero Alpha Fitness Privacy Notice, document ID ZAF-PRIVACY-2026-08-25-02. The general Notice continues to apply to website security, support and privacy requests and any other processing not changed by this addendum.
+
+This addendum is privacy information. It is not consent to marketing, photography, video or any optional use, and it does not remove any data-protection right.
+
+2. Controller and contact details
+
+ZERO ALPHA FITNESS LTD, a company registered in England and Wales under company number 15978998, trading as Zero Alpha Fitness, is the controller of the personal information described here.
+
+Registered office: 18 Bryngwyn Bach, Llanelli, United Kingdom, SA14 8SH.
+
+Public trading and contact address: Unit 3, Felinfoel Business Hub, Llanelli, SA14 8BE.
+
+Privacy and rights contact: support@zeroalphafitness.co.uk.
+
+Website: https://alpha-wod.vercel.app/.
+
+3. Checkout short-form notice
+
+Zero Alpha Fitness uses the attendee's full name, date of birth and email address, the selected class and the booking, payment and acceptance record to check adult eligibility, administer the named place, take payment through Stripe, send essential service messages, manage cancellation or refund requests and keep proportionate transaction, safety and legal evidence. These fields are required to request the booking. A mobile number is optional and, if supplied, is used only for urgent operational contact about that class unless another purpose is separately explained. No account is required or created. Marketing is not part of the PAYG purchase.
+
+4. Information used for PAYG
+
+Required identity, eligibility and contact information
+
+• The named adult attendee's full name, date of birth and email address.
+
+• The selected class, including its identifier, title, date, start and end time, location and capacity status.
+
+Optional contact information
+
+• A mobile number. Leaving it blank does not prevent checkout. If supplied, it is used only for urgent operational contact about the booked class, not for marketing, unless a separate lawful purpose is clearly explained.
+
+Booking, payment and agreement information
+
+• Checkout-attempt, capacity-hold, order, booking, cancellation, refund, dispute and attendance or no-show status; the £7 amount; relevant timestamps; and provider references.
+
+• The exact PAYG terms and waiver versions and SHA-256 digests, the acceptance statements and status, the named attendee, and the timestamp and evidence digest recorded for the acceptance.
+
+• Stripe Checkout, payment, charge, refund and dispute identifiers and limited payment-method information where Stripe makes it available. Stripe collects the payment credentials. The Zero Alpha application does not store full card or bank credentials.
+
+Communications, security and operational information
+
+• Confirmation and cancellation-message payloads while they are needed for delivery, provider delivery status, support correspondence and privacy requests.
+
+• Timestamps and proportionate security, fraud-prevention, duplicate-booking, capacity-integrity, error and audit information. Service providers may also record IP address, device or browser information in their security and operational logs as explained in the general Privacy Notice.
+
+The public PAYG form does not ask for an account password, free-text medical history, injury details, marketing permission or promotional-media consent.
+
+5. Where the information comes from
+
+• Directly from the attendee when they choose a class, complete the PAYG form, accept the terms and waiver, contact support or exercise a privacy right.
+
+• From Stripe about hosted Checkout, payment, refund and dispute events.
+
+• Automatically from the website, Firebase, hosting, transactional-email and security or operational systems.
+
+• From authorised staff when they administer the class, attendance, cancellation, safety issue, refund or support request.
+
+6. Purposes and lawful bases
+
+Contract and requested pre-contract steps
+
+We use the required identity, age, contact, selected-class, acceptance and payment information where it is necessary to take the checkout steps the attendee requests, form and administer the one-class contract, reserve and confirm the named place, send essential confirmation and cancellation information, take or refund payment and provide the class. We do not rely on contract where the purpose can reasonably be achieved with less information.
+
+Legitimate interests
+
+We use proportionate information where necessary to prevent duplicate or fraudulent bookings, protect class capacity, secure and recover the service, administer attendance and immediate safety, investigate inconsistent provider evidence, maintain evidence of what was agreed, handle complaints and establish, exercise or defend legal claims. Our interests are providing the paid class reliably and safely, protecting attendees and the business, preventing misuse and demonstrating the transaction. We balance those interests against the attendee's rights and use data minimisation, access limits, fixed redaction periods and human review as safeguards.
+
+If an optional mobile number is supplied, the legitimate interest is being able to make urgent operational contact about that booked class. The number is not required and is not used for marketing through this purpose.
+
+Legal obligation
+
+We use or disclose the minimum necessary information where a specific law requires company, accounting or transaction records, regulatory cooperation or another action.
+
+Vital interests
+
+Exceptionally, we may use or disclose the minimum necessary information to protect someone's life where the person cannot consent, for example in a genuine emergency.
+
+Consent and marketing
+
+Consent is not the basis for the core PAYG booking. Marketing and promotional media are outside this purchase and would require their own separate, lawful and optional process. A refusal does not affect the booking.
+
+7. Health and other special-category information
+
+DO NOT SUBMIT HEALTH OR INJURY DETAILS IN THE PUBLIC PAYG FORM
+
+If an attendee needs a reasonable adjustment or must share information for immediate safety, they should contact support@zeroalphafitness.co.uk before the class. Zero Alpha Fitness will provide a separate appropriate route and just-in-time privacy information if that information is genuinely necessary.
+
+Health information is special-category data. Before collecting it, Zero Alpha Fitness must identify both an Article 6 lawful basis and an Article 9 condition, minimise the information and access, and state the applicable retention rule. The ordinary PAYG terms or waiver checkbox is not blanket consent to use health information.
+
+8. Recipients and international transfers
+
+We share only what is reasonably necessary with:
+
+• Stripe, payment networks, banks and payment-method providers for hosted Checkout, payment authentication, fraud prevention, refunds and disputes. Stripe may act as a service provider and as an independent controller for some legal, network and fraud activities under its own notice.
+
+• Google Firebase and Google Cloud for the application, booking ledger, access control, scheduled redaction and operational recovery.
+
+• Vercel for website delivery, hosting and operational logs.
+
+• Resend for essential transactional email delivery.
+
+• Authorised Zero Alpha Fitness staff and contractors who need the information for their role.
+
+• Accountants, insurers, legal advisers, courts, regulators, law-enforcement bodies or emergency services where disclosure is lawful, necessary and appropriately protected.
+
+Some suppliers or their subprocessors may process information outside the UK. Where this is a restricted transfer, Zero Alpha Fitness uses an applicable UK adequacy regulation or an approved UK International Data Transfer Agreement or UK Addendum, together with any required transfer risk assessment and supplementary protections. An attendee may ask for information about the relevant safeguard.
+
+9. Automated booking and payment rules
+
+The PAYG service uses rules to place and release short-lived capacity holds, prevent a duplicate active place for the same attendee and class, confirm a booking after provider payment evidence, decide whether a cancellation meets the published 24-hour refund boundary, and place inconsistent payment or booking evidence into review. These rules use booking, time, capacity, acceptance and payment status rather than profiling an attendee's character.
+
+An attendee may contact support@zeroalphafitness.co.uk for an explanation, correction or human review of an incorrect or exceptional result.
+
+10. Retention and redaction
+
+The approved internal retention policy version is ZAF-PAYG-PII-RETENTION-2026-08-31-01. It requires scheduled, bounded and resumable removal or irreversible anonymisation of the following named fields:
+
+• Abandoned or expired unpaid checkout — attendee identity, contact details, acceptance fields, request fingerprint and hosted Checkout URL are removed or irreversibly anonymised 30 days after the checkout expires.
+
+• Confirmed, cancelled or refunded PAYG order — attendee identity, contact details and acceptance fields; transactional-email recipient, payload and last-error fields; and the guest-booking attendee name are removed or irreversibly anonymised 90 days after the scheduled class end.
+
+• PAYG waiver — attendee identity and acceptance fields are removed or irreversibly anonymised 2,190 days after the scheduled class end.
+
+A short-lived active transactional-email delivery lease may defer the relevant payload redaction only until that lease expires. The redaction worker must then retry. A live refund, dispute, complaint, fraud review, incident, insurance or safeguarding matter, or a legal hold may require only the relevant information to be retained longer. It must be reviewed and removed or irreversibly anonymised when that need ends.
+
+Minimum non-identifying provider, financial and order state, class snapshot, legal-version, evidence-digest, refund, dispute and audit information may remain where lawfully needed. General website security and technical logs are normally kept for no more than 12 months unless required for an incident, fraud review or claim. Support and privacy-request records are kept only while needed to handle the request, meet a legal obligation or manage a complaint or claim, using the criteria in the general Privacy Notice.
+
+An erasure request does not override a lawful need to retain a limited record. Where possible, evidence that must remain is separated from the live attendee identity.
+
+11. Security
+
+Zero Alpha Fitness uses proportionate technical and organisational measures, including access controls, separation of payment credentials from the application, App Check for purchase mutations, bounded provider recovery, audit evidence and scheduled PII redaction. No online service is risk-free. If a personal-data breach creates a legally reportable risk, Zero Alpha Fitness will notify the ICO and affected people as required.
+
+12. Rights
+
+Depending on the purpose, lawful basis and circumstances, an attendee may have the right to:
+
+• be informed and obtain access to their personal information;
+
+• correct inaccurate or incomplete information;
+
+• ask for erasure or restriction;
+
+• receive portable information where the legal conditions apply;
+
+• withdraw consent at any time where a separate optional activity relies on consent, without affecting earlier lawful use; and
+
+• obtain an explanation and request human review of a qualifying automated decision.
+
+Zero Alpha Fitness may need reasonable information to verify identity and authority before acting. Rights are not absolute and depend on the circumstances. An ordinary request is free, subject to the limited legal exceptions explained in the general Privacy Notice.
+
+RIGHT TO OBJECT
+
+An attendee may object to processing based on legitimate interests. Tell us what you object to and why by emailing support@zeroalphafitness.co.uk. We will stop unless we demonstrate compelling legitimate grounds that override the attendee's interests, rights and freedoms, or the processing is needed for legal claims. Direct marketing is not part of PAYG and would stop if an attendee objects to it.
+
+13. Complaints
+
+Send a privacy complaint to support@zeroalphafitness.co.uk or Unit 3, Felinfoel Business Hub, Llanelli, SA14 8BE. An attendee may also complain to the UK Information Commissioner's Office (ICO): https://ico.org.uk/make-a-complaint/data-protection-complaints/.
+
+14. Changes
+
+Zero Alpha Fitness will version and date this addendum. If a change materially affects how PAYG information is used, it will provide clear information before the new use where required. Earlier booking and acceptance evidence remains linked to the version provided at the relevant time.

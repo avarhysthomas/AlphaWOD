@@ -10,6 +10,7 @@
     "verify:stripe-test-conditioning-config": "npm run build && STRIPE_TEST_PLAN_SCOPE=adult_conditioning node --env-file=.env.local scripts/verifyStripeTestConfig.js",
     "verify:stripe-test-payg-config": "npm run build && STRIPE_TEST_PLAN_SCOPE=adult_payg_class node --env-file=.env.local scripts/verifyStripeTestConfig.js",
     "verify:stripe-test-journey": "npm run build && node --env-file=.env.local scripts/verifyStripeTestJourney.js",
+    "verify:stripe-test-payg-journey": "npm run build && node scripts/verifyStripeTestPaygJourney.js",
     "verify:production-config": "npm run build && node --env-file-if-exists=.env.alphawod-d1f2f scripts/verifyProductionConfig.js",
     "verify:production-armed-config": "npm run build && node --env-file-if-exists=.env.alphawod-d1f2f scripts/verifyProductionConfig.js --armed",
     "verify:production-open-config": "npm run build && node --env-file-if-exists=.env.alphawod-d1f2f scripts/verifyProductionConfig.js --opening",

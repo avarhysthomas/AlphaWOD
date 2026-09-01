@@ -17,6 +17,26 @@ const {
   mergeManagedClaims,
   resolveUserAuthorisation,
 } = require("../lib/authz");
+const {
+  CHECKOUT_DOCUMENTS,
+  resolveCheckoutAcceptanceStatements,
+} = require("../lib/membershipPlans");
+
+test("current waiver metadata is parity-locked to canonical membership checkout", () => {
+  const acceptance = resolveCheckoutAcceptanceStatements("adult_unlimited")
+    .find(({id}) => id === "adult_participant_waiver");
+
+  assert.ok(acceptance);
+  assert.equal(
+    CURRENT_WAIVER_VERSION,
+    CHECKOUT_DOCUMENTS.adultWaiver.version
+  );
+  assert.equal(CURRENT_WAIVER_TITLE, CHECKOUT_DOCUMENTS.adultWaiver.title);
+  assert.deepEqual(
+    [...CURRENT_WAIVER_ACKNOWLEDGEMENTS],
+    [acceptance.statement]
+  );
+});
 
 test("approved legacy members receive AlphaWOD access", () => {
   const access = resolveUserAuthorisation({
@@ -304,4 +324,18 @@ test("only complete current callable waiver evidence is canonical", () => {
     isCanonicalCurrentWaiverAcceptance("another-user", evidence),
     false
   );
+  assert.equal(isCanonicalCurrentWaiverAcceptance("uid-1", {
+    ...evidence,
+    version: "2026-30-05",
+    agreementTitle:
+      "Zero Alpha Fitness — Participation Agreement, Assumption of Risk & Liability Waiver",
+    acknowledgements: [
+      "I have read and understood this Agreement and accept the risks in Clause 3.",
+      "I will follow all instructions and rules and take responsibility for my own pacing under Clause 4.",
+      "I will disclose relevant medical conditions and stop if unwell under Clause 2.",
+      "I understand the release/indemnity and the UK carve-out for negligence in Clause 5.",
+      "I understand the data processing summary and where to find the Privacy Notice under Clause 8.",
+      "If applicable, I agree to the Membership Terms under Clause 10.",
+    ],
+  }), false);
 });

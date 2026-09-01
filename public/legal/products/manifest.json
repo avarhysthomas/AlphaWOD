@@ -6,6 +6,7 @@
   "effectiveDate": "2026-09-01",
   "sourceReviewManifest": "public/legal/product-drafts/manifest.json",
   "approvalEvidence": "ops/release/evidence/product-terms-owner-approval-2026-09-01.json",
+  "privacyApprovalEvidence": "ops/release/evidence/payg-privacy-notice-owner-approval-2026-09-01.json",
   "documents": {
     "adultConditioningAddendum": {
       "title": "Adult Conditioning Only Membership Product Addendum",
@@ -31,7 +32,7 @@
       "bytes": 7406,
       "sha256": "7b209af1b23144ce8f3e7fda38f09c0806d05be5f558b0d751e6a37d5ecbdb05",
       "approvedForPublication": true,
-      "runtimeEligible": false
+      "runtimeEligible": true
     },
     "paygWaiver": {
       "title": "Adult PAYG Participant Waiver and Risk Acknowledgement",
@@ -44,7 +45,20 @@
       "bytes": 4488,
       "sha256": "137bf54c92eedb244114c525b6351400933a42d6e775d848576ff0c3e96a213d",
       "approvedForPublication": true,
-      "runtimeEligible": false
+      "runtimeEligible": true
+    },
+    "paygPrivacyNotice": {
+      "title": "PAYG Privacy Notice Addendum",
+      "sourceDraftVersion": "ZAF-PAYG-PRIVACY-NOTICE-DRAFT-2026-09-01-01",
+      "sourceDraftBytes": 13622,
+      "sourceDraftSha256": "b337333f2d7439ac011633add9a30f659f912bf8577084cd95630edf8ebddba0",
+      "version": "ZAF-PAYG-PRIVACY-NOTICE-2026-09-01-01",
+      "filename": "ZAF-PAYG-PRIVACY-NOTICE-2026-09-01-01.txt",
+      "publicUrl": "/legal/products/ZAF-PAYG-PRIVACY-NOTICE-2026-09-01-01.txt",
+      "bytes": 13220,
+      "sha256": "6091e9d8259815928da440528d1cea12a4703f691c00bfa6aa43c60fb8450377",
+      "approvedForPublication": true,
+      "runtimeEligible": true
     }
   },
   "paygCancellationAcceptance": {
@@ -59,7 +73,7 @@
     "paygSpecificDateLeisureExceptionConfirmed": true,
     "paygTermsApproved": true,
     "paygWaiverApproved": true,
-    "paygPrivacyNoticeApproved": false,
+    "paygPrivacyNoticeApproved": true,
     "paygOrderPiiRetentionDays": 90,
     "paygWaiverPiiRetentionDays": 2190,
     "paygEmailPiiRetentionDays": 90,
@@ -67,8 +81,7 @@
     "paygRedactionImplementationAccepted": true
   },
   "runtimeBlockers": [
-    "No approved customer-facing PAYG Privacy Notice or PAYG privacy addendum exists; the internal retention decision draft is explicitly not a customer notice.",
-    "The final files have not yet been deployed and read back byte-for-byte from their same-origin immutable URLs."
+    "The final files have not yet been deployed, bound in production configuration and read back byte-for-byte from their same-origin immutable URLs."
   ],
   "productionPurchaseGatesRemainClosed": true
 }

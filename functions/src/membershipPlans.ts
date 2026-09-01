@@ -18,7 +18,7 @@ import {
   CONDITIONING_SLOT_KEYS,
   ConditioningSlotKey,
   canonicalConditioningSlots,
-} from "./authz";
+} from "./accessPolicy";
 
 export const BILLING_TIMEZONE = "Europe/London";
 export const BILLING_CURRENCY = "gbp";

@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "payg-stripe-test-browser-purchase-partial",
+  "readinessItemId": "payg-stripe-test-purchase-refund-dispute-email-journey",
+  "recordedAt": "2026-09-01T15:29:44Z",
+  "customerPiiRecorded": false,
+  "stripeMode": "test",
+  "productKey": "adult_payg_class",
+  "providerReferences": {
+    "checkoutSessionId": "cs_test_a1xQ0XbmZ4PBZ95tdA0plOVJinI7RcSVnMg7X8i90v7CF78gEfLB6roPe2",
+    "paymentIntentIdRecorded": false,
+    "refundIdRecorded": false,
+    "disputeIdRecorded": false
+  },
+  "catalogue": {
+    "approvedTestPriceId": "price_1UAmVVFzNDZoGGA04z8hX10N",
+    "amountPence": 700,
+    "currency": "gbp",
+    "priceType": "one_time",
+    "exactApprovedTestPriceVerified": true
+  },
+  "localApplicationReadback": {
+    "hostedCheckoutCompleted": true,
+    "accountRequired": false,
+    "authenticationAccountCreated": false,
+    "orderConfirmed": true,
+    "bookingCreated": true,
+    "bookingKind": "payg_guest",
+    "confirmationOutboxState": "pending",
+    "confirmationDeliveryEnabled": false,
+    "confirmationEmailDelivered": false,
+    "productionWrites": false
+  },
+  "releaseGateAssessment": {
+    "testPurchaseAndLocalBookingVerified": true,
+    "fullPaygOperationalGateVerified": false,
+    "confirmationDeliveryVerified": false,
+    "refundVerified": false,
+    "refundEmailDeliveryVerified": false,
+    "disputeVerified": false,
+    "disputeEmailDeliveryVerified": false,
+    "classCancellationOperationsDrillVerified": false,
+    "productionDeploymentVerified": false,
+    "productionPublicationVerified": false
+  },
+  "limitations": [
+    "This records the prior real Stripe test-mode browser purchase and its local application readback only; it does not claim a new provider mutation on 1 September.",
+    "The pending confirmation outbox proves durable queue state only. Email delivery was disabled and no delivered confirmation was observed.",
+    "No provider refund, refund email, dispute, dispute email, late-cancellation or no-show operation was performed or verified.",
+    "No whole-class cancellation drill, production write, deployment, publication, live backlog reconciliation or production gate change was performed."
+  ],
+  "liveProviderMutation": false,
+  "productionWritePerformed": false,
+  "deploymentPerformed": false,
+  "purchaseGatesChanged": false
+}

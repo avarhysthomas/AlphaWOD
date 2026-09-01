@@ -308,6 +308,7 @@ test("legacy waiver migration preserves supplied evidence", () => {
     result.evidence.evidenceStatus,
     "legacy_client_record_unverified"
   );
+  assert.notEqual(result.evidence.version, CURRENT_WAIVER_VERSION);
 });
 
 test("legacy waiver migration detects marker-only forged acceptance", () => {

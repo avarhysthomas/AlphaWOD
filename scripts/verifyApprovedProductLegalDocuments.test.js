@@ -7,6 +7,7 @@ const test = require("node:test");
 const {
   PUBLICATION_DIRECTORY,
   assertOwnerApprovalEvidence,
+  assertPrivacyOwnerApprovalEvidence,
   verifyApprovedProductLegalDocuments,
 } = require("./verifyApprovedProductLegalDocuments");
 
@@ -16,7 +17,85 @@ test("approved product documents preserve exact immutable evidence and closed ga
     "adultConditioningAddendum",
     "paygTerms",
     "paygWaiver",
+    "paygPrivacyNotice",
   ]);
+});
+
+test("privacy approval exactly binds the reviewed draft and final candidate", (t) => {
+  const repositoryRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "zaf-privacy-approval-")
+  );
+  t.after(() => fs.rmSync(repositoryRoot, {recursive: true, force: true}));
+  const evidenceDirectory = path.join(repositoryRoot, "ops", "release", "evidence");
+  const draftDirectory = path.join(
+    repositoryRoot,
+    "public",
+    "legal",
+    "product-drafts"
+  );
+  const finalDirectory = path.join(
+    repositoryRoot,
+    "public",
+    "legal",
+    "products"
+  );
+  fs.mkdirSync(evidenceDirectory, {recursive: true});
+  fs.mkdirSync(draftDirectory, {recursive: true});
+  fs.mkdirSync(finalDirectory, {recursive: true});
+
+  const manifest = JSON.parse(fs.readFileSync(
+    path.join(PUBLICATION_DIRECTORY, "manifest.json"),
+    "utf8"
+  ));
+  const draftManifest = JSON.parse(fs.readFileSync(
+    path.resolve(PUBLICATION_DIRECTORY, "..", "product-drafts", "manifest.json"),
+    "utf8"
+  ));
+  const privacyDraft = draftManifest.documents.paygPrivacyNotice;
+  const privacyFinal = manifest.documents.paygPrivacyNotice;
+  fs.copyFileSync(
+    path.resolve(PUBLICATION_DIRECTORY, "..", "product-drafts", privacyDraft.filename),
+    path.join(draftDirectory, privacyDraft.filename)
+  );
+  fs.copyFileSync(
+    path.join(PUBLICATION_DIRECTORY, privacyFinal.filename),
+    path.join(finalDirectory, privacyFinal.filename)
+  );
+
+  const sourceEvidence = JSON.parse(fs.readFileSync(
+    path.resolve(PUBLICATION_DIRECTORY, "..", "..", "..", manifest.privacyApprovalEvidence),
+    "utf8"
+  ));
+  const evidencePath = path.join(repositoryRoot, manifest.privacyApprovalEvidence);
+  fs.writeFileSync(evidencePath, `${JSON.stringify(sourceEvidence, null, 2)}\n`);
+  assert.doesNotThrow(() => assertPrivacyOwnerApprovalEvidence(
+    manifest,
+    repositoryRoot,
+    draftManifest
+  ));
+
+  const stale = structuredClone(sourceEvidence);
+  stale.approvedReviewDocument.sha256 = "0".repeat(64);
+  fs.writeFileSync(evidencePath, `${JSON.stringify(stale, null, 2)}\n`);
+  assert.throws(
+    () => assertPrivacyOwnerApprovalEvidence(
+      manifest,
+      repositoryRoot,
+      draftManifest
+    ),
+    /stale or unsafe/i
+  );
+
+  fs.writeFileSync(evidencePath, `${JSON.stringify(sourceEvidence, null, 2)}\n`);
+  fs.appendFileSync(path.join(finalDirectory, privacyFinal.filename), "tampered\n");
+  assert.throws(
+    () => assertPrivacyOwnerApprovalEvidence(
+      manifest,
+      repositoryRoot,
+      draftManifest
+    ),
+    /byte binding|customer-facing sections/i
+  );
 });
 
 test("approved product verification rejects byte drift and runtime eligibility", (t) => {

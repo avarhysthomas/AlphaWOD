@@ -1,5 +1,27 @@
 /* eslint-disable require-jsdoc, max-len */
 
+import {
+  AppAccessTier,
+  canonicalConditioningEligibleSlots,
+  canonicalConditioningSlots,
+  ConditioningSlotKey,
+  isAppAccessTier,
+} from "./accessPolicy";
+import {
+  CHECKOUT_DOCUMENTS,
+  resolveCheckoutAcceptanceStatements,
+} from "./membershipPlans";
+
+export {
+  APP_ACCESS_TIERS,
+  canonicalConditioningEligibleSlots,
+  canonicalConditioningSlots,
+  CONDITIONING_SLOT_KEYS,
+  isAppAccessTier,
+  isConditioningSlotKey,
+} from "./accessPolicy";
+export type {AppAccessTier, ConditioningSlotKey} from "./accessPolicy";
+
 export const ACCESS_SCHEMA_VERSION = 3;
 export const CLAIMS_VERSION = 4;
 
@@ -15,28 +37,23 @@ export type EntitlementStatus = typeof ENTITLEMENT_STATUSES[number];
 export const ENTITLEMENT_SOURCES = ["none", "legacy", "manual", "stripe", "staff"] as const;
 export type EntitlementSource = typeof ENTITLEMENT_SOURCES[number];
 
-export const APP_ACCESS_TIERS = ["none", "limited", "full"] as const;
-export type AppAccessTier = typeof APP_ACCESS_TIERS[number];
+const adultWaiverAcceptance = resolveCheckoutAcceptanceStatements(
+  "adult_unlimited"
+).find(({id}) => id === "adult_participant_waiver");
 
-export const CONDITIONING_SLOT_KEYS = [
-  "monday_0600",
-  "tuesday_1800",
-  "thursday_1800",
-  "friday_0530",
-] as const;
-export type ConditioningSlotKey = typeof CONDITIONING_SLOT_KEYS[number];
+if (!adultWaiverAcceptance) {
+  throw new Error("The canonical Adult Waiver acceptance statement is missing.");
+}
 
-export const CURRENT_WAIVER_VERSION = "2026-30-05";
-export const CURRENT_WAIVER_TITLE =
-  "Zero Alpha Fitness — Participation Agreement, Assumption of Risk & Liability Waiver";
-
+/**
+ * Current app-waiver metadata is derived from the exact immutable document and
+ * acceptance statement used by membership checkout. Historical waiver records
+ * stay stored under their original versions but cannot satisfy this marker.
+ */
+export const CURRENT_WAIVER_VERSION = CHECKOUT_DOCUMENTS.adultWaiver.version;
+export const CURRENT_WAIVER_TITLE = CHECKOUT_DOCUMENTS.adultWaiver.title;
 export const CURRENT_WAIVER_ACKNOWLEDGEMENTS = [
-  "I have read and understood this Agreement and accept the risks in Clause 3.",
-  "I will follow all instructions and rules and take responsibility for my own pacing under Clause 4.",
-  "I will disclose relevant medical conditions and stop if unwell under Clause 2.",
-  "I understand the release/indemnity and the UK carve-out for negligence in Clause 5.",
-  "I understand the data processing summary and where to find the Privacy Notice under Clause 8.",
-  "If applicable, I agree to the Membership Terms under Clause 10.",
+  adultWaiverAcceptance.statement,
 ] as const;
 
 function isFirestoreTimestampLike(value: unknown): boolean {
@@ -182,47 +199,6 @@ export function isEntitlementStatus(value: unknown): value is EntitlementStatus 
 export function isEntitlementSource(value: unknown): value is EntitlementSource {
   return typeof value === "string" &&
     (ENTITLEMENT_SOURCES as readonly string[]).includes(value);
-}
-
-export function isAppAccessTier(value: unknown): value is AppAccessTier {
-  return typeof value === "string" &&
-    (APP_ACCESS_TIERS as readonly string[]).includes(value);
-}
-
-export function isConditioningSlotKey(value: unknown): value is ConditioningSlotKey {
-  return typeof value === "string" &&
-    (CONDITIONING_SLOT_KEYS as readonly string[]).includes(value);
-}
-
-/**
- * Returns the two fixed historical schema-v6 Half-membership slots in
- * canonical catalogue order. Current schema-v7 memberships use
- * canonicalConditioningEligibleSlots instead.
- * Any duplicate, unknown, missing, or additional value fails closed.
- * @param {unknown} value Candidate stored or submitted slot list.
- * @return {ConditioningSlotKey[] | null} Canonical slots, or null when invalid.
- */
-export function canonicalConditioningSlots(value: unknown): ConditioningSlotKey[] | null {
-  if (!Array.isArray(value) || value.length !== 2 ||
-      !value.every(isConditioningSlotKey)) return null;
-  const unique = new Set<ConditioningSlotKey>(value);
-  if (unique.size !== 2) return null;
-  return CONDITIONING_SLOT_KEYS.filter((slot) => unique.has(slot));
-}
-
-/**
- * Returns the complete canonical flexible Conditioning scope, or null.
- * @param {unknown} value Candidate stored eligible-slot scope.
- * @return {ConditioningSlotKey[] | null} Canonical complete scope or null.
- */
-export function canonicalConditioningEligibleSlots(
-  value: unknown
-): ConditioningSlotKey[] | null {
-  if (!Array.isArray(value) || value.length !== CONDITIONING_SLOT_KEYS.length ||
-    !value.every(isConditioningSlotKey)) return null;
-  const unique = new Set<ConditioningSlotKey>(value);
-  if (unique.size !== CONDITIONING_SLOT_KEYS.length) return null;
-  return CONDITIONING_SLOT_KEYS.filter((slot) => unique.has(slot));
 }
 
 export function isValidEntitlementPair(

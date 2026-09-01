@@ -23,7 +23,7 @@ test("the product legal review set is exact, draft-only and runtime-ineligible",
   ]);
 });
 
-test("the PAYG privacy draft remains owner-unapproved and source-bound", () => {
+test("the frozen PAYG privacy draft remains unapproved and source-bound", () => {
   const manifest = readManifest();
   const entry = manifest.documents.paygPrivacyNotice;
   assert.equal(entry.approvedForPublication, false);

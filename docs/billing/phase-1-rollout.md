@@ -362,13 +362,15 @@ the owner and marks the membership for manual review, with a critical audit,
 rather than leaving a permanent ownership lock or mutating an unsuitable
 profile.
 
-Membership checkout presents the canonical registered Adult Participant Waiver
-to a new Adult Unlimited buyer and freezes that registered version and exact
-acknowledgement with the purchase evidence. This closed publication release
-does not change the pre-existing AlphaWOD in-app waiver gate for current users;
-any later transition of that separate gate requires a compatible callable and
-frontend rollout rather than a frontend-only deployment. Media consent remains
-separate and is not inferred from membership-waiver acceptance.
+Membership checkout and the AlphaWOD in-app waiver gate both derive their
+current version, title and single exact acknowledgement from the canonical
+registered Adult Participant Waiver
+`ZAF-ADULT-WAIVER-2026-08-23-01`. The callable stores a new immutable acceptance
+record under that version before updating the profile marker. Evidence created
+under the former `2026-30-05` in-app identifier remains stored as historical
+evidence but is not authoritative for the current gate, so an affected member
+must review and sign the approved waiver once. Media consent remains separate
+and is not inferred from membership-waiver acceptance.
 
 ## 5. Approval and purchase gates
 

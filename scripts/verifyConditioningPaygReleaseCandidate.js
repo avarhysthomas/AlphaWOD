@@ -141,6 +141,10 @@ const PAYG_RETENTION_DECISION_ID =
 const PAYG_PRIVACY_DECISION_ID = "payg-privacy-notice";
 const PAYG_PRIVACY_ENGINEERING_EVIDENCE =
   "ops/release/evidence/payg-privacy-runtime-binding-readiness-2026-09-01.json";
+const CONDITIONING_BROWSER_PARTIAL_EVIDENCE =
+  "ops/release/evidence/conditioning-stripe-test-and-local-browser-2026-09-01.json";
+const PAYG_BROWSER_PARTIAL_EVIDENCE =
+  "ops/release/evidence/payg-stripe-test-browser-purchase-2026-09-01.json";
 const PAYG_RETENTION_POLICY_VERSION =
   "ZAF-PAYG-PII-RETENTION-2026-08-31-01";
 const LIVE_STRIPE_DELIVERY_BACKLOG_ID =
@@ -559,28 +563,69 @@ function assertPaygPrivacyOwnerDecision(ownerDecisions) {
   if (!decision) {
     throw new Error("PAYG Privacy Notice owner decision is missing.");
   }
-  if (decision.approved) {
-    throw new Error(
-      "PAYG Privacy Notice cannot be approved until its immutable final " +
-      "publication verifier and exact owner evidence are committed."
-    );
+  if (decision.approved !== true ||
+    decision.evidence !==
+      "ops/release/evidence/payg-privacy-notice-owner-approval-2026-09-01.json" ||
+    decision.partialEvidence !== undefined) {
+    throw new Error("PAYG Privacy Notice owner decision is stale or unsafe.");
   }
-  if (decision.evidence !== null ||
-    decision.partialEvidence !== PAYG_PRIVACY_ENGINEERING_EVIDENCE) {
-    throw new Error("Pending PAYG Privacy Notice owner evidence is stale.");
+  const approval = readEvidence(
+    decision.evidence,
+    "PAYG Privacy Notice owner approval"
+  );
+  const manifest = JSON.parse(fs.readFileSync(
+    path.join(root, "public/legal/products/manifest.json"),
+    "utf8"
+  ));
+  const draftManifest = JSON.parse(fs.readFileSync(
+    path.join(root, "public/legal/product-drafts/manifest.json"),
+    "utf8"
+  ));
+  const final = manifest.documents?.paygPrivacyNotice;
+  const draft = draftManifest.documents?.paygPrivacyNotice;
+  if (approval.schemaVersion !== 1 ||
+    approval.decisionId !== "payg-privacy-notice-owner-approval" ||
+    approval.approved !== true || approval.approvedByRole !== "business-owner" ||
+    approval.approvedReviewDocument?.decision !== "payg-privacy-notice" ||
+    approval.approvedReviewDocument.version !== draft?.version ||
+    approval.approvedReviewDocument.bytes !== draft?.bytes ||
+    approval.approvedReviewDocument.sha256 !== draft?.sha256 ||
+    approval.approvedFinalPublicationCandidate?.decision !==
+      "payg-privacy-notice" ||
+    approval.approvedFinalPublicationCandidate.version !== final?.version ||
+    approval.approvedFinalPublicationCandidate.bytes !== final?.bytes ||
+    approval.approvedFinalPublicationCandidate.sha256 !== final?.sha256 ||
+    approval.customerFacingSectionsUnchanged !== true ||
+    approval.customerFacingSectionsByteEvidence?.bytes !== 13059 ||
+    approval.customerFacingSectionsByteEvidence.sourceDraftSha256 !==
+      "e4180eb07e52af8cb768898a86d10eac0b7b2fbce6624dd00469cd8a8ea68f0d" ||
+    approval.customerFacingSectionsByteEvidence.finalSha256 !==
+      "e4180eb07e52af8cb768898a86d10eac0b7b2fbce6624dd00469cd8a8ea68f0d" ||
+    approval.customerPiiRecorded !== false ||
+    approval.runtimePublicationComplete !== false ||
+    approval.deploymentAuthorized !== false ||
+    approval.productionPurchaseGatesRemainClosed !== true ||
+    manifest.ownerDecisions?.paygPrivacyNoticeApproved !== true ||
+    manifest.productionPurchaseGatesRemainClosed !== true) {
+    throw new Error("PAYG Privacy Notice owner approval evidence is stale or unsafe.");
   }
-  const evidence = readEvidence(
-    decision.partialEvidence,
+  const engineering = readEvidence(
+    PAYG_PRIVACY_ENGINEERING_EVIDENCE,
     "PAYG Privacy Notice engineering evidence"
   );
-  if (evidence.schemaVersion !== 1 ||
-    evidence.evidenceType !==
+  if (engineering.schemaVersion !== 1 ||
+    engineering.evidenceType !==
       "payg-privacy-notice-runtime-binding-engineering-readiness" ||
-    evidence.engineeringReady !== true || evidence.launchReady !== false ||
-    evidence.privacyNoticeApproved !== false ||
-    evidence.productionPurchaseGatesRemainClosed !== true ||
-    evidence.deploymentAuthorized !== false ||
-    evidence.customerPiiRecorded !== false) {
+    engineering.engineeringReady !== true || engineering.launchReady !== false ||
+    engineering.privacyNoticeApproved !== true ||
+    engineering.ownerApprovalEvidence !== decision.evidence ||
+    engineering.approvedFinal?.version !== final.version ||
+    engineering.approvedFinal?.publicUrl !== final.publicUrl ||
+    engineering.approvedFinal?.bytes !== final.bytes ||
+    engineering.approvedFinal?.sha256 !== final.sha256 ||
+    engineering.productionPurchaseGatesRemainClosed !== true ||
+    engineering.deploymentAuthorized !== false ||
+    engineering.customerPiiRecorded !== false) {
     throw new Error("PAYG Privacy Notice engineering evidence is stale or unsafe.");
   }
 }
@@ -760,6 +805,183 @@ function paygRedactionImplemented() {
   return match[1] === "true";
 }
 
+function assertRecordedBrowserEvidence(operationalEvidence) {
+  const conditioningGate = operationalEvidence.find(
+    ({id}) => id === "conditioning-stripe-test-purchase-to-booking-journey"
+  );
+  const paygGate = operationalEvidence.find(
+    ({id}) => id === "payg-stripe-test-purchase-refund-dispute-email-journey"
+  );
+  const cancellationDrill = operationalEvidence.find(
+    ({id}) => id === "class-cancellation-quota-and-payg-refund-drill"
+  );
+  const alertGate = operationalEvidence.find(
+    ({id}) => id === "billing-alert-policies-and-staffed-notification-route"
+  );
+  const backlogGate = operationalEvidence.find(
+    ({id}) => id === "live-stripe-delivery-backlog-cleared"
+  );
+  const publicationGate = operationalEvidence.find(
+    ({id}) => id === "product-legal-publication-and-runtime-binding"
+  );
+
+  if (conditioningGate?.verified !== false ||
+    conditioningGate.evidence !== null ||
+    conditioningGate.partialEvidence !== CONDITIONING_BROWSER_PARTIAL_EVIDENCE ||
+    !conditioningGate.remainingControls?.includes("confirmation-email-delivered") ||
+    paygGate?.verified !== false || paygGate.evidence !== null ||
+    paygGate.partialEvidence !== PAYG_BROWSER_PARTIAL_EVIDENCE ||
+    !paygGate.remainingControls?.includes("confirmation-email-delivered") ||
+    !paygGate.remainingControls?.includes("refund-converged-and-email-delivered") ||
+    !paygGate.remainingControls?.includes("dispute-converged-and-email-delivered") ||
+    cancellationDrill?.verified !== false || cancellationDrill.evidence !== null ||
+    cancellationDrill.partialEvidence !== CONDITIONING_BROWSER_PARTIAL_EVIDENCE ||
+    alertGate?.verified !== false || alertGate.evidence !== null ||
+    alertGate.syntheticDeliveryAcknowledged !== false ||
+    !alertGate.remainingControls?.includes(
+      "synthetic-alert-delivery-test-and-human-acknowledgement"
+    ) ||
+    backlogGate?.verified !== false || backlogGate.evidence !== null ||
+    publicationGate?.verified !== false || publicationGate.evidence !== null) {
+    throw new Error("Partial browser evidence must retain every external blocker.");
+  }
+
+  const conditioning = readEvidence(
+    CONDITIONING_BROWSER_PARTIAL_EVIDENCE,
+    "Conditioning Stripe/browser partial evidence"
+  );
+  const conditioningSequence = conditioning.localBrowserRerun?.bookingSequence;
+  if (conditioning.schemaVersion !== 1 ||
+    conditioning.evidenceType !==
+      "conditioning-stripe-test-and-local-browser-partial" ||
+    conditioning.readinessItemId !== conditioningGate.id ||
+    conditioning.customerPiiRecorded !== false ||
+    conditioning.stripeReadback?.mode !== "test" ||
+    conditioning.stripeReadback?.planKey !== "adult_conditioning" ||
+    conditioning.stripeReadback?.checkoutSessionId !==
+      "cs_test_a1SfbXmndUQS5DBMWcx95iFdk2xXLU2tucJO7DzhERuGDuIQB69oanwIXj" ||
+    conditioning.stripeReadback?.subscriptionId !==
+      "sub_1UAroiFzNDZoGGA04ISXiiwj" ||
+    conditioning.stripeReadback?.amountPence !== 3000 ||
+    conditioning.stripeReadback?.currency !== "gbp" ||
+    conditioning.stripeReadback?.checkoutPaymentStatus !== "paid" ||
+    conditioning.stripeReadback?.subscriptionStatus !== "active" ||
+    conditioning.stripeReadback?.appAccessTier !== "limited" ||
+    conditioning.stripeReadback?.weeklyBookingLimit !== 2 ||
+    conditioning.stripeReadback?.flexibleEligibleClassSelection !== true ||
+    conditioning.stripeReadback?.confirmationOutboxState !== "pending" ||
+    conditioning.stripeReadback?.confirmationDeliveryEnabled !== false ||
+    conditioning.stripeReadback?.confirmationDelivered !== false ||
+    conditioning.localBrowserRerun?.environment !== "local-emulator-fixture" ||
+    conditioning.localBrowserRerun?.fixtureBoundToRecordedCheckoutAndSubscription !==
+      true ||
+    conditioning.localBrowserRerun?.newStripeRequestPerformed !== false ||
+    conditioning.localBrowserRerun?.newStripeObjectCreatedOrChanged !== false ||
+    conditioning.localBrowserRerun?.productionWritePerformed !== false ||
+    conditioning.localBrowserRerun?.waiver?.version !==
+      "ZAF-ADULT-WAIVER-2026-08-23-01" ||
+    conditioning.localBrowserRerun?.waiver?.currentMarkerObserved !== true ||
+    conditioning.localBrowserRerun?.waiver?.requiredAcknowledgementCount !== 1 ||
+    conditioning.localBrowserRerun?.waiver?.storedAcknowledgementCount !== 1 ||
+    conditioning.localBrowserRerun?.waiver?.exactAcknowledgementSetMatched !== true ||
+    !Array.isArray(conditioningSequence) || conditioningSequence.length !== 5 ||
+    conditioningSequence[2]?.result !== "blocked-weekly-quota" ||
+    conditioningSequence[3]?.result !==
+      "succeeded-capacity-and-quota-released" ||
+    conditioningSequence[4]?.result !== "succeeded" ||
+    conditioning.localBrowserRerun?.finalEmulatorReadback?.quotaBookedCount !== 2 ||
+    conditioning.localBrowserRerun?.finalEmulatorReadback
+      ?.allObservedUnbookedCandidateBookedCountsZero !== true ||
+    conditioning.releaseGateAssessment?.fullConditioningOperationalGateVerified !==
+      false ||
+    conditioning.releaseGateAssessment?.confirmationDeliveryVerified !== false ||
+    conditioning.releaseGateAssessment?.classCancellationOperationsDrillVerified !==
+      false ||
+    conditioning.liveProviderMutation !== false ||
+    conditioning.productionWritePerformed !== false ||
+    conditioning.deploymentPerformed !== false) {
+    throw new Error("Conditioning Stripe/browser partial evidence is stale or unsafe.");
+  }
+  assertSameValues(
+    conditioning.localBrowserRerun.finalEmulatorReadback
+      .activeBookingFixtureLabels,
+    ["Thursday A", "Friday D"],
+    "Conditioning active browser fixtures"
+  );
+  assertSameValues(
+    conditioning.localBrowserRerun.finalEmulatorReadback
+      .cancelledBookingFixtureLabels,
+    ["Friday C"],
+    "Conditioning cancelled browser fixtures"
+  );
+  assertSameValues(
+    conditioning.localBrowserRerun.finalEmulatorReadback
+      .quotaActiveBookingFixtureLabels,
+    ["Thursday A", "Friday D"],
+    "Conditioning quota browser fixtures"
+  );
+  assertSameValues(
+    conditioning.localBrowserRerun.accessReadback.available,
+    ["Schedule", "Profile", "Membership"],
+    "Conditioning available app surfaces"
+  );
+  assertSameValues(
+    conditioning.localBrowserRerun.accessReadback.notIncluded,
+    ["Dashboard", "Training", "Leaderboard"],
+    "Conditioning excluded app surfaces"
+  );
+  if (conditioning.localBrowserRerun.accessReadback.notIncludedCopy !==
+    "Not included") {
+    throw new Error("Conditioning excluded app copy is stale.");
+  }
+
+  const payg = readEvidence(
+    PAYG_BROWSER_PARTIAL_EVIDENCE,
+    "PAYG Stripe/browser partial evidence"
+  );
+  if (payg.schemaVersion !== 1 ||
+    payg.evidenceType !== "payg-stripe-test-browser-purchase-partial" ||
+    payg.readinessItemId !== paygGate.id || payg.customerPiiRecorded !== false ||
+    payg.stripeMode !== "test" || payg.productKey !== "adult_payg_class" ||
+    payg.providerReferences?.checkoutSessionId !==
+      "cs_test_a1xQ0XbmZ4PBZ95tdA0plOVJinI7RcSVnMg7X8i90v7CF78gEfLB6roPe2" ||
+    payg.providerReferences?.refundIdRecorded !== false ||
+    payg.providerReferences?.disputeIdRecorded !== false ||
+    payg.catalogue?.approvedTestPriceId !==
+      "price_1UAmVVFzNDZoGGA04z8hX10N" ||
+    payg.catalogue?.amountPence !== 700 || payg.catalogue?.currency !== "gbp" ||
+    payg.catalogue?.exactApprovedTestPriceVerified !== true ||
+    payg.localApplicationReadback?.hostedCheckoutCompleted !== true ||
+    payg.localApplicationReadback?.accountRequired !== false ||
+    payg.localApplicationReadback?.authenticationAccountCreated !== false ||
+    payg.localApplicationReadback?.orderConfirmed !== true ||
+    payg.localApplicationReadback?.bookingCreated !== true ||
+    payg.localApplicationReadback?.bookingKind !== "payg_guest" ||
+    payg.localApplicationReadback?.confirmationOutboxState !== "pending" ||
+    payg.localApplicationReadback?.confirmationDeliveryEnabled !== false ||
+    payg.localApplicationReadback?.confirmationEmailDelivered !== false ||
+    payg.localApplicationReadback?.productionWrites !== false ||
+    payg.releaseGateAssessment?.fullPaygOperationalGateVerified !== false ||
+    payg.releaseGateAssessment?.confirmationDeliveryVerified !== false ||
+    payg.releaseGateAssessment?.refundVerified !== false ||
+    payg.releaseGateAssessment?.disputeVerified !== false ||
+    payg.releaseGateAssessment?.classCancellationOperationsDrillVerified !==
+      false ||
+    payg.liveProviderMutation !== false || payg.productionWritePerformed !== false ||
+    payg.deploymentPerformed !== false) {
+    throw new Error("PAYG Stripe/browser partial evidence is stale or unsafe.");
+  }
+
+  const alertEvidence = readEvidence(
+    alertGate.partialEvidence,
+    "Billing alert partial evidence"
+  );
+  if (alertEvidence.verification?.syntheticDeliveryTestPerformed !== false ||
+    alertEvidence.verification?.namedPrimaryAndBackupRosterRecorded !== false) {
+    throw new Error("Alert evidence must not claim synthetic acknowledgement.");
+  }
+}
+
 function verifyConditioningPaygReleaseCandidate() {
   console.log("PASS static: running offline release verifiers (no deploy, no network). ");
   verifyBillingMonitoring();
@@ -791,6 +1013,7 @@ function verifyConditioningPaygReleaseCandidate() {
   assertPaygPrivacyOwnerDecision(readiness.ownerDecisions);
   assertPaygRetentionOwnerEvidence(readiness.ownerDecisions);
   assertLiveStripeDeliveryBacklogEvidence(readiness.operationalEvidence);
+  assertRecordedBrowserEvidence(readiness.operationalEvidence);
 
   const engineeringBlockers = [];
   if (!paygRedactionImplemented()) {
@@ -837,5 +1060,6 @@ module.exports = {
   assertOperationalGateSpecificContent,
   assertPaygPrivacyOwnerDecision,
   assertPartialEvidence,
+  assertRecordedBrowserEvidence,
   verifyConditioningPaygReleaseCandidate,
 };

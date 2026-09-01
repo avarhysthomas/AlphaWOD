@@ -22,6 +22,7 @@ const {
   assertOperationalGateSpecificContent,
   assertPaygPrivacyOwnerDecision,
   assertPartialEvidence,
+  assertRecordedBrowserEvidence,
 } = require("./verifyConditioningPaygReleaseCandidate");
 
 const root = path.resolve(__dirname, "..");
@@ -63,13 +64,39 @@ test("release readiness remains read-only with every production gate closed", ()
   ));
   assert.equal(readiness.verificationMode, "read-only-no-deploy");
   assert.equal(readiness.productionGatesExpectedClosed, true);
-  assert.ok(readiness.ownerDecisions
-    .filter(({id}) => id !== "payg-privacy-notice")
-    .every((decision) => decision.approved));
-  assert.equal(readiness.ownerDecisions.find(
-    ({id}) => id === "payg-privacy-notice"
-  )?.approved, false);
+  assert.ok(readiness.ownerDecisions.every((decision) => decision.approved));
   assert.ok(readiness.operationalEvidence.some((check) => !check.verified));
+});
+
+test("recorded Stripe/browser evidence stays PII-free and partial", () => {
+  const readiness = JSON.parse(fs.readFileSync(
+    path.join(root, "ops/release/conditioning-payg-readiness.json"),
+    "utf8"
+  ));
+  assert.doesNotThrow(
+    () => assertRecordedBrowserEvidence(readiness.operationalEvidence)
+  );
+
+  const conditioning = JSON.parse(fs.readFileSync(path.join(
+    root,
+    "ops/release/evidence/conditioning-stripe-test-and-local-browser-2026-09-01.json"
+  ), "utf8"));
+  const payg = JSON.parse(fs.readFileSync(path.join(
+    root,
+    "ops/release/evidence/payg-stripe-test-browser-purchase-2026-09-01.json"
+  ), "utf8"));
+  assert.equal(conditioning.customerPiiRecorded, false);
+  assert.equal(conditioning.stripeReadback.confirmationDelivered, false);
+  assert.equal(conditioning.localBrowserRerun.newStripeRequestPerformed, false);
+  assert.equal(
+    conditioning.releaseGateAssessment.fullConditioningOperationalGateVerified,
+    false
+  );
+  assert.equal(payg.customerPiiRecorded, false);
+  assert.equal(payg.localApplicationReadback.confirmationEmailDelivered, false);
+  assert.equal(payg.releaseGateAssessment.refundVerified, false);
+  assert.equal(payg.releaseGateAssessment.disputeVerified, false);
+  assert.equal(payg.releaseGateAssessment.fullPaygOperationalGateVerified, false);
 });
 
 test("product terms approval remains separate from publication and runtime binding", () => {
@@ -89,7 +116,14 @@ test("product terms approval remains separate from publication and runtime bindi
   );
   assert.equal(publication?.verified, false);
   assert.equal(publication?.evidence, null);
-  assert.equal(publication?.partialEvidence, decisions[0].evidence);
+  assert.equal(
+    publication?.partialEvidence,
+    "ops/release/evidence/payg-privacy-runtime-binding-readiness-2026-09-01.json"
+  );
+  assert.deepEqual(publication?.supportingEvidence, [
+    decisions[0].evidence,
+    "ops/release/evidence/payg-privacy-notice-owner-approval-2026-09-01.json",
+  ]);
 });
 
 test("live Stripe delivery backlog remains an explicit release blocker", () => {
@@ -419,7 +453,7 @@ test("pending operational gates require concrete journey, drill, and publication
   assert.throws(
     () => assertOperationalGateSpecificContent(legalGate, legalGate.evidence),
     /failed its content validator/,
-    "the checked-in manifest cannot claim privacy publication before approval"
+    "synthetic evidence cannot claim the checked-in final document bytes"
   );
 });
 
@@ -432,23 +466,20 @@ test("approved owner decisions cannot retain partial evidence", () => {
   );
 });
 
-test("PAYG Privacy Notice remains an explicit owner blocker until final promotion", () => {
-  const pending = {
+test("PAYG Privacy Notice owner approval binds the exact draft and final", () => {
+  const approved = {
     id: "payg-privacy-notice",
-    approved: false,
-    evidence: null,
-    partialEvidence:
-      "ops/release/evidence/payg-privacy-runtime-binding-readiness-2026-09-01.json",
+    approved: true,
+    evidence:
+      "ops/release/evidence/payg-privacy-notice-owner-approval-2026-09-01.json",
   };
-  assert.doesNotThrow(() => assertPaygPrivacyOwnerDecision([pending]));
+  assert.doesNotThrow(() => assertPaygPrivacyOwnerDecision([approved]));
   assert.throws(
     () => assertPaygPrivacyOwnerDecision([{
-      ...pending,
-      approved: true,
+      ...approved,
       evidence: "ops/release/evidence/bogus.json",
-      partialEvidence: undefined,
     }]),
-    /cannot be approved until its immutable final publication verifier/
+    /stale or unsafe/
   );
 });
 

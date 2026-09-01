@@ -10,11 +10,20 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
 const net = require("node:net");
+const os = require("node:os");
 const path = require("node:path");
 const {redactProviderSecrets, stripeCliTestKey} = require("./stripeCliTestKey");
 const {
   resolveStripeTestCatalogueScope,
 } = require("./stripeTestCatalogueScope");
+const {
+  PAYG_SCOPE,
+  buildLocalPaygClassDocument,
+  buildLocalPaygEnvironment,
+  installLocalPaygDotenvOverlay,
+  loadApprovedPaygRelease,
+  recoverLocalPaygDotenvOverlay,
+} = require("./localStripePaygJourney");
 
 const PROJECT_ID = "demo-alphawod-stripe";
 const APP_PORT = 3002;
@@ -90,7 +99,11 @@ function resolveFirebaseCommand() {
   return compatible[0].command;
 }
 
-const FIREBASE_COMMAND = resolveFirebaseCommand();
+const FIREBASE_CONFIG_PATH = path.join(REPO_ROOT, "firebase.json");
+const PROCESS_SUPERVISOR_PATH = path.join(
+  __dirname,
+  "localStripeProcessSupervisor.js"
+);
 const WEBHOOK_URL =
   `http://127.0.0.1:5001/${PROJECT_ID}/europe-west1/stripeWebhook`;
 const CALLABLE_URL =
@@ -106,6 +119,9 @@ const REQUIRED_PORTS = new Map([
   [9150, "Firebase Emulator UI websocket"],
 ]);
 const STRIPE_EVENTS = WEBHOOK_EVENT_MANIFEST.requiredEvents.join(",");
+// firebase-tools must see the declared secret as present, while the delivery
+// implementation must fail its trim() guard before constructing a request.
+const LOCAL_DISABLED_RESEND_API_KEY = " ";
 const SECRET_NAME_PATTERN = /(?:^|_)(?:SECRET|API_KEY|TOKEN|PASSWORD|PRIVATE_KEY|CREDENTIALS?)(?:_|$)/;
 const NON_SECRET_METADATA_NAME_PATTERN = /(?:_KEY_ID|_VALID_UNTIL)$/;
 const SAFE_PARENT_ENVIRONMENT = [
@@ -123,9 +139,13 @@ const SAFE_PARENT_ENVIRONMENT = [
 ];
 
 const children = new Set();
+const processGroups = new Map();
 const timers = new Set();
 let stopping = false;
 let shutdownPromise;
+let restoreLocalPaygDotenv = () => {};
+let privateRuntimeDirectory = null;
+let exitCleanupHandled = false;
 
 function safeEnvironment(additions = {}) {
   const environment = {};
@@ -133,6 +153,59 @@ function safeEnvironment(additions = {}) {
     if (process.env[name]) environment[name] = process.env[name];
   }
   return {...environment, ...additions};
+}
+
+const PRIVATE_RUNTIME_PREFIX = "alphawod-local-stripe-";
+
+function createPrivateRuntimeDirectory(parentDirectory = os.tmpdir()) {
+  const directory = fs.mkdtempSync(path.join(
+    path.resolve(parentDirectory),
+    PRIVATE_RUNTIME_PREFIX
+  ));
+  fs.chmodSync(directory, 0o700);
+  return directory;
+}
+
+function cleanupPrivateRuntimeDirectory(directory) {
+  if (!directory) return;
+  const resolved = path.resolve(directory);
+  if (!path.basename(resolved).startsWith(PRIVATE_RUNTIME_PREFIX)) {
+    throw new Error("Refusing to clean an unrecognised local Stripe runtime path.");
+  }
+  fs.rmSync(resolved, {recursive: true, force: true});
+}
+
+function assertSupportedProcessPlatform(platform = process.platform) {
+  if (platform === "win32") {
+    throw new Error(
+      "The local Stripe browser harness requires POSIX process groups " +
+      "(macOS or Linux) for complete descendant teardown."
+    );
+  }
+}
+
+function privateChildEnvironment(runtimeDirectory, additions = {}) {
+  return safeEnvironment({
+    TMPDIR: runtimeDirectory,
+    npm_config_cache: path.join(runtimeDirectory, "npm-cache"),
+    ...additions,
+  });
+}
+
+function firebaseEmulatorLaunch(firebaseCommand, runtimeDirectory, environment) {
+  return Object.freeze({
+    command: firebaseCommand,
+    args: Object.freeze([
+      "emulators:start",
+      "--config", FIREBASE_CONFIG_PATH,
+      "--project", PROJECT_ID,
+      "--only", "auth,firestore,functions",
+    ]),
+    options: Object.freeze({
+      cwd: runtimeDirectory,
+      env: environment,
+    }),
+  });
 }
 
 function lineRelay(label, stream, target, inspect = () => {}) {
@@ -173,16 +246,124 @@ function delay(milliseconds) {
   });
 }
 
+function processGroupExists(
+  group,
+  killProcess = process.kill,
+  platform = process.platform
+) {
+  if (!group?.pid) return false;
+  if (platform === "win32") return processLeaderRunning(group.child);
+  try {
+    killProcess(-group.pid, 0);
+    return true;
+  } catch (error) {
+    if (error.code === "ESRCH") return false;
+    if (error.code === "EPERM") return true;
+    throw error;
+  }
+}
+
+function trackProcessGroup(
+  child,
+  label,
+  registry = processGroups,
+  groupExists = processGroupExists
+) {
+  if (!child?.pid) return null;
+  const group = Object.freeze({pid: child.pid, child, label});
+  registry.set(group.pid, group);
+  child.once("close", () => {
+    if (!groupExists(group)) registry.delete(group.pid);
+  });
+  return group;
+}
+
+function signalProcessGroup(
+  group,
+  signal,
+  killProcess = process.kill,
+  platform = process.platform
+) {
+  if (!group?.pid) return false;
+  try {
+    if (platform === "win32") {
+      if (!running(group.child)) return false;
+      group.child.kill(signal);
+    } else {
+      // Address the process group even if its original leader has exited.
+      killProcess(-group.pid, signal);
+    }
+    return true;
+  } catch (error) {
+    if (error.code === "ESRCH") return false;
+    console.error(
+      "Could not signal " + group.label + ": " + error.message
+    );
+    return false;
+  }
+}
+
+async function waitForProcessGroupsOrTimeout(groups, milliseconds) {
+  const deadline = Date.now() + milliseconds;
+  while (Date.now() < deadline &&
+    groups.some((group) => processGroupExists(group))) {
+    await delay(50);
+  }
+}
+
 function spawnChild(label, command, args, options = {}) {
-  const child = spawn(command, args, {
+  const supervisorEnvironment = {
+    ...(options.env || safeEnvironment()),
+    ...(options.preventDetachedDescendants ? {
+      LOCAL_STRIPE_ATTACH_TARGET_DESCENDANTS: "true",
+    } : {}),
+  };
+  const child = spawn(process.execPath, [
+    PROCESS_SUPERVISOR_PATH,
+    command,
+    ...args,
+  ], {
     cwd: options.cwd || REPO_ROOT,
-    env: options.env || safeEnvironment(),
-    stdio: ["ignore", "pipe", "pipe"],
+    env: supervisorEnvironment,
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
     detached: process.platform !== "win32",
   });
   child.localJourneyLabel = label;
+  child.supervisedTargetExited = false;
+  child.supervisedTargetExitCode = null;
+  child.supervisedTargetSignal = null;
   children.add(child);
-  child.once("close", () => children.delete(child));
+  trackProcessGroup(child, label);
+  child.on("message", (message) => {
+    if (!message || typeof message !== "object") return;
+    if (message.type === "target-error") {
+      child.supervisedTargetExited = true;
+      child.emit(
+        "target-error",
+        new Error(String(message.message || "unknown spawn error"))
+      );
+      return;
+    }
+    if (message.type === "target-exit") {
+      child.supervisedTargetExited = true;
+      child.supervisedTargetExitCode = message.code;
+      child.supervisedTargetSignal = message.signal;
+      child.emit("target-exit", message.code, message.signal);
+    }
+  });
+  child.once("close", (code, signal) => {
+    children.delete(child);
+    if (!child.supervisedTargetExited) {
+      child.supervisedTargetExited = true;
+      child.emit(
+        "target-error",
+        new Error(
+          `${label} supervisor exited before reporting the command result (` +
+          `${signal || `code ${code}`}).`
+        )
+      );
+    }
+  });
   child.once("error", (error) => {
     if (!stopping) fail(`${label} could not start: ${error.message}`);
   });
@@ -190,59 +371,66 @@ function spawnChild(label, command, args, options = {}) {
 }
 
 function monitorChild(child, label) {
-  child.once("exit", (code, signal) => {
+  child.once("target-error", (error) => {
+    if (!stopping) fail(`${label} could not start: ${error.message}`);
+  });
+  child.once("target-exit", (code, signal) => {
     if (!stopping) {
       fail(`${label} exited unexpectedly (${signal || `code ${code}`}).`);
     }
   });
+  child.once("close", (code, signal) => {
+    if (!stopping) {
+      fail(`${label} supervisor exited unexpectedly (${signal || `code ${code}`}).`);
+    }
+  });
 }
 
-function running(child) {
+function processLeaderRunning(child) {
   return child?.pid && child.exitCode === null && child.signalCode === null;
 }
 
-function signalChild(child, signal) {
-  if (!running(child)) return;
-  try {
-    if (process.platform === "win32") child.kill(signal);
-    else process.kill(-child.pid, signal);
-  } catch (error) {
-    if (error.code !== "ESRCH") {
-      console.error(`Could not signal ${child.localJourneyLabel}: ${error.message}`);
-    }
-  }
-}
-
-function waitForChildExit(child) {
-  if (!running(child)) return Promise.resolve();
-  return new Promise((resolve) => child.once("close", resolve));
-}
-
-async function waitForChildrenOrTimeout(activeChildren, milliseconds) {
-  let timer;
-  await Promise.race([
-    Promise.all(activeChildren.map(waitForChildExit)),
-    new Promise((resolve) => {
-      timer = setTimeout(resolve, milliseconds);
-      timers.add(timer);
-    }),
-  ]);
-  if (timer) clearTimer(timer);
+function running(child) {
+  return processLeaderRunning(child) && !child.supervisedTargetExited;
 }
 
 function shutdown(code = 0) {
   if (shutdownPromise) return shutdownPromise;
   stopping = true;
   shutdownPromise = (async () => {
+    let finalCode = code;
     for (const timer of timers) clearTimeout(timer);
     timers.clear();
-    const active = [...children].filter(running);
-    active.forEach((child) => signalChild(child, "SIGTERM"));
-    await waitForChildrenOrTimeout(active, 4000);
-    const stubborn = [...children].filter(running);
-    stubborn.forEach((child) => signalChild(child, "SIGKILL"));
-    await waitForChildrenOrTimeout(stubborn, 1500);
-    process.exit(code);
+    const active = [...processGroups.values()]
+      .filter((group) => processGroupExists(group));
+    active.forEach((group) => signalProcessGroup(group, "SIGTERM"));
+    await waitForProcessGroupsOrTimeout(active, 4000);
+    const stubborn = [...processGroups.values()]
+      .filter((group) => processGroupExists(group));
+    stubborn.forEach((group) => signalProcessGroup(group, "SIGKILL"));
+    await waitForProcessGroupsOrTimeout(stubborn, 1500);
+    try {
+      restoreLocalPaygDotenv();
+      restoreLocalPaygDotenv = () => {};
+    } catch (error) {
+      finalCode = 1;
+      console.error(
+        "Could not safely restore functions/.env.local: " +
+        redactProviderSecrets(error.message)
+      );
+    }
+    try {
+      cleanupPrivateRuntimeDirectory(privateRuntimeDirectory);
+      privateRuntimeDirectory = null;
+    } catch (error) {
+      finalCode = 1;
+      console.error(
+        "Could not clean the private local Stripe runtime: " +
+        redactProviderSecrets(error.message)
+      );
+    }
+    exitCleanupHandled = true;
+    process.exit(finalCode);
   })();
   return shutdownPromise;
 }
@@ -354,18 +542,22 @@ async function waitUntil(description, child, check, timeoutMilliseconds) {
   throw new Error(`Timed out waiting for ${description}.${detail}`);
 }
 
-function runPreflight(runtimeEnvironment) {
+function runPreflight(runtimeEnvironment, runtimeDirectory) {
   return new Promise((resolve, reject) => {
     const child = spawnChild(
       "Stripe catalogue preflight",
       process.execPath,
-      ["--env-file=.env.local", "scripts/verifyStripeTestConfig.js"],
-      {cwd: FUNCTIONS_DIR, env: runtimeEnvironment}
+      [
+        "--env-file=" + path.join(FUNCTIONS_DIR, ".env.local"),
+        path.join(FUNCTIONS_DIR, "scripts/verifyStripeTestConfig.js"),
+      ],
+      {cwd: runtimeDirectory, env: runtimeEnvironment}
     );
     lineRelay("preflight", child.stdout, process.stdout);
     lineRelay("preflight", child.stderr, process.stderr);
     child.once("error", reject);
-    child.once("exit", (code, signal) => {
+    child.once("target-error", reject);
+    child.once("target-exit", (code, signal) => {
       if (code === 0) resolve();
       else reject(new Error(
         `Stripe catalogue preflight exited with ${signal || `code ${code}`}.`
@@ -374,7 +566,7 @@ function runPreflight(runtimeEnvironment) {
   });
 }
 
-function startStripeListener(stripeKey) {
+function startStripeListener(stripeKey, runtimeDirectory) {
   return new Promise((resolve, reject) => {
     const listener = spawnChild(
       "Stripe listener",
@@ -385,7 +577,12 @@ function startStripeListener(stripeKey) {
         "--events", STRIPE_EVENTS,
         "--forward-to", WEBHOOK_URL,
       ],
-      {env: safeEnvironment({STRIPE_API_KEY: stripeKey})}
+      {
+        cwd: runtimeDirectory,
+        env: privateChildEnvironment(runtimeDirectory, {
+          STRIPE_API_KEY: stripeKey,
+        }),
+      }
     );
     monitorChild(listener, "Stripe listener");
     let settled = false;
@@ -406,7 +603,14 @@ function startStripeListener(stripeKey) {
         reject(error);
       }
     });
-    listener.once("exit", (code, signal) => {
+    listener.once("target-error", (error) => {
+      if (!settled) {
+        settled = true;
+        clearTimer(timeout);
+        reject(error);
+      }
+    });
+    listener.once("target-exit", (code, signal) => {
       if (!settled) {
         settled = true;
         clearTimer(timeout);
@@ -442,6 +646,29 @@ async function waitForFirebase(firebase) {
   }, 120000);
 }
 
+async function seedLocalPaygClass() {
+  const seeded = buildLocalPaygClassDocument();
+  const response = await httpRequest(
+    `http://127.0.0.1:8080/v1/projects/${PROJECT_ID}/databases/(default)/documents/classes/${seeded.classId}`,
+    {
+      method: "PATCH",
+      // Firestore's emulator treats the literal owner token as its local admin
+      // identity. The destination remains hard-coded to loopback/demo-*.
+      headers: {
+        authorization: "Bearer owner",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(seeded.body),
+    }
+  );
+  if (response.status !== 200) {
+    throw new Error(
+      `Could not seed the isolated PAYG browser class (HTTP ${response.status}).`
+    );
+  }
+  return seeded;
+}
+
 async function waitForFrontend(frontend, isReady) {
   await waitUntil(
     "the React development server to compile and pass type-checking",
@@ -452,30 +679,53 @@ async function waitForFrontend(frontend, isReady) {
 }
 
 async function main() {
+  const localDotenvPath = path.join(FUNCTIONS_DIR, ".env.local");
+  // Recover before every other fallible preflight. A missing Firebase binary,
+  // invalid scope, or stale release must never leave prior temporary gates on.
+  // The recovery helper also rolls back a durable CAS transaction whose live
+  // path was moved aside immediately before an abrupt process death.
+  recoverLocalPaygDotenvOverlay(localDotenvPath);
+  assertSupportedProcessPlatform();
   assertNoDiskSecrets();
+  const firebaseCommand = resolveFirebaseCommand();
   const catalogueScope = resolveStripeTestCatalogueScope(
     process.env.STRIPE_TEST_PLAN_SCOPE
   );
-  if (!fs.existsSync(path.join(FUNCTIONS_DIR, ".env.local"))) {
-    throw new Error("functions/.env.local is missing. Copy .env.local.example first.");
+  const paygRelease = catalogueScope.name === PAYG_SCOPE ?
+    loadApprovedPaygRelease(REPO_ROOT) : null;
+  const paygEnvironment = paygRelease ?
+    buildLocalPaygEnvironment(paygRelease) : {};
+  if (paygRelease) {
+    // firebase-tools intentionally gives .env.local precedence over the
+    // runner's process environment for non-secret params. Install a reversible
+    // non-secret overlay so the PAYG browser scope can open locally without
+    // weakening production gates or writing provider credentials to disk.
+    restoreLocalPaygDotenv = installLocalPaygDotenvOverlay(
+      localDotenvPath,
+      paygEnvironment
+    );
   }
+  privateRuntimeDirectory = createPrivateRuntimeDirectory();
   await assertPortsAvailable();
 
   const stripeKey = stripeCliTestKey();
   console.log("Starting an isolated Stripe test listener (the runner creates no secret files)...");
-  const {webhookSecret} = await startStripeListener(stripeKey);
+  const {webhookSecret} = await startStripeListener(
+    stripeKey,
+    privateRuntimeDirectory
+  );
 
-  const preflightEnvironment = safeEnvironment({
+  const preflightEnvironment = privateChildEnvironment(privateRuntimeDirectory, {
     APP_PUBLIC_ORIGIN: APP_ORIGIN,
     STRIPE_SECRET_KEY: stripeKey,
     ...(catalogueScope.name === "full" ? {} : {
       STRIPE_TEST_PLAN_SCOPE: catalogueScope.name,
     }),
   });
-  await runPreflight(preflightEnvironment);
+  await runPreflight(preflightEnvironment, privateRuntimeDirectory);
   await assertPortsAvailable();
 
-  const functionsEnvironment = safeEnvironment({
+  const functionsEnvironment = privateChildEnvironment(privateRuntimeDirectory, {
     APP_PUBLIC_ORIGIN: APP_ORIGIN,
     FIREBASE_CLI_DISABLE_UPDATE_CHECK: "true",
     MEMBERSHIP_CHECKOUT_APP_ID: APP_ID,
@@ -484,34 +734,44 @@ async function main() {
     // the emulator never falls back to the real Secret Manager project.
     PAYG_CANCELLATION_TOKEN_SECRET:
       crypto.randomBytes(32).toString("base64url"),
-    RESEND_API_KEY: "re_test_local_email_disabled",
+    RESEND_API_KEY: LOCAL_DISABLED_RESEND_API_KEY,
     RESEND_FROM_EMAIL: "local-stripe-test@example.invalid",
     STRIPE_SECRET_KEY: stripeKey,
     STRIPE_WEBHOOK_SECRET: webhookSecret,
+    ...paygEnvironment,
   });
 
+  const firebaseLaunch = firebaseEmulatorLaunch(
+    firebaseCommand,
+    privateRuntimeDirectory,
+    functionsEnvironment
+  );
   const firebase = spawnChild(
     "Firebase emulators",
-    FIREBASE_COMMAND,
-    [
-      "emulators:start",
-      "--project", PROJECT_ID,
-      "--only", "auth,firestore,functions",
-    ],
-    {env: functionsEnvironment}
+    firebaseLaunch.command,
+    firebaseLaunch.args,
+    {
+      ...firebaseLaunch.options,
+      // firebase-tools normally starts Java emulators with detached:true.
+      // Keep them in the stable supervisor group for complete teardown.
+      preventDetachedDescendants: true,
+    }
   );
   lineRelay("firebase", firebase.stdout, process.stdout);
   lineRelay("firebase", firebase.stderr, process.stderr);
   monitorChild(firebase, "Firebase emulators");
   await waitForFirebase(firebase);
+  const seededPaygClass = catalogueScope.name === PAYG_SCOPE ?
+    await seedLocalPaygClass() : null;
   await assertAppPortAvailable();
 
   const frontend = spawnChild(
     "React frontend",
     "npm",
-    ["start"],
+    ["--prefix", REPO_ROOT, "start"],
     {
-      env: safeEnvironment({
+      cwd: privateRuntimeDirectory,
+      env: privateChildEnvironment(privateRuntimeDirectory, {
         BROWSER: "none",
         CI: "true",
         HOST: "127.0.0.1",
@@ -544,29 +804,85 @@ async function main() {
 
   console.log("\nLocal Stripe test journey is ready:");
   console.log(`- Catalogue preflight scope: ${catalogueScope.name}`);
-  console.log(`- App: ${APP_ORIGIN}/memberships`);
+  console.log(`- App: ${APP_ORIGIN}${seededPaygClass ?
+    "/pay-as-you-go" : "/memberships"}`);
   console.log("- Firebase UI: http://127.0.0.1:4000");
   console.log(`- Stripe forwarding: ${WEBHOOK_URL}`);
   console.log("- Card: 4242 4242 4242 4242, any future expiry/CVC");
-  console.log("- Presale expectation: £0 today; first payment on 1 September 2026");
-  console.log("- Adult Unlimited TEST ONLY shared code: EXISTING5-TEST");
-  console.log("- Verify after Checkout: npm run verify:stripe-test-journey --prefix functions");
+  if (seededPaygClass) {
+    console.log(`- Seeded class: ${seededPaygClass.classId} at ${seededPaygClass.startTime}`);
+    console.log("- PAYG expectation: one £7 Stripe test-mode payment; no account created");
+    console.log("- Email transport: disabled; confirmation remains in the local outbox");
+  } else {
+    console.log("- Presale expectation: £0 today; first payment on 1 September 2026");
+    console.log("- Adult Unlimited TEST ONLY shared code: EXISTING5-TEST");
+    console.log("- Verify after Checkout: npm run verify:stripe-test-journey --prefix functions");
+  }
   console.log("Press Ctrl-C once to stop every local process.\n");
 }
 
-process.on("SIGINT", () => void shutdown(0));
-process.on("SIGTERM", () => void shutdown(0));
-process.on("SIGHUP", () => void shutdown(0));
-process.on("uncaughtException", (error) => {
-  fail(`Uncaught exception: ${error instanceof Error ? error.message : String(error)}`);
-});
-process.on("unhandledRejection", (error) => {
-  fail(`Unhandled rejection: ${error instanceof Error ? error.message : String(error)}`);
-});
-
-main().catch((error) => {
-  if (!stopping) {
-    console.error(`Local Stripe journey could not start: ${redactProviderSecrets(error.message)}`);
-    void shutdown(1);
+function cleanupOnExit() {
+  if (exitCleanupHandled) return;
+  exitCleanupHandled = true;
+  try {
+    restoreLocalPaygDotenv();
+  } catch (error) {
+    process.exitCode = 1;
+    console.error(
+      "Could not safely restore functions/.env.local during exit: " +
+      redactProviderSecrets(error.message)
+    );
   }
-});
+  try {
+    cleanupPrivateRuntimeDirectory(privateRuntimeDirectory);
+  } catch (error) {
+    process.exitCode = 1;
+    console.error(
+      "Could not clean the private local Stripe runtime during exit: " +
+      redactProviderSecrets(error.message)
+    );
+  }
+}
+
+function runCli() {
+  process.on("SIGINT", () => void shutdown(0));
+  process.on("SIGTERM", () => void shutdown(0));
+  process.on("SIGHUP", () => void shutdown(0));
+  process.once("exit", cleanupOnExit);
+  process.on("uncaughtException", (error) => {
+    fail(
+      "Uncaught exception: " +
+      (error instanceof Error ? error.message : String(error))
+    );
+  });
+  process.on("unhandledRejection", (error) => {
+    fail(
+      "Unhandled rejection: " +
+      (error instanceof Error ? error.message : String(error))
+    );
+  });
+
+  main().catch((error) => {
+    if (!stopping) {
+      console.error(
+        "Local Stripe journey could not start: " +
+        redactProviderSecrets(error.message)
+      );
+      void shutdown(1);
+    }
+  });
+}
+
+module.exports = {
+  LOCAL_DISABLED_RESEND_API_KEY,
+  assertSupportedProcessPlatform,
+  cleanupPrivateRuntimeDirectory,
+  createPrivateRuntimeDirectory,
+  firebaseEmulatorLaunch,
+  processGroupExists,
+  signalProcessGroup,
+  spawnChild,
+  trackProcessGroup,
+};
+
+if (require.main === module) runCli();

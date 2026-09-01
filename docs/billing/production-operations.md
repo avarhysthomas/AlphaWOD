@@ -184,15 +184,13 @@ must remain.
 The business owner approved the frozen Adult Conditioning and PAYG product
 terms on 1 September 2026. The immutable Conditioning addendum is now included
 in the membership checkout/confirmation registry, and the closed production
-configuration contains the final PAYG terms and waiver versions, same-origin
-URLs and SHA-256 digests. `PAYG_LEGAL_APPROVED` remains false because an
-internal retention decision record is not a customer Privacy Notice. Keep PAYG
-closed until approved customer-facing privacy bytes are added to the final
-bundle; `PAYG_PRIVACY_NOTICE_VERSION`, `PAYG_PRIVACY_NOTICE_PUBLIC_URL` and
-`PAYG_PRIVACY_NOTICE_SHA256` bind that one immutable final; and a closed
-deployment is read back byte-for-byte. The checkout shows the Notice before
-guest details and records the version presented. It does not ask for privacy
-consent.
+configuration template contains the final PAYG terms, waiver and owner-approved
+Privacy Notice versions, same-origin URLs and SHA-256 digests.
+`PAYG_LEGAL_APPROVED` remains false until the complete bundle is deployed with
+purchase closed and read back byte-for-byte. `PAYG_PRIVACY_NOTICE_VERSION`,
+`PAYG_PRIVACY_NOTICE_PUBLIC_URL` and `PAYG_PRIVACY_NOTICE_SHA256` bind that one
+immutable final. The checkout shows the Notice before guest details and records
+the version presented. It does not ask for privacy consent.
 
 A delayed paid webhook or recovery may promote retained intent evidence into a
 paid order only when an authoritative, exactly bound card Charge proves that

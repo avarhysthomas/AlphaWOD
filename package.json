@@ -27,6 +27,7 @@
     "start": "react-scripts start",
     "stripe:test": "npm run run:stripe-test-journey --prefix functions",
     "stripe:test:conditioning": "STRIPE_TEST_PLAN_SCOPE=adult_conditioning npm run run:stripe-test-journey --prefix functions",
+    "stripe:test:payg": "STRIPE_TEST_PLAN_SCOPE=adult_payg_class npm run run:stripe-test-journey --prefix functions",
     "stripe:test:conditioning-preflight": "npm run verify:stripe-test-conditioning-config --prefix functions",
     "stripe:test:payg-preflight": "npm run verify:stripe-test-payg-config --prefix functions",
     "build": "react-scripts build",
