@@ -664,7 +664,7 @@ async function scanLeaderboardPii(db) {
   };
 }
 
-async function main() {
+async function main({credential} = {}) {
   const args = parseArgs(process.argv.slice(2));
   const projectId = args.project;
   const apply = args.apply === "true";
@@ -683,7 +683,10 @@ async function main() {
   }
   const reportFile = args.report ? fs.openSync(args.report, "wx") : null;
 
-  admin.initializeApp({projectId});
+  admin.initializeApp({
+    projectId,
+    ...(credential ? {credential} : {}),
+  });
   const db = admin.firestore();
   const snap = await db.collection("users").get();
   const authUsers = await listAllAuthUsers();
@@ -1043,6 +1046,7 @@ module.exports = {
   isValidLegacyWaiverQuarantine,
   legacyWaiverFieldSnapshot,
   legacyWaiverFieldsMatch,
+  main,
   profileAccessStateForAuth,
   privilegedClaimSnapshot,
   requireUpdateTime,
