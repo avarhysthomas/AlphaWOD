@@ -9,7 +9,8 @@
  * set without deleting claims owned by other systems.
  *
  * Preview (default):
- *   npm run backfill:claims -- --project alphawod-d1f2f
+ *   npm run backfill:claims -- --project alphawod-d1f2f \
+ *     --report /secure/path/phase-0-dry-run.json --summary-only
  *
  * Apply only after reviewing the preview:
  *   npm run backfill:claims -- --project alphawod-d1f2f --apply \
@@ -671,10 +672,14 @@ async function main() {
   const approvedAccessReport = args["approved-access-report"];
   const allowImplicitApproved = args["allow-implicit-approved"] === "true";
   const allowUnresolved = args["allow-unresolved"] === "true";
+  const summaryOnly = args["summary-only"] === "true";
 
   if (!projectId) throw new Error("--project is required; no default project is permitted.");
   if (apply && confirmProject !== projectId) {
     throw new Error("Apply requires --confirm-project to exactly match --project.");
+  }
+  if (summaryOnly && !args.report) {
+    throw new Error("--summary-only requires --report so the complete review record is retained.");
   }
   const reportFile = args.report ? fs.openSync(args.report, "wx") : null;
 
@@ -997,7 +1002,20 @@ async function main() {
     fs.writeFileSync(reportFile, `${JSON.stringify(report, null, 2)}\n`);
     fs.closeSync(reportFile);
   }
-  console.log(JSON.stringify(report, null, 2));
+  console.log(JSON.stringify(summaryOnly ? {
+    projectId: report.projectId,
+    mode: report.mode,
+    scanned: report.scanned,
+    scannedAuthUsers: report.scannedAuthUsers,
+    migratable: report.migratable,
+    accessGrantCandidateCount: report.accessGrantCandidates.length,
+    implicitApprovedCount: report.implicitApproved.length,
+    invalidCount: report.invalid.length,
+    missingAuthUsersCount: report.missingAuthUsers.length,
+    authUsersWithoutProfilesCount: report.authUsersWithoutProfiles.length,
+    incompleteLegacyWaiverCount: report.legacyWaivers.incomplete.length,
+    leaderboardPii: report.leaderboardPii,
+  } : report, null, 2));
   console.log(apply ? "Migration applied." : "Dry run only; no data was changed.");
 }
 
