@@ -34,11 +34,11 @@ describe("PAYG callable client", () => {
     expect(invoke).toHaveBeenCalledWith({});
   });
 
-  it("sends the exact guest, class and legal acceptance contract with App Check", async () => {
+  it("sends the exact guest, class, acceptance and presented-notice contract with App Check", async () => {
     const invoke = jest.fn().mockResolvedValue({data: {ok: true, sessionUrl: "https://checkout.stripe.test/payg"}});
     (httpsCallable as jest.Mock).mockReturnValue(invoke);
     const request: CreatePaygCheckoutRequest = {
-      checkoutSchemaVersion: 1,
+      checkoutSchemaVersion: 2,
       checkoutAttemptId: "12345678-1234-4123-8123-123456789abc",
       classId: "class_1",
       attendee: {fullName: "Guest Athlete", dateOfBirth: "1990-01-01"},
@@ -50,6 +50,7 @@ describe("PAYG callable client", () => {
         cancellationPolicyAccepted: true,
         waiverVersion: "PAYG-WAIVER-1",
         termsVersion: "PAYG-TERMS-1",
+        privacyNoticeVersionPresented: "PAYG-PRIVACY-NOTICE-1",
       },
     };
 

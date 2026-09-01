@@ -67,6 +67,7 @@ function legalEvidence() {
     cancellationPolicyAccepted: true,
     waiverVersion: "payg-waiver-test-v1",
     termsVersion: "payg-terms-test-v1",
+    privacyNoticeVersionPresented: "payg-privacy-test-v1",
     legal: {
       waiver: {
         version: "payg-waiver-test-v1",
@@ -77,6 +78,11 @@ function legalEvidence() {
         version: "payg-terms-test-v1",
         publicUrl: "https://example.test/legal/payg-terms",
         sha256: "b".repeat(64),
+      },
+      privacyNotice: {
+        version: "payg-privacy-test-v1",
+        publicUrl: "https://example.test/legal/payg-privacy",
+        sha256: "c".repeat(64),
       },
     },
     acceptedAt: admin.firestore.Timestamp.now(),

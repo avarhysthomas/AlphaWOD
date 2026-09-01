@@ -3,7 +3,7 @@
   "status": "DRAFT_NOT_APPROVED",
   "approvedForPublication": false,
   "runtimeEligible": false,
-  "draftDate": "2026-08-31",
+  "draftDate": "2026-09-01",
   "documents": {
     "adultConditioningAddendum": {
       "title": "Adult Conditioning Only Membership Product Addendum",
@@ -32,6 +32,15 @@
       "approvedForPublication": false,
       "runtimeEligible": false
     },
+    "paygPrivacyNotice": {
+      "title": "PAYG Privacy Notice Addendum",
+      "version": "ZAF-PAYG-PRIVACY-NOTICE-DRAFT-2026-09-01-01",
+      "filename": "ZAF-PAYG-PRIVACY-NOTICE-DRAFT-2026-09-01-01.txt",
+      "bytes": 13622,
+      "sha256": "b337333f2d7439ac011633add9a30f659f912bf8577084cd95630edf8ebddba0",
+      "approvedForPublication": false,
+      "runtimeEligible": false
+    },
     "paygPrivacyRetentionDecision": {
       "title": "PAYG Privacy and Retention Decision Record",
       "version": "ZAF-PAYG-PRIVACY-RETENTION-DRAFT-2026-08-31-01",
@@ -40,6 +49,20 @@
       "sha256": "f043689fab97e02fbc44b1bb3c76005c8ac9ca7eebebb6e9b1367b4c8a98f762",
       "approvedForPublication": false,
       "runtimeEligible": false
+    }
+  },
+  "paygPrivacyNoticeDraftBasis": {
+    "generalPrivacyNotice": {
+      "version": "ZAF-PRIVACY-2026-08-25-02",
+      "path": "public/legal/memberships/ZAF-PRIVACY-2026-08-25-02.txt",
+      "bytes": 15236,
+      "sha256": "0394ac927118b4490958cacff93c241f0ede617dd251758b33d464c72142a6fe"
+    },
+    "approvedRetentionEvidence": {
+      "version": "ZAF-PAYG-PII-RETENTION-2026-08-31-01",
+      "path": "ops/release/evidence/payg-retention-owner-approval-2026-08-31.json",
+      "bytes": 1674,
+      "sha256": "856c5233d1f66f153349615b55fc922bd9d6da8541a476e793bce6f2be2d6b16"
     }
   },
   "paygDraftAcceptance": {
@@ -53,6 +76,7 @@
     "paygSpecificDateLeisureExceptionConfirmed": false,
     "paygTermsApproved": false,
     "paygWaiverApproved": false,
+    "paygPrivacyNoticeApproved": false,
     "paygOrderPiiRetentionDays": null,
     "paygWaiverPiiRetentionDays": null,
     "paygEmailPiiRetentionDays": null,
@@ -63,15 +87,25 @@
     "Legal reviewer approves exact customer-facing bytes and removes every draft/internal-review marker.",
     "New immutable final version IDs, filenames, byte counts and SHA-256 digests are recorded; draft IDs must never be reused as final IDs.",
     "The approved Conditioning wording is incorporated into the membership checkout document set and its durable confirmation evidence.",
-    "The final PAYG terms and waiver are published under same-origin /legal/ URLs containing their exact final version IDs.",
-    "The final PAYG version, URL and SHA-256 values are copied into the production environment only after publication verification.",
+    "The final PAYG terms, waiver and Privacy Notice are published under same-origin /legal/ URLs containing their exact final version IDs.",
+    "The final PAYG document versions, URLs and SHA-256 values are copied into the production environment only after publication verification.",
     "Exact PAYG retention periods and policy version are approved, disclosed and copied into production only after automated redaction tests pass.",
+    "The approved PAYG Privacy Notice is presented prominently before personal information is submitted and is not treated as consent to the core booking.",
     "All legal and purchase gates remain false through deployment, provider verification and monitored end-to-end test evidence."
   ],
   "reviewSources": [
     "https://www.legislation.gov.uk/uksi/2013/3134/pdfs/uksi_20133134_en.pdf",
     "https://www.legislation.gov.uk/ukpga/2015/15/pdfs/ukpgaen_20150015_en.pdf",
+    "https://www.legislation.gov.uk/eur/2016/679/pdfs/eur_20160679_2016-05-04_en.pdf",
+    "https://www.legislation.gov.uk/ukpga/2025/18/pdfs/ukpga_20250018_en.pdf",
+    "https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/individual-rights/the-right-to-be-informed/what-privacy-information-should-we-provide/",
+    "https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/lawful-basis/a-guide-to-lawful-basis/contract/",
+    "https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/lawful-basis/legitimate-interests/what-is-the-legitimate-interests-basis/",
+    "https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/lawful-basis/a-guide-to-lawful-basis/special-category-data/",
+    "https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/data-protection-principles/a-guide-to-the-data-protection-principles/data-minimisation/",
     "https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/data-protection-principles/a-guide-to-the-data-protection-principles/storage-limitation/",
+    "https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/individual-rights/individual-rights/right-to-object/",
+    "https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/international-transfers/",
     "https://www.gov.uk/guidance/writing-a-fair-contract-for-customers"
   ]
 }

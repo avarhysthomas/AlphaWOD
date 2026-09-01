@@ -23,8 +23,10 @@ import {
   readPendingPaygCheckout,
   rememberPendingPaygCheckout,
   type PaygClass,
+  type PaygLegalRelease,
   type PublicPaygSchedule,
 } from "../services/payg";
+import { PAYG_CANCELLATION_ACCEPTANCE } from "../legal";
 
 const LONDON_TZ = "Europe/London";
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
@@ -145,6 +147,17 @@ function sessionAvailability(session: PaygClass) {
   if (session.availability === "full") return "Full";
   if (session.availability === "unavailable") return "Not available for PAYG";
   return `${session.spacesRemaining} ${session.spacesRemaining === 1 ? "space" : "spaces"} left`;
+}
+
+function hasCompleteLegalRelease(
+  value: PaygLegalRelease | null | undefined
+): value is PaygLegalRelease {
+  const documents = value ? [value.waiver, value.terms, value.privacyNotice] : [];
+  return documents.length === 3 && documents.every((document) =>
+    typeof document?.version === "string" && document.version.length > 0 &&
+    typeof document.publicUrl === "string" &&
+    document.publicUrl.startsWith("/legal/")
+  );
 }
 
 export default function PayAsYouGo() {
@@ -304,8 +317,11 @@ export default function PayAsYouGo() {
     if (selectedWeekIndex >= 0) setVisibleWeekIndex(selectedWeekIndex);
   }, [pendingCheckout, pendingSession, weeks]);
 
+  const scheduleLegal = schedule?.legal;
+  const legalRelease = hasCompleteLegalRelease(scheduleLegal) ?
+    scheduleLegal : null;
   const checkoutOpen = Boolean(
-    schedule?.available && schedule.checkoutAvailable && schedule.legal
+    schedule?.available && schedule.checkoutAvailable && legalRelease
   );
   const pendingHoldActive = Boolean(
     pendingCheckout && Date.parse(pendingCheckout.holdExpiresAt) > Date.now()
@@ -364,7 +380,7 @@ export default function PayAsYouGo() {
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    if (!selected || !schedule?.legal || !checkoutOpen || !allAccepted) return;
+    if (!selected || !legalRelease || !checkoutOpen || !allAccepted) return;
 
     try {
       setSubmitting(true);
@@ -372,7 +388,7 @@ export default function PayAsYouGo() {
       const checkoutAttemptId =
         attemptRef.current ?? (attemptRef.current = createPaygCheckoutAttemptId());
       const result = await createPaygCheckoutSession({
-        checkoutSchemaVersion: 1,
+        checkoutSchemaVersion: 2,
         checkoutAttemptId,
         classId: selected.classId,
         attendee: {
@@ -388,8 +404,9 @@ export default function PayAsYouGo() {
           waiverAccepted: true,
           termsAccepted: true,
           cancellationPolicyAccepted: true,
-          waiverVersion: schedule.legal.waiver.version,
-          termsVersion: schedule.legal.terms.version,
+          waiverVersion: legalRelease.waiver.version,
+          termsVersion: legalRelease.terms.version,
+          privacyNoticeVersionPresented: legalRelease.privacyNotice.version,
         },
       });
       rememberPendingPaygCheckout({
@@ -706,11 +723,27 @@ export default function PayAsYouGo() {
                     <p className="font-black text-amber-100">Checkout not open yet</p>
                     <p className="mt-1">You can view the timetable, but online PAYG purchase remains closed while the release checks are completed.</p>
                   </div>
-                ) : selected ? (
+                ) : selected && legalRelease ? (
                   <form onSubmit={handleSubmit} className="mt-7 space-y-5">
                     <div>
                       <h2 className="font-heading text-3xl uppercase text-white">Attendee details</h2>
                       <p className="mt-2 text-sm leading-6 text-white/50">Adult guests only. No account will be created.</p>
+                    </div>
+
+                    <div className="rounded-xl bg-payg/10 p-4 text-sm leading-6 text-white/80">
+                      <p className="font-black text-payg">How we use your details</p>
+                      <p className="mt-1">
+                        Before entering your details, read the{" "}
+                        <a
+                          className="font-black text-payg underline underline-offset-4 outline-none focus-visible:ring-2 focus-visible:ring-payg focus-visible:ring-offset-2 focus-visible:ring-offset-[#151311]"
+                          href={legalRelease.privacyNotice.publicUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          PAYG Privacy Notice
+                        </a>
+                        . It explains what we collect, why we use it, how long we keep it and your rights. This notice is information, not consent to marketing.
+                      </p>
                     </div>
 
                     <label className="block text-sm font-bold text-white/75">
@@ -737,13 +770,13 @@ export default function PayAsYouGo() {
                         I confirm I am the named attendee and I am aged 18 or over.
                       </Acceptance>
                       <Acceptance checked={waiverAccepted} onChange={(value) => { setWaiverAccepted(value); resetAttempt(); }}>
-                        I have read and accept the <a className="font-bold text-payg underline underline-offset-4" href={schedule?.legal?.waiver.publicUrl} target="_blank" rel="noreferrer">adult participant waiver</a>.
+                        I have read and accept the <a className="font-bold text-payg underline underline-offset-4" href={legalRelease.waiver.publicUrl} target="_blank" rel="noreferrer">adult participant waiver</a>.
                       </Acceptance>
                       <Acceptance checked={termsAccepted} onChange={(value) => { setTermsAccepted(value); resetAttempt(); }}>
-                        I have read and accept the <a className="font-bold text-payg underline underline-offset-4" href={schedule?.legal?.terms.publicUrl} target="_blank" rel="noreferrer">Pay As You Go terms</a>.
+                        I have read and accept the <a className="font-bold text-payg underline underline-offset-4" href={legalRelease.terms.publicUrl} target="_blank" rel="noreferrer">Pay As You Go terms</a>.
                       </Acceptance>
                       <Acceptance checked={cancellationAccepted} onChange={(value) => { setCancellationAccepted(value); resetAttempt(); }}>
-                        I understand this class cannot be transferred or rescheduled, and cancellations made less than 24 hours before it starts or a no-show are non-refundable.
+                        {PAYG_CANCELLATION_ACCEPTANCE.statement}
                       </Acceptance>
                     </fieldset>
 

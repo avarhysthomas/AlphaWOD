@@ -39,7 +39,7 @@ import {
 } from "./stripeLiveCatalog";
 
 export const PAYG_SCHEMA_VERSION = 1;
-export const PAYG_CHECKOUT_SCHEMA_VERSION = 1;
+export const PAYG_CHECKOUT_SCHEMA_VERSION = 2;
 export const PAYG_OFFERING_KEY = "adult_payg_class" as const;
 export const PAYG_PURCHASE_KIND = "payg_class" as const;
 export const PAYG_AMOUNT_PENCE = 700;
@@ -139,6 +139,16 @@ const paygWaiverSha256 = defineString("PAYG_WAIVER_SHA256", {default: ""});
 const paygTermsVersion = defineString("PAYG_TERMS_VERSION", {default: ""});
 const paygTermsPublicUrl = defineString("PAYG_TERMS_PUBLIC_URL", {default: ""});
 const paygTermsSha256 = defineString("PAYG_TERMS_SHA256", {default: ""});
+const paygPrivacyNoticeVersion = defineString("PAYG_PRIVACY_NOTICE_VERSION", {
+  default: "",
+});
+const paygPrivacyNoticePublicUrl = defineString(
+  "PAYG_PRIVACY_NOTICE_PUBLIC_URL",
+  {default: ""}
+);
+const paygPrivacyNoticeSha256 = defineString("PAYG_PRIVACY_NOTICE_SHA256", {
+  default: "",
+});
 // PAYG is served by the same Firebase web app as membership checkout. Reuse
 // the already-verified production app ID instead of introducing a second
 // security identity that could drift.
@@ -225,6 +235,14 @@ export type PaygLegalDocument = Readonly<{
 export type PaygLegalConfig = Readonly<{
   waiver: PaygLegalDocument;
   terms: PaygLegalDocument;
+  privacyNotice: PaygLegalDocument;
+}>;
+
+export type PaygConfirmationLegalAcceptance = Readonly<{
+  acceptedAt: string;
+  waiver: PaygLegalDocument;
+  terms: PaygLegalDocument;
+  privacyNotice: PaygLegalDocument;
 }>;
 
 export type PaygPiiRetentionConfig = Readonly<{
@@ -266,6 +284,9 @@ export type PaygAcceptances = Readonly<{
   cancellationPolicyAccepted: true;
   waiverVersion: string;
   termsVersion: string;
+  // The notice is presented, not consented to. Binding the shown version lets
+  // the server reject a stale page without misrepresenting privacy as consent.
+  privacyNoticeVersionPresented: string;
 }>;
 
 export type NormalizedPaygCheckoutRequest = Readonly<{
@@ -1175,10 +1196,18 @@ export function normalizePaygCheckoutRequest(
     1,
     120
   );
-  if (waiverVersion !== legal.waiver.version || termsVersion !== legal.terms.version) {
+  const privacyNoticeVersionPresented = requireBoundedString(
+    acceptances.privacyNoticeVersionPresented,
+    "acceptances.privacyNoticeVersionPresented",
+    1,
+    120
+  );
+  if (waiverVersion !== legal.waiver.version ||
+    termsVersion !== legal.terms.version ||
+    privacyNoticeVersionPresented !== legal.privacyNotice.version) {
     throw paygError(
       "failed-precondition",
-      "The waiver or PAYG terms changed. Review the current documents before continuing.",
+      "A PAYG document or Privacy Notice changed. Review the current documents before continuing.",
       "stale_legal_terms"
     );
   }
@@ -1213,6 +1242,7 @@ export function normalizePaygCheckoutRequest(
       ),
       waiverVersion,
       termsVersion,
+      privacyNoticeVersionPresented,
     }),
   });
 }
@@ -1903,7 +1933,7 @@ function resolvePublicOrigin(): string {
 }
 
 function readLegalDocument(
-  kind: "waiver" | "terms",
+  kind: "waiver" | "terms" | "privacy notice",
   versionValue: string,
   publicUrlValue: string,
   sha256Value: string,
@@ -1967,6 +1997,13 @@ function resolveLegalConfig(requireApproval = true): PaygLegalConfig {
       paygTermsVersion.value(),
       paygTermsPublicUrl.value(),
       paygTermsSha256.value(),
+      origin
+    ),
+    privacyNotice: readLegalDocument(
+      "privacy notice",
+      paygPrivacyNoticeVersion.value(),
+      paygPrivacyNoticePublicUrl.value(),
+      paygPrivacyNoticeSha256.value(),
       origin
     ),
   });
@@ -2184,7 +2221,7 @@ function publicOffering() {
   });
 }
 
-function publicLegalConfig(legal: PaygLegalConfig) {
+export function publicLegalConfig(legal: PaygLegalConfig) {
   return Object.freeze({
     waiver: Object.freeze({
       version: legal.waiver.version,
@@ -2193,6 +2230,10 @@ function publicLegalConfig(legal: PaygLegalConfig) {
     terms: Object.freeze({
       version: legal.terms.version,
       publicUrl: legal.terms.publicUrl,
+    }),
+    privacyNotice: Object.freeze({
+      version: legal.privacyNotice.version,
+      publicUrl: legal.privacyNotice.publicUrl,
     }),
   });
 }
@@ -3175,6 +3216,9 @@ function hasCompletePaygIntentPiiEvidence(intent: PaygIntentDoc): boolean {
     intent.contact?.email &&
     intent.acceptances?.legal?.waiver?.sha256 &&
     intent.acceptances?.legal?.terms?.sha256 &&
+    intent.acceptances?.legal?.privacyNotice?.sha256 &&
+    intent.acceptances?.privacyNoticeVersionPresented ===
+      intent.acceptances?.legal?.privacyNotice?.version &&
     /^[a-f0-9]{64}$/.test(intent.acceptanceEvidenceDigest || "") &&
     resolveStoredPaygPiiRetentionConfig(intent.privacy)
   );
@@ -3302,15 +3346,139 @@ function retainedPaygAcceptanceEvidence(intent: PaygIntentDoc) {
     cancellationPolicyAccepted: intent.acceptances.cancellationPolicyAccepted,
     waiver: Object.freeze({
       version: intent.acceptances.legal.waiver.version,
+      publicUrl: intent.acceptances.legal.waiver.publicUrl,
       sha256: intent.acceptances.legal.waiver.sha256,
     }),
     terms: Object.freeze({
       version: intent.acceptances.legal.terms.version,
+      publicUrl: intent.acceptances.legal.terms.publicUrl,
       sha256: intent.acceptances.legal.terms.sha256,
+    }),
+    privacyNoticePresented: true,
+    privacyNotice: Object.freeze({
+      version: intent.acceptances.legal.privacyNotice.version,
+      publicUrl: intent.acceptances.legal.privacyNotice.publicUrl,
+      sha256: intent.acceptances.legal.privacyNotice.sha256,
     }),
     acceptedAt: intent.acceptances.acceptedAt,
     retentionPolicyVersion: resolveStoredPaygPiiRetentionConfig(intent.privacy)
       ?.policyVersion ?? "unrecorded-v1",
+  });
+}
+
+function normalizePaygConfirmationLegalAcceptance(
+  value: PaygConfirmationLegalAcceptance
+): PaygConfirmationLegalAcceptance {
+  const acceptedAtMillis = Date.parse(value.acceptedAt);
+  if (!Number.isSafeInteger(acceptedAtMillis) || acceptedAtMillis <= 0 ||
+    new Date(acceptedAtMillis).toISOString() !== value.acceptedAt) {
+    throw new Error("PAYG legal acceptance time is invalid.");
+  }
+  const normalizeDocument = (
+    kind: "waiver" | "terms" | "privacy notice",
+    document: PaygLegalDocument
+  ): PaygLegalDocument => {
+    if (!/^[A-Za-z0-9._-]{3,120}$/.test(document.version) ||
+      !/^[a-f0-9]{64}$/.test(document.sha256)) {
+      throw new Error(`PAYG ${kind} confirmation evidence is invalid.`);
+    }
+    let publicUrl: URL;
+    try {
+      publicUrl = new URL(document.publicUrl);
+    } catch {
+      throw new Error(`PAYG ${kind} confirmation URL is invalid.`);
+    }
+    const loopback = publicUrl.hostname === "localhost" ||
+      publicUrl.hostname === "127.0.0.1";
+    if ((publicUrl.protocol !== "https:" &&
+      !(loopback && publicUrl.protocol === "http:")) ||
+      publicUrl.username || publicUrl.password ||
+      !publicUrl.pathname.startsWith("/legal/") ||
+      publicUrl.search || publicUrl.hash) {
+      throw new Error(`PAYG ${kind} confirmation URL is invalid.`);
+    }
+    return Object.freeze({
+      version: document.version,
+      publicUrl: publicUrl.href,
+      sha256: document.sha256,
+    });
+  };
+  return Object.freeze({
+    acceptedAt: value.acceptedAt,
+    waiver: normalizeDocument("waiver", value.waiver),
+    terms: normalizeDocument("terms", value.terms),
+    privacyNotice: normalizeDocument("privacy notice", value.privacyNotice),
+  });
+}
+
+function validPaygConfirmationLegalAcceptance(
+  value: unknown
+): value is PaygConfirmationLegalAcceptance {
+  if (!value || typeof value !== "object") return false;
+  try {
+    const candidate = value as PaygConfirmationLegalAcceptance;
+    const normalized = normalizePaygConfirmationLegalAcceptance(candidate);
+    return candidate.acceptedAt === normalized.acceptedAt &&
+      candidate.waiver?.version === normalized.waiver.version &&
+      candidate.waiver?.publicUrl === normalized.waiver.publicUrl &&
+      candidate.waiver?.sha256 === normalized.waiver.sha256 &&
+      candidate.terms?.version === normalized.terms.version &&
+      candidate.terms?.publicUrl === normalized.terms.publicUrl &&
+      candidate.terms?.sha256 === normalized.terms.sha256 &&
+      candidate.privacyNotice?.version === normalized.privacyNotice.version &&
+      candidate.privacyNotice?.publicUrl ===
+        normalized.privacyNotice.publicUrl &&
+      candidate.privacyNotice?.sha256 === normalized.privacyNotice.sha256;
+  } catch {
+    return false;
+  }
+}
+
+function paygConfirmationLegalAcceptance(
+  intent: PaygIntentDoc
+): PaygConfirmationLegalAcceptance {
+  const acceptedAtMillis = timestampMillis(intent.acceptances.acceptedAt);
+  if (acceptedAtMillis === null ||
+    !Number.isSafeInteger(acceptedAtMillis) || acceptedAtMillis <= 0 ||
+    intent.acceptances.waiverVersion !==
+      intent.acceptances.legal.waiver.version ||
+    intent.acceptances.termsVersion !== intent.acceptances.legal.terms.version ||
+    intent.acceptances.privacyNoticeVersionPresented !==
+      intent.acceptances.legal.privacyNotice.version) {
+    throw new Error("PAYG stored legal acceptance evidence is invalid.");
+  }
+  let origin: URL;
+  try {
+    origin = new URL(intent.publicOrigin);
+  } catch {
+    throw new Error("PAYG stored public origin is invalid.");
+  }
+  if (origin.origin !== intent.publicOrigin) {
+    throw new Error("PAYG stored public origin is invalid.");
+  }
+  return normalizePaygConfirmationLegalAcceptance({
+    acceptedAt: new Date(acceptedAtMillis).toISOString(),
+    waiver: {
+      ...intent.acceptances.legal.waiver,
+      publicUrl: new URL(
+        intent.acceptances.legal.waiver.publicUrl,
+        origin
+      ).href,
+    },
+    terms: {
+      ...intent.acceptances.legal.terms,
+      publicUrl: new URL(
+        intent.acceptances.legal.terms.publicUrl,
+        origin
+      ).href,
+    },
+    privacyNotice: {
+      ...intent.acceptances.legal.privacyNotice,
+      publicUrl: new URL(
+        intent.acceptances.legal.privacyNotice.publicUrl,
+        origin
+      ).href,
+    },
   });
 }
 
@@ -3350,6 +3518,7 @@ export function buildPaygConfirmationOutboxPayload(input: Readonly<{
   publicOrigin: string;
   cancellationToken: string;
   cancellationCutoffAtMillis: number;
+  legalAcceptance: PaygConfirmationLegalAcceptance;
 }>) {
   const origin = input.publicOrigin.replace(/\/$/, "");
   const cancellationUrl = `${origin}/pay-as-you-go/cancel?token=${
@@ -3373,6 +3542,9 @@ export function buildPaygConfirmationOutboxPayload(input: Readonly<{
         afterCutoff: "A cancellation made under 24 hours before the class, or a no-show, is non-refundable.",
       }),
       cancellationUrl,
+      legalAcceptance: normalizePaygConfirmationLegalAcceptance(
+        input.legalAcceptance
+      ),
     }),
   });
 }
@@ -3548,6 +3720,7 @@ function confirmationOutboxFor(
       cancellationToken: token,
       cancellationCutoffAtMillis: intent.classStartMillis -
         PAYG_CANCELLATION_CUTOFF_HOURS * 60 * 60 * 1000,
+      legalAcceptance: paygConfirmationLegalAcceptance(intent),
     }),
     piiRetentionCutoffAt,
     piiRedactionRetryAt: piiRetentionCutoffAt,
@@ -5144,7 +5317,6 @@ export async function fulfilPaygCheckoutSession(
   const outboxRef = db().collection("paygEmailOutbox").doc(intentId);
   const duplicateLockRef = db().collection(PAYG_DUPLICATE_LOCK_COLLECTION)
     .doc(intent.duplicateLockId);
-  const confirmationOutbox = confirmationOutboxFor(intentRef, intent);
   let outcome: Readonly<{
     status: PaygOrderStatus | "payment_review";
     alreadyFulfilled: boolean;
@@ -5306,6 +5478,8 @@ export async function fulfilPaygCheckoutSession(
         bookingKind: "payg_guest",
         isGuestBooking: true,
         paygOrderId: intentId,
+        retainedAcceptanceEvidence:
+          retainedPaygAcceptanceEvidence(freshIntent),
         attendanceStatus: "none",
         attended: false,
         checkedInAt: null,
@@ -5345,6 +5519,10 @@ export async function fulfilPaygCheckoutSession(
         });
       }
       if (!outboxSnap.exists) {
+        const confirmationOutbox = confirmationOutboxFor(
+          intentRef,
+          freshIntent
+        );
         tx.create(outboxRef, {
           ...confirmationOutbox,
           status: "pending",
@@ -7802,6 +7980,15 @@ export function buildPaygConfirmationEmail(
     `Where: ${data.class.location}`,
     `Paid: ${amount} GBP`,
     "",
+    "Booking documents:",
+    `PAYG Terms: ${data.legalAcceptance.terms.version}`,
+    `Terms copy: ${data.legalAcceptance.terms.publicUrl}`,
+    `Participant Waiver: ${data.legalAcceptance.waiver.version}`,
+    `Waiver copy: ${data.legalAcceptance.waiver.publicUrl}`,
+    `Privacy Notice shown: ${data.legalAcceptance.privacyNotice.version}`,
+    `Privacy Notice copy: ${data.legalAcceptance.privacyNotice.publicUrl}`,
+    `Acceptance time: ${data.legalAcceptance.acceptedAt}`,
+    "",
     data.cancellationPolicy.beforeCutoff,
     data.cancellationPolicy.afterCutoff,
     `Refund deadline: ${data.cancellationPolicy.refundableUntil}`,
@@ -7819,6 +8006,11 @@ export function buildPaygConfirmationEmail(
         <p><strong>${escapeHtml(data.class.title)}</strong><br>
           ${escapeHtml(when)}<br>${escapeHtml(data.class.location)}</p>
         <p><strong>Paid:</strong> ${escapeHtml(amount)} GBP</p>
+        <p><strong>Booking documents</strong><br>
+          PAYG Terms (accepted): <a href="${escapeHtml(data.legalAcceptance.terms.publicUrl)}">${escapeHtml(data.legalAcceptance.terms.version)}</a><br>
+          Participant Waiver (accepted): <a href="${escapeHtml(data.legalAcceptance.waiver.publicUrl)}">${escapeHtml(data.legalAcceptance.waiver.version)}</a><br>
+          Privacy Notice (shown, not consent): <a href="${escapeHtml(data.legalAcceptance.privacyNotice.publicUrl)}">${escapeHtml(data.legalAcceptance.privacyNotice.version)}</a><br>
+          Acceptance time: ${escapeHtml(data.legalAcceptance.acceptedAt)}</p>
         <p>${escapeHtml(data.cancellationPolicy.beforeCutoff)}
           ${escapeHtml(data.cancellationPolicy.afterCutoff)}</p>
         <p><strong>Refund deadline:</strong>
@@ -8083,6 +8275,9 @@ function validPaygOutboxPayload(
       payload.idempotencyKey === `payg-confirmation/${payload.orderId}/v1` &&
     payload.templateData.amountPence === PAYG_AMOUNT_PENCE &&
     payload.templateData.currency === PAYG_CURRENCY &&
+    validPaygConfirmationLegalAcceptance(
+      payload.templateData.legalAcceptance
+    ) &&
     typeof payload.templateData.cancellationUrl === "string" &&
     payload.templateData.cancellationUrl.includes("/pay-as-you-go/cancel?token=");
   }

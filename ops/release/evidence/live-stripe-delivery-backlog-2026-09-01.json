@@ -1,11 +1,12 @@
 {
   "schemaVersion": 1,
   "evidenceType": "stripe-live-delivery-backlog-readback",
-  "recordedAt": "2026-09-01",
+  "recordedAt": "2026-09-01T11:53:23Z",
   "readback": {
     "command": "stripe events list --live --delivery-success=false",
     "windowStart": "2026-08-25",
     "unsuccessfulEventCount": 1,
+    "paginationExhausted": true,
     "events": [
       {
         "eventId": "evt_1UAgFqFzNDZoGGA0UDdTWXmb",

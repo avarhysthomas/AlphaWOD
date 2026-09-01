@@ -16,6 +16,9 @@ const {
 const {
   verifyConditioningPaygDeployment,
 } = require("./verifyConditioningPaygDeployment");
+const {
+  verifyApprovedProductLegalDocuments,
+} = require("./verifyApprovedProductLegalDocuments");
 
 const root = path.resolve(__dirname, "..");
 const readinessPath = path.join(
@@ -25,6 +28,7 @@ const readinessPath = path.join(
 
 const EXPECTED_OWNER_DECISIONS = Object.freeze([
   "adult-conditioning-product-terms",
+  "payg-privacy-notice",
   "payg-pii-retention-and-redaction-policy",
   "payg-product-terms-and-waiver",
 ]);
@@ -36,10 +40,107 @@ const EXPECTED_OPERATIONAL_EVIDENCE = Object.freeze([
   "live-stripe-delivery-backlog-cleared",
   "live-stripe-webhook-exact-event-readback",
   "payg-stripe-test-purchase-refund-dispute-email-journey",
+  "product-legal-publication-and-runtime-binding",
   "resend-domain-and-confirmation-delivery",
 ]);
+const OPERATIONAL_EVIDENCE_REQUIREMENTS = Object.freeze({
+  "billing-alert-policies-and-staffed-notification-route": Object.freeze({
+    evidenceType: "gcp-billing-and-payg-alert-policy-suite",
+    verifiedControls: Object.freeze([
+      "nine-policies-enabled",
+      "primary-route-delivery-acknowledged",
+      "independent-backup-route-delivery-acknowledged",
+      "named-primary-responder",
+      "named-backup-responder",
+    ]),
+  }),
+  "class-cancellation-quota-and-payg-refund-drill": Object.freeze({
+    evidenceType: "class-cancellation-quota-and-payg-refund-drill",
+    verifiedControls: Object.freeze([
+      "conditioning-quota-cancel-rebook-verified",
+      "conditioning-late-cancel-quota-verified",
+      "payg-refund-over-24h-verified",
+      "payg-no-refund-under-24h-verified",
+      "payg-capacity-released-after-refund",
+    ]),
+  }),
+  "conditioning-stripe-test-purchase-to-booking-journey": Object.freeze({
+    evidenceType: "stripe-test-membership-checkout",
+    verifiedControls: Object.freeze([
+      "stripe-test-checkout-completed",
+      "webhook-booking-created",
+      "membership-entitlement-active",
+      "two-per-week-enforced",
+      "confirmation-delivered",
+    ]),
+  }),
+  "live-product-catalogue-and-closed-config-readback": Object.freeze({
+    evidenceType: "production-provider-app-check-and-closed-config-readback",
+    verifiedControls: Object.freeze([
+      "stripe-live-catalogue-verified",
+      "payg-price-700-gbp",
+      "app-check-provider-bound",
+      "secrets-versioned-without-values",
+      "new-product-gates-closed",
+    ]),
+  }),
+  "live-stripe-delivery-backlog-cleared": Object.freeze({
+    schemaVersion: 2,
+    evidenceType: "stripe-live-delivery-backlog-cleared-readback",
+    verifiedControls: Object.freeze([
+      "compatible-code-deployed",
+      "exact-event-reconciled",
+      "redelivery-acknowledged",
+      "zero-unsuccessful-events-full-readback",
+    ]),
+  }),
+  "live-stripe-webhook-exact-event-readback": Object.freeze({
+    evidenceType: "stripe-live-webhook-exact-event-readback",
+    verifiedControls: Object.freeze([
+      "live-account-readback",
+      "endpoint-enabled",
+      "exact-required-event-set",
+      "signing-secret-not-recorded",
+      "read-only",
+    ]),
+  }),
+  "payg-stripe-test-purchase-refund-dispute-email-journey": Object.freeze({
+    evidenceType: "payg-stripe-test-purchase-refund-dispute-email-journey",
+    verifiedControls: Object.freeze([
+      "stripe-test-checkout-completed",
+      "webhook-booking-created",
+      "confirmation-delivered",
+      "refund-converged",
+      "dispute-converged",
+      "emails-delivered",
+    ]),
+  }),
+  "product-legal-publication-and-runtime-binding": Object.freeze({
+    evidenceType: "product-legal-publication-and-runtime-binding",
+    verifiedControls: Object.freeze([
+      "immutable-documents-published",
+      "runtime-config-bound",
+      "closed-gate-deployed",
+      "production-readback-matched",
+      "privacy-notice-before-personal-data",
+    ]),
+  }),
+  "resend-domain-and-confirmation-delivery": Object.freeze({
+    evidenceType: "resend-production-domain-and-confirmation-delivery-readback",
+    verifiedControls: Object.freeze([
+      "domain-verified",
+      "membership-confirmation-delivered",
+      "sender-configured",
+      "secret-value-not-recorded",
+      "recipient-pii-not-recorded",
+    ]),
+  }),
+});
 const PAYG_RETENTION_DECISION_ID =
   "payg-pii-retention-and-redaction-policy";
+const PAYG_PRIVACY_DECISION_ID = "payg-privacy-notice";
+const PAYG_PRIVACY_ENGINEERING_EVIDENCE =
+  "ops/release/evidence/payg-privacy-runtime-binding-readiness-2026-09-01.json";
 const PAYG_RETENTION_POLICY_VERSION =
   "ZAF-PAYG-PII-RETENTION-2026-08-31-01";
 const LIVE_STRIPE_DELIVERY_BACKLOG_ID =
@@ -64,6 +165,291 @@ function assertSameValues(actual, expected, label) {
   }
 }
 
+function evidenceSha256(absolutePath) {
+  return crypto.createHash("sha256")
+    .update(fs.readFileSync(absolutePath))
+    .digest("hex");
+}
+
+function productLegalPublicationDocumentsMatch(
+  evidence,
+  {
+    publicationManifest = null,
+    readPublishedDocument = null,
+  } = {}
+) {
+  try {
+    const manifest = publicationManifest ?? JSON.parse(fs.readFileSync(
+      path.join(root, "public/legal/products/manifest.json"),
+      "utf8"
+    ));
+    const readDocument = readPublishedDocument ?? ((entry) =>
+      fs.readFileSync(path.join(root, "public/legal/products", entry.filename))
+    );
+    const expectedKeys = [
+      "adultConditioningAddendum",
+      "paygPrivacyNotice",
+      "paygTerms",
+      "paygWaiver",
+    ];
+    const manifestKeys = Object.keys(manifest.documents ?? {}).sort();
+    const evidenceDocuments = Array.isArray(evidence.documents) ?
+      evidence.documents : [];
+    const evidenceKeys = evidenceDocuments.map(({key}) => key).sort();
+    if (manifest.approvedForPublication !== true ||
+      manifest.productionPurchaseGatesRemainClosed !== true ||
+      manifest.ownerDecisions?.paygPrivacyNoticeApproved !== true ||
+      JSON.stringify(manifestKeys) !== JSON.stringify(expectedKeys) ||
+      JSON.stringify(evidenceKeys) !== JSON.stringify(expectedKeys) ||
+      evidenceDocuments.length !== expectedKeys.length) {
+      return false;
+    }
+    return expectedKeys.every((key) => {
+      const entry = manifest.documents[key];
+      const recorded = evidenceDocuments.find((document) => document.key === key);
+      if (!entry || !recorded || entry.approvedForPublication !== true ||
+        entry.filename !== `${entry.version}.txt` ||
+        entry.publicUrl !== `/legal/products/${entry.filename}` ||
+        !Number.isSafeInteger(entry.bytes) || entry.bytes <= 0 ||
+        !/^[a-f0-9]{64}$/.test(entry.sha256 || "") ||
+        recorded.version !== entry.version || recorded.bytes !== entry.bytes ||
+        recorded.sha256 !== entry.sha256 ||
+        recorded.publicUrl !== entry.publicUrl) {
+        return false;
+      }
+      const bytes = readDocument(entry, key);
+      return Buffer.isBuffer(bytes) && bytes.length === entry.bytes &&
+        crypto.createHash("sha256").update(bytes).digest("hex") === entry.sha256;
+    });
+  } catch {
+    return false;
+  }
+}
+
+function assertOperationalGateSpecificContent(item, evidence, options = {}) {
+  let valid = true;
+  switch (item.id) {
+    case "live-stripe-webhook-exact-event-readback":
+      {
+        const webhookManifest = JSON.parse(fs.readFileSync(
+          path.join(root, "ops/stripe/billing-webhook-events.json"),
+          "utf8"
+        ));
+        const expectedEvents = [...(webhookManifest.requiredEvents ?? [])].sort();
+        const configuredEvents = Array.isArray(evidence.endpoint?.enabledEvents) ?
+          [...evidence.endpoint.enabledEvents].sort() : [];
+        valid = evidence.stripeMode === "live" &&
+          evidence.endpoint?.status === "enabled" &&
+          configuredEvents.length === expectedEvents.length &&
+          JSON.stringify(configuredEvents) === JSON.stringify(expectedEvents) &&
+          evidence.verification?.expectedEventCount === 18 &&
+          evidence.verification?.configuredEventCount === 18 &&
+          evidence.verification?.exactSetMatch === true &&
+          evidence.verification?.signingSecretValueRecorded === false &&
+          evidence.readbackMutation === false &&
+          evidence.deploymentPerformed === false;
+      }
+      break;
+    case "live-product-catalogue-and-closed-config-readback":
+      valid = evidence.firebaseProjectId === "alphawod-d1f2f" &&
+        evidence.stripeCatalogue?.mode === "live" &&
+        evidence.stripeCatalogue?.recurringCatalogueExactMatch === true &&
+        evidence.stripeCatalogue?.payg?.productId ===
+          "prod_VAOGG2ZsBQ65Qt" &&
+        evidence.stripeCatalogue?.payg?.priceId ===
+          "price_1UAmoCFzNDZoGGA0lKDwjbBU" &&
+        evidence.stripeCatalogue?.payg?.amountPence === 700 &&
+        evidence.stripeCatalogue?.payg?.currency === "gbp" &&
+        evidence.stripeCatalogue?.payg?.priceType === "one_time" &&
+        evidence.stripeCatalogue?.payg?.active === true &&
+        evidence.stripeCatalogue?.payg?.productDefaultPrice === true &&
+        evidence.stripeCatalogue?.supersededPaygPrice?.priceId ===
+          "price_1UA3TdFzNDZoGGA0dCgYfU2h" &&
+        evidence.stripeCatalogue?.supersededPaygPrice?.active === false &&
+        evidence.closedNewOfferConfiguration?.adultConditioningPurchaseEnabled ===
+          false &&
+        evidence.closedNewOfferConfiguration?.adultConditioningLegalApproved ===
+          false &&
+        evidence.closedNewOfferConfiguration?.paygAvailabilityEnabled === false &&
+        evidence.closedNewOfferConfiguration?.paygLegalApproved === false &&
+        evidence.firebaseAppCheck?.registrationStatus === "registered" &&
+        evidence.firebaseAppCheck?.provider === "reCAPTCHA Enterprise" &&
+        evidence.firebaseAppCheck?.allowedDomain === "alpha-wod.vercel.app" &&
+        evidence.firebaseAppCheck?.vercelProductionSiteKeyMatchesRegisteredKey ===
+          true &&
+        evidence.firebaseAppCheck?.siteKeyValueRecorded === false &&
+        evidence.firebaseSecretManager?.secretValuesRecorded === false &&
+        evidence.productionDeploymentPerformed === false;
+      break;
+    case "live-stripe-delivery-backlog-cleared":
+      // The exact deployment, reconciliation, acknowledgement and full Stripe
+      // readback contract is validated by assertClearedStripeDeliveryBacklogEvidence.
+      valid = true;
+      break;
+    case "resend-domain-and-confirmation-delivery":
+      valid = evidence.domain?.name === "zeroalphafitness.co.uk" &&
+        evidence.domain?.status === "verified" &&
+        evidence.configuration?.fromAddress ===
+          "hello@zeroalphafitness.co.uk" &&
+        evidence.configuration?.secretValueRecorded === false &&
+        evidence.deliveryReadback?.productionMembershipConfirmationObserved ===
+          true &&
+        evidence.deliveryReadback?.providerStatus === "delivered" &&
+        evidence.deliveryReadback?.recipientPiiRecorded === false &&
+        evidence.readbackMutation === false &&
+        evidence.deploymentPerformed === false;
+      break;
+    case "billing-alert-policies-and-staffed-notification-route":
+      valid = evidence.googleCloudProjectId === "alphawod-d1f2f" &&
+        evidence.policyCountExpected === 9 &&
+        evidence.policyCountVerified === 9 &&
+        Array.isArray(evidence.notificationRoutes) &&
+        evidence.notificationRoutes.length >= 2 &&
+        evidence.notificationRoutes.every((route) =>
+          route.enabled === true && route.recipientConfiguredInProvider === true
+        ) &&
+        new Set(
+          evidence.notificationRoutes.map(({providerId}) => providerId)
+        ).size >= 2 &&
+        evidence.verification?.allManifestPoliciesCreated === true &&
+        evidence.verification?.allPoliciesEnabled === true &&
+        evidence.verification?.allFiltersMatchCheckedInManifest === true &&
+        evidence.verification?.allThresholdWindowsVerified === true &&
+        evidence.verification?.primaryEmailAttachedToEveryPolicy === true &&
+        evidence.verification?.twoIndependentRoutesAttachedToEveryPolicy === true &&
+        evidence.verification?.namedPrimaryAndBackupRosterRecorded === true &&
+        evidence.verification?.syntheticDeliveryTestPerformed === true;
+      break;
+    case "conditioning-stripe-test-purchase-to-booking-journey":
+      valid = evidence.stripeMode === "test" &&
+        evidence.planKey === "adult_conditioning" &&
+        evidence.amountPence === 3000 &&
+        /^cs_test_[A-Za-z0-9_]+$/.test(
+          evidence.providerReferences?.checkoutSessionId || ""
+        ) &&
+        /^sub_[A-Za-z0-9_]+$/.test(
+          evidence.providerReferences?.subscriptionId || ""
+        ) &&
+        /^evt_[A-Za-z0-9_]+$/.test(
+          evidence.providerReferences?.webhookEventId || ""
+        ) &&
+        typeof evidence.applicationReferences?.membershipId === "string" &&
+        evidence.applicationReferences.membershipId.length >= 8 &&
+        evidence.verification?.hostedCheckoutCompleted === true &&
+        evidence.verification?.webhookAcknowledged === true &&
+        evidence.verification?.membershipCreated === true &&
+        evidence.verification?.entitlementActivated === true &&
+        evidence.verification?.limitedAppAccessVerified === true &&
+        evidence.verification?.twoClassesPerLondonWeekEnforced === true &&
+        evidence.verification?.flexibleEligibleClassChangesVerified === true &&
+        evidence.verification?.confirmationDelivered === true &&
+        evidence.liveProviderMutation === false;
+      break;
+    case "payg-stripe-test-purchase-refund-dispute-email-journey":
+      valid = evidence.stripeMode === "test" &&
+        evidence.productKey === "adult_payg_class" &&
+        evidence.amountPence === 700 &&
+        evidence.accountRequired === false &&
+        /^cs_test_[A-Za-z0-9_]+$/.test(
+          evidence.providerReferences?.checkoutSessionId || ""
+        ) &&
+        /^pi_[A-Za-z0-9_]+$/.test(
+          evidence.providerReferences?.paymentIntentId || ""
+        ) &&
+        /^re_[A-Za-z0-9_]+$/.test(
+          evidence.providerReferences?.refundId || ""
+        ) &&
+        /^dp_[A-Za-z0-9_]+$/.test(
+          evidence.providerReferences?.disputeId || ""
+        ) &&
+        typeof evidence.applicationReferences?.guestBookingId === "string" &&
+        evidence.applicationReferences.guestBookingId.length >= 8 &&
+        evidence.verification?.hostedCheckoutCompleted === true &&
+        evidence.verification?.paidWebhookCreatedBooking === true &&
+        evidence.verification?.confirmationEmailDelivered === true &&
+        evidence.verification?.refundConverged === true &&
+        evidence.verification?.refundEmailDelivered === true &&
+        evidence.verification?.disputeConverged === true &&
+        evidence.verification?.disputeEmailDelivered === true &&
+        evidence.verification?.noAccountJourneyVerified === true &&
+        evidence.liveProviderMutation === false;
+      break;
+    case "class-cancellation-quota-and-payg-refund-drill":
+      valid = evidence.environment === "isolated-test" &&
+        evidence.timezone === "Europe/London" &&
+        evidence.conditioningWeeklyBookingLimit === 2 &&
+        evidence.paygCancellationCutoffHours === 24 &&
+        typeof evidence.drillReferences?.conditioningMemberIdHash === "string" &&
+        /^[a-f0-9]{64}$/.test(
+          evidence.drillReferences.conditioningMemberIdHash
+        ) &&
+        typeof evidence.drillReferences?.paygOrderId === "string" &&
+        evidence.drillReferences.paygOrderId.length >= 8 &&
+        evidence.verification?.thirdConditioningBookingRejected === true &&
+        evidence.verification?.eligibleCancellationReleasedQuota === true &&
+        evidence.verification?.replacementConditioningBookingSucceeded === true &&
+        evidence.verification?.refundAtOrBeforeCutoffSucceeded === true &&
+        evidence.verification?.insideCutoffStayedNonRefundable === true &&
+        evidence.verification?.noShowStayedNonRefundable === true &&
+        evidence.verification?.paygBookingNeverBecameCredit === true &&
+        evidence.verification?.refundedCapacityReleased === true &&
+        evidence.liveProviderMutation === false &&
+        evidence.observedByRole === "Zero Alpha Fitness operations";
+      break;
+    case "product-legal-publication-and-runtime-binding": {
+      valid = evidence.productionOrigin === "https://alpha-wod.vercel.app" &&
+        productLegalPublicationDocumentsMatch(evidence, options) &&
+        evidence.deployment?.environment === "production" &&
+        /^[0-9a-f]{40}$/.test(evidence.deployment?.sourceCommit || "") &&
+        isIsoTimestamp(evidence.deployment?.completedAt) &&
+        evidence.deployment?.adultConditioningPurchaseEnabled === false &&
+        evidence.deployment?.paygAvailabilityEnabled === false &&
+        evidence.deployment?.paygLegalApproved === false &&
+        evidence.verification?.http200Utf8ExactBytes === true &&
+        evidence.verification?.manifestHashesMatched === true &&
+        evidence.verification?.runtimeVersionUrlHashBindingsMatched === true &&
+        evidence.verification?.deployedReadbackMatched === true &&
+        evidence.verification?.privacyNoticeShownBeforePersonalData === true &&
+        evidence.verification?.privacyNoticeTreatedAsConsent === false &&
+        evidence.verification?.allNewProductGatesStayedClosed === true;
+      break;
+    }
+    default:
+      throw new Error(`Operational evidence ${item.id} has no gate validator.`);
+  }
+  if (!valid) {
+    throw new Error(`Operational evidence ${item.id} failed its content validator.`);
+  }
+}
+
+function assertOperationalEvidenceContent(item, evidence, absolutePath) {
+  const requirement = OPERATIONAL_EVIDENCE_REQUIREMENTS[item.id];
+  if (!requirement) {
+    throw new Error(`Operational evidence ${item.id} has no content validator.`);
+  }
+  const controls = Array.isArray(evidence?.verifiedControls) ?
+    new Set(evidence.verifiedControls) : new Set();
+  if (evidence?.schemaVersion !== (requirement.schemaVersion ?? 1) ||
+    evidence.evidenceType !== requirement.evidenceType ||
+    evidence.readinessItemId !== item.id ||
+    evidence.verified !== true ||
+    evidence.newProductPurchaseGatesRemainClosed !== true ||
+    evidence.customerPiiRecorded !== false ||
+    typeof evidence.recordedAt !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(
+      evidence.recordedAt
+    ) ||
+    !Number.isFinite(Date.parse(evidence.recordedAt)) ||
+    !/^[a-f0-9]{64}$/.test(item.evidenceSha256 || "") ||
+    evidenceSha256(absolutePath) !== item.evidenceSha256 ||
+    requirement.verifiedControls.some((control) => !controls.has(control))) {
+    throw new Error(
+      `Operational evidence ${item.id} is unbound, incomplete or stale.`
+    );
+  }
+  assertOperationalGateSpecificContent(item, evidence);
+}
+
 function assertEvidence(items, statusField, label) {
   for (const item of items) {
     if (!item.id || typeof item[statusField] !== "boolean") {
@@ -72,6 +458,19 @@ function assertEvidence(items, statusField, label) {
     if (item[statusField]) {
       if (typeof item.evidence !== "string" || item.evidence.trim().length < 8) {
         throw new Error(`${label} ${item.id} needs a durable evidence reference.`);
+      }
+      const absolutePath = evidencePath(item.evidence, `${label} ${item.id}`);
+      let evidence;
+      try {
+        evidence = JSON.parse(fs.readFileSync(absolutePath, "utf8"));
+      } catch {
+        throw new Error(`${label} ${item.id} evidence is not valid JSON.`);
+      }
+      if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
+        throw new Error(`${label} ${item.id} evidence must be a JSON object.`);
+      }
+      if (label === "Operational evidence") {
+        assertOperationalEvidenceContent(item, evidence, absolutePath);
       }
     } else if (item.evidence !== null) {
       throw new Error(`${label} ${item.id} must not claim evidence while pending.`);
@@ -151,6 +550,66 @@ function assertPaygRetentionOwnerEvidence(ownerDecisions) {
     typeof policy.activeEmailLeaseRule !== "string") {
     throw new Error("PAYG retention owner evidence does not match the approved policy.");
   }
+}
+
+function assertPaygPrivacyOwnerDecision(ownerDecisions) {
+  const decision = ownerDecisions.find(
+    (item) => item.id === PAYG_PRIVACY_DECISION_ID
+  );
+  if (!decision) {
+    throw new Error("PAYG Privacy Notice owner decision is missing.");
+  }
+  if (decision.approved) {
+    throw new Error(
+      "PAYG Privacy Notice cannot be approved until its immutable final " +
+      "publication verifier and exact owner evidence are committed."
+    );
+  }
+  if (decision.evidence !== null ||
+    decision.partialEvidence !== PAYG_PRIVACY_ENGINEERING_EVIDENCE) {
+    throw new Error("Pending PAYG Privacy Notice owner evidence is stale.");
+  }
+  const evidence = readEvidence(
+    decision.partialEvidence,
+    "PAYG Privacy Notice engineering evidence"
+  );
+  if (evidence.schemaVersion !== 1 ||
+    evidence.evidenceType !==
+      "payg-privacy-notice-runtime-binding-engineering-readiness" ||
+    evidence.engineeringReady !== true || evidence.launchReady !== false ||
+    evidence.privacyNoticeApproved !== false ||
+    evidence.productionPurchaseGatesRemainClosed !== true ||
+    evidence.deploymentAuthorized !== false ||
+    evidence.customerPiiRecorded !== false) {
+    throw new Error("PAYG Privacy Notice engineering evidence is stale or unsafe.");
+  }
+}
+
+function assertProductTermsOwnerEvidence(ownerDecisions) {
+  const ids = [
+    "adult-conditioning-product-terms",
+    "payg-product-terms-and-waiver",
+  ];
+  const decisions = ids.map((id) => ownerDecisions.find((item) => item.id === id));
+  if (decisions.some((decision) => !decision?.approved)) return;
+  if (decisions[0].evidence !== decisions[1].evidence) {
+    throw new Error("Product terms owner decisions must bind one exact approval record.");
+  }
+  const evidence = readEvidence(
+    decisions[0].evidence,
+    "Product terms owner approval"
+  );
+  if (evidence.schemaVersion !== 1 ||
+    evidence.decisionId !== "conditioning-and-payg-product-terms-owner-approval" ||
+    evidence.approved !== true || evidence.approvedByRole !== "business-owner" ||
+    evidence.paygSpecificDateCancellationStatementApproved !== true ||
+    evidence.customerPiiRecorded !== false ||
+    evidence.runtimePublicationComplete !== false ||
+    evidence.deploymentAuthorized !== false ||
+    evidence.productionPurchaseGatesRemainClosed !== true) {
+    throw new Error("Product terms owner approval evidence is stale or unsafe.");
+  }
+  verifyApprovedProductLegalDocuments();
 }
 
 function assertLiveStripeDeliveryBacklogEvidence(operationalEvidence) {
@@ -328,6 +787,8 @@ function verifyConditioningPaygReleaseCandidate() {
   assertEvidence(readiness.operationalEvidence, "verified", "Operational evidence");
   assertPartialEvidence(readiness.ownerDecisions, "approved");
   assertPartialEvidence(readiness.operationalEvidence, "verified");
+  assertProductTermsOwnerEvidence(readiness.ownerDecisions);
+  assertPaygPrivacyOwnerDecision(readiness.ownerDecisions);
   assertPaygRetentionOwnerEvidence(readiness.ownerDecisions);
   assertLiveStripeDeliveryBacklogEvidence(readiness.operationalEvidence);
 
@@ -371,6 +832,10 @@ if (require.main === module) {
 
 module.exports = {
   assertClearedStripeDeliveryBacklogEvidence,
+  assertEvidence,
+  assertOperationalEvidenceContent,
+  assertOperationalGateSpecificContent,
+  assertPaygPrivacyOwnerDecision,
   assertPartialEvidence,
   verifyConditioningPaygReleaseCandidate,
 };

@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "status": "APPROVED_FOR_PUBLICATION_RUNTIME_CLOSED",
+  "approvedForPublication": true,
+  "runtimeEligible": false,
+  "effectiveDate": "2026-09-01",
+  "sourceReviewManifest": "public/legal/product-drafts/manifest.json",
+  "approvalEvidence": "ops/release/evidence/product-terms-owner-approval-2026-09-01.json",
+  "documents": {
+    "adultConditioningAddendum": {
+      "title": "Adult Conditioning Only Membership Product Addendum",
+      "sourceDraftVersion": "ZAF-CONDITIONING-ADDENDUM-DRAFT-2026-08-31-01",
+      "sourceDraftBytes": 5374,
+      "sourceDraftSha256": "a18186bb8f19167ef49d8024aa87010bbd322b17c9455baf609e76e2ed4c40b3",
+      "version": "ZAF-CONDITIONING-ADDENDUM-2026-09-01-01",
+      "filename": "ZAF-CONDITIONING-ADDENDUM-2026-09-01-01.txt",
+      "publicUrl": "/legal/products/ZAF-CONDITIONING-ADDENDUM-2026-09-01-01.txt",
+      "bytes": 4116,
+      "sha256": "b91f7fd256bca8ca6bca8d020519c5e298b167a8b98ea039df213bd4bc71fc19",
+      "approvedForPublication": true,
+      "runtimeEligible": true
+    },
+    "paygTerms": {
+      "title": "Adult Pay As You Go Class Terms",
+      "sourceDraftVersion": "ZAF-PAYG-TERMS-DRAFT-2026-08-31-01",
+      "sourceDraftBytes": 8149,
+      "sourceDraftSha256": "f64cf9d3851945f6bf17c111beb38961e1fa5c22d7067aeff5652ef5886d0472",
+      "version": "ZAF-PAYG-TERMS-2026-09-01-01",
+      "filename": "ZAF-PAYG-TERMS-2026-09-01-01.txt",
+      "publicUrl": "/legal/products/ZAF-PAYG-TERMS-2026-09-01-01.txt",
+      "bytes": 7406,
+      "sha256": "7b209af1b23144ce8f3e7fda38f09c0806d05be5f558b0d751e6a37d5ecbdb05",
+      "approvedForPublication": true,
+      "runtimeEligible": false
+    },
+    "paygWaiver": {
+      "title": "Adult PAYG Participant Waiver and Risk Acknowledgement",
+      "sourceDraftVersion": "ZAF-PAYG-WAIVER-DRAFT-2026-08-31-01",
+      "sourceDraftBytes": 5197,
+      "sourceDraftSha256": "df23694cbeaf841aadeb92c1dfe2b6cb05b4a38203d6cbd2840c77381f66795c",
+      "version": "ZAF-PAYG-WAIVER-2026-09-01-01",
+      "filename": "ZAF-PAYG-WAIVER-2026-09-01-01.txt",
+      "publicUrl": "/legal/products/ZAF-PAYG-WAIVER-2026-09-01-01.txt",
+      "bytes": 4488,
+      "sha256": "137bf54c92eedb244114c525b6351400933a42d6e775d848576ff0c3e96a213d",
+      "approvedForPublication": true,
+      "runtimeEligible": false
+    }
+  },
+  "paygCancellationAcceptance": {
+    "statementId": "payg_specific_date_cancellation_v1",
+    "copyVersion": "ZAF-PAYG-CANCELLATION-STATEMENT-2026-09-01-01",
+    "approved": true,
+    "boundDocumentVersion": "ZAF-PAYG-TERMS-2026-09-01-01",
+    "statement": "I understand that this purchase is for a leisure activity on the specific date and time shown and that the usual 14-day distance-contract cancellation right does not apply to a specific-date leisure booking. Zero Alpha Fitness will still refund me if I cancel at least 24 hours before the class starts. Cancellations less than 24 hours before the class and no-shows are non-refundable, except where the law requires otherwise."
+  },
+  "ownerDecisions": {
+    "conditioningCommercialTermsApproved": true,
+    "paygSpecificDateLeisureExceptionConfirmed": true,
+    "paygTermsApproved": true,
+    "paygWaiverApproved": true,
+    "paygPrivacyNoticeApproved": false,
+    "paygOrderPiiRetentionDays": 90,
+    "paygWaiverPiiRetentionDays": 2190,
+    "paygEmailPiiRetentionDays": 90,
+    "paygRetentionPolicyVersion": "ZAF-PAYG-PII-RETENTION-2026-08-31-01",
+    "paygRedactionImplementationAccepted": true
+  },
+  "runtimeBlockers": [
+    "No approved customer-facing PAYG Privacy Notice or PAYG privacy addendum exists; the internal retention decision draft is explicitly not a customer notice.",
+    "The final files have not yet been deployed and read back byte-for-byte from their same-origin immutable URLs."
+  ],
+  "productionPurchaseGatesRemainClosed": true
+}

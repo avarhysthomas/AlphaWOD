@@ -16,6 +16,7 @@ const EXPECTED_DOCUMENT_KEYS = [
   "adultConditioningAddendum",
   "paygTerms",
   "paygWaiver",
+  "paygPrivacyNotice",
   "paygPrivacyRetentionDecision",
 ];
 const DRAFT_BANNERS = [
@@ -48,6 +49,26 @@ const REQUIRED_COPY = {
     /death or personal injury caused by negligence/,
     /retention periods.*have not been approved/is,
   ],
+  paygPrivacyNotice: [
+    /ZAF-PRIVACY-2026-08-25-02/,
+    /ZAF-PAYG-PII-RETENTION-2026-08-31-01/,
+    /full name, date of birth and email address/i,
+    /mobile number is optional/i,
+    /urgent operational contact about (?:that|the booked) class/i,
+    /No account is required or created/i,
+    /Marketing is not part of the PAYG purchase/i,
+    /Contract and requested pre-contract steps/,
+    /Legitimate interests/,
+    /Legal obligation/,
+    /Google Firebase and Google Cloud/,
+    /Resend/,
+    /restricted transfer/,
+    /30 days after the checkout expires/,
+    /90 days after the scheduled class end/,
+    /2,190 days after the scheduled class end/,
+    /RIGHT TO OBJECT/,
+    /Information Commissioner's Office \(ICO\)/,
+  ],
   paygPrivacyRetentionDecision: [
     /PAYG_PII_RETENTION_APPROVED must remain false/,
     /mobile number.*optional/is,
@@ -64,6 +85,66 @@ function sha256(bytes) {
 
 function readManifest(manifestPath = MANIFEST_PATH) {
   return JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+}
+
+function assertFrozenBasisFile(repositoryRoot, label, entry, expected) {
+  if (!entry || typeof entry !== "object" ||
+    entry.version !== expected.version || entry.path !== expected.path ||
+    entry.bytes !== expected.bytes || entry.sha256 !== expected.sha256) {
+    throw new Error(`${label} lineage is stale.`);
+  }
+  const absolutePath = path.resolve(repositoryRoot, entry.path);
+  const rootPrefix = `${path.resolve(repositoryRoot)}${path.sep}`;
+  if (!absolutePath.startsWith(rootPrefix) || !fs.existsSync(absolutePath)) {
+    throw new Error(`${label} lineage path is invalid.`);
+  }
+  const bytes = fs.readFileSync(absolutePath);
+  if (bytes.length !== entry.bytes || sha256(bytes) !== entry.sha256) {
+    throw new Error(`${label} lineage bytes have drifted.`);
+  }
+  return bytes;
+}
+
+function assertPaygPrivacyNoticeDraftBasis(manifest, repositoryRoot) {
+  const basis = manifest.paygPrivacyNoticeDraftBasis;
+  const privacyBytes = assertFrozenBasisFile(
+    repositoryRoot,
+    "General Privacy Notice",
+    basis?.generalPrivacyNotice,
+    {
+      version: "ZAF-PRIVACY-2026-08-25-02",
+      path: "public/legal/memberships/ZAF-PRIVACY-2026-08-25-02.txt",
+      bytes: 15236,
+      sha256: "0394ac927118b4490958cacff93c241f0ede617dd251758b33d464c72142a6fe",
+    }
+  );
+  if (!privacyBytes.toString("utf8").includes(
+    "ZERO ALPHA FITNESS LTD, a company registered in England and Wales"
+  )) {
+    throw new Error("General Privacy Notice controller lineage is incomplete.");
+  }
+
+  const retentionBytes = assertFrozenBasisFile(
+    repositoryRoot,
+    "Approved PAYG retention evidence",
+    basis?.approvedRetentionEvidence,
+    {
+      version: "ZAF-PAYG-PII-RETENTION-2026-08-31-01",
+      path: "ops/release/evidence/payg-retention-owner-approval-2026-08-31.json",
+      bytes: 1674,
+      sha256: "856c5233d1f66f153349615b55fc922bd9d6da8541a476e793bce6f2be2d6b16",
+    }
+  );
+  const retention = JSON.parse(retentionBytes.toString("utf8"));
+  if (retention.approved !== true ||
+    retention.policyVersion !== basis.approvedRetentionEvidence.version ||
+    retention.policy?.abandonedUnpaidIntent?.retentionDays !== 30 ||
+    retention.policy?.paidOrderAfterClassEnd?.retentionDays !== 90 ||
+    retention.policy?.waiverIdentityAfterClassEnd?.retentionDays !== 2190 ||
+    retention.customerFacingDocumentsApproved !== false ||
+    retention.productionGatesRemainClosed !== true) {
+    throw new Error("Approved PAYG retention evidence is incomplete or unsafe.");
+  }
 }
 
 function assertDraftDocument(directory, key, entry) {
@@ -158,7 +239,7 @@ function assertRuntimeRemainsClosed(repositoryRoot = REPOSITORY_ROOT) {
     ),
   ];
   if (runtimeSources.some((source) =>
-    /ZAF-(?:CONDITIONING|PAYG)-[^\s"']*DRAFT-2026-08-31/.test(source))) {
+    /ZAF-(?:CONDITIONING|PAYG)-[^\s"']*DRAFT-\d{4}-\d{2}-\d{2}/.test(source))) {
     throw new Error("A runtime or production example references an unapproved product draft.");
   }
 }
@@ -188,6 +269,7 @@ function verifyProductLegalDrafts({
   const verified = keys.map((key) =>
     assertDraftDocument(directory, key, manifest.documents[key])
   );
+  assertPaygPrivacyNoticeDraftBasis(manifest, repositoryRoot);
   const acceptance = manifest.paygDraftAcceptance;
   if (acceptance?.statementId !== "payg_specific_date_cancellation_v1" ||
     acceptance.copyVersion !==

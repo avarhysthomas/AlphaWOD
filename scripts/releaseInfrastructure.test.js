@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const crypto = require("node:crypto");
@@ -16,6 +17,10 @@ const {
 } = require("./verifyBillingWebhookEvents");
 const {
   assertClearedStripeDeliveryBacklogEvidence,
+  assertEvidence,
+  assertOperationalEvidenceContent,
+  assertOperationalGateSpecificContent,
+  assertPaygPrivacyOwnerDecision,
   assertPartialEvidence,
 } = require("./verifyConditioningPaygReleaseCandidate");
 
@@ -58,8 +63,33 @@ test("release readiness remains read-only with every production gate closed", ()
   ));
   assert.equal(readiness.verificationMode, "read-only-no-deploy");
   assert.equal(readiness.productionGatesExpectedClosed, true);
-  assert.ok(readiness.ownerDecisions.some((decision) => !decision.approved));
+  assert.ok(readiness.ownerDecisions
+    .filter(({id}) => id !== "payg-privacy-notice")
+    .every((decision) => decision.approved));
+  assert.equal(readiness.ownerDecisions.find(
+    ({id}) => id === "payg-privacy-notice"
+  )?.approved, false);
   assert.ok(readiness.operationalEvidence.some((check) => !check.verified));
+});
+
+test("product terms approval remains separate from publication and runtime binding", () => {
+  const readiness = JSON.parse(fs.readFileSync(
+    path.join(root, "ops/release/conditioning-payg-readiness.json"),
+    "utf8"
+  ));
+  const decisions = readiness.ownerDecisions.filter(({id}) => [
+    "adult-conditioning-product-terms",
+    "payg-product-terms-and-waiver",
+  ].includes(id));
+  assert.equal(decisions.length, 2);
+  assert.ok(decisions.every(({approved}) => approved));
+  assert.equal(decisions[0].evidence, decisions[1].evidence);
+  const publication = readiness.operationalEvidence.find(
+    ({id}) => id === "product-legal-publication-and-runtime-binding"
+  );
+  assert.equal(publication?.verified, false);
+  assert.equal(publication?.evidence, null);
+  assert.equal(publication?.partialEvidence, decisions[0].evidence);
 });
 
 test("live Stripe delivery backlog remains an explicit release blocker", () => {
@@ -172,12 +202,330 @@ test("cleared Stripe backlog evidence binds deployment, reconciliation and full 
   }
 });
 
+test("cleared Stripe backlog uses its schema-v2 operational evidence envelope", () => {
+  const evidence = {
+    schemaVersion: 2,
+    evidenceType: "stripe-live-delivery-backlog-cleared-readback",
+    readinessItemId: "live-stripe-delivery-backlog-cleared",
+    verified: true,
+    newProductPurchaseGatesRemainClosed: true,
+    customerPiiRecorded: false,
+    recordedAt: "2026-09-01T10:20:00.000Z",
+    verifiedControls: [
+      "compatible-code-deployed",
+      "exact-event-reconciled",
+      "redelivery-acknowledged",
+      "zero-unsuccessful-events-full-readback",
+    ],
+  };
+  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "release-evidence-"));
+  const evidenceFile = path.join(tempDirectory, "cleared.json");
+  fs.writeFileSync(evidenceFile, `${JSON.stringify(evidence)}\n`);
+  const evidenceSha256 = crypto.createHash("sha256")
+    .update(fs.readFileSync(evidenceFile))
+    .digest("hex");
+  const item = {
+    id: "live-stripe-delivery-backlog-cleared",
+    evidenceSha256,
+  };
+  assert.doesNotThrow(
+    () => assertOperationalEvidenceContent(item, evidence, evidenceFile)
+  );
+
+  const stale = {...evidence, schemaVersion: 1};
+  fs.writeFileSync(evidenceFile, `${JSON.stringify(stale)}\n`);
+  assert.throws(
+    () => assertOperationalEvidenceContent(item, stale, evidenceFile),
+    /unbound, incomplete or stale/
+  );
+});
+
+test("pending operational gates require concrete journey, drill, and publication results", () => {
+  const legalDocumentKeys = [
+    "adultConditioningAddendum",
+    "paygPrivacyNotice",
+    "paygTerms",
+    "paygWaiver",
+  ];
+  const legalContents = Object.fromEntries(legalDocumentKeys.map((key) => [
+    key,
+    Buffer.from(`Immutable ${key} publication\n`, "utf8"),
+  ]));
+  const legalManifestDocuments = Object.fromEntries(legalDocumentKeys.map((key) => {
+    const version = `ZAF-${key.toUpperCase()}-2026-09-01-01`;
+    const bytes = legalContents[key];
+    return [key, {
+      version,
+      filename: `${version}.txt`,
+      publicUrl: `/legal/products/${version}.txt`,
+      bytes: bytes.length,
+      sha256: crypto.createHash("sha256").update(bytes).digest("hex"),
+      approvedForPublication: true,
+    }];
+  }));
+  const legalManifest = {
+    approvedForPublication: true,
+    productionPurchaseGatesRemainClosed: true,
+    ownerDecisions: {paygPrivacyNoticeApproved: true},
+    documents: legalManifestDocuments,
+  };
+  const cases = [
+    {
+      id: "conditioning-stripe-test-purchase-to-booking-journey",
+      evidence: {
+        stripeMode: "test",
+        planKey: "adult_conditioning",
+        amountPence: 3000,
+        providerReferences: {
+          checkoutSessionId: "cs_test_conditioning",
+          subscriptionId: "sub_conditioning",
+          webhookEventId: "evt_conditioning",
+        },
+        applicationReferences: {membershipId: "membership_conditioning"},
+        verification: {
+          hostedCheckoutCompleted: true,
+          webhookAcknowledged: true,
+          membershipCreated: true,
+          entitlementActivated: true,
+          limitedAppAccessVerified: true,
+          twoClassesPerLondonWeekEnforced: true,
+          flexibleEligibleClassChangesVerified: true,
+          confirmationDelivered: true,
+        },
+        liveProviderMutation: false,
+      },
+      invalidate: (evidence) => {
+        evidence.verification.twoClassesPerLondonWeekEnforced = false;
+      },
+    },
+    {
+      id: "payg-stripe-test-purchase-refund-dispute-email-journey",
+      evidence: {
+        stripeMode: "test",
+        productKey: "adult_payg_class",
+        amountPence: 700,
+        accountRequired: false,
+        providerReferences: {
+          checkoutSessionId: "cs_test_payg",
+          paymentIntentId: "pi_payg",
+          refundId: "re_payg",
+          disputeId: "dp_payg",
+        },
+        applicationReferences: {guestBookingId: "booking_payg"},
+        verification: {
+          hostedCheckoutCompleted: true,
+          paidWebhookCreatedBooking: true,
+          confirmationEmailDelivered: true,
+          refundConverged: true,
+          refundEmailDelivered: true,
+          disputeConverged: true,
+          disputeEmailDelivered: true,
+          noAccountJourneyVerified: true,
+        },
+        liveProviderMutation: false,
+      },
+      invalidate: (evidence) => {
+        evidence.providerReferences.disputeId = "missing";
+      },
+    },
+    {
+      id: "class-cancellation-quota-and-payg-refund-drill",
+      evidence: {
+        environment: "isolated-test",
+        timezone: "Europe/London",
+        conditioningWeeklyBookingLimit: 2,
+        paygCancellationCutoffHours: 24,
+        drillReferences: {
+          conditioningMemberIdHash: "a".repeat(64),
+          paygOrderId: "payg_order_test",
+        },
+        verification: {
+          thirdConditioningBookingRejected: true,
+          eligibleCancellationReleasedQuota: true,
+          replacementConditioningBookingSucceeded: true,
+          refundAtOrBeforeCutoffSucceeded: true,
+          insideCutoffStayedNonRefundable: true,
+          noShowStayedNonRefundable: true,
+          paygBookingNeverBecameCredit: true,
+          refundedCapacityReleased: true,
+        },
+        liveProviderMutation: false,
+        observedByRole: "Zero Alpha Fitness operations",
+      },
+      invalidate: (evidence) => {
+        evidence.verification.noShowStayedNonRefundable = false;
+      },
+    },
+    {
+      id: "product-legal-publication-and-runtime-binding",
+      evidence: {
+        productionOrigin: "https://alpha-wod.vercel.app",
+        documents: legalDocumentKeys.map((key) => ({
+          key,
+          version: legalManifestDocuments[key].version,
+          bytes: legalManifestDocuments[key].bytes,
+          sha256: legalManifestDocuments[key].sha256,
+          publicUrl: legalManifestDocuments[key].publicUrl,
+        })),
+        deployment: {
+          environment: "production",
+          sourceCommit: "c".repeat(40),
+          completedAt: "2026-09-01T12:00:00.000Z",
+          adultConditioningPurchaseEnabled: false,
+          paygAvailabilityEnabled: false,
+          paygLegalApproved: false,
+        },
+        verification: {
+          http200Utf8ExactBytes: true,
+          manifestHashesMatched: true,
+          runtimeVersionUrlHashBindingsMatched: true,
+          deployedReadbackMatched: true,
+          privacyNoticeShownBeforePersonalData: true,
+          privacyNoticeTreatedAsConsent: false,
+          allNewProductGatesStayedClosed: true,
+        },
+      },
+      options: {
+        publicationManifest: legalManifest,
+        readPublishedDocument: (_entry, key) => legalContents[key],
+      },
+      invalidate: (evidence) => {
+        evidence.documents[1].sha256 = "b".repeat(64);
+      },
+    },
+  ];
+
+  for (const gate of cases) {
+    assert.doesNotThrow(
+      () => assertOperationalGateSpecificContent(
+        gate,
+        gate.evidence,
+        gate.options
+      ),
+      gate.id
+    );
+    const invalid = JSON.parse(JSON.stringify(gate.evidence));
+    gate.invalidate(invalid);
+    assert.throws(
+      () => assertOperationalGateSpecificContent(gate, invalid, gate.options),
+      /failed its content validator/,
+      gate.id
+    );
+  }
+
+  const legalGate = cases.find(
+    ({id}) => id === "product-legal-publication-and-runtime-binding"
+  );
+  assert.throws(
+    () => assertOperationalGateSpecificContent(legalGate, legalGate.evidence),
+    /failed its content validator/,
+    "the checked-in manifest cannot claim privacy publication before approval"
+  );
+});
+
 test("approved owner decisions cannot retain partial evidence", () => {
   assert.throws(
     () => assertPartialEvidence([
       {id: "owner-decision", approved: true, partialEvidence: "stale.json"},
     ], "approved"),
     /must remove partial evidence/
+  );
+});
+
+test("PAYG Privacy Notice remains an explicit owner blocker until final promotion", () => {
+  const pending = {
+    id: "payg-privacy-notice",
+    approved: false,
+    evidence: null,
+    partialEvidence:
+      "ops/release/evidence/payg-privacy-runtime-binding-readiness-2026-09-01.json",
+  };
+  assert.doesNotThrow(() => assertPaygPrivacyOwnerDecision([pending]));
+  assert.throws(
+    () => assertPaygPrivacyOwnerDecision([{
+      ...pending,
+      approved: true,
+      evidence: "ops/release/evidence/bogus.json",
+      partialEvidence: undefined,
+    }]),
+    /cannot be approved until its immutable final publication verifier/
+  );
+});
+
+test("verified operational gates require bound, typed and hashed evidence", () => {
+  const readiness = JSON.parse(fs.readFileSync(
+    path.join(root, "ops/release/conditioning-payg-readiness.json"),
+    "utf8"
+  ));
+  const verified = readiness.operationalEvidence.filter(({verified: value}) => value);
+  assert.doesNotThrow(
+    () => assertEvidence(verified, "verified", "Operational evidence")
+  );
+
+  const stale = {...verified[0], evidenceSha256: "0".repeat(64)};
+  assert.throws(
+    () => assertEvidence([stale], "verified", "Operational evidence"),
+    /unbound, incomplete or stale/
+  );
+
+  const unrelatedSource = verified.find(
+    ({id}) => id === "resend-domain-and-confirmation-delivery"
+  );
+  const unrelated = {
+    ...verified[0],
+    evidence: unrelatedSource.evidence,
+    evidenceSha256: unrelatedSource.evidenceSha256,
+  };
+  assert.throws(
+    () => assertEvidence([unrelated], "verified", "Operational evidence"),
+    /unbound, incomplete or stale/
+  );
+
+  assert.throws(
+    () => assertEvidence([{
+      ...verified[0],
+      evidence: "ops/release/evidence/does-not-exist.json",
+    }], "verified", "Operational evidence"),
+    /does not resolve to checked-in evidence/
+  );
+});
+
+test("verified Stripe webhook and catalogue evidence cannot contradict its summaries", () => {
+  const webhook = JSON.parse(fs.readFileSync(path.join(
+    root,
+    "ops/release/evidence/live-stripe-webhook-exact-event-readback-2026-09-01.json"
+  ), "utf8"));
+  const catalogue = JSON.parse(fs.readFileSync(path.join(
+    root,
+    "ops/release/evidence/production-provider-app-check-and-closed-config-readback-2026-09-01.json"
+  ), "utf8"));
+  assert.doesNotThrow(() => assertOperationalGateSpecificContent(
+    {id: "live-stripe-webhook-exact-event-readback"},
+    webhook
+  ));
+  assert.doesNotThrow(() => assertOperationalGateSpecificContent(
+    {id: "live-product-catalogue-and-closed-config-readback"},
+    catalogue
+  ));
+
+  const wrongEvents = JSON.parse(JSON.stringify(webhook));
+  wrongEvents.endpoint.enabledEvents[0] = "account.updated";
+  assert.throws(
+    () => assertOperationalGateSpecificContent(
+      {id: "live-stripe-webhook-exact-event-readback"},
+      wrongEvents
+    ),
+    /failed its content validator/
+  );
+
+  const wrongPrice = JSON.parse(JSON.stringify(catalogue));
+  wrongPrice.stripeCatalogue.payg.priceId = "price_wrong";
+  assert.throws(
+    () => assertOperationalGateSpecificContent(
+      {id: "live-product-catalogue-and-closed-config-readback"},
+      wrongPrice
+    ),
+    /failed its content validator/
   );
 });
 

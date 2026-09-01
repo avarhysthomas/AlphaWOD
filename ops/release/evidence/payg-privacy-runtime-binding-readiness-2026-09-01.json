@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "payg-privacy-notice-runtime-binding-engineering-readiness",
+  "recordedAt": "2026-09-01",
+  "engineeringReady": true,
+  "launchReady": false,
+  "privacyNoticeApproved": false,
+  "productionPurchaseGatesRemainClosed": true,
+  "deploymentAuthorized": false,
+  "customerPiiRecorded": false,
+  "draft": {
+    "version": "ZAF-PAYG-PRIVACY-NOTICE-DRAFT-2026-09-01-01",
+    "path": "public/legal/product-drafts/ZAF-PAYG-PRIVACY-NOTICE-DRAFT-2026-09-01-01.txt",
+    "bytes": 13622,
+    "sha256": "b337333f2d7439ac011633add9a30f659f912bf8577084cd95630edf8ebddba0"
+  },
+  "requiredEnvironmentParameters": [
+    "PAYG_PRIVACY_NOTICE_VERSION",
+    "PAYG_PRIVACY_NOTICE_PUBLIC_URL",
+    "PAYG_PRIVACY_NOTICE_SHA256"
+  ],
+  "verifiedControls": [
+    "required-runtime-parameters",
+    "public-schedule-privacy-notice-projection",
+    "pre-pii-privacy-notice-link",
+    "no-privacy-consent-checkbox",
+    "server-validated-presented-version",
+    "durable-presented-notice-evidence",
+    "missing-or-stale-notice-fails-closed"
+  ],
+  "releaseBoundary": "The draft is not publication evidence. PAYG legal resolution and checkout fail closed until one approved immutable Privacy Notice version, URL and SHA-256 are configured together and all operational gates pass."
+}

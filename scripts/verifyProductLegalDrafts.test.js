@@ -18,8 +18,25 @@ test("the product legal review set is exact, draft-only and runtime-ineligible",
     "adultConditioningAddendum",
     "paygTerms",
     "paygWaiver",
+    "paygPrivacyNotice",
     "paygPrivacyRetentionDecision",
   ]);
+});
+
+test("the PAYG privacy draft remains owner-unapproved and source-bound", () => {
+  const manifest = readManifest();
+  const entry = manifest.documents.paygPrivacyNotice;
+  assert.equal(entry.approvedForPublication, false);
+  assert.equal(entry.runtimeEligible, false);
+  assert.equal(manifest.ownerDecisions.paygPrivacyNoticeApproved, false);
+  assert.equal(
+    manifest.paygPrivacyNoticeDraftBasis.generalPrivacyNotice.version,
+    "ZAF-PRIVACY-2026-08-25-02"
+  );
+  assert.equal(
+    manifest.paygPrivacyNoticeDraftBasis.approvedRetentionEvidence.version,
+    "ZAF-PAYG-PII-RETENTION-2026-08-31-01"
+  );
 });
 
 test("draft verification rejects an approval flip or byte drift", (t) => {

@@ -23,6 +23,7 @@ export type PaygLegalDocument = {
 export type PaygLegalRelease = {
   waiver: PaygLegalDocument;
   terms: PaygLegalDocument;
+  privacyNotice: PaygLegalDocument;
 };
 
 export type PublicPaygSchedule = {
@@ -41,7 +42,7 @@ export type PublicPaygSchedule = {
 };
 
 export type CreatePaygCheckoutRequest = {
-  checkoutSchemaVersion: 1;
+  checkoutSchemaVersion: 2;
   checkoutAttemptId: string;
   classId: string;
   attendee: {
@@ -59,6 +60,7 @@ export type CreatePaygCheckoutRequest = {
     cancellationPolicyAccepted: true;
     waiverVersion: string;
     termsVersion: string;
+    privacyNoticeVersionPresented: string;
   };
 };
 
@@ -305,9 +307,10 @@ export function paygErrorMessage(error: unknown) {
   switch (reason) {
     case "payg_unavailable":
     case "payg_legal_unavailable":
+    case "payg_privacy_unavailable":
       return "Pay As You Go checkout is not open yet.";
     case "stale_legal_terms":
-      return "The terms changed while this page was open. Refresh and review them again.";
+      return "A booking document or Privacy Notice changed while this page was open. Refresh and review the current versions.";
     case "class_unavailable":
       return "That class is no longer available. Choose another session.";
     case "class_full":

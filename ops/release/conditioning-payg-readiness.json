@@ -6,14 +6,19 @@
   "ownerDecisions": [
     {
       "id": "adult-conditioning-product-terms",
-      "approved": false,
-      "evidence": null
+      "approved": true,
+      "evidence": "ops/release/evidence/product-terms-owner-approval-2026-09-01.json"
     },
     {
       "id": "payg-product-terms-and-waiver",
+      "approved": true,
+      "evidence": "ops/release/evidence/product-terms-owner-approval-2026-09-01.json"
+    },
+    {
+      "id": "payg-privacy-notice",
       "approved": false,
       "evidence": null,
-      "partialEvidence": "ops/release/evidence/payg-waiver-owner-approval-2026-09-01.json"
+      "partialEvidence": "ops/release/evidence/payg-privacy-runtime-binding-readiness-2026-09-01.json"
     },
     {
       "id": "payg-pii-retention-and-redaction-policy",
@@ -25,7 +30,8 @@
     {
       "id": "live-stripe-webhook-exact-event-readback",
       "verified": true,
-      "evidence": "ops/release/evidence/live-stripe-webhook-exact-event-readback-2026-09-01.json"
+      "evidence": "ops/release/evidence/live-stripe-webhook-exact-event-readback-2026-09-01.json",
+      "evidenceSha256": "9ebc5a43013493b7b7c9280d6772a9a222d4afeed33568a8da22a099a417b7c7"
     },
     {
       "id": "live-stripe-delivery-backlog-cleared",
@@ -36,18 +42,29 @@
     {
       "id": "live-product-catalogue-and-closed-config-readback",
       "verified": true,
-      "evidence": "ops/release/evidence/production-provider-app-check-and-closed-config-readback-2026-09-01.json"
+      "evidence": "ops/release/evidence/production-provider-app-check-and-closed-config-readback-2026-09-01.json",
+      "evidenceSha256": "cc1e112717c6d614d80a89243520b3df1ee0baad6aa4953cf230e335cd50a417"
+    },
+    {
+      "id": "product-legal-publication-and-runtime-binding",
+      "verified": false,
+      "evidence": null,
+      "partialEvidence": "ops/release/evidence/product-terms-owner-approval-2026-09-01.json"
     },
     {
       "id": "billing-alert-policies-and-staffed-notification-route",
       "verified": false,
       "evidence": null,
-      "partialEvidence": "ops/release/evidence/billing-missed-payment-email-alert-2026-09-01.json"
+      "partialEvidence": "ops/release/evidence/billing-alert-policy-suite-2026-09-01.json",
+      "supportingEvidence": [
+        "ops/release/evidence/billing-missed-payment-email-alert-2026-09-01.json"
+      ]
     },
     {
       "id": "resend-domain-and-confirmation-delivery",
       "verified": true,
-      "evidence": "ops/release/evidence/resend-domain-and-confirmation-delivery-2026-09-01.json"
+      "evidence": "ops/release/evidence/resend-domain-and-confirmation-delivery-2026-09-01.json",
+      "evidenceSha256": "f008c94eff67c126da6b8c918d363600de8d1f852d6c8dd2eeb165f97468d4f0"
     },
     {
       "id": "conditioning-stripe-test-purchase-to-booking-journey",
@@ -59,7 +76,11 @@
       "id": "payg-stripe-test-purchase-refund-dispute-email-journey",
       "verified": false,
       "evidence": null,
-      "partialEvidence": "ops/release/evidence/payg-stripe-test-catalogue-readback-2026-09-01.json",
+      "partialEvidence": "ops/release/evidence/payg-local-emulator-journey-2026-09-01.json",
+      "supportingEvidence": [
+        "ops/release/evidence/payg-stripe-test-catalogue-readback-2026-09-01.json",
+        "ops/release/evidence/payg-stripe-live-catalogue-readback-2026-09-01.json"
+      ],
       "owner": "Zero Alpha Fitness operations",
       "executionMode": "internal"
     },

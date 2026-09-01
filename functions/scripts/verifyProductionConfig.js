@@ -45,6 +45,9 @@ const PAYG_LEGAL_EVIDENCE_KEYS = [
   "PAYG_TERMS_VERSION",
   "PAYG_TERMS_PUBLIC_URL",
   "PAYG_TERMS_SHA256",
+  "PAYG_PRIVACY_NOTICE_VERSION",
+  "PAYG_PRIVACY_NOTICE_PUBLIC_URL",
+  "PAYG_PRIVACY_NOTICE_SHA256",
 ];
 
 const PAYG_RETENTION_EVIDENCE_KEYS = [
@@ -154,19 +157,23 @@ function assertPaygLegalEvidence(environment, origin) {
   const values = Object.fromEntries(
     PAYG_LEGAL_EVIDENCE_KEYS.map((name) => [name, required(environment, name)])
   );
-  for (const kind of ["WAIVER", "TERMS"]) {
+  for (const kind of ["WAIVER", "TERMS", "PRIVACY_NOTICE"]) {
     const version = values[`PAYG_${kind}_VERSION`];
     const digest = values[`PAYG_${kind}_SHA256`];
     if (!/^[A-Za-z0-9._-]{3,120}$/.test(version) ||
       /(?:^|[-_.])(?:DRAFT|PENDING|REVIEW|CANDIDATE)(?:[-_.]|$)/i.test(version) ||
       !/^[a-f0-9]{64}$/.test(digest)) {
-      throw new Error(`PAYG ${kind.toLowerCase()} publication evidence is invalid.`);
+      throw new Error(
+        `PAYG ${kind.toLowerCase().replace(/_/g, " ")} publication evidence is invalid.`
+      );
     }
     let url;
     try {
       url = new URL(values[`PAYG_${kind}_PUBLIC_URL`], origin);
     } catch {
-      throw new Error(`PAYG ${kind.toLowerCase()} publication URL is invalid.`);
+      throw new Error(
+        `PAYG ${kind.toLowerCase().replace(/_/g, " ")} publication URL is invalid.`
+      );
     }
     const expectedPathSuffix = `/${version}.txt`;
     if (url.origin !== origin || !url.pathname.startsWith("/legal/") ||
@@ -176,7 +183,7 @@ function assertPaygLegalEvidence(environment, origin) {
         .test(url.pathname) ||
       url.search || url.hash) {
       throw new Error(
-        `PAYG ${kind.toLowerCase()} must use an immutable same-origin /legal/ URL.`
+        `PAYG ${kind.toLowerCase().replace(/_/g, " ")} must use an immutable same-origin /legal/ URL.`
       );
     }
   }

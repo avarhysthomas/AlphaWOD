@@ -57,6 +57,18 @@ const PUBLICATION_MANIFEST = [
     approvedBytes: 10978,
     approvedSha256: "3628a34258a331e61408989d511a3a36d956742b689037dfebe77efb94795925",
   },
+  {
+    key: "adultConditioningAddendum",
+    title: "Adult Conditioning Only Membership Product Addendum",
+    version: "ZAF-CONDITIONING-ADDENDUM-2026-09-01-01",
+    effectiveDate: "2026-09-01",
+    approvedBytes: 4116,
+    approvedSha256: "b91f7fd256bca8ca6bca8d020519c5e298b167a8b98ea039df213bd4bc71fc19",
+    sourceRelativePath:
+      "public/legal/products/ZAF-CONDITIONING-ADDENDUM-2026-09-01-01.txt",
+    publicUrl:
+      "/legal/products/ZAF-CONDITIONING-ADDENDUM-2026-09-01-01.txt",
+  },
 ];
 
 const CONTENT_TYPE = "text/plain; charset=utf-8";
@@ -76,7 +88,9 @@ function readPublicationDocuments(
 ) {
   return publicationManifest.map((manifestEntry) => {
     const filename = `${manifestEntry.version}.txt`;
-    const filePath = path.join(publicationDirectory, filename);
+    const filePath = manifestEntry.sourceRelativePath ?
+      path.join(REPOSITORY_ROOT, manifestEntry.sourceRelativePath) :
+      path.join(publicationDirectory, filename);
     const bytes = fs.readFileSync(filePath);
     const content = bytes.toString("utf8");
 
@@ -115,7 +129,7 @@ function readPublicationDocuments(
       title: manifestEntry.title,
       version: manifestEntry.version,
       effectiveDate: manifestEntry.effectiveDate,
-      publicUrl: `/legal/memberships/${filename}`,
+      publicUrl: manifestEntry.publicUrl ?? `/legal/memberships/${filename}`,
       contentType: CONTENT_TYPE,
       hashCovers: HASH_COVERS,
       sha256: digest,

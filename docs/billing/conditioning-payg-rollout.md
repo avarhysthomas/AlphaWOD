@@ -3,8 +3,11 @@
 This runbook records the commercial and safety boundary for the two products
 added on 30 August 2026. It is preparation, not deployment authorisation. The
 checked-in production examples keep every new purchase gate closed, and neither
-product may be opened until its dedicated legal copy and end-to-end evidence
-have been approved.
+product may be opened until its dedicated legal copy has been deployed and
+verified and its end-to-end evidence is complete. On 1 September 2026 the
+business owner approved the exact frozen Conditioning and PAYG terms review
+set. Separate immutable final IDs preserve that approval without changing or
+reusing any draft ID. Purchase remains closed.
 
 ## Frozen catalogue
 
@@ -51,8 +54,10 @@ currency and recurring shape before accepting money.
   class ineligible. No AlphaWOD account is required.
 - Checkout requires the adult attendee's full name, date of birth and email
   address. A mobile number is optional and, when supplied, is used only for
-  urgent contact about that class. Checkout also requires the approved waiver,
-  terms and cancellation-policy acceptances.
+  urgent contact about that class. The approved PAYG Privacy Notice is linked
+  before these fields and its presented version is recorded without a consent
+  checkbox. Checkout separately requires the approved waiver, terms and
+  cancellation-policy acceptances.
 - One successful £7 payment creates one guest booking for the selected class.
   It never creates a class credit, entitlement, transferable balance or
   rescheduling right.
@@ -80,9 +85,10 @@ PAYG_AVAILABILITY_ENABLED=true
 PAYG_LEGAL_APPROVED=true
 ```
 
-The PAYG legal-document versions, public URLs and SHA-256 digests must also be
-real approved values. PAYG intentionally has no browser-side opening gate: the
-public timetable can remain visible while the callable refuses to create a
+The PAYG waiver, terms and Privacy Notice versions, public URLs and SHA-256
+digests must also be real approved values. Missing or stale Privacy Notice
+evidence fails closed. PAYG intentionally has no browser-side opening gate:
+the public timetable can remain visible while the callable refuses to create a
 purchase. Opening one product must not open the other.
 
 PAYG PII redaction is implemented behind the still-closed purchase and legal
@@ -138,21 +144,32 @@ reuse these secrets or place them in dotenv files or a client bundle.
 
 ## Required preflight evidence
 
-The exact unapproved review set is frozen in
+The exact source review set remains frozen in
 `public/legal/product-drafts/manifest.json`. It contains the Conditioning
 product addendum, PAYG terms, PAYG adult waiver, PAYG privacy/retention decision
-record, their byte counts and SHA-256 digests, and every unresolved owner
-decision. Verify that the review bytes are intact and no runtime references a
+record, their byte counts and SHA-256 digests, and the review-time owner
+decisions. Verify that the review bytes are intact and no runtime references a
 draft with:
 
 ```text
 npm run verify:product-legal-drafts
 ```
 
-That command must continue to report every document as unapproved and
-runtime-ineligible. Promotion requires new immutable final version IDs and
-digests after the review-only markers are removed; draft IDs must never be
-copied into the PAYG environment. Legal approval does not itself open a gate.
+That command must continue to report the historical draft bytes as unapproved
+and runtime-ineligible; later approval evidence never rewrites a draft. The
+approved final candidates and their source-draft lineage are recorded in
+`public/legal/products/manifest.json` and verified with:
+
+```text
+npm run verify:approved-product-legal
+```
+
+The Adult Conditioning addendum is bound into the immutable membership
+checkout/confirmation registry. The approved PAYG terms and waiver have final
+same-origin URLs and digests in the closed production configuration. PAYG
+remains runtime-ineligible until an approved customer-facing PAYG Privacy
+Notice exists and the complete final bundle is deployed and read back
+byte-for-byte. Legal approval does not itself open a purchase gate.
 
 Run the offline release-candidate gate first:
 
@@ -176,12 +193,14 @@ the recurring Conditioning entry; `npm run stripe:test:payg-preflight` reads
 only the one-time PAYG entry. Both skip the unrelated promotion offers, while
 the default full-catalogue preflight remains the release-wide drift check.
 
-1. Review and publish product-specific legal wording. The current membership
-   bundle predates both offers and must not be treated as approval for them.
-   The exact PAYG redaction schedule is implemented as described above, but the
-   final legal/privacy publication decision and production approval evidence
-   are still required. Approval of product terms does not by itself set any
-   runtime gate.
+1. Publish and verify the approved product-specific legal wording. The owner
+   approval is recorded in
+   `ops/release/evidence/product-terms-owner-approval-2026-09-01.json`. The
+   Conditioning addendum and PAYG terms/waiver have separate final IDs, but the
+   PAYG customer-facing Privacy Notice is still awaiting approved final bytes.
+   Deploy the completed bundle with purchase closed, read every immutable URL
+   back byte-for-byte, then attach durable publication evidence. Approval of
+   product terms does not by itself set any runtime gate.
 2. Run the production configuration verifier and read-only Stripe live catalogue
    verifier against the exact environment that will be deployed. With gates
    closed, use `npm run verify:production-config --prefix functions`. Once the

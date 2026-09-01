@@ -55,6 +55,10 @@ const openSchedule = {
   legal: {
     waiver: {version: "PAYG-WAIVER-1", publicUrl: "/legal/payg/waiver.txt"},
     terms: {version: "PAYG-TERMS-1", publicUrl: "/legal/payg/terms.txt"},
+    privacyNotice: {
+      version: "PAYG-PRIVACY-NOTICE-1",
+      publicUrl: "/legal/payg/privacy-notice.txt",
+    },
   },
   classes: [
     {
@@ -116,6 +120,12 @@ describe("Pay As You Go timetable", () => {
     expect(screen.getByRole("button", {name: "Continue"}))
       .toHaveAttribute("aria-controls", "payg-details");
     expect(screen.getByText(/Mon,? 7 Sept · 06:00/i)).toBeInTheDocument();
+    const privacyLink = screen.getByRole("link", {name: "PAYG Privacy Notice"});
+    expect(privacyLink).toHaveAttribute("href", "/legal/payg/privacy-notice.txt");
+    expect(privacyLink.compareDocumentPosition(screen.getByLabelText("Full name")) &
+      Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByRole("checkbox", {name: /Privacy Notice/i}))
+      .not.toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Full name"), {target: {value: "Guest Athlete"}});
     fireEvent.change(screen.getByLabelText("Date of birth"), {target: {value: "1990-01-01"}});
@@ -126,11 +136,11 @@ describe("Pay As You Go timetable", () => {
     fireEvent.click(screen.getByLabelText(/aged 18 or over/i));
     fireEvent.click(screen.getByLabelText(/adult participant waiver/i));
     fireEvent.click(screen.getByLabelText(/Pay As You Go terms/i));
-    fireEvent.click(screen.getByLabelText(/cannot be transferred or rescheduled/i));
+    fireEvent.click(screen.getByLabelText(/usual 14-day distance-contract cancellation right/i));
     fireEvent.click(screen.getByRole("button", {name: "Reserve and pay £7"}));
 
     await waitFor(() => expect(mockedCheckout).toHaveBeenCalledWith({
-      checkoutSchemaVersion: 1,
+      checkoutSchemaVersion: 2,
       checkoutAttemptId: "12345678-1234-4123-8123-123456789abc",
       classId: "class_available",
       attendee: {fullName: "Guest Athlete", dateOfBirth: "1990-01-01"},
@@ -142,6 +152,7 @@ describe("Pay As You Go timetable", () => {
         cancellationPolicyAccepted: true,
         waiverVersion: "PAYG-WAIVER-1",
         termsVersion: "PAYG-TERMS-1",
+        privacyNoticeVersionPresented: "PAYG-PRIVACY-NOTICE-1",
       },
     }));
   });
@@ -163,7 +174,7 @@ describe("Pay As You Go timetable", () => {
     fireEvent.click(screen.getByLabelText(/aged 18 or over/i));
     fireEvent.click(screen.getByLabelText(/adult participant waiver/i));
     fireEvent.click(screen.getByLabelText(/Pay As You Go terms/i));
-    fireEvent.click(screen.getByLabelText(/cannot be transferred or rescheduled/i));
+    fireEvent.click(screen.getByLabelText(/usual 14-day distance-contract cancellation right/i));
     fireEvent.click(screen.getByRole("button", {name: "Reserve and pay £7"}));
 
     await waitFor(() => expect(mockedCheckout).toHaveBeenCalled());
@@ -228,6 +239,23 @@ describe("Pay As You Go timetable", () => {
 
     expect(await screen.findByText("Checkout not open yet")).toBeInTheDocument();
     expect(screen.queryByRole("button", {name: /Reserve and pay/i})).not.toBeInTheDocument();
+  });
+
+  it("fails closed when an older backend response omits the Privacy Notice", async () => {
+    mockedSchedule.mockResolvedValueOnce({
+      ...openSchedule,
+      legal: {
+        waiver: openSchedule.legal.waiver,
+        terms: openSchedule.legal.terms,
+      },
+    } as unknown as typeof openSchedule);
+    render(<PayAsYouGo />);
+
+    fireEvent.click(await screen.findByRole("button", {name: /Conditioning/i}));
+    expect(screen.getByText("Checkout not open yet")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Full name")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", {name: /Reserve and pay/i}))
+      .not.toBeInTheDocument();
   });
 
   it("recovers the same held checkout after the guest returns from Stripe", async () => {

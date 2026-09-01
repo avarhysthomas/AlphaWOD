@@ -1,0 +1,165 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "gcp-billing-and-payg-alert-policy-suite",
+  "recordedAt": "2026-09-01T11:41:51Z",
+  "googleCloudProjectId": "alphawod-d1f2f",
+  "sourceManifest": "ops/monitoring/billing-alerts.json",
+  "policyCountExpected": 9,
+  "policyCountVerified": 9,
+  "counterMetrics": [
+    {
+      "name": "billing-recovery-worker-errors",
+      "windowSeconds": 900,
+      "threshold": 2,
+      "comparison": "COMPARISON_GT",
+      "thresholdValue": 1
+    },
+    {
+      "name": "billing-webhook-processing-errors",
+      "windowSeconds": 300,
+      "threshold": 2,
+      "comparison": "COMPARISON_GT",
+      "thresholdValue": 1
+    },
+    {
+      "name": "billing-checkout-provider-rejections",
+      "windowSeconds": 300,
+      "threshold": 5,
+      "comparison": "COMPARISON_GT",
+      "thresholdValue": 4
+    },
+    {
+      "name": "billing-checkout-abuse-signals",
+      "windowSeconds": 300,
+      "threshold": 10,
+      "comparison": "COMPARISON_GT",
+      "thresholdValue": 9
+    },
+    {
+      "name": "payg-recovery-errors",
+      "windowSeconds": 900,
+      "threshold": 2,
+      "comparison": "COMPARISON_GT",
+      "thresholdValue": 1
+    },
+    {
+      "name": "payg-confirmation-delivery-errors",
+      "windowSeconds": 900,
+      "threshold": 2,
+      "comparison": "COMPARISON_GT",
+      "thresholdValue": 1
+    }
+  ],
+  "alertPolicies": [
+    {
+      "manifestId": "billing-critical-runtime",
+      "providerId": "12037507494370570260",
+      "displayName": "Billing — critical runtime",
+      "conditionType": "conditionMatchedLog",
+      "threshold": 1,
+      "notificationRateLimitSeconds": 300,
+      "autoCloseSeconds": 3600
+    },
+    {
+      "manifestId": "billing-payment-failed",
+      "providerId": "1784587597971323419",
+      "displayName": "Billing — missed membership payment",
+      "conditionType": "conditionMatchedLog",
+      "threshold": 1,
+      "notificationRateLimitSeconds": 300,
+      "autoCloseSeconds": 3600
+    },
+    {
+      "manifestId": "billing-recovery-worker-errors",
+      "providerId": "8782936618813610812",
+      "displayName": "Billing — recovery worker failures",
+      "conditionType": "conditionThreshold",
+      "threshold": 2,
+      "windowSeconds": 900,
+      "autoCloseSeconds": 3600
+    },
+    {
+      "manifestId": "billing-webhook-processing-errors",
+      "providerId": "3997463355137696710",
+      "displayName": "Billing — webhook processing failures",
+      "conditionType": "conditionThreshold",
+      "threshold": 2,
+      "windowSeconds": 300,
+      "autoCloseSeconds": 3600
+    },
+    {
+      "manifestId": "billing-checkout-provider-rejections",
+      "providerId": "9263304689304625856",
+      "displayName": "Billing — checkout provider rejections",
+      "conditionType": "conditionThreshold",
+      "threshold": 5,
+      "windowSeconds": 300,
+      "autoCloseSeconds": 3600
+    },
+    {
+      "manifestId": "billing-checkout-abuse-signals",
+      "providerId": "9263304689304626981",
+      "displayName": "Billing — checkout abuse signals",
+      "conditionType": "conditionThreshold",
+      "threshold": 10,
+      "windowSeconds": 300,
+      "autoCloseSeconds": 3600
+    },
+    {
+      "manifestId": "payg-recovery-errors",
+      "providerId": "12854745094006301958",
+      "displayName": "PAYG — recovery failures",
+      "conditionType": "conditionThreshold",
+      "threshold": 2,
+      "windowSeconds": 900,
+      "autoCloseSeconds": 3600
+    },
+    {
+      "manifestId": "payg-confirmation-delivery-errors",
+      "providerId": "9039709359320902849",
+      "displayName": "PAYG — confirmation delivery failures",
+      "conditionType": "conditionThreshold",
+      "threshold": 2,
+      "windowSeconds": 900,
+      "autoCloseSeconds": 3600
+    },
+    {
+      "manifestId": "payg-provider-preflight-and-checkout-errors",
+      "providerId": "12037507494370574230",
+      "displayName": "PAYG — provider preflight / Checkout failure",
+      "conditionType": "conditionMatchedLog",
+      "threshold": 1,
+      "notificationRateLimitSeconds": 300,
+      "autoCloseSeconds": 3600
+    }
+  ],
+  "notificationRoutes": [
+    {
+      "providerId": "10993157459978907641",
+      "displayName": "Zero Alpha billing operations",
+      "type": "email",
+      "enabled": true,
+      "recipientConfiguredInProvider": true,
+      "recipientCategory": "shared-business-inbox",
+      "recipientDomain": "zeroalphafitness.co.uk"
+    }
+  ],
+  "verification": {
+    "allManifestPoliciesCreated": true,
+    "allPoliciesEnabled": true,
+    "allFiltersMatchCheckedInManifest": true,
+    "allThresholdWindowsVerified": true,
+    "primaryEmailAttachedToEveryPolicy": true,
+    "twoIndependentRoutesAttachedToEveryPolicy": false,
+    "namedPrimaryAndBackupRosterRecorded": false,
+    "syntheticDeliveryTestPerformed": false
+  },
+  "limitations": [
+    "Only one provider notification channel currently exists; a second independent staffed route and named backup responder remain required.",
+    "Synthetic matching logs were not emitted because two-route delivery cannot yet be proved and production alerts should not be exercised without a staffed acknowledgement plan.",
+    "Policy creation does not deploy application code or open purchase."
+  ],
+  "providerConfigurationChanged": true,
+  "applicationDeploymentPerformed": false,
+  "purchaseGatesChanged": false
+}

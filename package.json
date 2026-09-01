@@ -47,6 +47,7 @@
     "verify:legal-registry-sync": "node scripts/syncPublishedLegalDocuments.js --check",
     "verify:published-legal": "npm run verify:legal-registry-sync && npm run build --prefix functions && node --env-file-if-exists=functions/.env.alphawod-d1f2f scripts/verifyPublishedLegalDocuments.js",
     "verify:product-legal-drafts": "node scripts/verifyProductLegalDrafts.js",
+    "verify:approved-product-legal": "node scripts/verifyApprovedProductLegalDocuments.js",
     "eject": "react-scripts eject"
   },
   "eslintConfig": {

@@ -1,0 +1,70 @@
+Adult Conditioning Only Membership Product Addendum
+
+VERSION DATE
+1 September 2026
+
+DOCUMENT ID
+ZAF-CONDITIONING-ADDENDUM-2026-09-01-01
+
+CONTRACTING ENTITY
+ZERO ALPHA FITNESS LTD · company number 15978998
+
+TRADING NAME
+Zero Alpha Fitness
+
+CONTACT
+support@zeroalphafitness.co.uk
+
+1. How this addendum applies
+
+This addendum supplements the Membership Terms, Cancellation, Refund and Cooling-off Policy, Privacy Notice, and Adult Participant Waiver shown at checkout. If this addendum conflicts with a general description of app access or the Adult Conditioning Only Membership, this addendum applies to that product only. All statutory rights remain unaffected.
+
+2. Product and price
+
+The Adult Conditioning Only Membership is a rolling monthly adult membership priced at £30 per month. It has no joining fee, free trial or minimum term. Stripe shows the amount due today, the first payment date and the recurring billing schedule before the member confirms payment. The general membership cancellation, first-of-month billing, failed-payment, refund and cooling-off provisions continue to apply.
+
+3. Weekly class entitlement
+
+While the membership and its payment entitlement are active, the named member may book a maximum of two eligible Conditioning classes in each Europe/London Monday-to-Sunday week.
+
+The eligible recurring timetable at the version date is:
+
+• Monday at 06:00.
+
+• Tuesday at 18:00.
+
+• Thursday at 18:00.
+
+• Friday at 05:30.
+
+The member chooses from eligible classes actually published in the live schedule. The member may choose different eligible classes from week to week; checkout does not reserve fixed recurring slots. A booking counts against the week containing that class's scheduled start time in Europe/London.
+
+Every booking remains subject to the class being published, open, suitable and not full. The membership does not guarantee a place in a particular class. The app and server enforce the same weekly limit and eligible timetable.
+
+4. Changes, cancellations and attendance
+
+If the member cancels an eligible booking through the authorised booking flow before it is treated as attended or a no-show, that booking is released from the same week's two-class allowance and the member may book another eligible class in that week, subject to capacity.
+
+A class recorded as attended or as a no-show continues to use one place from that week's allowance. A place is not carried forward, exchanged for money, transferred to another person or converted into a reusable credit.
+
+If Zero Alpha Fitness cancels a class, the cancelled booking should not consume the member's allowance. The member may choose another eligible class in the same week, subject to capacity. Any wider remedy required by consumer law or the general Membership Terms remains available.
+
+5. Limited app access
+
+After the first required payment succeeds, and while the subscription remains eligible, this membership provides limited Zero Alpha App access for:
+
+• viewing the Schedule;
+
+• making and cancelling eligible bookings within the weekly allowance;
+
+• viewing and maintaining the member Profile fields made available to this tier; and
+
+• viewing and managing the membership through the supported membership route.
+
+It does not include Dashboard or WOD content, Training, Leaderboards, unrestricted class booking, or attendance-tier and lifetime-performance totals reserved for other access tiers. Staff and administrator permissions are independent of this consumer product.
+
+6. Timetable and service changes
+
+Zero Alpha Fitness may make reasonable operational changes to class times, instructors, formats, facilities or the eligible timetable. It must not rely on that right to remove the essential benefit of the membership without a fair remedy. A material adverse change will be handled with reasonable notice where practicable and any cancellation, price-reduction or refund right required by law.
+
+Services must be supplied with reasonable care and skill. Nothing in this addendum excludes or restricts liability or a consumer remedy that cannot lawfully be excluded or restricted.

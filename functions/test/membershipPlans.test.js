@@ -140,6 +140,9 @@ test("registry freezes the approved mixed checkout document bundle", () => {
       privacyNotice: ["ZAF-PRIVACY-2026-08-25-02", "2026-08-25"],
       adultWaiver: ["ZAF-ADULT-WAIVER-2026-08-23-01", "2026-08-23"],
       guardianAddendum: ["ZAF-GUARDIAN-2026-08-27-01", "2026-08-27"],
+      adultConditioningAddendum: [
+        "ZAF-CONDITIONING-ADDENDUM-2026-09-01-01", "2026-09-01",
+      ],
     }
   );
   for (const document of Object.values(CHECKOUT_DOCUMENTS)) {
@@ -176,6 +179,20 @@ test("checkout legal requirements are exact for adult self-signers and youth gua
     resolveCheckoutSignerRole("adult_unlimited"),
     "adult_participant_and_payer"
   );
+  assert.deepEqual(
+    resolveCheckoutDocuments("adult_conditioning").map(({key}) => key),
+    [
+      "membershipTerms", "cancellationPolicy", "adultConditioningAddendum",
+      "privacyNotice", "adultWaiver",
+    ]
+  );
+  const conditioningContract = resolveCheckoutAcceptanceStatements(
+    "adult_conditioning"
+  ).find(({id}) => id === "membership_contract");
+  assert.deepEqual(conditioningContract.documentKeys, [
+    "membershipTerms", "cancellationPolicy", "adultConditioningAddendum",
+  ]);
+  assert.match(conditioningContract.statement, /Conditioning Only Membership Product Addendum/);
   assert.deepEqual(
     resolveCheckoutDocuments("youth_youngstars").map(({key}) => key),
     ["membershipTerms", "cancellationPolicy", "privacyNotice", "guardianAddendum"]

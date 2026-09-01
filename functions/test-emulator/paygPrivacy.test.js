@@ -31,9 +31,15 @@ const ACCEPTANCES = Object.freeze({
   cancellationPolicyAccepted: true,
   waiverVersion: "waiver-v1",
   termsVersion: "terms-v1",
+  privacyNoticeVersionPresented: "privacy-v1",
   legal: {
     waiver: {version: "waiver-v1", publicUrl: "/legal/waiver", sha256: "a".repeat(64)},
     terms: {version: "terms-v1", publicUrl: "/legal/terms", sha256: "b".repeat(64)},
+    privacyNotice: {
+      version: "privacy-v1",
+      publicUrl: "/legal/privacy",
+      sha256: "c".repeat(64),
+    },
   },
   acceptedAt: Timestamp.fromMillis(1_700_000_000_000),
 });

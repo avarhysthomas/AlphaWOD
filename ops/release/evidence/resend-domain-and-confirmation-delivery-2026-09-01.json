@@ -1,6 +1,17 @@
 {
   "schemaVersion": 1,
   "evidenceType": "resend-production-domain-and-confirmation-delivery-readback",
+  "readinessItemId": "resend-domain-and-confirmation-delivery",
+  "verified": true,
+  "newProductPurchaseGatesRemainClosed": true,
+  "customerPiiRecorded": false,
+  "verifiedControls": [
+    "domain-verified",
+    "membership-confirmation-delivered",
+    "sender-configured",
+    "secret-value-not-recorded",
+    "recipient-pii-not-recorded"
+  ],
   "recordedAt": "2026-09-01T08:20:19Z",
   "domain": {
     "name": "zeroalphafitness.co.uk",

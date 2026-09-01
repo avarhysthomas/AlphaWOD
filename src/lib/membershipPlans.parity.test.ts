@@ -168,6 +168,9 @@ describe("membership catalogue parity", () => {
       privacyNotice: ["ZAF-PRIVACY-2026-08-25-02", "2026-08-25"],
       adultWaiver: ["ZAF-ADULT-WAIVER-2026-08-23-01", "2026-08-23"],
       guardianAddendum: ["ZAF-GUARDIAN-2026-08-27-01", "2026-08-27"],
+      adultConditioningAddendum: [
+        "ZAF-CONDITIONING-ADDENDUM-2026-09-01-01", "2026-09-01",
+      ],
     });
     Object.values(CHECKOUT_DOCUMENTS).forEach((document) => {
       expect(document.sha256).toMatch(/^[a-f0-9]{64}$/);
@@ -225,6 +228,20 @@ describe("membership catalogue parity", () => {
       ]);
     expect(resolveCheckoutSignerRole("adult_unlimited"))
       .toBe("adult_participant_and_payer");
+
+    expect(resolveCheckoutDocuments("adult_conditioning").map(({key}) => key))
+      .toEqual([
+        "membershipTerms", "cancellationPolicy", "adultConditioningAddendum",
+        "privacyNotice", "adultWaiver",
+      ]);
+    const conditioningContract = resolveCheckoutAcceptanceStatements(
+      "adult_conditioning"
+    ).find(({id}) => id === "membership_contract");
+    expect(conditioningContract?.documentKeys).toEqual([
+      "membershipTerms", "cancellationPolicy", "adultConditioningAddendum",
+    ]);
+    expect(conditioningContract?.statement)
+      .toMatch(/Conditioning Only Membership Product Addendum/);
 
     expect(resolveCheckoutDocuments("youth_teenstars").map(({key}) => key)).toEqual([
       "membershipTerms", "cancellationPolicy", "privacyNotice", "guardianAddendum",

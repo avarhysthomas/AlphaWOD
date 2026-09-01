@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "payg-local-emulator-no-provider-journey",
+  "recordedAt": "2026-09-01T12:32:26Z",
+  "sourceRevisionBeforeEvidence": "445bfe1",
+  "sourceFiles": [
+    "functions/test-emulator/paygJourney.test.js",
+    "functions/test-emulator/fakeStripe.js",
+    "functions/src/payg.ts"
+  ],
+  "execution": {
+    "workingDirectory": "functions",
+    "command": "npm run test:emulator:payg-journey",
+    "result": "passed",
+    "tests": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "isolation": {
+    "firebaseProjectId": "demo-alphawod-stripe",
+    "firestore": "local-emulator",
+    "authentication": "local-emulator",
+    "stripe": "loopback-http-fake-test-mode",
+    "email": "injected-in-memory-sender",
+    "resendApiKeyConfiguredForJourney": false,
+    "realProviderRequestPerformed": false,
+    "customerChargePerformed": false,
+    "emailSent": false
+  },
+  "verification": {
+    "realCreatePaygCheckoutSessionHandlerInvoked": true,
+    "realFirestoreTransactionsInvoked": true,
+    "approvedTestPriceIdUsed": "price_1UAmVVFzNDZoGGA04z8hX10N",
+    "amountPence": 700,
+    "currency": "gbp",
+    "oneTimeCheckoutContractVerified": true,
+    "classHoldCountedExactlyOnce": true,
+    "duplicateClassAttendeeRejected": true,
+    "overCapacityCheckoutRejected": true,
+    "paidStripeEventFulfilledToGuestBooking": true,
+    "confirmationEmailPayloadAndDurableStateVerified": true,
+    "acceptedLegalVersionsAndTimestampCopiedExactlyToOrder": true,
+    "acceptedLegalVersionsAndTimestampRetainedOnGuestBooking": true,
+    "acceptedLegalVersionsHashesUrlsAndTimestampBoundToOutbox": true,
+    "acceptedLegalVersionsUrlsAndTimestampRenderedInConfirmationEmail": true,
+    "privacyNoticeVersionShownWithoutConsentLanguageAcrossReceipt": true,
+    "serverSignedCancellationTokenAccepted": true,
+    "refundableCancellationCutoffApplied": true,
+    "refundConvergedToSucceeded": true,
+    "cancelledCapacityReleased": true
+  },
+  "releaseGateAssessment": {
+    "localPaygCodeJourneyVerified": true,
+    "fullStripeTestOperationalGateVerified": false,
+    "internalPaygOperationalDrillVerified": false,
+    "productionAppCheckJourneyVerified": false,
+    "productionEmailDeliveryVerified": false,
+    "productionDeploymentAuthorized": false
+  },
+  "closes": [
+    "A repeatable no-provider journey now joins PAYG checkout admission, Firestore capacity, exact GBP 7.00 catalogue use, paid fulfilment, guest booking, confirmation composition/state, signed cancellation and refund convergence.",
+    "The exact waiver and PAYG terms versions and original server acceptance timestamp are asserted unchanged across the intent, order, durable guest-booking evidence, confirmation outbox and rendered customer email; the outbox also binds each immutable document URL and SHA-256 digest.",
+    "The Privacy Notice version shown at checkout is bound through the same records and rendered as shown, not accepted or consented to.",
+    "The confirmation worker is executable in tests without sending real email because the sender is injected and RESEND_API_KEY is deliberately blank.",
+    "Duplicate-attendee and full-class attempts leave the relevant class counters and provider Checkout count unchanged."
+  ],
+  "limitations": [
+    "This does not run a real Stripe test-mode Checkout, test card payment, signed webhook delivery, provider refund, dispute or Dashboard readback and therefore must not mark the full Stripe-test operational gate verified.",
+    "Firebase Functions emulator mode disables production App Check enforcement; a deployed browser-to-callable App Check journey remains separate evidence.",
+    "The injected email sender proves application composition and convergence only; it does not prove Resend acceptance, inbox delivery or the PAYG paid/refund/dispute email drill.",
+    "The business-owned PAYG paid, refund, dispute, late-cancellation and no-show operational drills remain pending until recorded by the staffed operators.",
+    "This test does not deploy code, reconcile the existing live Stripe delivery backlog, open purchase, or exercise production alert delivery."
+  ],
+  "providerMutation": false,
+  "applicationDataMutation": false,
+  "deploymentPerformed": false,
+  "purchaseGatesChanged": false
+}

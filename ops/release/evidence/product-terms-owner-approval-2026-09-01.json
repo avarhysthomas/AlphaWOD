@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "decisionId": "conditioning-and-payg-product-terms-owner-approval",
+  "recordedAt": "2026-09-01",
+  "approved": true,
+  "approvedByRole": "business-owner",
+  "source": "Explicit owner instruction in the current Codex release task: terms are approved; the PAYG waiver and retention policy were approved earlier in the same release task.",
+  "approvedReviewDocuments": [
+    {
+      "decision": "adult-conditioning-product-terms",
+      "version": "ZAF-CONDITIONING-ADDENDUM-DRAFT-2026-08-31-01",
+      "bytes": 5374,
+      "sha256": "a18186bb8f19167ef49d8024aa87010bbd322b17c9455baf609e76e2ed4c40b3"
+    },
+    {
+      "decision": "payg-product-terms",
+      "version": "ZAF-PAYG-TERMS-DRAFT-2026-08-31-01",
+      "bytes": 8149,
+      "sha256": "f64cf9d3851945f6bf17c111beb38961e1fa5c22d7067aeff5652ef5886d0472"
+    },
+    {
+      "decision": "payg-waiver",
+      "version": "ZAF-PAYG-WAIVER-DRAFT-2026-08-31-01",
+      "bytes": 5197,
+      "sha256": "df23694cbeaf841aadeb92c1dfe2b6cb05b4a38203d6cbd2840c77381f66795c"
+    }
+  ],
+  "approvedFinalPublicationCandidates": [
+    {
+      "decision": "adult-conditioning-product-terms",
+      "version": "ZAF-CONDITIONING-ADDENDUM-2026-09-01-01",
+      "bytes": 4116,
+      "sha256": "b91f7fd256bca8ca6bca8d020519c5e298b167a8b98ea039df213bd4bc71fc19"
+    },
+    {
+      "decision": "payg-product-terms",
+      "version": "ZAF-PAYG-TERMS-2026-09-01-01",
+      "bytes": 7406,
+      "sha256": "7b209af1b23144ce8f3e7fda38f09c0806d05be5f558b0d751e6a37d5ecbdb05"
+    },
+    {
+      "decision": "payg-waiver",
+      "version": "ZAF-PAYG-WAIVER-2026-09-01-01",
+      "bytes": 4488,
+      "sha256": "137bf54c92eedb244114c525b6351400933a42d6e775d848576ff0c3e96a213d"
+    }
+  ],
+  "promotionMethod": "The immutable source drafts remain unchanged. Separate final IDs remove only draft/review control text, convert conditional publication wording to customer-facing wording, apply the already approved £7 price and 30/90/2,190-day retention decisions, and retain the reviewed commercial and risk substance.",
+  "paygSpecificDateCancellationStatementApproved": true,
+  "paygSpecificDateCancellationStatementId": "payg_specific_date_cancellation_v1",
+  "paygSpecificDateCancellationCopyVersion": "ZAF-PAYG-CANCELLATION-STATEMENT-2026-09-01-01",
+  "customerPiiRecorded": false,
+  "publicationManifest": "public/legal/products/manifest.json",
+  "runtimePublicationComplete": false,
+  "deploymentAuthorized": false,
+  "productionPurchaseGatesRemainClosed": true
+}

@@ -1,6 +1,17 @@
 {
   "schemaVersion": 1,
   "evidenceType": "production-provider-app-check-and-closed-config-readback",
+  "readinessItemId": "live-product-catalogue-and-closed-config-readback",
+  "verified": true,
+  "newProductPurchaseGatesRemainClosed": true,
+  "customerPiiRecorded": false,
+  "verifiedControls": [
+    "stripe-live-catalogue-verified",
+    "payg-price-700-gbp",
+    "app-check-provider-bound",
+    "secrets-versioned-without-values",
+    "new-product-gates-closed"
+  ],
   "recordedAt": "2026-09-01T08:20:19Z",
   "firebaseProjectId": "alphawod-d1f2f",
   "stripeCatalogue": {
@@ -28,6 +39,7 @@
     "secretsStoredInFile": false,
     "existingMembershipPurchaseEnabled": true,
     "adultConditioningPurchaseEnabled": false,
+    "adultConditioningLegalApproved": false,
     "paygAvailabilityEnabled": false,
     "paygLegalApproved": false,
     "preflightCommand": "npm run verify:production-open-config --prefix functions",

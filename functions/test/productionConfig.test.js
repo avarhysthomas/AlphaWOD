@@ -48,6 +48,10 @@ function validEnvironment() {
     PAYG_TERMS_VERSION: "PAYG-TERMS-2026-01",
     PAYG_TERMS_PUBLIC_URL: "/legal/PAYG-TERMS-2026-01.txt",
     PAYG_TERMS_SHA256: "b".repeat(64),
+    PAYG_PRIVACY_NOTICE_VERSION: "PAYG-PRIVACY-NOTICE-2026-01",
+    PAYG_PRIVACY_NOTICE_PUBLIC_URL:
+      "/legal/PAYG-PRIVACY-NOTICE-2026-01.txt",
+    PAYG_PRIVACY_NOTICE_SHA256: "c".repeat(64),
     STRIPE_EXPECTED_MODE: "live",
     STRIPE_PORTAL_CONFIGURATION_ID: "bpc_LivePortal",
     STRIPE_PRICE_ADULT_UNLIMITED:
@@ -173,6 +177,12 @@ test("never accepts product review drafts as PAYG publication evidence", () => {
     },
     {
       PAYG_TERMS_PUBLIC_URL: "/legal/other-document.txt",
+    },
+    {
+      PAYG_PRIVACY_NOTICE_VERSION:
+        "ZAF-PAYG-PRIVACY-NOTICE-DRAFT-2026-09-01-01",
+      PAYG_PRIVACY_NOTICE_PUBLIC_URL:
+        "/legal/product-drafts/ZAF-PAYG-PRIVACY-NOTICE-DRAFT-2026-09-01-01.txt",
     },
   ]) {
     assert.throws(() => assertProductionArmedConfig({

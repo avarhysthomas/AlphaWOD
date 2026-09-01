@@ -25,6 +25,24 @@ const CLASS = Object.freeze({
   timezone: "Europe/London",
   location: "Zero Alpha Fitness",
 });
+const LEGAL_ACCEPTANCE = Object.freeze({
+  acceptedAt: "2026-09-01T10:11:12.345Z",
+  waiver: Object.freeze({
+    version: "payg-waiver-race-v1",
+    publicUrl: "https://alpha-wod.vercel.app/legal/payg-waiver-race.txt",
+    sha256: "a".repeat(64),
+  }),
+  terms: Object.freeze({
+    version: "payg-terms-race-v1",
+    publicUrl: "https://alpha-wod.vercel.app/legal/payg-terms-race.txt",
+    sha256: "b".repeat(64),
+  }),
+  privacyNotice: Object.freeze({
+    version: "payg-privacy-race-v1",
+    publicUrl: "https://alpha-wod.vercel.app/legal/payg-privacy-race.txt",
+    sha256: "c".repeat(64),
+  }),
+});
 
 async function clearFirestore() {
   const firestoreHost = process.env.FIRESTORE_EMULATOR_HOST;
@@ -46,6 +64,7 @@ function confirmationPayload(orderId) {
     publicOrigin: "https://alpha-wod.vercel.app",
     cancellationToken: "private-cancellation-token",
     cancellationCutoffAtMillis: Date.parse("2026-09-09T17:00:00.000Z"),
+    legalAcceptance: LEGAL_ACCEPTANCE,
   });
 }
 

@@ -60,6 +60,7 @@ const {
   paygEmailLeaseCorrelation,
   paygPaymentCompletedBeforePiiCutoff,
   paygPiiRedactionDeadline,
+  publicLegalConfig,
   parsePaygPiiRetentionConfig,
   publicPaygAttendeeName,
   publicPaygPaymentReviewState,
@@ -104,6 +105,26 @@ const LEGAL = Object.freeze({
     publicUrl: "/legal/payg/terms.txt",
     sha256: "b".repeat(64),
   }),
+  privacyNotice: Object.freeze({
+    version: "ZAF-PAYG-PRIVACY-2026-01",
+    publicUrl: "/legal/payg/privacy.txt",
+    sha256: "c".repeat(64),
+  }),
+});
+const CONFIRMATION_LEGAL_ACCEPTANCE = Object.freeze({
+  acceptedAt: "2026-09-01T10:11:12.345Z",
+  waiver: Object.freeze({
+    ...LEGAL.waiver,
+    publicUrl: `https://alpha-wod.vercel.app${LEGAL.waiver.publicUrl}`,
+  }),
+  terms: Object.freeze({
+    ...LEGAL.terms,
+    publicUrl: `https://alpha-wod.vercel.app${LEGAL.terms.publicUrl}`,
+  }),
+  privacyNotice: Object.freeze({
+    ...LEGAL.privacyNotice,
+    publicUrl: `https://alpha-wod.vercel.app${LEGAL.privacyNotice.publicUrl}`,
+  }),
 });
 
 const ATTEMPT_ID = "paygAttempt_0123456789abcdef0123456789";
@@ -130,6 +151,7 @@ function checkoutRequest(overrides = {}) {
       cancellationPolicyAccepted: true,
       waiverVersion: LEGAL.waiver.version,
       termsVersion: LEGAL.terms.version,
+      privacyNoticeVersionPresented: LEGAL.privacyNotice.version,
     },
     ...overrides,
   };
@@ -265,6 +287,10 @@ test("checkout input normalizes identity/contact and rejects stale or incomplete
   assert.equal(normalized.contact.email, "ava@example.test");
   assert.equal(normalized.contact.phone, "+447700900123");
   assert.equal(normalized.acceptances.waiverVersion, LEGAL.waiver.version);
+  assert.equal(
+    normalized.acceptances.privacyNoticeVersionPresented,
+    LEGAL.privacyNotice.version
+  );
   assert.equal(Object.isFrozen(normalized), true);
   assert.equal(Object.isFrozen(normalized.acceptances), true);
 
@@ -296,6 +322,17 @@ test("checkout input normalizes identity/contact and rejects stale or incomplete
     }), LEGAL),
     /changed/i
   );
+  for (const privacyNoticeVersionPresented of [undefined, "stale-privacy-notice"]) {
+    assert.throws(
+      () => normalizePaygCheckoutRequest(checkoutRequest({
+        acceptances: {
+          ...checkoutRequest().acceptances,
+          privacyNoticeVersionPresented,
+        },
+      }), LEGAL),
+      /privacyNoticeVersionPresented|changed/i
+    );
+  }
   assert.throws(
     () => normalizePaygCheckoutRequest(checkoutRequest({
       contact: {email: "ava@example.test", phone: "07700900123"},
@@ -311,6 +348,23 @@ test("checkout input normalizes identity/contact and rejects stale or incomplete
     }), LEGAL),
     /must be accepted/i
   );
+});
+
+test("the public legal projection includes the exact Privacy Notice version and URL", () => {
+  assert.deepEqual(publicLegalConfig(LEGAL), {
+    waiver: {
+      version: LEGAL.waiver.version,
+      publicUrl: LEGAL.waiver.publicUrl,
+    },
+    terms: {
+      version: LEGAL.terms.version,
+      publicUrl: LEGAL.terms.publicUrl,
+    },
+    privacyNotice: {
+      version: LEGAL.privacyNotice.version,
+      publicUrl: LEGAL.privacyNotice.publicUrl,
+    },
+  });
 });
 
 test("PAYG checkout App Check accepts only a fresh token from the exact web app", () => {
@@ -548,9 +602,14 @@ test("PII promotion closes on any scrub marker and at the destination deadline",
     attendee: {fullName: "Privacy Test", dateOfBirth: "1990-01-01"},
     contact: {email: "privacy@example.test"},
     acceptances: {
+      privacyNoticeVersionPresented: "payg-privacy-v1",
       legal: {
         waiver: {sha256: "a".repeat(64)},
         terms: {sha256: "b".repeat(64)},
+        privacyNotice: {
+          version: "payg-privacy-v1",
+          sha256: "c".repeat(64),
+        },
       },
     },
     acceptanceEvidenceDigest: "c".repeat(64),
@@ -929,6 +988,7 @@ test("confirmation outbox freezes class, amount, policy, and signed cancellation
     publicOrigin: "https://alpha-wod.vercel.app",
     cancellationToken: "signed.token",
     cancellationCutoffAtMillis: Date.parse("2026-09-09T18:00:00.000Z"),
+    legalAcceptance: CONFIRMATION_LEGAL_ACCEPTANCE,
   });
   assert.equal(payload.idempotencyKey, `payg-confirmation/${INTENT_ID}/v1`);
   assert.deepEqual(payload.to, ["ava@example.test"]);
@@ -936,6 +996,10 @@ test("confirmation outbox freezes class, amount, policy, and signed cancellation
   assert.equal(payload.templateData.amountPence, 700);
   assert.equal(payload.templateData.currency, "gbp");
   assert.equal(payload.templateData.cancellationPolicy.cutoffHours, 24);
+  assert.deepEqual(
+    payload.templateData.legalAcceptance,
+    CONFIRMATION_LEGAL_ACCEPTANCE
+  );
   assert.match(payload.templateData.cancellationPolicy.beforeCutoff, /refundable/i);
   assert.match(payload.templateData.cancellationPolicy.afterCutoff, /non-refundable/i);
   assert.equal(
@@ -944,6 +1008,11 @@ test("confirmation outbox freezes class, amount, policy, and signed cancellation
   );
   assert.equal(Object.isFrozen(payload), true);
   assert.equal(Object.isFrozen(payload.templateData), true);
+  assert.equal(Object.isFrozen(payload.templateData.legalAcceptance), true);
+  assert.equal(
+    Object.isFrozen(payload.templateData.legalAcceptance.terms),
+    true
+  );
 });
 
 test("confirmation email is deterministic, escaped, and carries the guest cancellation link", () => {
@@ -964,6 +1033,7 @@ test("confirmation email is deterministic, escaped, and carries the guest cancel
     publicOrigin: "https://alpha-wod.vercel.app",
     cancellationToken: "signed.token",
     cancellationCutoffAtMillis: Date.parse("2026-09-09T17:00:00.000Z"),
+    legalAcceptance: CONFIRMATION_LEGAL_ACCEPTANCE,
   });
   const email = buildPaygConfirmationEmail(
     outbox,
@@ -972,10 +1042,19 @@ test("confirmation email is deterministic, escaped, and carries the guest cancel
   );
   assert.equal(email.subject, "Your PAYG class is confirmed — Conditioning <script>");
   assert.match(email.text, /Paid: £7\.00 GBP/);
+  assert.match(email.text, /PAYG Terms: ZAF-PAYG-TERMS-2026-01/);
+  assert.match(email.text, /Participant Waiver: ZAF-PAYG-WAIVER-2026-01/);
+  assert.match(email.text, /Privacy Notice shown: ZAF-PAYG-PRIVACY-2026-01/);
+  assert.doesNotMatch(email.text, /Privacy Notice accepted/i);
+  assert.match(email.text, /Acceptance time: 2026-09-01T10:11:12\.345Z/);
+  assert.match(email.text, /https:\/\/alpha-wod\.vercel\.app\/legal\/payg\/terms\.txt/);
   assert.match(email.text, /Cancel this booking: https:\/\/alpha-wod\.vercel\.app\/pay-as-you-go\/cancel\?token=signed\.token/);
   assert.match(email.html, /Ava &lt;Admin&gt;/);
   assert.match(email.html, /Conditioning &lt;script&gt;/);
   assert.match(email.html, /Unit 3 &amp; Studio/);
+  assert.match(email.html, /ZAF-PAYG-TERMS-2026-01/);
+  assert.match(email.html, /Privacy Notice \(shown, not consent\)/);
+  assert.match(email.html, /2026-09-01T10:11:12\.345Z/);
   assert.doesNotMatch(email.html, /<script>/);
   assert.equal(email.reply_to, "support@zeroalphafitness.co.uk");
   assert.throws(

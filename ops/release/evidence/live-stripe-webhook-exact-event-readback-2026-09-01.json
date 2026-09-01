@@ -1,6 +1,17 @@
 {
   "schemaVersion": 1,
   "evidenceType": "stripe-live-webhook-exact-event-readback",
+  "readinessItemId": "live-stripe-webhook-exact-event-readback",
+  "verified": true,
+  "newProductPurchaseGatesRemainClosed": true,
+  "customerPiiRecorded": false,
+  "verifiedControls": [
+    "live-account-readback",
+    "endpoint-enabled",
+    "exact-required-event-set",
+    "signing-secret-not-recorded",
+    "read-only"
+  ],
   "recordedAt": "2026-09-01T08:20:19Z",
   "stripeMode": "live",
   "endpoint": {

@@ -1893,7 +1893,10 @@ function assertCheckoutDocumentModel(publicationReadyRequired: boolean): void {
       signerRole: "adult_participant_and_payer",
     },
     adult_conditioning: {
-      documents: ["membershipTerms", "cancellationPolicy", "privacyNotice", "adultWaiver"],
+      documents: [
+        "membershipTerms", "cancellationPolicy", "adultConditioningAddendum",
+        "privacyNotice", "adultWaiver",
+      ],
       statements: [
         "membership_contract", "privacy_notice", "adult_participant_waiver",
         "recurring_payment_authority", "immediate_performance",
