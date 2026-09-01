@@ -12,8 +12,12 @@ have been approved.
 | --- | --- | --- | --- | --- |
 | Adult Conditioning Only Membership | Live | `prod_VAOFQB36XfKixX` | `price_1UA3T0FzNDZoGGA0RJg5qEHe` | £30 GBP monthly |
 | Adult Conditioning Only Membership | Test | `prod_VAOvaoryJOeb04` | `price_1UA47fFzNDZoGGA0lgyZPUZ9` | £30 GBP monthly |
-| Adult Pay as You Go Class | Live | `prod_VAOGG2ZsBQ65Qt` | `price_1UA3TdFzNDZoGGA0dCgYfU2h` | £7.50 GBP one time |
-| Adult Pay as You Go Class | Test | `prod_VAOxXxpax1MuRt` | `price_1UA49JFzNDZoGGA0ciTM2OOQ` | £7.50 GBP one time |
+| Adult Pay as You Go Class | Live | `prod_VAOGG2ZsBQ65Qt` | `price_1UAmoCFzNDZoGGA0lKDwjbBU` | £7 GBP one time |
+| Adult Pay as You Go Class | Test | `prod_VAOxXxpax1MuRt` | `price_1UAmVVFzNDZoGGA04z8hX10N` | £7 GBP one time |
+
+The superseded live £7.50 Price `price_1UA3TdFzNDZoGGA0dCgYfU2h` is archived.
+The £7 Price above is the Product's live default and was read back before its
+identifier was frozen in the catalogue and production configuration example.
 
 All four Products use tax code `txcd_50021001`, matching the existing adult
 catalogue. Stripe tax treatment remains subject to the business owner's tax
@@ -49,7 +53,7 @@ currency and recurring shape before accepting money.
   address. A mobile number is optional and, when supplied, is used only for
   urgent contact about that class. Checkout also requires the approved waiver,
   terms and cancellation-policy acceptances.
-- One successful £7.50 payment creates one guest booking for the selected class.
+- One successful £7 payment creates one guest booking for the selected class.
   It never creates a class credit, entitlement, transferable balance or
   rescheduling right.
 - Cancellation at least 24 hours before the class is refundable. Cancellation

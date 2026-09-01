@@ -229,15 +229,15 @@ export const APPROVED_LIVE_STRIPE_CATALOGUE = {
 } as const satisfies Record<PlanKey, ApprovedLiveStripeCatalogueEntry>;
 
 /**
- * Exact one-time LIVE PAYG object inspected in Stripe Dashboard on 30 August
- * 2026. It stays separate from the recurring PlanKey catalogue by design.
+ * Exact one-time LIVE PAYG contract created and read back on 1 September 2026.
+ * It stays separate from the recurring PlanKey catalogue by design.
  */
 export const APPROVED_LIVE_PAYG_CATALOGUE = {
   priceEnvKey: "STRIPE_PRICE_ADULT_PAYG_CLASS",
   productId: "prod_VAOGG2ZsBQ65Qt",
   productName: "Adult Pay as You Go Class",
-  priceId: "price_1UA3TdFzNDZoGGA0dCgYfU2h",
-  amountPence: 750,
+  priceId: "price_1UAmoCFzNDZoGGA0lKDwjbBU",
+  amountPence: 700,
   currency: "gbp",
   type: "one_time",
   billingScheme: "per_unit",
@@ -248,9 +248,9 @@ export const APPROVED_LIVE_PAYG_CATALOGUE = {
   productTaxCode: "txcd_50021001",
 } as const satisfies ApprovedLiveOneTimeStripeCatalogueEntry;
 
-/** Exact Stripe sandbox counterpart created and inspected on 30 August 2026. */
+/** Exact £7 Stripe sandbox counterpart created on 1 September 2026. */
 export const APPROVED_TEST_PAYG_CATALOGUE = {
   ...APPROVED_LIVE_PAYG_CATALOGUE,
   productId: "prod_VAOxXxpax1MuRt",
-  priceId: "price_1UA49JFzNDZoGGA0ciTM2OOQ",
+  priceId: "price_1UAmVVFzNDZoGGA04z8hX10N",
 } as const satisfies ApprovedLiveOneTimeStripeCatalogueEntry;

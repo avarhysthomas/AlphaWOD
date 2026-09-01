@@ -14,9 +14,9 @@ test("fake Stripe supports the one-time PAYG payment and refund seams", async ()
     protocol: "http",
   });
   try {
-    const priceId = "price_1UA49JFzNDZoGGA0ciTM2OOQ";
+    const priceId = "price_1UAmVVFzNDZoGGA04z8hX10N";
     const price = await stripe.prices.retrieve(priceId, {expand: ["product"]});
-    assert.equal(price.unit_amount, 750);
+    assert.equal(price.unit_amount, 700);
     assert.equal(price.type, "one_time");
     assert.equal(price.product.id, "prod_VAOxXxpax1MuRt");
 
@@ -45,7 +45,7 @@ test("fake Stripe supports the one-time PAYG payment and refund seams", async ()
       expand: ["data.price.product"],
     });
     assert.equal(lineItems.data.length, 1);
-    assert.equal(lineItems.data[0].amount_total, 750);
+    assert.equal(lineItems.data[0].amount_total, 700);
     assert.equal(lineItems.data[0].price.product.id, "prod_VAOxXxpax1MuRt");
 
     const paymentIntent = await stripe.paymentIntents.retrieve(
@@ -58,7 +58,7 @@ test("fake Stripe supports the one-time PAYG payment and refund seams", async ()
       metadata: {paygOrderId: intentId},
     });
     assert.equal(refund.status, "succeeded");
-    assert.equal(refund.amount, 750);
+    assert.equal(refund.amount, 700);
     assert.equal(refund.metadata.paygOrderId, intentId);
   } finally {
     await fake.close();

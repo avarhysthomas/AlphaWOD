@@ -30,7 +30,7 @@ const {
   fulfilPaygCheckoutSession,
 } = require("../lib/payg");
 
-const PAYG_PRICE_ID = "price_1UA49JFzNDZoGGA0ciTM2OOQ";
+const PAYG_PRICE_ID = "price_1UAmVVFzNDZoGGA04z8hX10N";
 const PAYG_PRODUCT_ID = "prod_VAOxXxpax1MuRt";
 const LOCAL_CANCELLATION_SECRET =
   "local-payg-cancellation-secret-32-bytes";
@@ -112,7 +112,7 @@ function seedPaidProvider({
     customer_details: {email: "late-payment@example.test"},
     payment_intent: paymentIntentId,
     subscription: null,
-    amount_total: 750,
+    amount_total: 700,
     currency: "gbp",
     total_details: {amount_discount: 0},
     line_items: [{price: PAYG_PRICE_ID, quantity: 1}],
@@ -122,8 +122,8 @@ function seedPaidProvider({
     object: "payment_intent",
     livemode: false,
     status: "succeeded",
-    amount: 750,
-    amount_received: 750,
+    amount: 700,
+    amount_received: 700,
     currency: "gbp",
     latest_charge: chargeId,
     metadata,
@@ -132,7 +132,7 @@ function seedPaidProvider({
     id: chargeId,
     object: "charge",
     livemode: false,
-    amount: 750,
+    amount: 700,
     amount_refunded: 0,
     currency: "gbp",
     payment_intent: paymentIntentId,
@@ -220,7 +220,7 @@ async function seedPaygPurchase({
     },
     classStartMillis,
     classEndMillis,
-    amountPence: 750,
+    amountPence: 700,
     currency: "gbp",
     publicOrigin: "https://example.test",
     checkoutExpiresAt: Math.floor(nowMillis / 1000) + 30 * 60,
@@ -346,7 +346,7 @@ test("fulfilment cannot resurrect PII after a concurrent intent scrub", {timeout
     },
     classStartMillis,
     classEndMillis,
-    amountPence: 750,
+    amountPence: 700,
     currency: "gbp",
     publicOrigin: "https://example.test",
     checkoutExpiresAt: Math.floor(now / 1000) + 30 * 60,

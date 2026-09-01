@@ -32,7 +32,7 @@ export type PublicPaygSchedule = {
   offering: {
     key: "adult_payg_class";
     displayName: "Adult Pay as You Go Class";
-    amountPence: 750;
+    amountPence: 700;
     currency: "gbp";
     cancellationCutoffHours: 24;
   };

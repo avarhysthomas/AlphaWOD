@@ -34,7 +34,7 @@ const REQUIRED_COPY = {
     /limited Zero Alpha App access/,
   ],
   paygTerms: [
-    /price is £7\.50/,
+    /price is £7\./,
     /cannot be transferred or rescheduled/,
     /at least 24 hours/,
     /less than 24 hours/,

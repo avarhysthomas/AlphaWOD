@@ -48,7 +48,7 @@ const openSchedule = {
   offering: {
     key: "adult_payg_class" as const,
     displayName: "Adult Pay as You Go Class" as const,
-    amountPence: 750 as const,
+    amountPence: 700 as const,
     currency: "gbp" as const,
     cancellationCutoffHours: 24 as const,
   },
@@ -127,7 +127,7 @@ describe("Pay As You Go timetable", () => {
     fireEvent.click(screen.getByLabelText(/adult participant waiver/i));
     fireEvent.click(screen.getByLabelText(/Pay As You Go terms/i));
     fireEvent.click(screen.getByLabelText(/cannot be transferred or rescheduled/i));
-    fireEvent.click(screen.getByRole("button", {name: "Reserve and pay £7.50"}));
+    fireEvent.click(screen.getByRole("button", {name: "Reserve and pay £7"}));
 
     await waitFor(() => expect(mockedCheckout).toHaveBeenCalledWith({
       checkoutSchemaVersion: 1,
@@ -164,7 +164,7 @@ describe("Pay As You Go timetable", () => {
     fireEvent.click(screen.getByLabelText(/adult participant waiver/i));
     fireEvent.click(screen.getByLabelText(/Pay As You Go terms/i));
     fireEvent.click(screen.getByLabelText(/cannot be transferred or rescheduled/i));
-    fireEvent.click(screen.getByRole("button", {name: "Reserve and pay £7.50"}));
+    fireEvent.click(screen.getByRole("button", {name: "Reserve and pay £7"}));
 
     await waitFor(() => expect(mockedCheckout).toHaveBeenCalled());
     expect(mockedCheckout.mock.calls[0][0].contact).toEqual({

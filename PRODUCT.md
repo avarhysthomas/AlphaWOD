@@ -26,7 +26,7 @@ The product connects Zero Alpha Fitness's real weekly timetable and membership r
 - Adult Conditioning Only Membership costs £30 per month and follows the existing first-of-month billing schedule.
 - A Conditioning Only member may book any two eligible Conditioning classes in each Europe/London Monday-to-Sunday week: Monday 06:00, Tuesday 18:00, Thursday 18:00, or Friday 05:30. The choices are made from the live schedule and may change from week to week.
 - Conditioning Only members can use Schedule, Profile, and Membership management. Dashboard/WOD programming, Training, Leaderboards, and profile performance statistics are not included.
-- Pay As You Go costs £7.50 for one named class from the whole public schedule. It is not a reusable credit and cannot be transferred or rescheduled.
+- Pay As You Go costs £7 for one named class from the whole public schedule. It is not a reusable credit and cannot be transferred or rescheduled.
 - Pay As You Go does not require an account. Checkout collects the adult attendee's name and date of birth, plus an email address and contact number for operational contact about that class.
 - A Pay As You Go cancellation made at least 24 hours before the class is refundable. A cancellation made less than 24 hours before the class, or a no-show, is non-refundable.
 

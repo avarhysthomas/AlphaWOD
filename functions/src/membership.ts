@@ -1239,6 +1239,182 @@ async function resolveApprovedCheckoutDiscount(
   };
 }
 
+type LegacyPresaleDiscountRecovery = {
+  discount: MembershipDiscount;
+  paymentSchedule: MembershipPaymentSchedule;
+};
+
+/**
+ * Identifies the one historical founding-presale shape that was persisted
+ * without its already-applied existing-member discount. Keeping this exact
+ * prevents a provider discount from silently changing any other legacy
+ * contract.
+ */
+function hasRecoverableLegacyPresaleDiscountGap(
+  membership: MembershipDoc
+): boolean {
+  const schedule = membership.paymentSchedule;
+  const order = orderFor(membership);
+  return membership.schemaVersion === 1 &&
+    membership.planKey === EXISTING_MEMBER_OFFER.planKey &&
+    membership.state === "scheduled" &&
+    membership.stripeStatus === "active" &&
+    membership.billingMode === "presale_deferred" &&
+    membership.billingCycleAnchor === PRESALE_BILLING_ANCHOR_UNIX_SECONDS &&
+    membership.firstPaymentAt === PRESALE_BILLING_ANCHOR_UNIX_SECONDS &&
+    membership.serviceStartsAt === PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS &&
+    participantCountFor(membership) === 1 &&
+    membership.firstPaymentReceivedAt === null &&
+    membership.firstPaidInvoiceId === null &&
+    membership.discount == null &&
+    schedule?.amountDueTodayPence === 0 &&
+    schedule?.firstPaymentAt === membership.firstPaymentAt &&
+    schedule?.standardMonthlyPence === getPlan(
+      EXISTING_MEMBER_OFFER.planKey
+    ).amountPence &&
+    order.standardMonthlyPence === schedule.standardMonthlyPence &&
+    schedule.discountedMonthlyPence == null &&
+    (schedule.discountedPaymentCount == null ||
+      schedule.discountedPaymentCount === 0) &&
+    schedule.fullPriceFrom == null;
+}
+
+/**
+ * Recovers the missing schema-v1 schedule only from an exact, authoritative
+ * Stripe contract. This deliberately repeats the Coupon/Promotion/Product
+ * allowlist checks used at Checkout; observing a £55 invoice is never enough
+ * by itself to approve or infer a discount.
+ */
+async function resolveLegacyPresaleDiscountRecovery(
+  subscription: Stripe.Subscription,
+  membership: MembershipDoc
+): Promise<LegacyPresaleDiscountRecovery | null> {
+  if (!hasRecoverableLegacyPresaleDiscountGap(membership)) return null;
+
+  const applied = subscription.discounts ?? [];
+  if (applied.length === 0) return null;
+  if (applied.length !== 1 || typeof applied[0] === "string") {
+    throw new Error(
+      `Legacy membership ${membership.subscriptionId} does not carry one ` +
+      "expanded approved discount."
+    );
+  }
+
+  const configuredCouponId = stripeExistingMemberCouponId.value().trim();
+  const configuredPromotionCodeId =
+    stripeExistingMemberPromotionCodeId.value().trim();
+  if (!configuredCouponId) {
+    throw new Error(
+      `Legacy membership ${membership.subscriptionId} cannot validate its discount allowlist.`
+    );
+  }
+
+  const compatibleDiscount = applied[0] as Stripe.Discount & {
+    coupon?: unknown;
+    promotion_code?: unknown;
+    source?: {coupon?: unknown; promotion_code?: unknown};
+  };
+  const couponId = idOf(compatibleDiscount.coupon) ??
+    idOf(compatibleDiscount.source?.coupon);
+  const promotionCodeId = idOf(compatibleDiscount.promotion_code) ??
+    idOf(compatibleDiscount.source?.promotion_code);
+  const directApprovedCoupon = couponId === configuredCouponId &&
+    promotionCodeId === null;
+  const approvedPromotion = couponId === configuredCouponId &&
+    Boolean(configuredPromotionCodeId) &&
+    promotionCodeId === configuredPromotionCodeId;
+  const fullPriceFrom = addUtcMonths(
+    membership.firstPaymentAt,
+    EXISTING_MEMBER_OFFER.durationMonths
+  );
+  const finalDiscountedPaymentAt = addUtcMonths(
+    membership.firstPaymentAt,
+    EXISTING_MEMBER_OFFER.durationMonths - 1
+  );
+  if (couponId !== configuredCouponId ||
+    (!directApprovedCoupon && !approvedPromotion) ||
+    idOf(compatibleDiscount.subscription) !== subscription.id ||
+    compatibleDiscount.subscription_item != null ||
+    !Number.isSafeInteger(compatibleDiscount.start) ||
+    !Number.isSafeInteger(compatibleDiscount.end) ||
+    compatibleDiscount.start > membership.firstPaymentAt ||
+    (compatibleDiscount.end as number) <= finalDiscountedPaymentAt ||
+    (compatibleDiscount.end as number) > fullPriceFrom) {
+    throw new Error(
+      `Legacy membership ${membership.subscriptionId} carries an unapproved discount.`
+    );
+  }
+
+  const billingStripe = stripe();
+  const itemPrice = subscription.items.data[0]?.price;
+  let productId = itemPrice && typeof itemPrice !== "string" ?
+    idOf(itemPrice.product) : null;
+  if (!productId) {
+    const price = await billingStripe.prices.retrieve(membership.stripePriceId);
+    assertStripeObjectMode("Price", price.id, price.livemode);
+    productId = idOf(price.product);
+  }
+  if (!productId) {
+    throw new Error(
+      `Legacy membership ${membership.subscriptionId} has no membership Product.`
+    );
+  }
+
+  const coupon = await retrieveApprovedExistingMemberCoupon(
+    billingStripe,
+    productId,
+    false
+  );
+  let promotionCode: Stripe.PromotionCode | null = null;
+  if (approvedPromotion) {
+    promotionCode = await billingStripe.promotionCodes.retrieve(
+      configuredPromotionCodeId
+    );
+    assertStripeObjectMode(
+      "Promotion Code",
+      promotionCode.id,
+      promotionCode.livemode
+    );
+  }
+  if (coupon.id !== configuredCouponId ||
+    (promotionCode && (
+      promotionCode.id !== configuredPromotionCodeId ||
+      !promotionCodeMatchesApprovedOffer(promotionCode, coupon.id) ||
+      !promotionCodeRedemptionCountIsCredible(promotionCode)
+    ))) {
+    throw new Error(
+      `Legacy membership ${membership.subscriptionId} does not carry the ` +
+      "approved existing-member offer."
+    );
+  }
+
+  const standardMonthlyPence = membership.paymentSchedule.standardMonthlyPence;
+  const discountedMonthlyPence = Math.max(
+    0,
+    standardMonthlyPence - EXISTING_MEMBER_OFFER.amountOffPence
+  );
+  const discount: MembershipDiscount = {
+    couponId: coupon.id,
+    promotionCodeId: promotionCode?.id ?? null,
+    amountOffPence: EXISTING_MEMBER_OFFER.amountOffPence,
+    currency: "gbp",
+    durationInMonths: EXISTING_MEMBER_OFFER.durationMonths,
+    startsAt: compatibleDiscount.start,
+    endsAt: compatibleDiscount.end,
+  };
+  return {
+    discount,
+    paymentSchedule: {
+      amountDueTodayPence: 0,
+      firstPaymentAt: membership.firstPaymentAt,
+      standardMonthlyPence,
+      discountedMonthlyPence,
+      discountedPaymentCount: EXISTING_MEMBER_OFFER.durationMonths,
+      fullPriceFrom,
+    },
+  };
+}
+
 /** Keeps stored customer-facing dates aligned with an earlier Stripe schedule. */
 function alignCancellationOutcome(
   proposed: CancellationOutcome,
@@ -4140,12 +4316,28 @@ async function convergeMembershipFromStripe(
     providerContractError: string | null;
   };
   try {
+    const legacyRecoverySnapshot = authoritativeActivationPayment ?
+      await membershipRef.get() : null;
+    const legacyPresaleDiscountRecovery =
+      legacyRecoverySnapshot?.exists ?
+        await resolveLegacyPresaleDiscountRecovery(
+          subscription,
+          legacyRecoverySnapshot.data() as MembershipDoc
+        ) : null;
     convergenceOutcome = await db().runTransaction(async (tx) => {
       const fresh = await tx.get(membershipRef);
       if (!fresh.exists || fresh.get("convergenceLeaseToken") !== lease.token) {
         throw new Error(`Membership ${subscriptionId} lost its convergence lease.`);
       }
       const stored = fresh.data() as MembershipDoc;
+      const applyLegacyPresaleDiscountRecovery = Boolean(
+        legacyPresaleDiscountRecovery &&
+        hasRecoverableLegacyPresaleDiscountGap(stored)
+      );
+      const effectiveDiscount = applyLegacyPresaleDiscountRecovery ?
+        legacyPresaleDiscountRecovery?.discount : stored.discount;
+      const effectivePaymentSchedule = applyLegacyPresaleDiscountRecovery ?
+        legacyPresaleDiscountRecovery?.paymentSchedule : stored.paymentSchedule;
       const storedEntitlementPolicy = validateCommercialEntitlementPolicy(
         stored.commercialTerms,
         stored.planKey
@@ -4183,9 +4375,10 @@ async function convergeMembershipFromStripe(
               } : stored.planKey === "adult_conditioning" ? {
                 selectedConditioningSlots: storedLegacySlots || undefined,
               } : {}),
-            ...(stored.schemaVersion >= 2 ? {
-              discountCouponId: stored.discount?.couponId ?? null,
-            } : {}),
+            ...(stored.schemaVersion >= 2 ||
+              applyLegacyPresaleDiscountRecovery ? {
+                discountCouponId: effectiveDiscount?.couponId ?? null,
+              } : {}),
           }
         );
       const providerNeedsManualReview = Boolean(currentContractMismatch);
@@ -4233,14 +4426,14 @@ async function convergeMembershipFromStripe(
             `Invoice ${activationPayment.invoiceId} is not an approved recurring payment.`
           );
         }
-        const discountedPeriod = Boolean(stored.discount) && (
-          stored.discount?.duration === "forever" ||
-          (typeof stored.paymentSchedule?.fullPriceFrom === "number" &&
-            membershipLine.periodStart < stored.paymentSchedule.fullPriceFrom)
+        const discountedPeriod = Boolean(effectiveDiscount) && (
+          effectiveDiscount?.duration === "forever" ||
+          (typeof effectivePaymentSchedule?.fullPriceFrom === "number" &&
+            membershipLine.periodStart < effectivePaymentSchedule.fullPriceFrom)
         );
         const expectedAmount = discountedPeriod ?
-          stored.paymentSchedule?.discountedMonthlyPence :
-          (stored.paymentSchedule?.standardMonthlyPence ??
+          effectivePaymentSchedule?.discountedMonthlyPence :
+          (effectivePaymentSchedule?.standardMonthlyPence ??
             getPlan(stored.planKey).amountPence);
         if (typeof expectedAmount !== "number" ||
           activationPayment.amountPaidPence !== expectedAmount) {
@@ -4578,6 +4771,12 @@ async function convergeMembershipFromStripe(
         stripeStatus: subscription.status,
         firstPaymentReceivedAt,
         firstPaidInvoiceId,
+        ...(applyLegacyPresaleDiscountRecovery ? {
+          discount: legacyPresaleDiscountRecovery?.discount,
+          paymentSchedule: legacyPresaleDiscountRecovery?.paymentSchedule,
+          legacyPresaleDiscountRecoveryVersion: 1,
+          legacyPresaleDiscountRecoveredAt: serverTimestamp(),
+        } : {}),
         currentPeriodEnd: resolveCurrentPeriodEnd(subscription),
         cancelAt: projectedCancelAt,
         openDisputeIds,
@@ -4601,6 +4800,21 @@ async function convergeMembershipFromStripe(
         convergenceLeaseExpiresAt: FieldValue.delete(),
         updatedAt: serverTimestamp(),
       }, {merge: true});
+      if (applyLegacyPresaleDiscountRecovery && activationPayment) {
+        tx.set(
+          db().collection("membershipAudit").doc(
+            `legacy-presale-discount-recovery-${activationPayment.invoiceId}`
+          ),
+          {
+            type: "legacy_presale_discount_recovered",
+            subscriptionId,
+            invoiceId: activationPayment.invoiceId,
+            recoveryVersion: 1,
+            createdAt: serverTimestamp(),
+          },
+          {merge: false}
+        );
+      }
       return {
         state,
         disputeOpen,
@@ -8313,7 +8527,23 @@ async function handleStripeEvent(
   case "invoice.payment_failed": {
     const invoice = event.data.object as Stripe.Invoice;
     const subscriptionId = resolveInvoiceSubscriptionId(invoice);
+    // This warning is the PII-free source for the business-owner missed-payment
+    // alert. Keep it to Stripe identifiers and the signed event timestamp: the
+    // Cloud Monitoring notification route, not application code, delivers the
+    // alert email.
     if (subscriptionId) {
+      const appOwnedMembership = await db()
+        .collection("memberships")
+        .doc(subscriptionId)
+        .get();
+      if (appOwnedMembership.exists) {
+        console.warn("BILLING_PAYMENT_FAILED", {
+          stripeEventId: event.id,
+          stripeInvoiceId: typeof invoice.id === "string" ? invoice.id : null,
+          stripeSubscriptionId: subscriptionId,
+          stripeEventCreated: event.created,
+        });
+      }
       // `due_date` is meaningful only for manually sent invoices. Automatic
       // invoices can be created/finalised well before the failed collection
       // attempt, so their grace period starts at the signed failure event.

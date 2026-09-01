@@ -9,6 +9,9 @@ const productionExamplePath = path.join(
   root,
   "functions/.env.production.example"
 );
+const PAYMENT_FAILED_POLICY_ID = "billing-payment-failed";
+const PAYMENT_FAILED_SIGNAL = "BILLING_PAYMENT_FAILED";
+const PAYMENT_FAILED_NOTIFICATION_ROUTE = "business-owner-email";
 
 function uniqueSorted(values) {
   return [...new Set(values)].sort();
@@ -49,6 +52,22 @@ function verifyBillingMonitoring() {
   }
   if (!manifest.notificationChannelRequired || !manifest.runbook) {
     throw new Error("Monitoring requires a notification channel and runbook.");
+  }
+
+  const paymentFailedPolicies = manifest.policies.filter(
+    (policy) => policy.id === PAYMENT_FAILED_POLICY_ID
+  );
+  const paymentFailedPolicy = paymentFailedPolicies[0];
+  if (paymentFailedPolicies.length !== 1 || paymentFailedPolicy.priority !== "page" ||
+    paymentFailedPolicy.windowSeconds !== 60 || paymentFailedPolicy.threshold !== 1 ||
+    paymentFailedPolicy.notificationRoute !== PAYMENT_FAILED_NOTIFICATION_ROUTE ||
+    JSON.stringify(paymentFailedPolicy.sourceSignals) !==
+      JSON.stringify([PAYMENT_FAILED_SIGNAL]) ||
+    !paymentFailedPolicy.cloudLoggingFilter.includes("severity>=WARNING") ||
+    !paymentFailedPolicy.cloudLoggingFilter.includes(PAYMENT_FAILED_SIGNAL)) {
+    throw new Error(
+      "Missed-payment monitoring must page immediately to the business-owner email route."
+    );
   }
 
   const sourceMarkers = uniqueSorted(
@@ -108,4 +127,10 @@ if (require.main === module) {
   }
 }
 
-module.exports = {consoleErrorSignals, verifyBillingMonitoring};
+module.exports = {
+  PAYMENT_FAILED_NOTIFICATION_ROUTE,
+  PAYMENT_FAILED_POLICY_ID,
+  PAYMENT_FAILED_SIGNAL,
+  consoleErrorSignals,
+  verifyBillingMonitoring,
+};

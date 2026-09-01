@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "decisionId": "payg-waiver-owner-approval",
+  "recordedAt": "2026-09-01",
+  "approved": true,
+  "approvedByRole": "business-owner",
+  "approvedDocument": "Adult PAYG Participant Waiver and Risk Acknowledgement",
+  "source": "Explicit owner instruction in the current Codex release task: waivers are approved.",
+  "scope": [
+    "The PAYG adult participant waiver is approved in principle for final publication.",
+    "The existing published Adult Participant Waiver remains the approved participation waiver for Adult Conditioning."
+  ],
+  "doesNotApprove": [
+    "Adult Conditioning Only Membership Product Addendum",
+    "Adult Pay As You Go Class Terms",
+    "PAYG specific-date cancellation legal conclusion"
+  ],
+  "publicationStatus": "pending-final-version-and-immutable-digest",
+  "deploymentAuthorized": false,
+  "productionGatesRemainClosed": true
+}

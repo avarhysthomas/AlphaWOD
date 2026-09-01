@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "production-provider-app-check-and-closed-config-readback",
+  "recordedAt": "2026-09-01T08:20:19Z",
+  "firebaseProjectId": "alphawod-d1f2f",
+  "stripeCatalogue": {
+    "mode": "live",
+    "recurringMembershipEntries": 6,
+    "recurringCatalogueExactMatch": true,
+    "payg": {
+      "productId": "prod_VAOGG2ZsBQ65Qt",
+      "priceId": "price_1UAmoCFzNDZoGGA0lKDwjbBU",
+      "amountPence": 700,
+      "currency": "gbp",
+      "priceType": "one_time",
+      "active": true,
+      "productDefaultPrice": true
+    },
+    "supersededPaygPrice": {
+      "priceId": "price_1UA3TdFzNDZoGGA0dCgYfU2h",
+      "active": false
+    },
+    "result": "passed-authenticated-live-readback-against-checked-in-allowlist"
+  },
+  "closedNewOfferConfiguration": {
+    "configFile": "functions/.env.alphawod-d1f2f",
+    "gitIgnored": true,
+    "secretsStoredInFile": false,
+    "existingMembershipPurchaseEnabled": true,
+    "adultConditioningPurchaseEnabled": false,
+    "paygAvailabilityEnabled": false,
+    "paygLegalApproved": false,
+    "preflightCommand": "npm run verify:production-open-config --prefix functions",
+    "preflightPassed": true
+  },
+  "firebaseAppCheck": {
+    "webAppId": "1:674003216841:web:cfee240659ca55d7622018",
+    "registrationStatus": "registered",
+    "provider": "reCAPTCHA Enterprise",
+    "keyDisplayName": "AlphaWOD Production App Check",
+    "allowedDomain": "alpha-wod.vercel.app",
+    "vercelProductionSiteKeyConfigured": true,
+    "vercelProductionSiteKeyMatchesRegisteredKey": true,
+    "siteKeyValueRecorded": false,
+    "serviceEnforcementReadback": {
+      "cloudFunctions": "protected per callable in source",
+      "cloudFirestore": "Monitoring",
+      "cloudStorage": "Monitoring",
+      "authentication": "Monitoring"
+    },
+    "statusDistinction": "Web-app provider registration and per-service enforcement are separate controls; a service shown as Monitoring does not mean the web app is unregistered."
+  },
+  "firebaseSecretManager": {
+    "enabledVersion": 1,
+    "secretNames": [
+      "PAYG_CANCELLATION_TOKEN_SECRET",
+      "PAYG_CHECKOUT_RATE_LIMIT_SECRET",
+      "PAYG_DUPLICATE_LOCK_SECRET",
+      "PAYG_CANCELLATION_TOKEN_PREVIOUS_SECRET",
+      "PAYG_DUPLICATE_LOCK_PREVIOUS_SECRET"
+    ],
+    "secretValuesRecorded": false
+  },
+  "vercelProduction": {
+    "project": "avarhysthomas-projects/alpha-wod",
+    "adultConditioningGate": "false",
+    "environmentChangedWithoutDeployment": true
+  },
+  "productionDeploymentPerformed": false
+}

@@ -137,7 +137,7 @@ export default function PayAsYouGoSuccess() {
         <section className="mt-7 overflow-hidden rounded-2xl border border-payg/25 bg-[#151311] shadow-[0_28px_90px_rgba(0,0,0,0.48)]">
           <div className="flex items-center justify-between border-b border-dashed border-black/30 bg-payg px-5 py-4 text-black sm:px-7">
             <span className="flex items-center gap-2 text-sm font-black uppercase tracking-[0.12em]"><Ticket className="h-4 w-4" /> Pay As You Go</span>
-            {confirmed ? <Check className="h-6 w-6" aria-label="Confirmed" /> : <span className="font-heading text-2xl">£7.50</span>}
+            {confirmed ? <Check className="h-6 w-6" aria-label="Confirmed" /> : <span className="font-heading text-2xl">£7</span>}
           </div>
           <div className="p-6 sm:p-8">
             <h1 className="font-heading text-5xl uppercase leading-none text-white sm:text-6xl">{title}</h1>

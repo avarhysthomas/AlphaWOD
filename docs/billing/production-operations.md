@@ -105,6 +105,25 @@ their read-only closed-gate checks before any deployment. Record both under
 sandbox objects, placeholders or a source-only assertion all leave that blocker
 open.
 
+The live Stripe unsuccessful-delivery backlog must also be empty. Record every
+readback under `live-stripe-delivery-backlog-cleared`; an exact webhook event
+allowlist does not close this separate delivery-health gate. The 1 September
+2026 readback from 25 August onward found one pending `invoice.paid` event that
+the application ledger had dead-lettered after repeated incompatible
+first-payment validation. Keep the release blocked until compatible reviewed
+code is deployed to both `stripeWebhook` and `reconcilePastDueMemberships`, the
+scheduled reconciliation records the exact paid Invoice and the deterministic
+`legacy_presale_discount_recovered` audit, and the authoritative membership is
+verified. The terminal event ledger remains an immutable `dead_letter` history;
+do not relabel or delete it. Only after that reconciliation may Stripe redeliver
+the known event and receive the reviewed manual-review acknowledgement. Repeat
+the unsuccessful-delivery query against the exact live account from 25 August
+through the readback completion time, exhaust every result page, and require
+zero events. Clearance evidence must bind the deployed function revisions and
+current compatibility-source SHA-256 to the exact event, Invoice, hashed
+Subscription identity, recovery audit and ordered timestamps. Never acknowledge
+the provider event merely to make the query empty.
+
 Run these from a reviewed release commit:
 
 ```sh
@@ -238,15 +257,33 @@ must still create real log-based alerts in project `alphawod-d1f2f`, attach at
 least two staffed notification routes, and fire a synthetic matching log to
 prove delivery.
 
+A staffed notification route is a real notification channel watched by a named
+responder whenever purchase is enabled, with a named backup or escalation path
+if the first responder cannot act. Use at least two independent routes for each
+policy so one delivery failure does not make the alert silent. The repository
+does not prescribe a provider, address or individual: operators must record the
+chosen channels and coverage roster in the release evidence without committing
+personal contact details here.
+
+The dedicated `billing-payment-failed` policy uses the externally configured
+`business-owner-email` route so the business owner receives each missed-payment
+signal. Its recipient address remains in Google Cloud rather than source code.
+This single email route does not satisfy the separate two-route resilience
+requirement for the complete billing alert set.
+
 The required policies are:
 
 | Policy | Trigger | First response |
 | --- | --- | --- |
 | `billing-critical-runtime` | Any `CRITICAL_BILLING_*` log | Keep/close purchase, capture IDs, inspect Stripe authoritatively and assign an incident owner. |
+| `billing-payment-failed` | One `BILLING_PAYMENT_FAILED` warning | Open the referenced Invoice in Stripe, confirm the current payment and Subscription state, and follow the failed-payment grace procedure. |
 | `billing-recovery-worker-errors` | Two worker errors in 15 minutes | Check Scheduler invocation, Function errors, leases and the due/dead-letter queues. |
 | `billing-webhook-processing-errors` | Two handler errors in five minutes | Check Stripe endpoint health and event deliveries; rely on the recovery worker, not blind state edits. |
 | `billing-checkout-provider-rejections` | Five provider rejections in five minutes | Close purchase if systemic; verify the live catalogue and billing anchor before retrying. |
 | `billing-checkout-abuse-signals` | Ten rate-limit or consumed-token events in five minutes | Inspect App Check metrics and checkout velocity without logging source addresses; close purchase if the pattern is sustained or distributed. |
+| `payg-recovery-errors` | Two PAYG recovery, refund, privacy or attendance-convergence errors in 15 minutes | Inspect the affected intent/order warning, worker lease, due state and Stripe source; assign an incident owner and use only the reviewed recovery path. |
+| `payg-confirmation-delivery-errors` | Two PAYG confirmation-delivery or provider-acceptance persistence errors in 15 minutes | Preserve the frozen outbox and idempotency evidence; check Resend and retry through the scheduled worker only after correcting the cause. |
+| `payg-provider-preflight-and-checkout-errors` | One PAYG catalogue-preflight or Stripe Checkout-creation error in five minutes | Keep or close PAYG purchase and verify the live Product, Price, mode and immutable provider contract before retrying. |
 
 Also configure outside Cloud Logging:
 

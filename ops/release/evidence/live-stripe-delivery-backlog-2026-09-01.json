@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "stripe-live-delivery-backlog-readback",
+  "recordedAt": "2026-09-01",
+  "readback": {
+    "command": "stripe events list --live --delivery-success=false",
+    "windowStart": "2026-08-25",
+    "unsuccessfulEventCount": 1,
+    "events": [
+      {
+        "eventId": "evt_1UAgFqFzNDZoGGA0UDdTWXmb",
+        "type": "invoice.paid",
+        "createdAtUnixSeconds": 1788225169,
+        "pendingWebhooks": 1,
+        "invoiceId": "in_1UAfI7FzNDZoGGA0axkViBtH"
+      }
+    ]
+  },
+  "applicationLedger": {
+    "eventId": "evt_1UAgFqFzNDZoGGA0UDdTWXmb",
+    "state": "dead-lettered",
+    "repeatedFailureReason": "unexpected first-payment amount"
+  },
+  "remediationRequired": {
+    "compatibleCodeDeployed": false,
+    "eventAndCustomerStateSafelyReconciled": false,
+    "zeroUnsuccessfulEventsReadback": false,
+    "orderedSteps": [
+      "Deploy the compatible reviewed source to stripeWebhook and reconcilePastDueMemberships with purchase gates closed.",
+      "Run the reviewed scheduled reconciliation and verify the exact Invoice, provider contract, recovery version and deterministic audit without altering the terminal event ledger.",
+      "Only after reconciliation, redeliver the known Stripe event and verify the reviewed manual-review acknowledgement.",
+      "Exhaust the live-account unsuccessful-delivery query from 2026-08-25 through readback completion and record a zero-event result."
+    ]
+  },
+  "customerPiiRecorded": false,
+  "amountRecorded": false,
+  "subscriptionIdRecorded": false,
+  "providerMutation": false,
+  "applicationDataMutation": false,
+  "deploymentPerformed": false
+}

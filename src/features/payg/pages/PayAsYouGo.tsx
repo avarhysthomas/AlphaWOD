@@ -451,12 +451,12 @@ export default function PayAsYouGo() {
                 </h1>
                 <p className="mt-4 max-w-2xl text-base leading-7 text-white/62">
                   The live weekly timetable is below. Pick one named session and pay
-                  {schedule ? ` ${formatPrice(schedule.offering.amountPence)}` : " £7.50"}
+                  {schedule ? ` ${formatPrice(schedule.offering.amountPence)}` : " £7"}
                   —no account and no membership required.
                 </p>
               </div>
               <div className="shrink-0 text-left sm:text-right">
-                <p className="font-heading text-4xl text-payg">£7.50</p>
+                <p className="font-heading text-4xl text-payg">£7</p>
                 <p className="mt-1 text-sm font-bold text-white/60">one class · one attendee</p>
               </div>
             </div>
@@ -637,7 +637,7 @@ export default function PayAsYouGo() {
                 <span className="flex items-center gap-2 text-sm font-black uppercase tracking-[0.12em]">
                   <Ticket className="h-4 w-4" /> Your class ticket
                 </span>
-                <span className="font-heading text-3xl">£7.50</span>
+                <span className="font-heading text-3xl">£7</span>
               </div>
 
               <div className="p-5 sm:p-6">
@@ -755,7 +755,7 @@ export default function PayAsYouGo() {
                       className="inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-xl bg-payg px-5 py-3.5 text-base font-black text-black outline-none transition hover:bg-payg-hover focus-visible:ring-2 focus-visible:ring-payg focus-visible:ring-offset-2 focus-visible:ring-offset-[#151311] disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       {submitting ? <LoaderCircle className="h-5 w-5 animate-spin" /> : <ShieldCheck className="h-5 w-5" />}
-                      {submitting ? "Opening Stripe…" : "Reserve and pay £7.50"}
+                      {submitting ? "Opening Stripe…" : "Reserve and pay £7"}
                     </button>
                     <p className="flex items-center justify-center gap-2 text-center text-xs leading-5 text-white/55"><LockKeyhole className="h-3.5 w-3.5" /> Secure payment is completed on Stripe.</p>
                   </form>
@@ -773,7 +773,7 @@ export default function PayAsYouGo() {
               <p className="truncate text-sm font-black text-white">
                 {formatShortDate(selected.startTime, selected.timezone)} · {formatTime(selected.startTime, selected.timezone)}
               </p>
-              <p className="mt-0.5 truncate text-xs text-white/60">{selected.title} · £7.50</p>
+              <p className="mt-0.5 truncate text-xs text-white/60">{selected.title} · £7</p>
             </div>
             <button
               type="button"

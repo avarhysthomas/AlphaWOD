@@ -74,6 +74,17 @@
       ]
     },
     {
+      "id": "billing-payment-failed",
+      "priority": "page",
+      "windowSeconds": 60,
+      "threshold": 1,
+      "notificationRoute": "business-owner-email",
+      "cloudLoggingFilter": "resource.type=\"cloud_run_revision\" AND severity>=WARNING AND (textPayload:\"BILLING_PAYMENT_FAILED\" OR jsonPayload.message:\"BILLING_PAYMENT_FAILED\")",
+      "sourceSignals": [
+        "BILLING_PAYMENT_FAILED"
+      ]
+    },
+    {
       "id": "billing-recovery-worker-errors",
       "priority": "page-after-two",
       "windowSeconds": 900,

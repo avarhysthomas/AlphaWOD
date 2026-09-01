@@ -8,6 +8,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const {verifyBillingMonitoring} = require("./verifyBillingMonitoring");
 const {
   verifyBillingWebhookEvents,
@@ -32,6 +33,7 @@ const EXPECTED_OPERATIONAL_EVIDENCE = Object.freeze([
   "class-cancellation-quota-and-payg-refund-drill",
   "conditioning-stripe-test-purchase-to-booking-journey",
   "live-product-catalogue-and-closed-config-readback",
+  "live-stripe-delivery-backlog-cleared",
   "live-stripe-webhook-exact-event-readback",
   "payg-stripe-test-purchase-refund-dispute-email-journey",
   "resend-domain-and-confirmation-delivery",
@@ -40,6 +42,17 @@ const PAYG_RETENTION_DECISION_ID =
   "payg-pii-retention-and-redaction-policy";
 const PAYG_RETENTION_POLICY_VERSION =
   "ZAF-PAYG-PII-RETENTION-2026-08-31-01";
+const LIVE_STRIPE_DELIVERY_BACKLOG_ID =
+  "live-stripe-delivery-backlog-cleared";
+const LIVE_STRIPE_ACCOUNT_ID = "acct_1Q1PQcFzNDZoGGA0";
+const LIVE_STRIPE_BACKLOG_WINDOW_START = "2026-08-25T00:00:00.000Z";
+const BLOCKED_STRIPE_EVENT_ID = "evt_1UAgFqFzNDZoGGA0UDdTWXmb";
+const BLOCKED_STRIPE_INVOICE_ID = "in_1UAfI7FzNDZoGGA0axkViBtH";
+const BLOCKED_STRIPE_EVENT_CREATED = 1788225169;
+const BLOCKED_STRIPE_SUBSCRIPTION_SHA256 =
+  "603678ab7502208430a4b7ce131e220ece946adccca58e35d28baca51e27386a";
+const LEGACY_RECOVERY_AUDIT_ID =
+  `legacy-presale-discount-recovery-${BLOCKED_STRIPE_INVOICE_ID}`;
 
 function uniqueSorted(values) {
   return [...new Set(values)].sort();
@@ -83,10 +96,10 @@ function readEvidence(relativePath, label) {
   return JSON.parse(fs.readFileSync(evidencePath(relativePath, label), "utf8"));
 }
 
-function assertPartialEvidence(items) {
+function assertPartialEvidence(items, statusField) {
   for (const item of items) {
     if (item.partialEvidence === undefined) continue;
-    if (item.verified) {
+    if (item[statusField]) {
       throw new Error(`${item.id} must remove partial evidence once fully verified.`);
     }
     readEvidence(item.partialEvidence, `Partial evidence for ${item.id}`);
@@ -140,6 +153,144 @@ function assertPaygRetentionOwnerEvidence(ownerDecisions) {
   }
 }
 
+function assertLiveStripeDeliveryBacklogEvidence(operationalEvidence) {
+  const item = operationalEvidence.find(
+    ({id}) => id === LIVE_STRIPE_DELIVERY_BACKLOG_ID
+  );
+  if (!item) {
+    throw new Error("Live Stripe delivery backlog readiness item is missing.");
+  }
+  if (item.verified) {
+    const cleared = readEvidence(
+      item.evidence,
+      `Operational evidence ${LIVE_STRIPE_DELIVERY_BACKLOG_ID}`
+    );
+    assertClearedStripeDeliveryBacklogEvidence(cleared);
+    return;
+  }
+
+  const pending = readEvidence(
+    item.partialEvidence,
+    `Partial evidence for ${LIVE_STRIPE_DELIVERY_BACKLOG_ID}`
+  );
+  const event = pending.readback?.events?.[0];
+  const remediation = pending.remediationRequired;
+  if (pending.schemaVersion !== 1 ||
+    pending.evidenceType !== "stripe-live-delivery-backlog-readback" ||
+    pending.readback?.windowStart !== "2026-08-25" ||
+    pending.readback?.unsuccessfulEventCount !== 1 ||
+    pending.readback.events.length !== 1 ||
+    event?.eventId !== BLOCKED_STRIPE_EVENT_ID ||
+    event.type !== "invoice.paid" ||
+    event.createdAtUnixSeconds !== BLOCKED_STRIPE_EVENT_CREATED ||
+    event.pendingWebhooks !== 1 ||
+    event.invoiceId !== BLOCKED_STRIPE_INVOICE_ID ||
+    pending.applicationLedger?.state !== "dead-lettered" ||
+    pending.applicationLedger?.repeatedFailureReason !==
+      "unexpected first-payment amount" ||
+    remediation?.compatibleCodeDeployed !== false ||
+    remediation.eventAndCustomerStateSafelyReconciled !== false ||
+    remediation.zeroUnsuccessfulEventsReadback !== false ||
+    pending.customerPiiRecorded !== false ||
+    pending.amountRecorded !== false ||
+    pending.subscriptionIdRecorded !== false ||
+    pending.providerMutation !== false ||
+    pending.applicationDataMutation !== false ||
+    pending.deploymentPerformed !== false) {
+    throw new Error("Live Stripe delivery backlog evidence is stale or unsafe.");
+  }
+}
+
+function isIsoTimestamp(value) {
+  return typeof value === "string" &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) &&
+    Number.isFinite(Date.parse(value));
+}
+
+function sourceSha256(relativePath) {
+  return crypto.createHash("sha256")
+    .update(fs.readFileSync(path.join(root, relativePath)))
+    .digest("hex");
+}
+
+/**
+ * A zero count is not sufficient on its own: the original failure can only be
+ * cleared after compatible production code and the exact customer/event state
+ * have converged, followed by a complete live-account query covering the
+ * original incident window.
+ */
+function assertClearedStripeDeliveryBacklogEvidence(cleared) {
+  const deployment = cleared?.deployment;
+  const reconciliation = cleared?.reconciliation;
+  const acknowledgement = cleared?.deliveryAcknowledgement;
+  const readback = cleared?.readback;
+  const deploymentCompletedAt = deployment?.completedAt;
+  const reconciliationCompletedAt = reconciliation?.completedAt;
+  const readbackCompletedAt = readback?.completedAt;
+  if (cleared?.schemaVersion !== 2 ||
+    cleared.evidenceType !==
+      "stripe-live-delivery-backlog-cleared-readback" ||
+    deployment?.compatibleCodeDeployed !== true ||
+    deployment.environment !== "production" ||
+    deployment.firebaseProjectId !== "alphawod-d1f2f" ||
+    !/^[0-9a-f]{40}$/.test(deployment.sourceCommit || "") ||
+    deployment.compatibilitySourceSha256 !==
+      sourceSha256("functions/src/membership.ts") ||
+    typeof deployment.stripeWebhookRevision !== "string" ||
+    deployment.stripeWebhookRevision.trim().length < 8 ||
+    typeof deployment.reconcilePastDueMembershipsRevision !== "string" ||
+    deployment.reconcilePastDueMembershipsRevision.trim().length < 8 ||
+    !isIsoTimestamp(deploymentCompletedAt) ||
+    reconciliation?.eventId !== BLOCKED_STRIPE_EVENT_ID ||
+    reconciliation.eventCreated !== BLOCKED_STRIPE_EVENT_CREATED ||
+    reconciliation.invoiceId !== BLOCKED_STRIPE_INVOICE_ID ||
+    reconciliation.subscriptionIdSha256 !==
+      BLOCKED_STRIPE_SUBSCRIPTION_SHA256 ||
+    reconciliation.eventAndCustomerStateSafelyReconciled !== true ||
+    reconciliation.reconciliationFunction !== "reconcilePastDueMemberships" ||
+    reconciliation.reconciliationFunctionRevision !==
+      deployment.reconcilePastDueMembershipsRevision ||
+    reconciliation.applicationLedgerState !== "dead_letter" ||
+    reconciliation.applicationLedgerResolution !==
+      "authoritative_state_reconciled" ||
+    reconciliation.resolutionAuditId !== LEGACY_RECOVERY_AUDIT_ID ||
+    reconciliation.membershipProviderContractStatus !== "verified" ||
+    reconciliation.firstPaymentRecorded !== true ||
+    reconciliation.firstPaidInvoiceId !== BLOCKED_STRIPE_INVOICE_ID ||
+    reconciliation.legacyPresaleDiscountRecoveryVersion !== 1 ||
+    !isIsoTimestamp(reconciliationCompletedAt) ||
+    acknowledgement?.eventId !== BLOCKED_STRIPE_EVENT_ID ||
+    acknowledgement.handler !== "stripeWebhook" ||
+    acknowledgement.handlerRevision !== deployment.stripeWebhookRevision ||
+    acknowledgement.httpStatus !== 200 ||
+    acknowledgement.disposition !==
+      "accepted_for_manual_review_after_reconciliation" ||
+    !isIsoTimestamp(acknowledgement.completedAt) ||
+    readback?.stripeAccountId !== LIVE_STRIPE_ACCOUNT_ID ||
+    readback.stripeMode !== "live" ||
+    readback.deliverySuccess !== false ||
+    readback.windowStart !== LIVE_STRIPE_BACKLOG_WINDOW_START ||
+    !isIsoTimestamp(readback.windowEnd) ||
+    readback.paginationComplete !== true ||
+    !Number.isInteger(readback.pagesRead) || readback.pagesRead < 1 ||
+    readback.unsuccessfulEventCount !== 0 ||
+    !Array.isArray(readback.events) || readback.events.length !== 0 ||
+    !isIsoTimestamp(readbackCompletedAt) ||
+    Date.parse(reconciliationCompletedAt) < Date.parse(deploymentCompletedAt) ||
+    Date.parse(acknowledgement.completedAt) <
+      Date.parse(reconciliationCompletedAt) ||
+    Date.parse(readbackCompletedAt) < Date.parse(acknowledgement.completedAt) ||
+    readback.windowEnd !== readbackCompletedAt ||
+    Date.parse(readback.windowStart) > BLOCKED_STRIPE_EVENT_CREATED * 1000 ||
+    Date.parse(readback.windowEnd) < BLOCKED_STRIPE_EVENT_CREATED * 1000 ||
+    cleared.customerPiiRecorded !== false) {
+    throw new Error(
+      "Cleared Stripe delivery backlog needs compatible deployment, exact " +
+      "reconciliation and a complete zero-event live readback."
+    );
+  }
+}
+
 function paygRedactionImplemented() {
   const source = fs.readFileSync(
     path.join(root, "functions/src/payg.ts"),
@@ -175,8 +326,10 @@ function verifyConditioningPaygReleaseCandidate() {
   );
   assertEvidence(readiness.ownerDecisions, "approved", "Owner decisions");
   assertEvidence(readiness.operationalEvidence, "verified", "Operational evidence");
-  assertPartialEvidence(readiness.operationalEvidence);
+  assertPartialEvidence(readiness.ownerDecisions, "approved");
+  assertPartialEvidence(readiness.operationalEvidence, "verified");
   assertPaygRetentionOwnerEvidence(readiness.ownerDecisions);
+  assertLiveStripeDeliveryBacklogEvidence(readiness.operationalEvidence);
 
   const engineeringBlockers = [];
   if (!paygRedactionImplemented()) {
@@ -217,5 +370,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  assertClearedStripeDeliveryBacklogEvidence,
+  assertPartialEvidence,
   verifyConditioningPaygReleaseCandidate,
 };

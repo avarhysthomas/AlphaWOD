@@ -3764,6 +3764,271 @@ test("first-payment activation uses the current Invoice instead of an old webhoo
   }
 });
 
+function legacyPresaleActivationInvoice(subscriptionId, invoiceId, amountPaidPence) {
+  const paidAt = PRESALE_BILLING_ANCHOR_UNIX_SECONDS + 60;
+  return {
+    id: invoiceId,
+    object: "invoice",
+    livemode: false,
+    status: "paid",
+    amount_paid: amountPaidPence,
+    currency: "gbp",
+    status_transitions: {paid_at: paidAt},
+    parent: {
+      type: "subscription_details",
+      subscription_details: {subscription: subscriptionId},
+    },
+    lines: {object: "list", data: [{
+      id: `il_${invoiceId}`,
+      object: "line_item",
+      parent: {
+        type: "subscription_item_details",
+        subscription_item_details: {
+          subscription: subscriptionId,
+          subscription_item: `si_${subscriptionId}`,
+          invoice_item: null,
+          proration: false,
+          proration_details: null,
+        },
+      },
+      period: {
+        start: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+        end: 1790812800,
+      },
+      pricing: {
+        type: "price_details",
+        price_details: {
+          price: "price_unlimited",
+          product: "prod_price_unlimited",
+        },
+      },
+      quantity: 1,
+      subscription: subscriptionId,
+    }]},
+  };
+}
+
+async function seedLegacyPresaleDiscountGap(
+  subscriptionId,
+  discountOverrides = {},
+  membershipOverrides = {}
+) {
+  await seedMembership(subscriptionId, {
+    schemaVersion: 1,
+    state: "scheduled",
+    stripeStatus: "active",
+    billingMode: "presale_deferred",
+    serviceStartsAt: PRESALE_SIGNUP_CUTOFF_UNIX_SECONDS,
+    firstPaymentAt: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+    billingCycleAnchor: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+    initialChargePence: 0,
+    firstPaymentReceivedAt: null,
+    firstPaidInvoiceId: null,
+    discount: null,
+    paymentSchedule: {
+      amountDueTodayPence: 0,
+      firstPaymentAt: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+      standardMonthlyPence: 6000,
+      discountedMonthlyPence: null,
+      discountedPaymentCount: 0,
+      fullPriceFrom: null,
+    },
+    nextReconcileAt: admin.firestore.Timestamp.fromMillis(
+      PRESALE_BILLING_ANCHOR_UNIX_SECONDS * 1000
+    ),
+    ...membershipOverrides,
+  });
+  fakeStripe.setSubscription(subscriptionId, {
+    status: "active",
+    billing_cycle_anchor: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+    discounts: [{
+      id: `di_${subscriptionId}`,
+      object: "discount",
+      coupon: "coupon_existing_member_5x3",
+      promotion_code: null,
+      source: null,
+      start: 1787487297,
+      end: 1795436097,
+      subscription: subscriptionId,
+      subscription_item: null,
+      ...discountOverrides,
+    }],
+  });
+}
+
+test("an exact provider discount recovers a schema-v1 presale and accepts £55", async () => {
+  const subscriptionId = "sub_legacy_discount_recovery";
+  const invoiceId = "in_legacy_discount_recovery";
+  const paidAt = PRESALE_BILLING_ANCHOR_UNIX_SECONDS + 60;
+  await seedLegacyPresaleDiscountGap(subscriptionId);
+
+  const realNow = Date.now;
+  Date.now = () => paidAt * 1000;
+  try {
+    const invoice = legacyPresaleActivationInvoice(
+      subscriptionId,
+      invoiceId,
+      5500
+    );
+    await handleStripeEvent({
+      id: "evt_legacy_discount_recovery",
+      type: "invoice.paid",
+      created: paidAt,
+      data: {object: invoice},
+    }, async () => undefined);
+
+    const membership = await db.collection("memberships").doc(subscriptionId).get();
+    assert.equal(membership.get("schemaVersion"), 1);
+    assert.equal(membership.get("state"), "active");
+    assert.equal(membership.get("firstPaymentReceivedAt"), paidAt);
+    assert.equal(membership.get("firstPaidInvoiceId"), invoiceId);
+    assert.deepEqual(membership.get("discount"), {
+      couponId: "coupon_existing_member_5x3",
+      promotionCodeId: null,
+      amountOffPence: 500,
+      currency: "gbp",
+      durationInMonths: 3,
+      startsAt: 1787487297,
+      endsAt: 1795436097,
+    });
+    assert.deepEqual(membership.get("paymentSchedule"), {
+      amountDueTodayPence: 0,
+      firstPaymentAt: PRESALE_BILLING_ANCHOR_UNIX_SECONDS,
+      standardMonthlyPence: 6000,
+      discountedMonthlyPence: 5500,
+      discountedPaymentCount: 3,
+      fullPriceFrom: 1796083200,
+    });
+    assert.equal(membership.get("legacyPresaleDiscountRecoveryVersion"), 1);
+    assert.ok(membership.get("legacyPresaleDiscountRecoveredAt"));
+    assert.equal(membership.get("providerContractStatus"), "verified");
+    const recoveryAudit = await db.collection("membershipAudit")
+      .doc(`legacy-presale-discount-recovery-${invoiceId}`)
+      .get();
+    assert.equal(recoveryAudit.exists, true);
+    assert.equal(recoveryAudit.get("type"), "legacy_presale_discount_recovered");
+    assert.equal(recoveryAudit.get("subscriptionId"), subscriptionId);
+    assert.equal(recoveryAudit.get("invoiceId"), invoiceId);
+    assert.equal(recoveryAudit.get("recoveryVersion"), 1);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("schema-v1 presale recovery rejects a provider discount outside the allowlist", async () => {
+  const subscriptionId = "sub_legacy_unapproved_discount";
+  const paidAt = PRESALE_BILLING_ANCHOR_UNIX_SECONDS + 60;
+  await seedLegacyPresaleDiscountGap(subscriptionId, {
+    coupon: "coupon_not_approved",
+  });
+
+  const realNow = Date.now;
+  Date.now = () => paidAt * 1000;
+  try {
+    const invoice = legacyPresaleActivationInvoice(
+      subscriptionId,
+      "in_legacy_unapproved_discount",
+      5500
+    );
+    await assert.rejects(
+      () => handleStripeEvent({
+        id: "evt_legacy_unapproved_discount",
+        type: "invoice.paid",
+        created: paidAt,
+        data: {object: invoice},
+      }, async () => undefined),
+      /unapproved discount/i
+    );
+
+    const membership = await db.collection("memberships").doc(subscriptionId).get();
+    assert.equal(membership.get("state"), "scheduled");
+    assert.equal(membership.get("firstPaymentReceivedAt"), null);
+    assert.equal(membership.get("discount"), null);
+    assert.equal(membership.get("legacyPresaleDiscountRecoveryVersion"), undefined);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("schema-v1 presale recovery rejects the wrong amount for an approved discount", async () => {
+  const subscriptionId = "sub_legacy_discount_wrong_amount";
+  const paidAt = PRESALE_BILLING_ANCHOR_UNIX_SECONDS + 60;
+  await seedLegacyPresaleDiscountGap(subscriptionId);
+
+  const realNow = Date.now;
+  Date.now = () => paidAt * 1000;
+  try {
+    const invoice = legacyPresaleActivationInvoice(
+      subscriptionId,
+      "in_legacy_discount_wrong_amount",
+      5400
+    );
+    await assert.rejects(
+      () => handleStripeEvent({
+        id: "evt_legacy_discount_wrong_amount",
+        type: "invoice.paid",
+        created: paidAt,
+        data: {object: invoice},
+      }, async () => undefined),
+      /unexpected first-payment amount/i
+    );
+
+    const membership = await db.collection("memberships").doc(subscriptionId).get();
+    assert.equal(membership.get("state"), "scheduled");
+    assert.equal(membership.get("firstPaymentReceivedAt"), null);
+    assert.equal(membership.get("discount"), null);
+    assert.equal(membership.get("legacyPresaleDiscountRecoveryVersion"), undefined);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("schema-v1 presale recovery stays closed after any payment progression", async () => {
+  const paidAt = PRESALE_BILLING_ANCHOR_UNIX_SECONDS + 60;
+  const progressedCases = [
+    {suffix: "active", overrides: {state: "active"}},
+    {
+      suffix: "received",
+      overrides: {firstPaymentReceivedAt: PRESALE_BILLING_ANCHOR_UNIX_SECONDS + 30},
+    },
+    {suffix: "invoice", overrides: {firstPaidInvoiceId: "in_already_recorded"}},
+  ];
+  const realNow = Date.now;
+  Date.now = () => paidAt * 1000;
+  try {
+    for (const {suffix, overrides} of progressedCases) {
+      const subscriptionId = `sub_legacy_progressed_${suffix}`;
+      await seedLegacyPresaleDiscountGap(subscriptionId, {}, overrides);
+      await assert.rejects(
+        () => handleStripeEvent({
+          id: `evt_legacy_progressed_${suffix}`,
+          type: "invoice.paid",
+          created: paidAt,
+          data: {object: legacyPresaleActivationInvoice(
+            subscriptionId,
+            `in_legacy_progressed_${suffix}`,
+            5500
+          )},
+        }, async () => undefined),
+        /unexpected first-payment amount/i
+      );
+
+      const membership = await db.collection("memberships").doc(subscriptionId).get();
+      assert.equal(membership.get("discount"), null);
+      assert.equal(membership.get("legacyPresaleDiscountRecoveryVersion"), undefined);
+      const recoveryAudit = await db.collection("membershipAudit")
+        .doc(`legacy-presale-discount-recovery-in_legacy_progressed_${suffix}`)
+        .get();
+      assert.equal(recoveryAudit.exists, false);
+      for (const [field, value] of Object.entries(overrides)) {
+        assert.equal(membership.get(field), value);
+      }
+    }
+  } finally {
+    Date.now = realNow;
+  }
+});
+
 test("an approved existing-member code freezes the three-payment £55 schedule", async () => {
   const fixedCheckout = new Date("2026-08-21T10:00:00Z").getTime();
   const realNow = Date.now;
@@ -7720,6 +7985,76 @@ test("automatic-payment grace starts at the failure event, not invoice creation"
     .doc("sub_payment_failure_time").get();
   assert.equal(membership.get("pastDueSince"), failedAt);
   assert.equal(membership.get("state"), "past_due_grace");
+});
+
+test("an app-owned failed invoice emits one PII-safe business-owner alert signal", async () => {
+  const failedAt = Math.floor(Date.now() / 1000);
+  await seedMembership("sub_payment_failed_alert");
+  fakeStripe.setSubscription("sub_payment_failed_alert", {status: "past_due"});
+  fakeStripe.setSubscription("sub_unowned_payment_failed_alert", {
+    status: "past_due",
+    metadata: {},
+  });
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args);
+
+  try {
+    await handleStripeEvent({
+      id: "evt_payment_failed_alert",
+      type: "invoice.payment_failed",
+      created: failedAt,
+      data: {object: {
+        id: "in_payment_failed_alert",
+        object: "invoice",
+        collection_method: "charge_automatically",
+        customer: "cus_payment_failed_private",
+        customer_email: "private-buyer@example.test",
+        customer_name: "Private Buyer",
+        due_date: null,
+        parent: {
+          type: "subscription_details",
+          subscription_details: {subscription: "sub_payment_failed_alert"},
+        },
+        lines: {object: "list", data: []},
+      }},
+    }, async () => undefined);
+    await handleStripeEvent({
+      id: "evt_unowned_payment_failed_alert",
+      type: "invoice.payment_failed",
+      created: failedAt,
+      data: {object: {
+        id: "in_unowned_payment_failed_alert",
+        object: "invoice",
+        collection_method: "charge_automatically",
+        due_date: null,
+        parent: {
+          type: "subscription_details",
+          subscription_details: {subscription: "sub_unowned_payment_failed_alert"},
+        },
+        lines: {object: "list", data: []},
+      }},
+    }, async () => undefined);
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  const paymentWarnings = warnings.filter(([marker]) =>
+    marker === "BILLING_PAYMENT_FAILED"
+  );
+  assert.deepEqual(paymentWarnings, [[
+    "BILLING_PAYMENT_FAILED",
+    {
+      stripeEventId: "evt_payment_failed_alert",
+      stripeInvoiceId: "in_payment_failed_alert",
+      stripeSubscriptionId: "sub_payment_failed_alert",
+      stripeEventCreated: failedAt,
+    },
+  ]]);
+  assert.doesNotMatch(
+    JSON.stringify(paymentWarnings),
+    /private-buyer@example\.test|Private Buyer|cus_payment_failed_private/
+  );
 });
 
 test("a customer fallback never applies an old charge to a replacement", async () => {

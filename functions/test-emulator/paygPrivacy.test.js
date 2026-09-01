@@ -120,7 +120,7 @@ test("PAYG redaction removes only approved PII and waits for an active email lea
       chargeId: "ch_test_privacy",
       refundStatus: "succeeded",
       disputeStatus: "won",
-      amountPence: 750,
+      amountPence: 700,
       currency: "gbp",
     }),
     db.collection("bookings").doc(bookingId).set({

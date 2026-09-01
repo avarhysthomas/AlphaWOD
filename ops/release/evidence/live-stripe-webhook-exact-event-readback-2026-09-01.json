@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "stripe-live-webhook-exact-event-readback",
+  "recordedAt": "2026-09-01T08:20:19Z",
+  "stripeMode": "live",
+  "endpoint": {
+    "id": "we_1U6SObFzNDZoGGA0cw5Yyqth",
+    "url": "https://europe-west1-alphawod-d1f2f.cloudfunctions.net/stripeWebhook",
+    "status": "enabled",
+    "enabledEvents": [
+      "charge.dispute.closed",
+      "charge.dispute.created",
+      "charge.dispute.updated",
+      "charge.refunded",
+      "checkout.session.async_payment_failed",
+      "checkout.session.async_payment_succeeded",
+      "checkout.session.completed",
+      "checkout.session.expired",
+      "customer.subscription.created",
+      "customer.subscription.deleted",
+      "customer.subscription.paused",
+      "customer.subscription.resumed",
+      "customer.subscription.updated",
+      "invoice.paid",
+      "invoice.payment_failed",
+      "refund.created",
+      "refund.failed",
+      "refund.updated"
+    ]
+  },
+  "verification": {
+    "expectedEventCount": 18,
+    "configuredEventCount": 18,
+    "exactSetMatch": true,
+    "signingSecretState": "unchanged",
+    "signingSecretValueRecorded": false,
+    "result": "passed-authenticated-dashboard-readback"
+  },
+  "limitations": [
+    "This is configuration readback evidence; it does not close the staffed alert-route or synthetic notification-delivery requirement."
+  ],
+  "readbackMutation": false,
+  "deploymentPerformed": false
+}

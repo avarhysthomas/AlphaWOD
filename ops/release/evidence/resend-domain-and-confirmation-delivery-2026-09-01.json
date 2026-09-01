@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "resend-production-domain-and-confirmation-delivery-readback",
+  "recordedAt": "2026-09-01T08:20:19Z",
+  "domain": {
+    "name": "zeroalphafitness.co.uk",
+    "status": "verified"
+  },
+  "configuration": {
+    "fromAddress": "hello@zeroalphafitness.co.uk",
+    "replyToAddress": "support@zeroalphafitness.co.uk",
+    "firebaseSecretName": "RESEND_API_KEY",
+    "enabledSecretVersion": 1,
+    "secretValueRecorded": false
+  },
+  "deliveryReadback": {
+    "productionMembershipConfirmationObserved": true,
+    "providerStatus": "delivered",
+    "recipientPiiRecorded": false,
+    "result": "passed-authenticated-provider-readback"
+  },
+  "limitations": [
+    "The separate PAYG purchase, refund, dispute and email journey remains owned and pending as an internal operational drill."
+  ],
+  "readbackMutation": false,
+  "deploymentPerformed": false
+}

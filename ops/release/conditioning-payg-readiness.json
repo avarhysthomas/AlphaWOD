@@ -12,7 +12,8 @@
     {
       "id": "payg-product-terms-and-waiver",
       "approved": false,
-      "evidence": null
+      "evidence": null,
+      "partialEvidence": "ops/release/evidence/payg-waiver-owner-approval-2026-09-01.json"
     },
     {
       "id": "payg-pii-retention-and-redaction-policy",
@@ -23,23 +24,30 @@
   "operationalEvidence": [
     {
       "id": "live-stripe-webhook-exact-event-readback",
+      "verified": true,
+      "evidence": "ops/release/evidence/live-stripe-webhook-exact-event-readback-2026-09-01.json"
+    },
+    {
+      "id": "live-stripe-delivery-backlog-cleared",
       "verified": false,
-      "evidence": null
+      "evidence": null,
+      "partialEvidence": "ops/release/evidence/live-stripe-delivery-backlog-2026-09-01.json"
     },
     {
       "id": "live-product-catalogue-and-closed-config-readback",
-      "verified": false,
-      "evidence": null
+      "verified": true,
+      "evidence": "ops/release/evidence/production-provider-app-check-and-closed-config-readback-2026-09-01.json"
     },
     {
       "id": "billing-alert-policies-and-staffed-notification-route",
       "verified": false,
-      "evidence": null
+      "evidence": null,
+      "partialEvidence": "ops/release/evidence/billing-missed-payment-email-alert-2026-09-01.json"
     },
     {
       "id": "resend-domain-and-confirmation-delivery",
-      "verified": false,
-      "evidence": null
+      "verified": true,
+      "evidence": "ops/release/evidence/resend-domain-and-confirmation-delivery-2026-09-01.json"
     },
     {
       "id": "conditioning-stripe-test-purchase-to-booking-journey",
@@ -51,12 +59,16 @@
       "id": "payg-stripe-test-purchase-refund-dispute-email-journey",
       "verified": false,
       "evidence": null,
-      "partialEvidence": "ops/release/evidence/payg-stripe-test-catalogue-readback-2026-08-31.json"
+      "partialEvidence": "ops/release/evidence/payg-stripe-test-catalogue-readback-2026-09-01.json",
+      "owner": "Zero Alpha Fitness operations",
+      "executionMode": "internal"
     },
     {
       "id": "class-cancellation-quota-and-payg-refund-drill",
       "verified": false,
-      "evidence": null
+      "evidence": null,
+      "owner": "Zero Alpha Fitness operations",
+      "executionMode": "internal"
     }
   ]
 }

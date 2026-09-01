@@ -239,7 +239,7 @@ Recurring-membership cards retain their roomier 28px corners and 16px fields. Co
 
 ### Copy and contract rules
 
-- PAYG is **£7.50 for one named class and one adult attendee**. It requires no account or membership and is never described as a credit, pass or reschedulable booking.
+- PAYG is **£7 for one named class and one adult attendee**. It requires no account or membership and is never described as a credit, pass or reschedulable booking.
 - State plainly that the class cannot be transferred or rescheduled; cancellations made at least 24 hours before class are refundable, while later cancellations and no-shows are non-refundable. For eligible cancellations say the refund is being processed, not that it is already complete.
 - Show exact London-local date/time, coach/location when supplied, remaining capacity, Stripe hand-off and the recorded cancellation cutoff. Processing retries must say they do not create another charge.
 - Adult Conditioning is **£30 per month** and includes any two eligible Conditioning classes per Europe/London Monday-to-Sunday week. Members choose from the live Schedule, may make different choices each week, and regain that week's place when they cancel a booking. It includes Schedule, Profile and Membership only; Dashboard/WOD, Training, Leaderboards and performance statistics are explicitly excluded.
@@ -266,7 +266,7 @@ Recurring-membership cards retain their roomier 28px corners and 16px fields. Co
 ### Don't
 
 - **Don't** replace the PAYG timetable with a generic hero followed by offer cards.
-- **Don't** imply that £7.50 buys a reusable credit, transferable place or rescheduling right.
+- **Don't** imply that £7 buys a reusable credit, transferable place or rescheduling right.
 - **Don't** show restricted Conditioning members Dashboard/WOD, Training, Leaderboards or performance navigation.
 - **Don't** treat hidden navigation as authorization; server and route guards remain mandatory.
 - **Don't** imply Conditioning choices recur automatically, carry into another week or remain consumed after their booking is cancelled.

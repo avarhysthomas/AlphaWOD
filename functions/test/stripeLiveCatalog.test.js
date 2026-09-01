@@ -129,6 +129,8 @@ test(
       APPROVED_TEST_PAYG_CATALOGUE,
       APPROVED_LIVE_PAYG_CATALOGUE,
     ]) {
+      assert.equal(approved.amountPence, 700);
+      assert.equal(approved.currency, "gbp");
       const price = {
         id: approved.priceId,
         type: "one_time",

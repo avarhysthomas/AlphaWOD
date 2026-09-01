@@ -51,8 +51,8 @@ function seedProvider(paymentIntentId, chargeId, overrides = {}) {
     object: "payment_intent",
     livemode: false,
     status: "succeeded",
-    amount: 750,
-    amount_received: 750,
+    amount: 700,
+    amount_received: 700,
     currency: "gbp",
     latest_charge: chargeId,
     metadata: {},
@@ -62,7 +62,7 @@ function seedProvider(paymentIntentId, chargeId, overrides = {}) {
     id: chargeId,
     object: "charge",
     livemode: false,
-    amount: 750,
+    amount: 700,
     amount_refunded: 0,
     currency: "gbp",
     payment_intent: paymentIntentId,
@@ -85,7 +85,7 @@ function orderRecord(paymentIntentId, chargeId, overrides = {}) {
     capacityState: "released",
     paymentIntentId,
     chargeId,
-    amountPence: 750,
+    amountPence: 700,
     currency: "gbp",
     bookingId: null,
     duplicateLockId: null,
@@ -110,7 +110,7 @@ function reviewRecord(intentId, paymentIntentId, overrides = {}) {
     disputeOpen: false,
     intentId,
     paymentIntentId,
-    refundExpectedAmountPence: 750,
+    refundExpectedAmountPence: 700,
     providerCurrency: "gbp",
     ...overrides,
   };
@@ -227,7 +227,7 @@ test("refunded order evidence beats a stale unsafe provider preflight", {timeout
     status: "refunded",
     refundId: "re_webhook_won",
     refundStatus: "succeeded",
-    refundedAmountPence: 750,
+    refundedAmountPence: 700,
   }, {merge: true});
   paymentIntent.status = "processing";
   fakeStripe.state.paymentIntents.set(paymentIntentId, paymentIntent);
@@ -239,7 +239,7 @@ test("refunded order evidence beats a stale unsafe provider preflight", {timeout
   assert.equal(order.get("status"), "refunded");
   assert.equal(order.get("refundId"), "re_webhook_won");
   assert.equal(order.get("refundStatus"), "succeeded");
-  assert.equal(order.get("refundedAmountPence"), 750);
+  assert.equal(order.get("refundedAmountPence"), 700);
   assertClaimCleared(order);
 });
 

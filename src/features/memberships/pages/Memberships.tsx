@@ -202,7 +202,7 @@ export default function Memberships() {
         <div className="mt-7 flex flex-col gap-5 border-y border-payg/25 py-6 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="font-heading text-3xl uppercase text-white">Just want one class?</h2>
-            <p className="mt-2 text-sm leading-6 text-white/60">See the live timetable and choose one Pay As You Go session for £7.50. No account or recurring membership.</p>
+            <p className="mt-2 text-sm leading-6 text-white/60">See the live timetable and choose one Pay As You Go session for £7. No account or recurring membership.</p>
           </div>
           <Link
             to="/pay-as-you-go"

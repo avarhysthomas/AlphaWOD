@@ -83,13 +83,13 @@ function createFakeStripe() {
       name: value.name,
     },
   }]));
-  prices.set("price_1UA49JFzNDZoGGA0ciTM2OOQ", {
-    id: "price_1UA49JFzNDZoGGA0ciTM2OOQ",
+  prices.set("price_1UAmVVFzNDZoGGA04z8hX10N", {
+    id: "price_1UAmVVFzNDZoGGA04z8hX10N",
     object: "price",
     active: true,
     livemode: false,
     currency: "gbp",
-    unit_amount: 750,
+    unit_amount: 700,
     type: "one_time",
     billing_scheme: "per_unit",
     recurring: null,

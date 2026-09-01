@@ -141,7 +141,7 @@ function exactPrice(mode = "test") {
     livemode: mode === "live",
     active: true,
     currency: "gbp",
-    unit_amount: 750,
+    unit_amount: 700,
     type: "one_time",
     billing_scheme: "per_unit",
     recurring: null,
@@ -163,20 +163,20 @@ function exactProduct(mode = "test") {
   };
 }
 
-test("the PAYG offering is one £7.50 GBP class and freezes both mode allowlists", () => {
+test("the PAYG offering is one £7 GBP class and freezes both mode allowlists", () => {
   assert.equal(PAYG_OFFERING_KEY, "adult_payg_class");
   assert.equal(PAYG_PURCHASE_KIND, "payg_class");
-  assert.equal(PAYG_AMOUNT_PENCE, 750);
+  assert.equal(PAYG_AMOUNT_PENCE, 700);
   assert.equal(PAYG_CURRENCY, "gbp");
   assert.equal(PAYG_PRODUCT_NAME, "Adult Pay as You Go Class");
   assert.deepEqual(APPROVED_PAYG_STRIPE_CATALOGUE_IDS, {
     test: {
       productId: "prod_VAOxXxpax1MuRt",
-      priceId: "price_1UA49JFzNDZoGGA0ciTM2OOQ",
+      priceId: "price_1UAmVVFzNDZoGGA04z8hX10N",
     },
     live: {
       productId: "prod_VAOGG2ZsBQ65Qt",
-      priceId: "price_1UA3TdFzNDZoGGA0dCgYfU2h",
+      priceId: "price_1UAmoCFzNDZoGGA0lKDwjbBU",
     },
   });
 });
@@ -438,7 +438,7 @@ test("PAYG PII promotion requires an exact provider success event before cutoff"
     id: "pi_privacy_cutoff",
     livemode: false,
     status: "succeeded",
-    amount_received: 750,
+    amount_received: 700,
     currency: "gbp",
     latest_charge: "ch_privacy_cutoff",
     metadata: {
@@ -516,7 +516,7 @@ test("PII promotion closes on any scrub marker and at the destination deadline",
     id: "pi_promotion_privacy",
     livemode: false,
     status: "succeeded",
-    amount_received: 750,
+    amount_received: 700,
     currency: "gbp",
     latest_charge: "ch_promotion_privacy",
     metadata: {
@@ -924,7 +924,7 @@ test("confirmation outbox freezes class, amount, policy, and signed cancellation
       timezone: "Europe/London",
       location: "Unit 3",
     },
-    amountPence: 750,
+    amountPence: 700,
     currency: "gbp",
     publicOrigin: "https://alpha-wod.vercel.app",
     cancellationToken: "signed.token",
@@ -933,7 +933,7 @@ test("confirmation outbox freezes class, amount, policy, and signed cancellation
   assert.equal(payload.idempotencyKey, `payg-confirmation/${INTENT_ID}/v1`);
   assert.deepEqual(payload.to, ["ava@example.test"]);
   assert.equal(payload.templateData.class.title, "Adult Conditioning");
-  assert.equal(payload.templateData.amountPence, 750);
+  assert.equal(payload.templateData.amountPence, 700);
   assert.equal(payload.templateData.currency, "gbp");
   assert.equal(payload.templateData.cancellationPolicy.cutoffHours, 24);
   assert.match(payload.templateData.cancellationPolicy.beforeCutoff, /refundable/i);
@@ -959,7 +959,7 @@ test("confirmation email is deterministic, escaped, and carries the guest cancel
       timezone: "Europe/London",
       location: "Unit 3 & Studio",
     },
-    amountPence: 750,
+    amountPence: 700,
     currency: "gbp",
     publicOrigin: "https://alpha-wod.vercel.app",
     cancellationToken: "signed.token",
@@ -971,7 +971,7 @@ test("confirmation email is deterministic, escaped, and carries the guest cancel
     "support@zeroalphafitness.co.uk"
   );
   assert.equal(email.subject, "Your PAYG class is confirmed — Conditioning <script>");
-  assert.match(email.text, /Paid: £7\.50 GBP/);
+  assert.match(email.text, /Paid: £7\.00 GBP/);
   assert.match(email.text, /Cancel this booking: https:\/\/alpha-wod\.vercel\.app\/pay-as-you-go\/cancel\?token=signed\.token/);
   assert.match(email.html, /Ava &lt;Admin&gt;/);
   assert.match(email.html, /Conditioning &lt;script&gt;/);
@@ -1140,7 +1140,7 @@ test("confirmation correction is one deterministic idempotent outbox message", (
     `payg-confirmation-correction/${INTENT_ID}/v1`
   );
   assert.notEqual(payload.outboxId, INTENT_ID);
-  assert.equal(payload.templateData.amountPence, 750);
+  assert.equal(payload.templateData.amountPence, 700);
   assert.equal(payload.templateData.currency, "gbp");
   assert.equal(Object.isFrozen(payload), true);
   const duplicate = buildPaygConfirmationCorrectionOutboxPayload({
@@ -1158,7 +1158,7 @@ test("confirmation correction is one deterministic idempotent outbox message", (
     "support@zeroalphafitness.co.uk"
   );
   assert.match(email.subject, /Important update/);
-  assert.match(email.text, /£7\.50 GBP payment or refund status may still be updating/i);
+  assert.match(email.text, /£7\.00 GBP payment or refund status may still be updating/i);
   assert.match(email.text, /if a refund is due/i);
   assert.doesNotMatch(email.text, /refund is being processed|has been refunded/i);
   assert.match(email.text, /instead of the earlier confirmation/i);
@@ -1603,13 +1603,13 @@ test("terminal dispute evidence is monotonic across out-of-order events", () => 
 });
 
 test("refund-safe payment reviews persist in the state required by recovery", () => {
-  assert.deepEqual(resolvePaygPaymentReviewDisposition(true, 750), {
+  assert.deepEqual(resolvePaygPaymentReviewDisposition(true, 700), {
     status: "refund_pending",
     issueRefund: true,
     scheduleRecovery: true,
   });
   for (const [automaticRefundSafe, amountReceivedPence] of [
-    [false, 750],
+    [false, 700],
     [true, 0],
     [true, null],
     [true, 7.5],
@@ -1630,7 +1630,7 @@ test("refund-safe payment reviews persist in the state required by recovery", ()
     canonicalPaymentIntentId: "pi_canonical",
     observedPaymentIntentId: "pi_extra",
     automaticRefundSafe: true,
-    amountReceivedPence: 750,
+    amountReceivedPence: 700,
   }), {
     canonicalServicePreserved: true,
     extraPayment: true,
@@ -1642,7 +1642,7 @@ test("refund-safe payment reviews persist in the state required by recovery", ()
     canonicalPaymentIntentId: "pi_canonical",
     observedPaymentIntentId: "pi_canonical",
     automaticRefundSafe: true,
-    amountReceivedPence: 750,
+    amountReceivedPence: 700,
   }), {
     canonicalServicePreserved: true,
     extraPayment: false,
@@ -1668,7 +1668,7 @@ function exactPaidSession(overrides = {}) {
     metadata,
     status: "complete",
     payment_status: "paid",
-    amount_total: 750,
+    amount_total: 700,
     currency: "gbp",
     total_details: {amount_discount: 0},
     subscription: null,
@@ -1683,8 +1683,8 @@ function exactPaidPaymentIntent(overrides = {}) {
     id: "pi_test_payg_contract",
     livemode: false,
     status: "succeeded",
-    amount: 750,
-    amount_received: 750,
+    amount: 700,
+    amount_received: 700,
     currency: "gbp",
     metadata: {
       purchaseKind: PAYG_PURCHASE_KIND,
