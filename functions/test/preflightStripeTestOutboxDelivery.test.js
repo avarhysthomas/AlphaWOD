@@ -10,6 +10,7 @@ const {
   APPROVED_FROM,
   APPROVED_RECIPIENT,
   APPROVED_REPLY_TO,
+  APPROVED_SENDER_EMAIL,
   assertApprovedRenderedEmail,
   assertExactSentOutbox,
   assertLocalEnvironment,
@@ -30,6 +31,16 @@ const SUBSCRIPTION_ID = "sub_conditioning_exact_test";
 const SESSION_ID = "cs_test_conditioning_exact_test";
 const PRICE_ID = "price_conditioning_exact_test";
 const PAYG_ORDER_ID = `payg_${"b".repeat(64)}`;
+
+test("one-shot routing is pinned to the newly authorized inbox and existing verified sender", () => {
+  assert.equal(APPROVED_RECIPIENT, "hello@thisisaevi.com");
+  assert.equal(APPROVED_SENDER_EMAIL, "hello@zeroalphafitness.co.uk");
+  assert.equal(
+    APPROVED_FROM,
+    "Zero Alpha Fitness <hello@zeroalphafitness.co.uk>"
+  );
+  assert.equal(APPROVED_REPLY_TO, "support@zeroalphafitness.co.uk");
+});
 
 function pristineOutbox(overrides = {}) {
   return {

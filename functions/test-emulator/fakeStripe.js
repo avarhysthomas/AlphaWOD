@@ -122,6 +122,8 @@ function createFakeStripe() {
     failedSubscriptionRetrieves: new Map(),
     subscriptionRetrieveCounts: new Map(),
     pausedPaymentIntentRetrieves: new Map(),
+    pausedCheckoutExpires: new Map(),
+    failedCheckoutExpires: new Map(),
     prices,
     coupons: new Map([["coupon_existing_member_5x3", {
       id: "coupon_existing_member_5x3",
@@ -214,7 +216,7 @@ function createFakeStripe() {
     req.on("data", (chunk) => {
       body += chunk;
     });
-    req.on("end", () => {
+    req.on("end", async () => {
       const url = new URL(req.url, "http://localhost");
       const path = url.pathname;
       const payload = req.method === "POST" ? formEncodedToObject(body) : {};
@@ -442,12 +444,39 @@ function createFakeStripe() {
         /^\/v1\/checkout\/sessions\/([^/]+)\/expire$/
       );
       if (checkoutExpireMatch && req.method === "POST") {
-        const session = state.checkoutSessions.get(checkoutExpireMatch[1]);
+        const sessionId = checkoutExpireMatch[1];
+        const pause = state.pausedCheckoutExpires.get(sessionId);
+        if (pause) {
+          state.pausedCheckoutExpires.delete(sessionId);
+          pause.markReached();
+          await pause.waitForRelease;
+        }
+        const session = state.checkoutSessions.get(sessionId);
         if (!session) {
-          return notFound(`No such checkout session: ${checkoutExpireMatch[1]}`);
+          return notFound(`No such checkout session: ${sessionId}`);
+        }
+        if (session.status !== "open") {
+          return send(400, {error: {
+            type: "invalid_request_error",
+            message: `Checkout Session ${sessionId} is not open.`,
+          }});
+        }
+        const failure = state.failedCheckoutExpires.get(sessionId);
+        if (failure) {
+          state.failedCheckoutExpires.delete(sessionId);
+          if (failure.afterExpire) {
+            session.status = "expired";
+            state.checkoutSessions.set(session.id, session);
+            state.updates.push({path, payload, providerApplied: true});
+          }
+          return send(failure.status, {error: {
+            type: "api_error",
+            message: failure.message,
+          }});
         }
         session.status = "expired";
         state.checkoutSessions.set(session.id, session);
+        state.updates.push({path, payload});
         return send(200, session);
       }
 
@@ -569,12 +598,26 @@ function createFakeStripe() {
         if (!paymentIntent) {
           return notFound(`No such payment_intent: ${payload.payment_intent}`);
         }
+        const requestedAmount = payload.amount === undefined ?
+          paymentIntent.amount_received : Number(payload.amount);
+        const charge = state.charges.get(paymentIntent.latest_charge);
+        const amountRefunded = Number(charge?.amount_refunded ?? 0);
+        const remainingAmount = paymentIntent.amount_received - amountRefunded;
+        if (!Number.isSafeInteger(requestedAmount) || requestedAmount <= 0 ||
+          !Number.isSafeInteger(remainingAmount) ||
+          requestedAmount > remainingAmount) {
+          return send(400, {error: {
+            type: "invalid_request_error",
+            code: "amount_too_large",
+            message: "Refund amount exceeds the unrefunded payment amount.",
+          }});
+        }
         const id = `re_fake_${state.refunds.size + 1}`;
         const refund = {
           id,
           object: "refund",
           livemode: false,
-          amount: paymentIntent.amount_received,
+          amount: requestedAmount,
           currency: paymentIntent.currency,
           payment_intent: paymentIntent.id,
           charge: paymentIntent.latest_charge,
@@ -586,7 +629,19 @@ function createFakeStripe() {
         if (typeof idempotencyKey === "string") {
           state.refundByIdempotencyKey.set(idempotencyKey, id);
         }
-        state.updates.push({path, payload});
+        if (charge) {
+          charge.amount_refunded = amountRefunded + requestedAmount;
+          charge.refunded = charge.amount_refunded >= charge.amount;
+          charge.refunds = charge.refunds || {
+            object: "list",
+            data: [],
+            has_more: false,
+            url: `/v1/charges/${charge.id}/refunds`,
+          };
+          charge.refunds.data.push(refund);
+          state.charges.set(charge.id, charge);
+        }
+        state.updates.push({path, payload, idempotencyKey});
         return send(200, refund);
       }
       const refundMatch = path.match(/^\/v1\/refunds\/([^/]+)$/);
@@ -688,6 +743,27 @@ function createFakeStripe() {
       });
       return {reached, release};
     },
+    /** Pauses one exact Checkout expiry to exercise payment/expiry races. */
+    pauseNextCheckoutExpire(id) {
+      let markReached;
+      let release;
+      const reached = new Promise((resolve) => {
+        markReached = resolve;
+      });
+      const waitForRelease = new Promise((resolve) => {
+        release = resolve;
+      });
+      state.pausedCheckoutExpires.set(id, {markReached, waitForRelease});
+      return {reached, release};
+    },
+    /** Fails one exact Checkout expiry before or after applying it. */
+    failNextCheckoutExpire(id, {
+      afterExpire = false,
+      status = 500,
+      message = "Injected Checkout expiry transport failure",
+    } = {}) {
+      state.failedCheckoutExpires.set(id, {afterExpire, status, message});
+    },
     /** Fails one authoritative GET, optionally after holding the lease. */
     failNextSubscriptionRetrieve(id, {
       delayMs = 0,
@@ -751,6 +827,12 @@ function createFakeStripe() {
         created: Math.floor(Date.now() / 1000),
         disputed: false,
         refunded: false,
+        refunds: {
+          object: "list",
+          data: [],
+          has_more: false,
+          url: `/v1/charges/${chargeId}/refunds`,
+        },
         ...overrides.charge,
       };
       state.charges.set(chargeId, charge);

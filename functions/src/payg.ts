@@ -424,6 +424,60 @@ type PaygRefundReason =
   | "hold_released_before_payment"
   | "paid_contract_mismatch";
 
+export type PaygClassCancellationRefundAction =
+  | "prepare"
+  | "resume"
+  | "already_refunded"
+  | "blocked";
+
+export function resolvePaygClassCancellationRefundAction(input: Readonly<{
+  status: unknown;
+  refundStatus?: unknown;
+  refundId?: unknown;
+  refundReason?: unknown;
+  hasProviderAttemptEvidence?: boolean;
+  disputeOpen?: unknown;
+  paymentReviewId?: unknown;
+  providerContractStatus?: unknown;
+  conflictingRefundId?: unknown;
+}>): Readonly<{
+  action: PaygClassCancellationRefundAction;
+  refundReason: PaygRefundReason | null;
+}> {
+  const blocked = input.disputeOpen === true ||
+    typeof input.paymentReviewId === "string" ||
+    typeof input.providerContractStatus === "string" ||
+    typeof input.conflictingRefundId === "string";
+  if (blocked) return Object.freeze({action: "blocked", refundReason: null});
+  if (input.status === "refunded") {
+    return input.refundStatus === "succeeded" &&
+      typeof input.refundId === "string" ?
+      Object.freeze({action: "already_refunded", refundReason: null}) :
+      Object.freeze({action: "blocked", refundReason: null});
+  }
+  if (input.status === "confirmed" || input.status === "cancelled") {
+    return Object.freeze({
+      action: "prepare",
+      refundReason: "class_cancellation",
+    });
+  }
+  if (input.status !== "refund_pending") {
+    return Object.freeze({action: "blocked", refundReason: null});
+  }
+  const storedReason = input.refundReason;
+  const resumableReason = storedReason === "guest_cancellation" ||
+    storedReason === "class_cancellation" ||
+    storedReason === "hold_released_before_payment" ? storedReason : null;
+  return Object.freeze({
+    action: "resume",
+    // Once an earlier provider attempt may have started, replay its exact
+    // request shape and idempotency key. Otherwise this operation owns the
+    // first provider request and records its approved reason explicitly.
+    refundReason: input.hasProviderAttemptEvidence && resumableReason ?
+      resumableReason : "class_cancellation",
+  });
+}
+
 export const PAYG_REFUND_ISSUANCE_CLAIM_MS = 2 * 60 * 1000;
 
 type PaygRefundClaimKind = "order" | "payment_review";
@@ -441,6 +495,11 @@ type PaygRefundClaimResult =
     expectedAmountPence: number | null;
     expectedCurrency: string | null;
     intentId: string | null;
+    refundOwnerId: string;
+    refundClaimKind: PaygRefundClaimKind;
+    refundReason: PaygRefundReason | null;
+    classCancellationOperationId: string | null;
+    classCancellationProviderRequestPreviouslyPrepared: boolean;
   }>;
 
 export type PaygRefundStateDecision = Readonly<{
@@ -2628,6 +2687,140 @@ export async function observePaygCheckoutForClassCancellation(
   });
 }
 
+async function recordPaygClassCancellationCheckoutExpiryRequest(
+  intentRef: DocumentReference,
+  classId: string,
+  operationId: string,
+  checkoutSessionId: string
+): Promise<void> {
+  const classRef = db().collection("classes").doc(classId);
+  await db().runTransaction(async (tx) => {
+    const [intent, frozenClass] = await Promise.all([
+      tx.get(intentRef),
+      tx.get(classRef),
+    ]);
+    const intentClass = intent.get("class") as Record<string, unknown> | null;
+    if (!intent.exists || !frozenClass.exists ||
+      intentClass?.classId !== classId ||
+      intent.get("checkoutSessionId") !== checkoutSessionId ||
+      intent.get("classCancellationOperationId") !== operationId ||
+      frozenClass.get("status") !== "scheduled" ||
+      frozenClass.get("bookingOpen") !== false ||
+      frozenClass.get("bookingClosedReason") !== "class_cancellation" ||
+      frozenClass.get("cancellationOperationId") !== operationId) {
+      throw new Error(
+        `Class cancellation ${operationId} changed before Checkout expiry.`
+      );
+    }
+    tx.set(intentRef, {
+      classCancellationCheckoutExpiryVersion: 1,
+      classCancellationCheckoutExpirySessionId: checkoutSessionId,
+      classCancellationCheckoutExpiryRequestedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }, {merge: true});
+  });
+}
+
+/**
+ * Expires the exact still-open Stripe Checkout Session owned by a frozen class.
+ * A completion race is re-read and routed through canonical paid fulfilment;
+ * local capacity is released only after irreversible provider nonpayment.
+ */
+export async function reconcilePaygCheckoutForClassCancellation(
+  intentRef: DocumentReference,
+  classId: string,
+  operationId: string
+): Promise<PaygClassCancellationProviderObservation> {
+  const initial = await intentRef.get();
+  if (!initial.exists) {
+    throw new Error(`PAYG intent ${intentRef.id} disappeared.`);
+  }
+  const intent = initial.data() as PaygIntentDoc;
+  if (intent.class?.classId !== classId ||
+    initial.get("classCancellationOperationId") !== operationId) {
+    throw new Error(
+      `PAYG intent ${intentRef.id} is not owned by ${operationId}.`
+    );
+  }
+  const sessionId = typeof intent.checkoutSessionId === "string" &&
+    intent.checkoutSessionId.trim() ? intent.checkoutSessionId.trim() : null;
+  if (!sessionId) {
+    // Missing local identity can be an accepted create whose response was
+    // lost. It remains held and blocked for exact idempotent recovery.
+    return observePaygCheckoutForClassCancellation(
+      intentRef,
+      classId,
+      operationId
+    );
+  }
+
+  const client = stripe();
+  let session = await client.checkout.sessions.retrieve(sessionId);
+  assertSessionBinding(session, intentRef.id, intent);
+  if (session.status === "open") {
+    await recordPaygClassCancellationCheckoutExpiryRequest(
+      intentRef,
+      classId,
+      operationId,
+      session.id
+    );
+    try {
+      session = await client.checkout.sessions.expire(session.id);
+      assertSessionBinding(session, intentRef.id, intent);
+    } catch (error) {
+      // Stripe may have accepted expiry while the response was lost, or a
+      // payment may have completed first. Re-read the exact Session; only a
+      // still-open result preserves the original ambiguity/error.
+      session = await client.checkout.sessions.retrieve(sessionId);
+      assertSessionBinding(session, intentRef.id, intent);
+      if (session.status === "open") throw error;
+    }
+  }
+
+  const paymentIntentId = idOf(session.payment_intent);
+  const paymentIntent = paymentIntentId ?
+    await client.paymentIntents.retrieve(paymentIntentId) : null;
+  if (paymentIntent) {
+    assertStripeObjectMode(
+      "PaymentIntent",
+      paymentIntent.id,
+      paymentIntent.livemode
+    );
+  }
+  const providerHasPayment = session.payment_status === "paid" ||
+    Boolean(paymentIntent && (paymentIntent.status === "succeeded" ||
+      paymentIntent.amount_received > 0));
+  if (providerHasPayment) {
+    await fulfilPaygCheckoutSession(session);
+    return observePaygCheckoutForClassCancellation(
+      intentRef,
+      classId,
+      operationId
+    );
+  }
+
+  let observation = await observePaygCheckoutForClassCancellation(
+    intentRef,
+    classId,
+    operationId
+  );
+  if (observation.terminalNonpayment) {
+    await releasePaygHoldForClassCancellation(
+      intentRef,
+      classId,
+      operationId
+    );
+    // Re-observe after the local release so finalization is tied to fresh
+    // provider evidence rather than a wall-clock or pre-release snapshot.
+    observation = await observePaygCheckoutForClassCancellation(
+      intentRef,
+      classId,
+      operationId
+    );
+  }
+  return observation;
+}
+
 async function resumeExistingPaygCheckout(
   client: Stripe,
   intentRef: DocumentReference
@@ -4092,6 +4285,180 @@ export function suppressPaygConfirmationForClassCancellation(
   }, {merge: true});
 }
 
+export type PaygClassCancellationRefundResult = Readonly<{
+  orderId: string;
+  action: PaygClassCancellationRefundAction;
+  providerAttempted: boolean;
+}>;
+
+/**
+ * Durably prepares and resumes the approved whole-class £7 refund. Every
+ * provider mutation remains behind exact local order/class/audit bindings and
+ * the ordinary refund claim/idempotency machinery.
+ */
+export async function initiatePaygOrderRefundForClassCancellation(
+  orderRef: DocumentReference,
+  classId: string,
+  operationId: string
+): Promise<PaygClassCancellationRefundResult> {
+  if (!/^payg_[a-f0-9]{64}$/.test(orderRef.id) ||
+    !/^class_cancel_[a-f0-9]{64}$/.test(operationId)) {
+    throw new Error("Class-cancellation PAYG refund identity is invalid.");
+  }
+  const classRef = db().collection("classes").doc(classId);
+  const auditRef = db().collection("classCancellationOperations")
+    .doc(operationId);
+  const prepared = await db().runTransaction(async (tx) => {
+    const [order, frozenClass, audit] = await Promise.all([
+      tx.get(orderRef),
+      tx.get(classRef),
+      tx.get(auditRef),
+    ]);
+    if (!order.exists) {
+      throw new Error(`PAYG order ${orderRef.id} disappeared.`);
+    }
+    const value = order.data() as Record<string, unknown>;
+    const orderClass = value.class as Record<string, unknown> | null;
+    const existingOperationId = typeof value.classCancellationOperationId ===
+      "string" ? value.classCancellationOperationId : null;
+    const auditState = audit.get("state");
+    const exactOperation = frozenClass.exists &&
+      frozenClass.get("status") === "scheduled" &&
+      frozenClass.get("bookingOpen") === false &&
+      frozenClass.get("bookingClosedReason") === "class_cancellation" &&
+      frozenClass.get("cancellationOperationId") === operationId &&
+      audit.exists && audit.get("schemaVersion") === 1 &&
+      audit.get("operationId") === operationId &&
+      audit.get("classId") === classId &&
+      (auditState === "processing" ||
+        auditState === "awaiting_payg_refunds" ||
+        auditState === "ready_to_finalize");
+    const exactOrder = value.schemaVersion === PAYG_SCHEMA_VERSION &&
+      value.orderId === orderRef.id &&
+      value.purchaseKind === PAYG_PURCHASE_KIND &&
+      value.offeringKey === PAYG_OFFERING_KEY &&
+      orderClass?.classId === classId &&
+      value.amountPence === PAYG_AMOUNT_PENCE &&
+      value.currency === PAYG_CURRENCY &&
+      typeof value.checkoutSessionId === "string" &&
+      /^cs_[A-Za-z0-9_]{4,252}$/.test(value.checkoutSessionId) &&
+      typeof value.paymentIntentId === "string" &&
+      /^pi_[A-Za-z0-9_]{4,252}$/.test(value.paymentIntentId) &&
+      typeof value.chargeId === "string" &&
+      /^ch_[A-Za-z0-9_]{4,252}$/.test(value.chargeId);
+    if (!exactOperation || !exactOrder ||
+      existingOperationId && existingOperationId !== operationId) {
+      throw new Error(
+        `PAYG order ${orderRef.id} is not exactly bound to ${operationId}.`
+      );
+    }
+    const refundId = typeof value.refundId === "string" ? value.refundId : null;
+    const hasInvalidRefundId = refundId !== null &&
+      !/^re_[A-Za-z0-9_]{4,252}$/.test(refundId);
+    const storedExpectedAmount = value.refundExpectedAmountPence;
+    const expectedAmountConflict = storedExpectedAmount !== undefined &&
+      storedExpectedAmount !== null && storedExpectedAmount !==
+        PAYG_AMOUNT_PENCE;
+    const providerRequestEvidencePresent = [
+      "classCancellationRefundProviderRequestPreparedAt",
+      "classCancellationRefundProviderIdempotencyKey",
+      "classCancellationRefundProviderAmountPence",
+      "classCancellationRefundProviderCurrency",
+      "classCancellationRefundProviderOperationId",
+    ].some((field) => value[field] !== undefined);
+    const providerRequestEvidenceExact = timestampMillis(
+      value.classCancellationRefundProviderRequestPreparedAt
+    ) !== null && value.classCancellationRefundProviderIdempotencyKey ===
+      `payg-refund:${orderRef.id}` &&
+      value.classCancellationRefundProviderAmountPence === PAYG_AMOUNT_PENCE &&
+      value.classCancellationRefundProviderCurrency === PAYG_CURRENCY &&
+      value.classCancellationRefundProviderOperationId === operationId;
+    const hasProviderAttemptEvidence = refundId !== null ||
+      typeof value.refundAutomationClaimToken === "string" ||
+      providerRequestEvidencePresent;
+    const decision = resolvePaygClassCancellationRefundAction({
+      status: value.status,
+      refundStatus: value.refundStatus,
+      refundId: value.refundId,
+      refundReason: value.refundReason,
+      hasProviderAttemptEvidence,
+      disputeOpen: value.disputeOpen,
+      paymentReviewId: value.paymentReviewId,
+      providerContractStatus: value.providerContractStatus,
+      conflictingRefundId: value.conflictingRefundId,
+    });
+    const contradictoryRefundEvidence =
+      (value.status === "confirmed" || value.status === "cancelled") &&
+      (refundId !== null || value.refundStatus !== undefined &&
+        value.refundStatus !== null);
+    const blocked = decision.action === "blocked" || hasInvalidRefundId ||
+      expectedAmountConflict || contradictoryRefundEvidence ||
+      providerRequestEvidencePresent && !providerRequestEvidenceExact ||
+      typeof value.disputeId === "string";
+    const operationFields = {
+      classCancellationOperationId: operationId,
+      classCancellationRequestedAt:
+        value.classCancellationRequestedAt ?? serverTimestamp(),
+      classCancellationRefundRequestedAt:
+        value.classCancellationRefundRequestedAt ?? serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+    if (blocked) {
+      tx.set(orderRef, {
+        ...operationFields,
+        classCancellationRefundStatus: "manual_review",
+        classCancellationRefundBlockedAt: serverTimestamp(),
+      }, {merge: true});
+      return {action: "blocked" as const, refundReason: null};
+    }
+    if (decision.action === "already_refunded") {
+      tx.set(orderRef, {
+        ...operationFields,
+        classCancellationRefundStatus: "reconciled",
+        classCancellationRefundReconciledAt: serverTimestamp(),
+      }, {merge: true});
+      return {action: decision.action, refundReason: null};
+    }
+    const refundReason = decision.refundReason;
+    if (!refundReason) {
+      throw new Error(`PAYG order ${orderRef.id} has no refund reason.`);
+    }
+    tx.set(orderRef, {
+      ...operationFields,
+      status: "refund_pending",
+      refundReason,
+      refundExpectedAmountPence: PAYG_AMOUNT_PENCE,
+      refundRecoveryAt: Timestamp.fromMillis(Date.now()),
+      classCancellationRefundStatus: "refund_pending",
+    }, {merge: true});
+    return {action: decision.action, refundReason};
+  });
+  if (!prepared.refundReason) {
+    return Object.freeze({
+      orderId: orderRef.id,
+      action: prepared.action,
+      providerAttempted: false,
+    });
+  }
+  try {
+    await issuePaygRefund(orderRef.id, prepared.refundReason);
+  } catch (error) {
+    // The refund_pending receipt and recovery marker are durable. An admin
+    // resume or the scheduled recovery worker will replay the same provider
+    // idempotency key; ambiguous provider state never permits finalization.
+    console.error("PAYG class-cancellation refund queued for recovery", {
+      orderId: orderRef.id,
+      operationId,
+      error,
+    });
+  }
+  return Object.freeze({
+    orderId: orderRef.id,
+    action: prepared.action,
+    providerAttempted: true,
+  });
+}
+
 type PaygLifecycleEmailPayload =
   | ReturnType<typeof buildPaygRefundOutboxPayload>
   | ReturnType<typeof buildPaygDisputeOutboxPayload>;
@@ -4687,6 +5054,7 @@ function paygRefundClaimCleanup() {
 async function acquirePaygRefundIssuanceClaim(
   ref: DocumentReference,
   kind: PaygRefundClaimKind,
+  requestedReason: PaygRefundReason | null = null,
   nowMillis = Date.now(),
   token = randomUUID()
 ): Promise<PaygRefundClaimResult> {
@@ -4708,6 +5076,132 @@ async function acquirePaygRefundIssuanceClaim(
       return {state: "existing" as const, refundId};
     }
     if (!paygRefundClaimEligible(snapshot, kind)) {
+      return {state: "blocked" as const};
+    }
+    const storedClassCancellationOperationId = typeof snapshot.get(
+      "classCancellationOperationId"
+    ) === "string" ? snapshot.get("classCancellationOperationId") as
+      string : null;
+    const classCancellationOperationId =
+      (kind === "order" && requestedReason === "class_cancellation" ||
+        kind === "payment_review" &&
+        snapshot.get("classCancellationRefundAuthorized") === true) &&
+      /^class_cancel_[a-f0-9]{64}$/.test(
+        storedClassCancellationOperationId ?? ""
+      ) ? storedClassCancellationOperationId : null;
+    const expectedAmount = Number(snapshot.get("refundExpectedAmountPence"));
+    const classCancellationIntentId = kind === "payment_review" &&
+      classCancellationOperationId &&
+      /^payg_[a-f0-9]{64}$/.test(snapshot.get("intentId") ?? "") ?
+      snapshot.get("intentId") as string : null;
+    const cancellationIntent = classCancellationIntentId ? await tx.get(
+      db().collection("paygIntents").doc(classCancellationIntentId)
+    ) : null;
+    const intentClass = cancellationIntent?.get("class") as
+      Record<string, unknown> | null | undefined;
+    const classCancellationClassId = kind === "order" &&
+      requestedReason === "class_cancellation" &&
+      typeof snapshot.get("class.classId") === "string" ?
+      snapshot.get("class.classId") as string :
+      kind === "payment_review" && typeof intentClass?.classId === "string" ?
+        intentClass.classId : null;
+    const [frozenClass, cancellationAudit] = classCancellationClassId &&
+      classCancellationOperationId ? await Promise.all([
+        tx.get(db().collection("classes").doc(classCancellationClassId)),
+        tx.get(db().collection("classCancellationOperations")
+          .doc(classCancellationOperationId)),
+      ]) : [null, null];
+    const providerRequestEvidencePresent = [
+      "classCancellationRefundProviderRequestPreparedAt",
+      "classCancellationRefundProviderIdempotencyKey",
+      "classCancellationRefundProviderAmountPence",
+      "classCancellationRefundProviderCurrency",
+      "classCancellationRefundProviderOperationId",
+    ].some((field) => snapshot.get(field) !== undefined);
+    const expectedProviderRequestKey = kind === "order" ?
+      `payg-refund:${ref.id}` : `payg-review-refund:${ref.id}`;
+    const classCancellationProviderRequestPreviouslyPrepared =
+      timestampMillis(snapshot.get(
+        "classCancellationRefundProviderRequestPreparedAt"
+      )) !== null && snapshot.get(
+        "classCancellationRefundProviderIdempotencyKey"
+      ) === expectedProviderRequestKey && snapshot.get(
+        "classCancellationRefundProviderAmountPence"
+      ) === expectedAmount && snapshot.get(
+        "classCancellationRefundProviderCurrency"
+      ) === PAYG_CURRENCY && snapshot.get(
+        "classCancellationRefundProviderOperationId"
+      ) === classCancellationOperationId;
+    const exactFrozenOperation = frozenClass !== null &&
+      cancellationAudit !== null && frozenClass.exists &&
+      frozenClass.get("status") === "scheduled" &&
+      frozenClass.get("bookingOpen") === false &&
+      frozenClass.get("bookingClosedReason") === "class_cancellation" &&
+      frozenClass.get("cancellationOperationId") ===
+        classCancellationOperationId && cancellationAudit.exists &&
+      cancellationAudit.get("schemaVersion") === 1 &&
+      cancellationAudit.get("operationId") === classCancellationOperationId &&
+      cancellationAudit.get("classId") === classCancellationClassId &&
+      ["processing", "awaiting_payg_refunds", "ready_to_finalize"].includes(
+        String(cancellationAudit.get("state"))
+      );
+    const exactClassCancellationReview = kind === "payment_review" &&
+      snapshot.get("classCancellationRefundAuthorized") === true &&
+      exactFrozenOperation && cancellationIntent !== null &&
+      cancellationIntent.exists &&
+      cancellationIntent.get("classCancellationOperationId") ===
+        classCancellationOperationId &&
+      cancellationIntent.get("checkoutSessionId") ===
+        snapshot.get("checkoutSessionId") &&
+      cancellationIntent.get("paymentIntentId") ===
+        snapshot.get("paymentIntentId") &&
+      expectedAmount === PAYG_AMOUNT_PENCE &&
+      snapshot.get("providerAmountReceivedPence") === PAYG_AMOUNT_PENCE &&
+      snapshot.get("providerCurrency") === PAYG_CURRENCY &&
+      (!providerRequestEvidencePresent ||
+        classCancellationProviderRequestPreviouslyPrepared);
+    const exactClassCancellationRefund = requestedReason ===
+      "class_cancellation" && kind === "order" &&
+      /^class_cancel_[a-f0-9]{64}$/.test(
+        classCancellationOperationId ?? ""
+      ) && exactFrozenOperation && snapshot.get("orderId") === ref.id &&
+      snapshot.get("purchaseKind") === PAYG_PURCHASE_KIND &&
+      snapshot.get("offeringKey") === PAYG_OFFERING_KEY &&
+      snapshot.get("amountPence") === PAYG_AMOUNT_PENCE &&
+      snapshot.get("currency") === PAYG_CURRENCY &&
+      snapshot.get("refundExpectedAmountPence") === PAYG_AMOUNT_PENCE &&
+      snapshot.get("refundReason") === "class_cancellation" &&
+      snapshot.get("disputeOpen") !== true &&
+      snapshot.get("paymentReviewId") == null &&
+      snapshot.get("providerContractStatus") == null &&
+      snapshot.get("conflictingRefundId") == null &&
+      (!providerRequestEvidencePresent ||
+        classCancellationProviderRequestPreviouslyPrepared);
+    if (requestedReason === "class_cancellation" &&
+      !exactClassCancellationRefund) {
+      tx.set(ref, {
+        status: "manual_review",
+        classCancellationRefundStatus: "manual_review",
+        refundStatus: "class_cancellation_binding_mismatch",
+        refundRecoveryAt: FieldValue.delete(),
+        ...paygRefundClaimCleanup(),
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+      return {state: "blocked" as const};
+    }
+    const expectedProviderCurrency = snapshot.get("providerCurrency");
+    if (kind === "payment_review" &&
+      (!Number.isSafeInteger(expectedAmount) || expectedAmount <= 0 ||
+        expectedProviderCurrency !== PAYG_CURRENCY ||
+        snapshot.get("classCancellationRefundAuthorized") === true &&
+          !exactClassCancellationReview)) {
+      tx.set(ref, {
+        status: "manual_review",
+        refundStatus: "refund_contract_invalid",
+        refundRecoveryAt: FieldValue.delete(),
+        ...paygRefundClaimCleanup(),
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
       return {state: "blocked" as const};
     }
     const paymentIntentId = snapshot.get("paymentIntentId");
@@ -4741,14 +5235,14 @@ async function acquirePaygRefundIssuanceClaim(
       refundRecoveryAt: Timestamp.fromMillis(claimExpiresAt),
       updatedAt: serverTimestamp(),
     }, {merge: true});
-    const expectedAmount = Number(snapshot.get("refundExpectedAmountPence"));
     return {
       state: "acquired" as const,
       token,
       paymentIntentId,
       expectedChargeId: typeof snapshot.get("chargeId") === "string" ?
         snapshot.get("chargeId") : null,
-      expectedAmountPence: kind === "payment_review" &&
+      expectedAmountPence: (kind === "payment_review" ||
+        exactClassCancellationRefund) &&
         Number.isSafeInteger(expectedAmount) && expectedAmount > 0 ?
         expectedAmount : null,
       expectedCurrency: typeof snapshot.get("providerCurrency") === "string" ?
@@ -4757,6 +5251,11 @@ async function acquirePaygRefundIssuanceClaim(
           snapshot.get("currency") : null,
       intentId: typeof snapshot.get("intentId") === "string" ?
         snapshot.get("intentId") : null,
+      refundOwnerId: ref.id,
+      refundClaimKind: kind,
+      refundReason: requestedReason,
+      classCancellationOperationId,
+      classCancellationProviderRequestPreviouslyPrepared,
     };
   });
 }
@@ -4765,6 +5264,7 @@ type PaygRefundProviderRefresh = Readonly<{
   disputed: boolean;
   safe: boolean;
   reason: string | null;
+  existingExactRefund: Stripe.Refund | null;
 }>;
 
 async function refreshPaygRefundProviderState(input: Readonly<{
@@ -4772,6 +5272,11 @@ async function refreshPaygRefundProviderState(input: Readonly<{
   expectedChargeId: string | null;
   expectedAmountPence: number | null;
   expectedCurrency: string | null;
+  refundOwnerId?: string;
+  refundClaimKind?: PaygRefundClaimKind;
+  refundReason?: PaygRefundReason | null;
+  classCancellationOperationId?: string | null;
+  classCancellationProviderRequestPreviouslyPrepared?: boolean;
 }>): Promise<PaygRefundProviderRefresh> {
   const paymentIntent = await stripe().paymentIntents.retrieve(
     input.paymentIntentId,
@@ -4784,13 +5289,48 @@ async function refreshPaygRefundProviderState(input: Readonly<{
   );
   const chargeId = idOf(paymentIntent.latest_charge);
   if (!chargeId) {
-    return {disputed: false, safe: false, reason: "missing_latest_charge"};
+    return {
+      disputed: false,
+      safe: false,
+      reason: "missing_latest_charge",
+      existingExactRefund: null,
+    };
   }
-  const charge = await stripe().charges.retrieve(chargeId);
+  const charge = await stripe().charges.retrieve(chargeId, {
+    expand: ["refunds"],
+  });
   assertStripeObjectMode("Charge", charge.id, charge.livemode);
   if (charge.disputed === true) {
-    return {disputed: true, safe: false, reason: "provider_dispute_open"};
+    return {
+      disputed: true,
+      safe: false,
+      reason: "provider_dispute_open",
+      existingExactRefund: null,
+    };
   }
+  const providerRefunds = charge.refunds?.data ?? [];
+  const expectedRefundReason = input.refundClaimKind === "order" ?
+    input.refundReason : "paid_contract_mismatch";
+  const exactExistingRefunds = input.classCancellationOperationId &&
+    input.classCancellationProviderRequestPreviouslyPrepared === true &&
+    input.expectedAmountPence !== null && input.expectedCurrency &&
+    input.refundOwnerId && input.refundClaimKind ? providerRefunds.filter(
+      (refund) => refund.amount === input.expectedAmountPence &&
+        refund.currency === input.expectedCurrency &&
+        idOf(refund.payment_intent) === input.paymentIntentId &&
+        idOf(refund.charge) === charge.id &&
+        refund.metadata?.refundReason === expectedRefundReason &&
+        refund.metadata?.classCancellationOperationId ===
+          input.classCancellationOperationId &&
+        (input.refundClaimKind === "order" ?
+          refund.metadata?.paygOrderId === input.refundOwnerId :
+          refund.metadata?.paygPaymentReviewId === input.refundOwnerId) &&
+        (refund.status === "pending" && charge.amount_refunded === 0 ||
+          refund.status === "succeeded" &&
+            charge.amount_refunded === input.expectedAmountPence)
+    ) : [];
+  const existingExactRefund = exactExistingRefunds.length === 1 ?
+    exactExistingRefunds[0] : null;
   const mismatches = [
     paymentIntent.id !== input.paymentIntentId ? "payment_intent_id" : null,
     paymentIntent.status !== "succeeded" ? "payment_intent_status" : null,
@@ -4803,13 +5343,29 @@ async function refreshPaygRefundProviderState(input: Readonly<{
     input.expectedAmountPence !== null &&
       paymentIntent.amount_received !== input.expectedAmountPence ?
       "expected_amount" : null,
+    input.expectedAmountPence !== null &&
+      charge.amount !== input.expectedAmountPence ? "charge_amount" : null,
     input.expectedCurrency &&
       paymentIntent.currency !== input.expectedCurrency ? "currency" : null,
+    input.expectedCurrency && charge.currency !== input.expectedCurrency ?
+      "charge_currency" : null,
+    input.expectedAmountPence !== null && charge.paid !== true ?
+      "charge_not_paid" : null,
+    input.expectedAmountPence !== null && charge.status !== "succeeded" ?
+      "charge_status" : null,
+    input.classCancellationOperationId !== null &&
+      input.classCancellationOperationId !== undefined &&
+      existingExactRefund === null &&
+      (!Number.isSafeInteger(charge.amount_refunded) ||
+        charge.amount_refunded !== 0) ? "prior_refund" : null,
+    exactExistingRefunds.length > 1 ? "multiple_exact_refunds" : null,
+    charge.refunds?.has_more === true ? "refund_history_truncated" : null,
   ].filter((value): value is string => Boolean(value));
   return {
     disputed: false,
     safe: mismatches.length === 0,
     reason: mismatches.length ? `provider_${mismatches.join("_")}` : null,
+    existingExactRefund,
   };
 }
 
@@ -4821,6 +5377,112 @@ async function confirmPaygRefundIssuanceClaim(
 ): Promise<boolean> {
   return db().runTransaction(async (tx) => {
     const snapshot = await tx.get(ref);
+    const classCancellationOperationId =
+      claim.classCancellationOperationId;
+    const classCancellationIntentId = classCancellationOperationId &&
+      kind === "payment_review" &&
+      /^payg_[a-f0-9]{64}$/.test(snapshot.get("intentId") ?? "") ?
+      snapshot.get("intentId") as string : null;
+    const cancellationIntent = classCancellationIntentId ? await tx.get(
+      db().collection("paygIntents").doc(classCancellationIntentId)
+    ) : null;
+    const intentClass = cancellationIntent?.get("class") as
+      Record<string, unknown> | null | undefined;
+    const classCancellationClassId = classCancellationOperationId ?
+      kind === "order" && typeof snapshot.get("class.classId") === "string" ?
+        snapshot.get("class.classId") as string :
+        kind === "payment_review" &&
+          typeof intentClass?.classId === "string" ? intentClass.classId :
+          null : null;
+    const [frozenClass, cancellationAudit] = classCancellationClassId &&
+      classCancellationOperationId ? await Promise.all([
+        tx.get(db().collection("classes").doc(classCancellationClassId)),
+        tx.get(db().collection("classCancellationOperations")
+          .doc(classCancellationOperationId)),
+      ]) : [null, null];
+    const providerRequestEvidencePresent = [
+      "classCancellationRefundProviderRequestPreparedAt",
+      "classCancellationRefundProviderIdempotencyKey",
+      "classCancellationRefundProviderAmountPence",
+      "classCancellationRefundProviderCurrency",
+      "classCancellationRefundProviderOperationId",
+    ].some((field) => snapshot.get(field) !== undefined);
+    const exactProviderRequestEvidence = timestampMillis(snapshot.get(
+      "classCancellationRefundProviderRequestPreparedAt"
+    )) !== null && snapshot.get(
+      "classCancellationRefundProviderIdempotencyKey"
+    ) === (kind === "order" ? `payg-refund:${ref.id}` :
+      `payg-review-refund:${ref.id}`) && snapshot.get(
+      "classCancellationRefundProviderAmountPence"
+    ) === PAYG_AMOUNT_PENCE && snapshot.get(
+      "classCancellationRefundProviderCurrency"
+    ) === PAYG_CURRENCY && snapshot.get(
+      "classCancellationRefundProviderOperationId"
+    ) === classCancellationOperationId;
+    const exactFrozenOperation = classCancellationOperationId !== null &&
+      frozenClass !== null && cancellationAudit !== null &&
+      frozenClass.exists && frozenClass.get("status") === "scheduled" &&
+      frozenClass.get("bookingOpen") === false &&
+      frozenClass.get("bookingClosedReason") === "class_cancellation" &&
+      frozenClass.get("cancellationOperationId") ===
+        classCancellationOperationId && cancellationAudit.exists &&
+      cancellationAudit.get("schemaVersion") === 1 &&
+      cancellationAudit.get("operationId") === classCancellationOperationId &&
+      cancellationAudit.get("classId") === classCancellationClassId &&
+      ["processing", "awaiting_payg_refunds", "ready_to_finalize"].includes(
+        String(cancellationAudit.get("state"))
+      );
+    const noConflictingRefundState = snapshot.get("refundId") == null &&
+      snapshot.get("disputeOpen") !== true &&
+      snapshot.get("disputeId") == null &&
+      snapshot.get("conflictingRefundId") == null &&
+      snapshot.get("refundStatus") !== "succeeded";
+    const exactClassCancellationOrder = kind === "order" &&
+      classCancellationOperationId !== null && exactFrozenOperation &&
+      snapshot.get("schemaVersion") === PAYG_SCHEMA_VERSION &&
+      snapshot.get("orderId") === ref.id &&
+      snapshot.get("purchaseKind") === PAYG_PURCHASE_KIND &&
+      snapshot.get("offeringKey") === PAYG_OFFERING_KEY &&
+      snapshot.get("class.classId") === classCancellationClassId &&
+      snapshot.get("amountPence") === PAYG_AMOUNT_PENCE &&
+      snapshot.get("currency") === PAYG_CURRENCY &&
+      snapshot.get("paymentIntentId") === claim.paymentIntentId &&
+      snapshot.get("chargeId") === claim.expectedChargeId &&
+      snapshot.get("refundReason") === "class_cancellation" &&
+      snapshot.get("refundExpectedAmountPence") === PAYG_AMOUNT_PENCE &&
+      snapshot.get("classCancellationRefundStatus") === "refund_pending" &&
+      snapshot.get("classCancellationOperationId") ===
+        classCancellationOperationId &&
+      timestampMillis(snapshot.get("classCancellationRequestedAt")) !== null &&
+      timestampMillis(snapshot.get(
+        "classCancellationRefundRequestedAt"
+      )) !== null && snapshot.get("paymentReviewId") == null &&
+      snapshot.get("providerContractStatus") == null &&
+      noConflictingRefundState &&
+      (!providerRequestEvidencePresent || exactProviderRequestEvidence);
+    const exactClassCancellationReview = kind === "payment_review" &&
+      classCancellationOperationId !== null && exactFrozenOperation &&
+      cancellationIntent !== null && cancellationIntent.exists &&
+      cancellationIntent.get("classCancellationOperationId") ===
+        classCancellationOperationId &&
+      cancellationIntent.get("checkoutSessionId") ===
+        snapshot.get("checkoutSessionId") &&
+      cancellationIntent.get("paymentIntentId") === claim.paymentIntentId &&
+      snapshot.get("schemaVersion") === PAYG_SCHEMA_VERSION &&
+      snapshot.get("classCancellationRefundAuthorized") === true &&
+      snapshot.get("classCancellationOperationId") ===
+        classCancellationOperationId &&
+      snapshot.get("paymentIntentId") === claim.paymentIntentId &&
+      snapshot.get("providerAmountReceivedPence") === PAYG_AMOUNT_PENCE &&
+      snapshot.get("providerCurrency") === PAYG_CURRENCY &&
+      snapshot.get("refundExpectedAmountPence") === PAYG_AMOUNT_PENCE &&
+      snapshot.get("refundReason") === "paid_contract_mismatch" &&
+      snapshot.get("automaticRefundSafe") === true &&
+      noConflictingRefundState &&
+      (!providerRequestEvidencePresent || exactProviderRequestEvidence);
+    const exactClassCancellationBinding =
+      classCancellationOperationId === null ||
+      exactClassCancellationOrder || exactClassCancellationReview;
     const claimExpiresAt = snapshot.exists ? timestampMillis(
       snapshot.get("refundAutomationClaimExpiresAt")
     ) : null;
@@ -4829,7 +5491,8 @@ async function confirmPaygRefundIssuanceClaim(
       snapshot.get("refundAutomationClaimPaymentIntentId") ===
         claim.paymentIntentId &&
       claimExpiresAt !== null && claimExpiresAt > nowMillis &&
-      paygRefundClaimEligible(snapshot, kind);
+      paygRefundClaimEligible(snapshot, kind) &&
+      exactClassCancellationBinding;
     if (!valid) {
       if (snapshot.exists &&
         snapshot.get("refundAutomationClaimToken") === claim.token) {
@@ -4846,6 +5509,19 @@ async function confirmPaygRefundIssuanceClaim(
     }
     tx.set(ref, {
       refundAutomationClaimProviderCheckedAt: serverTimestamp(),
+      ...(claim.classCancellationOperationId &&
+        claim.expectedAmountPence === PAYG_AMOUNT_PENCE &&
+        claim.expectedCurrency === PAYG_CURRENCY ? {
+          classCancellationRefundProviderRequestPreparedAt: serverTimestamp(),
+          classCancellationRefundProviderIdempotencyKey:
+            kind === "order" ? `payg-refund:${ref.id}` :
+              `payg-review-refund:${ref.id}`,
+          classCancellationRefundProviderAmountPence:
+            claim.expectedAmountPence,
+          classCancellationRefundProviderCurrency: claim.expectedCurrency,
+          classCancellationRefundProviderOperationId:
+            claim.classCancellationOperationId,
+        } : {}),
       updatedAt: serverTimestamp(),
     }, {merge: true});
     return true;
@@ -4967,7 +5643,11 @@ async function issuePaygRefund(
   reason: PaygRefundReason
 ): Promise<void> {
   const orderRef = db().collection("paygOrders").doc(orderId);
-  const claim = await acquirePaygRefundIssuanceClaim(orderRef, "order");
+  const claim = await acquirePaygRefundIssuanceClaim(
+    orderRef,
+    "order",
+    reason
+  );
   if (claim.state === "complete" || claim.state === "in_progress") return;
   if (claim.state === "blocked") {
     throw new Error(`PAYG order ${orderId} is not awaiting a refund.`);
@@ -5017,6 +5697,25 @@ async function issuePaygRefund(
     }
     return;
   }
+  if (provider.existingExactRefund) {
+    if (!await confirmPaygRefundIssuanceClaim(
+      orderRef,
+      "order",
+      claim
+    )) return;
+    await persistCreatedPaygRefund(
+      orderRef,
+      claim.token,
+      provider.existingExactRefund.id,
+      reason
+    );
+    if (!await convergePaygRefund(provider.existingExactRefund)) {
+      throw new Error(
+        `Refund ${provider.existingExactRefund.id} has no matching PAYG order.`
+      );
+    }
+    return;
+  }
   if (!await confirmPaygRefundIssuanceClaim(
     orderRef,
     "order",
@@ -5029,11 +5728,18 @@ async function issuePaygRefund(
     // a provider-success/local-crash window without issuing a second refund.
     refund = await stripe().refunds.create({
       payment_intent: claim.paymentIntentId,
+      ...(reason === "class_cancellation" ? {
+        amount: PAYG_AMOUNT_PENCE,
+      } : {}),
       metadata: {
         purchaseKind: PAYG_PURCHASE_KIND,
         offeringKey: PAYG_OFFERING_KEY,
         paygOrderId: orderId,
         refundReason: reason,
+        ...(claim.classCancellationOperationId ? {
+          classCancellationOperationId:
+            claim.classCancellationOperationId,
+        } : {}),
         schemaVersion: String(PAYG_SCHEMA_VERSION),
       },
     }, {idempotencyKey: `payg-refund:${orderId}`});
@@ -5280,6 +5986,26 @@ async function issuePaygPaymentReviewRefund(reviewId: string): Promise<void> {
     }
     return;
   }
+  if (provider.existingExactRefund) {
+    if (!await confirmPaygRefundIssuanceClaim(
+      reviewRef,
+      "payment_review",
+      claim
+    )) return;
+    await persistCreatedPaygRefund(
+      reviewRef,
+      claim.token,
+      provider.existingExactRefund.id
+    );
+    if (!await convergePaygPaymentReviewRefund(
+      provider.existingExactRefund
+    )) {
+      throw new Error(
+        `Refund ${provider.existingExactRefund.id} has no matching PAYG payment review.`
+      );
+    }
+    return;
+  }
   if (!await confirmPaygRefundIssuanceClaim(
     reviewRef,
     "payment_review",
@@ -5288,12 +6014,17 @@ async function issuePaygPaymentReviewRefund(reviewId: string): Promise<void> {
   try {
     refund = await stripe().refunds.create({
       payment_intent: claim.paymentIntentId,
+      amount: claim.expectedAmountPence ?? undefined,
       metadata: {
         purchaseKind: PAYG_PURCHASE_KIND,
         offeringKey: PAYG_OFFERING_KEY,
         paygIntentId: claim.intentId ?? "unrecorded",
         paygPaymentReviewId: reviewId,
         refundReason: "paid_contract_mismatch",
+        ...(claim.classCancellationOperationId ? {
+          classCancellationOperationId:
+            claim.classCancellationOperationId,
+        } : {}),
         schemaVersion: String(PAYG_SCHEMA_VERSION),
       },
     }, {idempotencyKey: `payg-review-refund:${reviewId}`});
@@ -5344,6 +6075,22 @@ async function persistPaygPaymentReviewOnly(input: Readonly<{
       ]);
     if (!freshIntent.exists) throw new Error(`PAYG intent ${intentRef.id} disappeared.`);
     const current = freshIntent.data() as PaygIntentDoc;
+    const classCancellationOperationId = typeof freshIntent.get(
+      "classCancellationOperationId"
+    ) === "string" ? freshIntent.get("classCancellationOperationId") as
+      string : null;
+    const classCancellationFields = classCancellationOperationId &&
+      /^class_cancel_[a-f0-9]{64}$/.test(classCancellationOperationId) &&
+      classSnap.exists && classSnap.get("status") === "scheduled" &&
+      classSnap.get("bookingOpen") === false &&
+      classSnap.get("bookingClosedReason") === "class_cancellation" &&
+      classSnap.get("cancellationOperationId") ===
+        classCancellationOperationId ? {
+        classCancellationOperationId,
+        classCancellationRequestedAt:
+          freshIntent.get("classCancellationRequestedAt") ?? serverTimestamp(),
+        classCancellationRefundAuthorized: true,
+      } : {};
     const exactCanonicalOrder = canonicalOrder.exists &&
       canonicalOrder.get("purchaseKind") === PAYG_PURCHASE_KIND &&
       canonicalOrder.get("orderId") === intentRef.id &&
@@ -5391,6 +6138,7 @@ async function persistPaygPaymentReviewOnly(input: Readonly<{
           "paid_contract_mismatch" : FieldValue.delete(),
         refundRecoveryAt: reviewDisposition.scheduleRecovery ?
           Timestamp.fromMillis(Date.now()) : FieldValue.delete(),
+        ...classCancellationFields,
         updatedAt: serverTimestamp(),
         createdAt: serverTimestamp(),
       }, {merge: true});
@@ -5445,6 +6193,7 @@ async function persistPaygPaymentReviewOnly(input: Readonly<{
         "paid_contract_mismatch" : FieldValue.delete(),
       refundRecoveryAt: disposition.scheduleRecovery ?
         Timestamp.fromMillis(Date.now()) : FieldValue.delete(),
+      ...classCancellationFields,
       updatedAt: serverTimestamp(),
       createdAt: serverTimestamp(),
     }, {merge: true});
@@ -6756,6 +7505,17 @@ async function releasePaidOrderCapacity(
   duplicateLockSnap: DocumentSnapshot | null,
   update: Record<string, unknown>
 ): Promise<void> {
+  const classCancellationOperationId =
+    (order as PaygOrderDoc & {classCancellationOperationId?: unknown})
+      .classCancellationOperationId;
+  const classCancellationRefundedAmount = update.refundedAmountPence ??
+    (order as PaygOrderDoc & {refundedAmountPence?: unknown})
+      .refundedAmountPence;
+  const classCancellationRefundReconciled =
+    typeof classCancellationOperationId === "string" &&
+    /^class_cancel_[a-f0-9]{64}$/.test(classCancellationOperationId) &&
+    update.refundStatus === "succeeded" &&
+    classCancellationRefundedAmount === PAYG_AMOUNT_PENCE;
   if (order.capacityState === "held" && classSnap.exists) {
     const bookedCount = Number(classSnap.get("bookedCount") ?? 0);
     tx.set(classSnap.ref, {
@@ -6782,6 +7542,10 @@ async function releasePaidOrderCapacity(
     confirmationEmailStatus: "not_required",
     noShowReviewAt: FieldValue.delete(),
     ...update,
+    ...(classCancellationRefundReconciled ? {
+      classCancellationRefundStatus: "reconciled",
+      classCancellationRefundReconciledAt: serverTimestamp(),
+    } : {}),
     ...paygRefundClaimCleanup(),
     updatedAt: serverTimestamp(),
   }, {merge: true});

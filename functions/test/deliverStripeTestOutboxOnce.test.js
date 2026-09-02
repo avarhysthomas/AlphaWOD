@@ -16,8 +16,8 @@ const {
   withProtectedResendKey,
 } = require("../scripts/deliverStripeTestOutboxOnce");
 
-const RECIPIENT = "hello@zeroalphafitness.co.uk";
-const FROM = `Zero Alpha Fitness <${RECIPIENT}>`;
+const RECIPIENT = "hello@thisisaevi.com";
+const FROM = "Zero Alpha Fitness <hello@zeroalphafitness.co.uk>";
 const REPLY_TO = "support@zeroalphafitness.co.uk";
 const MESSAGE_ID = "49a3999c-0ce1-4ea6-ab68-afcd6dc2e794";
 

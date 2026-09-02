@@ -21,10 +21,10 @@ import {
   PAYG_DUPLICATE_LOCK_COLLECTION,
   PAYG_PAYMENT_REVIEW_COLLECTION,
   PAYG_WORKER_SECRETS,
-  observePaygCheckoutForClassCancellation,
+  initiatePaygOrderRefundForClassCancellation,
   paygConfirmationCorrectionOutboxId,
   paygRefundOutboxId,
-  releasePaygHoldForClassCancellation,
+  reconcilePaygCheckoutForClassCancellation,
   suppressPaygConfirmationForClassCancellation,
 } from "./payg";
 
@@ -1058,23 +1058,12 @@ async function reconcileClassPaygIntents(
   for (const intent of intents.docs) {
     if (orderIds.has(intent.id)) continue;
     if (releaseLocalHold) {
-      if (stringOrNull(intent.get("checkoutSessionId"))) {
-        await releasePaygHoldForClassCancellation(
-          intent.ref,
-          classId,
-          operationId
-        );
-      } else {
-        // Missing Session identity is ambiguous: Stripe create may have won
-        // before local persistence. Preserve the recoverable hold/lease so the
-        // existing idempotent worker can recover the exact Session first.
-        await bindAmbiguousPaygIntentToCancellation(
-          firestore,
-          intent.ref,
-          classId,
-          operationId
-        );
-      }
+      await bindAmbiguousPaygIntentToCancellation(
+        firestore,
+        intent.ref,
+        classId,
+        operationId
+      );
     } else if (intent.get("classCancellationOperationId") !== operationId) {
       throw new HttpsError(
         "failed-precondition",
@@ -1082,8 +1071,29 @@ async function reconcileClassPaygIntents(
         {reason: "class_cancellation_payg_binding_invalid", operationId}
       );
     }
-    await observePaygCheckoutForClassCancellation(
+    await reconcilePaygCheckoutForClassCancellation(
       intent.ref,
+      classId,
+      operationId
+    );
+  }
+}
+
+async function reconcileClassPaygOrders(
+  firestore: Firestore,
+  classId: string,
+  operationId: string
+): Promise<void> {
+  const orders = await classQuery(firestore, "paygOrders", classId).get();
+  for (const order of orders.docs) {
+    await suppressOrderConfirmation(
+      firestore,
+      classId,
+      operationId,
+      order.ref
+    );
+    await initiatePaygOrderRefundForClassCancellation(
+      order.ref,
       classId,
       operationId
     );
@@ -1140,15 +1150,7 @@ export function buildBeginClassCancellation(requireAdmin: AdminGuard) {
         operationId,
         true
       );
-      const orders = await classQuery(database, "paygOrders", classId).get();
-      for (const order of orders.docs) {
-        await suppressOrderConfirmation(
-          database,
-          classId,
-          operationId,
-          order.ref
-        );
-      }
+      await reconcileClassPaygOrders(database, classId, operationId);
       const documents = await readCancellationDocuments(
         database,
         classId,
@@ -1218,6 +1220,7 @@ export function buildFinalizeClassCancellation(requireAdmin: AdminGuard) {
       operationId,
       false
     );
+    await reconcileClassPaygOrders(database, classId, operationId);
     const outcome = await database.runTransaction(async (tx) => {
       const documents = await readCancellationDocumentsInTransaction(
         tx,

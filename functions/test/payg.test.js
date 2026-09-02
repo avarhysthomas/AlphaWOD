@@ -72,6 +72,7 @@ const {
   publicPaygAttendeeName,
   publicPaygPaymentReviewState,
   resolveAgeAtMillis,
+  resolvePaygClassCancellationRefundAction,
   resolvePaygCancellationDecision,
   resolvePaygCancellationRefundPendingDisposition,
   resolvePaygCancellationSigningKey,
@@ -770,6 +771,45 @@ test("cancellation boundary is refundable at exactly 24 hours and late after it"
     releaseCapacity: false,
     cutoffAtMillis: start - day,
   });
+});
+
+test("whole-class cancellation refunds only canonical resumable order states", () => {
+  assert.deepEqual(resolvePaygClassCancellationRefundAction({
+    status: "confirmed",
+  }), {action: "prepare", refundReason: "class_cancellation"});
+  assert.deepEqual(resolvePaygClassCancellationRefundAction({
+    status: "cancelled",
+  }), {action: "prepare", refundReason: "class_cancellation"});
+  assert.deepEqual(resolvePaygClassCancellationRefundAction({
+    status: "refund_pending",
+    refundReason: "guest_cancellation",
+    hasProviderAttemptEvidence: false,
+  }), {action: "resume", refundReason: "class_cancellation"});
+  assert.deepEqual(resolvePaygClassCancellationRefundAction({
+    status: "refund_pending",
+    refundReason: "guest_cancellation",
+    refundId: "re_existing_1234",
+    hasProviderAttemptEvidence: true,
+  }), {action: "resume", refundReason: "guest_cancellation"});
+  assert.deepEqual(resolvePaygClassCancellationRefundAction({
+    status: "refunded",
+    refundStatus: "succeeded",
+    refundId: "re_exact_1234",
+  }), {action: "already_refunded", refundReason: null});
+  for (const status of ["attended", "no_show", "disputed", "manual_review"]) {
+    assert.deepEqual(resolvePaygClassCancellationRefundAction({status}), {
+      action: "blocked",
+      refundReason: null,
+    }, status);
+  }
+  assert.equal(resolvePaygClassCancellationRefundAction({
+    status: "confirmed",
+    disputeOpen: true,
+  }).action, "blocked");
+  assert.equal(resolvePaygClassCancellationRefundAction({
+    status: "confirmed",
+    paymentReviewId: "review_1",
+  }).action, "blocked");
 });
 
 test("post-start cancellation defers no-show until staff attendance review", () => {

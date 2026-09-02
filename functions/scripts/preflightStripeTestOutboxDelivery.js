@@ -16,8 +16,9 @@ const Stripe = require("stripe");
 const {stripeCliTestKey} = require("./stripeCliTestKey");
 
 const PROJECT_ID = "demo-alphawod-stripe";
-const APPROVED_RECIPIENT = "hello@zeroalphafitness.co.uk";
-const APPROVED_FROM = `Zero Alpha Fitness <${APPROVED_RECIPIENT}>`;
+const APPROVED_RECIPIENT = "hello@thisisaevi.com";
+const APPROVED_SENDER_EMAIL = "hello@zeroalphafitness.co.uk";
+const APPROVED_FROM = `Zero Alpha Fitness <${APPROVED_SENDER_EMAIL}>`;
 const APPROVED_REPLY_TO = "support@zeroalphafitness.co.uk";
 const DELIVERY_MODES = new Set(["send", "readback"]);
 const REPOSITORY_ROOT = path.resolve(__dirname, "../..");
@@ -125,7 +126,7 @@ function configureReadOnlyEnvironment(environment = process.env) {
     PAYG_FIREBASE_PROJECT_ID: PROJECT_ID,
     STRIPE_EXPECTED_MODE: "test",
     MEMBERSHIP_TEST_JOURNEY_ENABLED: "true",
-    MEMBERSHIP_FROM_EMAIL: APPROVED_RECIPIENT,
+    MEMBERSHIP_FROM_EMAIL: APPROVED_SENDER_EMAIL,
     PAYG_FROM_EMAIL: APPROVED_FROM,
     PAYG_REPLY_TO_EMAIL: APPROVED_REPLY_TO,
   });
@@ -770,6 +771,7 @@ module.exports = {
   APPROVED_FROM,
   APPROVED_RECIPIENT,
   APPROVED_REPLY_TO,
+  APPROVED_SENDER_EMAIL,
   GuardrailError,
   assertApprovedRenderedEmail,
   assertExactSentOutbox,
