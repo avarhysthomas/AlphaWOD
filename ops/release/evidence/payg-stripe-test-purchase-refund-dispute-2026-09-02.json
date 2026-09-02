@@ -1,0 +1,133 @@
+{
+  "schemaVersion": 2,
+  "evidenceType": "payg-stripe-test-purchase-refund-dispute-partial",
+  "readinessItemId": "payg-stripe-test-purchase-refund-dispute-email-journey",
+  "recordedAt": "2026-09-01T23:27:29Z",
+  "testedSourceCommit": "f0d9efc54d3c0d46e38b9515ba367450d142b03d",
+  "customerPiiRecorded": false,
+  "stripeMode": "test",
+  "productKey": "adult_payg_class",
+  "accountRequired": false,
+  "catalogue": {
+    "testProductId": "prod_VAOxXxpax1MuRt",
+    "testPriceId": "price_1UAmVVFzNDZoGGA04z8hX10N",
+    "amountPence": 700,
+    "currency": "gbp",
+    "priceType": "one_time",
+    "exactApprovedTestPriceVerified": true
+  },
+  "refundScenario": {
+    "providerReferences": {
+      "checkoutSessionId": "cs_test_a1GeAMCx49zZtgYLXSV7UHp3QTX8YjVxcm75jUlSECBh2FFj2BSI3azwgz",
+      "paymentIntentId": "pi_3UB0vRFzNDZoGGA01ItZF4Hw",
+      "checkoutCompletedEventId": "evt_1UB0vTFzNDZoGGA0d0mo80Ib",
+      "refundId": "re_3UB0vRFzNDZoGGA01ZUuC7ZB",
+      "refundEventIds": [
+        "evt_3UB0vRFzNDZoGGA01zkXDQl5",
+        "evt_3UB0vRFzNDZoGGA01AUKFE6S",
+        "evt_3UB0vRFzNDZoGGA01VA4m4Qi"
+      ]
+    },
+    "applicationReferences": {
+      "orderId": "payg_07a98929b4b72031d4a5d9bd66103c904ffa37dfb9d45eaf545a15221d79e1d3",
+      "guestBookingId": "payg_guest_07a98929b4b72031d4a5d9bd66103c904ffa37dfb9d45eaf545a15221d79e1d3",
+      "classId": "payg_browser_test_class"
+    },
+    "purchaseReadback": {
+      "checkoutCompleted": true,
+      "paymentSucceeded": true,
+      "stripeCustomerCreated": false,
+      "authenticationAccountCreated": false,
+      "orderInitiallyConfirmed": true,
+      "guestBookingInitiallyBooked": true,
+      "confirmationOutboxInitiallyPending": true,
+      "initialBookedCount": 1,
+      "initialUnpaidHoldCount": 0
+    },
+    "refundReadback": {
+      "refundStatus": "succeeded",
+      "refundedAmountPence": 700,
+      "orderStatus": "refunded",
+      "capacityState": "released",
+      "bookingStatus": "cancelled",
+      "bookingCancellationReason": "payg_guest_refundable",
+      "cancellationPolicyOutcome": "at_least_24_hours_refundable",
+      "finalBookedCount": 0,
+      "finalUnpaidHoldCount": 0,
+      "confirmationOutboxStatus": "tombstoned",
+      "confirmationOutboxTombstoneReason": "guest_cancellation_refund",
+      "confirmationProviderAcceptanceState": "not_sent",
+      "allRecordedRefundEventsProcessed": true
+    }
+  },
+  "disputeScenario": {
+    "providerReferences": {
+      "checkoutSessionId": "cs_test_a1GLqudYJzDzoDtfknS0zz2xKohjEPlGmzHyS26rLL7unL8Qgebl3XuZa1",
+      "paymentIntentId": "pi_3UB12zFzNDZoGGA01AT8PDoe",
+      "checkoutCompletedEventId": "evt_1UB133FzNDZoGGA05b1dSUCE",
+      "disputeId": "du_1UB132FzNDZoGGA0kLiyc8C2",
+      "disputeCreatedEventId": "evt_1UB133FzNDZoGGA0kSX2RFR0"
+    },
+    "applicationReferences": {
+      "orderId": "payg_9a8adaf42d24c2a7afbd9fd6f8345898f37a12b45f5f675a4f2ddcb922843a66",
+      "guestBookingId": "payg_guest_9a8adaf42d24c2a7afbd9fd6f8345898f37a12b45f5f675a4f2ddcb922843a66",
+      "classId": "payg_browser_test_class"
+    },
+    "providerReadback": {
+      "checkoutCompleted": true,
+      "paymentSucceeded": true,
+      "amountPence": 700,
+      "currency": "gbp",
+      "stripeCustomerCreated": false,
+      "disputeStatus": "needs_response",
+      "disputeReason": "product_not_received",
+      "disputeOpen": true,
+      "disputeEventProcessed": true
+    },
+    "applicationReadback": {
+      "orderStatus": "disputed",
+      "capacityState": "released",
+      "bookingStatus": "cancelled",
+      "bookingCancellationReason": "payg_dispute",
+      "refundAutomationStatus": "suspended_dispute",
+      "refundObligationReviewRequired": true,
+      "finalBookedCount": 0,
+      "finalUnpaidHoldCount": 0,
+      "confirmationOutboxStatus": "tombstoned",
+      "confirmationOutboxTombstoneReason": "payg_dispute",
+      "confirmationProviderAcceptanceState": "not_sent"
+    }
+  },
+  "emailDelivery": {
+    "transport": "disabled",
+    "confirmationDelivered": false,
+    "ordinaryRefundEmailImplemented": false,
+    "refundEmailDelivered": false,
+    "ordinaryDisputeEmailImplemented": false,
+    "disputeEmailDelivered": false
+  },
+  "releaseGateAssessment": {
+    "purchaseAndBookingVerified": true,
+    "refundableCancellationAndProviderRefundVerified": true,
+    "separateProviderDisputeConvergenceVerified": true,
+    "noAccountJourneyVerified": true,
+    "fullPaygOperationalGateVerified": false,
+    "confirmationDeliveryVerified": false,
+    "refundEmailDeliveryVerified": false,
+    "disputeEmailDeliveryVerified": false,
+    "lateCancellationAndNoShowVerified": false,
+    "wholeClassCancellationDrillVerified": false
+  },
+  "limitations": [
+    "The refund and dispute are intentionally separate Stripe test payments. A fully refunded payment was not falsely reused as the dispute scenario.",
+    "Email transport was disabled. No confirmation, refund or dispute email delivery is claimed.",
+    "The code under test did not contain ordinary refund or dispute customer email workflows; the existing confirmation outbox was safely tombstoned in both reversal scenarios.",
+    "The under-24-hour cancellation, no-show and ordered whole-class cancellation drills were not performed.",
+    "No live Stripe object, production Firebase document, deployment or purchase gate was changed."
+  ],
+  "testProviderMutationPerformed": true,
+  "liveProviderMutation": false,
+  "productionWritePerformed": false,
+  "deploymentPerformed": false,
+  "newProductPurchaseGatesRemainClosed": true
+}

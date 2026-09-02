@@ -31,6 +31,12 @@ const adminAddBooking = functionsTest.wrap(functions.adminAddBooking);
 const checkInBooking = functionsTest.wrap(functions.checkInBooking);
 const markBookingStatus = functionsTest.wrap(functions.markBookingStatus);
 const getClassRoster = functionsTest.wrap(functions.getClassRoster);
+const beginClassCancellation = functionsTest.wrap(
+  functions.beginClassCancellation
+);
+const finalizeClassCancellation = functionsTest.wrap(
+  functions.finalizeClassCancellation
+);
 
 function request(data, uid) {
   return {
@@ -467,6 +473,49 @@ test("membership cleanup releases a flexible Conditioning weekly quota atomicall
   assert.deepEqual(usage.docs[0].get("activeBookingIds"), []);
 });
 
+test("membership cleanup yields an active booking to a whole-class cancellation freeze", async () => {
+  await createAuthUser("cleanup-frozen");
+  await db.collection("users").doc("cleanup-frozen").set({
+    ...activeProfile("user", "stripe"),
+    name: "Cleanup Frozen",
+  });
+  const subscriptionId = await seedStripeBookingAuthority("cleanup-frozen");
+  const classId = "cleanup-whole-class-frozen";
+  const startMillis = Date.parse("2099-02-02T18:00:00.000Z");
+  await db.collection("classes").doc(classId).set({
+    templateId: "template_cleanup_whole_class_frozen",
+    title: "Open Gym",
+    timezone: "Europe/London",
+    startTime: admin.firestore.Timestamp.fromMillis(startMillis),
+    endTime: admin.firestore.Timestamp.fromMillis(startMillis + 3600000),
+    coachId: "coach",
+    coachName: "Coach",
+    capacity: 10,
+    bookedCount: 0,
+    location: "Gym",
+    status: "scheduled",
+    createdAt: admin.firestore.Timestamp.now(),
+  });
+  await bookClass(request({classId}, "cleanup-frozen"));
+  await db.collection("classes").doc(classId).set({
+    bookingOpen: false,
+    bookingClosedReason: "class_cancellation",
+    cancellationOperationId: "class_cancel_cleanup_test",
+    cancellationState: "processing",
+  }, {merge: true});
+  const membershipRef = db.collection("memberships").doc(subscriptionId);
+  await membershipRef.set({state: "cancelled"}, {merge: true});
+
+  await reconcileMembershipFutureBookings(membershipRef, Date.now());
+  const booking = await db.collection("bookings")
+    .doc(`${classId}_cleanup-frozen`).get();
+  assert.equal(booking.get("status"), "booked");
+  assert.equal(
+    (await db.collection("classes").doc(classId).get()).get("bookedCount"),
+    1
+  );
+});
+
 test("Stripe membership booking uses the cancellation and grace horizons", async () => {
   await Promise.all([
     createAuthUser("admin"),
@@ -803,6 +852,198 @@ test("roster and attendance fail closed for an out-of-horizon member booking", a
   assert.equal(
     (await db.collection("classes").doc(classId).get()).get("bookedCount"),
     1
+  );
+});
+
+test("whole-class cancellation releases a hidden Conditioning booking and freezes every roster mutation", async () => {
+  await Promise.all([
+    createAuthUser("admin"),
+    createAuthUser("cancel-flexible"),
+  ]);
+  await db.collection("users").doc("admin").set({
+    ...activeProfile("admin", "staff"),
+    name: "Admin",
+  });
+  await db.collection("users").doc("cancel-flexible").set({
+    role: "user",
+    approvalStatus: "approved",
+    entitlementStatus: "active",
+    entitlementSource: "stripe",
+    entitlementPlanKey: "adult_conditioning",
+    appAccessTier: "limited",
+    entitlementClassSlots: [
+      "monday_0600",
+      "tuesday_1800",
+      "thursday_1800",
+      "friday_0530",
+    ],
+    entitlementWeeklyBookingLimit: 2,
+    alphaWodAccess: true,
+    name: "Hidden Flexible Member",
+  });
+  const subscriptionId = await seedStripeBookingAuthority("cancel-flexible", {
+    planKey: "adult_conditioning",
+  });
+  const classId = "whole-class-cancel-flexible";
+  const bookingId = `${classId}_cancel-flexible`;
+  const startMillis = Date.parse("2099-01-05T06:00:00.000Z");
+  await db.collection("classes").doc(classId).set({
+    templateId: "template_whole_class_cancel",
+    title: "Conditioning",
+    timezone: "Europe/London",
+    startTime: admin.firestore.Timestamp.fromMillis(startMillis),
+    endTime: admin.firestore.Timestamp.fromMillis(startMillis + 3600000),
+    coachId: "coach",
+    coachName: "Coach",
+    capacity: 10,
+    bookedCount: 0,
+    paygUnpaidHoldCount: 0,
+    location: "Gym",
+    status: "scheduled",
+    conditioningSlotKey: "monday_0600",
+    paygEligible: true,
+    createdAt: admin.firestore.Timestamp.now(),
+  });
+  assert.deepEqual(
+    await bookClass(request({classId}, "cancel-flexible")),
+    {success: true}
+  );
+  let usage = await db.collection("conditioningWeeklyBookingUsage").get();
+  assert.equal(usage.size, 1);
+  assert.equal(usage.docs[0].get("bookedCount"), 1);
+
+  // Entitlement ends exactly at the occurrence, so ordinary roster filtering
+  // hides this still-active row. Cancellation must enumerate it server-side.
+  await db.collection("memberships").doc(subscriptionId).set({
+    cancelAt: startMillis / 1000,
+  }, {merge: true});
+  const hiddenRoster = await getClassRoster(request({classId}, "admin"));
+  assert.equal(hiddenRoster.total, 0);
+
+  const begun = await beginClassCancellation(request({classId}, "admin"));
+  assert.equal(begun.ok, true);
+  assert.equal(begun.operation.state, "ready_to_finalize");
+  assert.equal(begun.operation.memberBookingsReleased, 1);
+  assert.equal(begun.operation.activeBookingCount, 0);
+  const frozenClass = await db.collection("classes").doc(classId).get();
+  assert.equal(frozenClass.get("bookingOpen"), false);
+  assert.equal(frozenClass.get("bookingClosedReason"), "class_cancellation");
+  assert.equal(frozenClass.get("bookedCount"), 0);
+  const releasedBooking = await db.collection("bookings").doc(bookingId).get();
+  assert.equal(releasedBooking.get("status"), "cancelled");
+  assert.equal(releasedBooking.get("cancelledReason"), "authorised_absence");
+  usage = await db.collection("conditioningWeeklyBookingUsage").get();
+  assert.equal(usage.docs[0].get("bookedCount"), 0);
+  assert.deepEqual(usage.docs[0].get("activeBookingIds"), []);
+
+  for (const action of [
+    () => bookClass(request({classId}, "cancel-flexible")),
+    () => adminAddBooking(request({classId, userId: "cancel-flexible"}, "admin")),
+  ]) {
+    await assert.rejects(
+      action,
+      (error) => error.code === "failed-precondition" &&
+        error.details?.reason === "class_unavailable"
+    );
+  }
+
+  // Simulate an old client that already holds the booking identifier. Every
+  // general mutation must yield to the dedicated cancellation workflow.
+  await Promise.all([
+    db.collection("bookings").doc(bookingId).set({status: "booked"}, {merge: true}),
+    db.collection("classes").doc(classId).set({bookedCount: 1}, {merge: true}),
+  ]);
+  for (const action of [
+    () => cancelBooking(request({classId}, "cancel-flexible")),
+    () => checkInBooking(request({bookingId, attended: true}, "admin")),
+    () => markBookingStatus(request({bookingId, status: "dip"}, "admin")),
+  ]) {
+    await assert.rejects(
+      action,
+      (error) => error.code === "failed-precondition" &&
+        error.details?.reason === "class_cancellation_in_progress"
+    );
+  }
+  await Promise.all([
+    db.collection("bookings").doc(bookingId).set({status: "cancelled"}, {merge: true}),
+    db.collection("classes").doc(classId).set({bookedCount: 0}, {merge: true}),
+  ]);
+
+  const resumed = await beginClassCancellation(request({classId}, "admin"));
+  assert.equal(resumed.operation.memberBookingsReleased, 1);
+  const finalized = await finalizeClassCancellation(request({classId}, "admin"));
+  assert.equal(finalized.operation.state, "cancelled");
+  assert.equal(finalized.alreadyFinalized, false);
+  const replay = await finalizeClassCancellation(request({classId}, "admin"));
+  assert.equal(replay.alreadyFinalized, true);
+  const finalClass = await db.collection("classes").doc(classId).get();
+  assert.equal(finalClass.get("status"), "cancelled");
+  const operationId = finalClass.get("cancellationOperationId");
+  const audit = await db.collection("classCancellationOperations")
+    .doc(operationId).get();
+  assert.equal(audit.get("state"), "cancelled");
+  assert.equal(audit.get("memberBookingsReleased"), 1);
+});
+
+test("whole-class cancellation rejects started classes and pre-existing attendance", async () => {
+  await Promise.all([createAuthUser("admin"), createAuthUser("attended-member")]);
+  await db.collection("users").doc("admin").set({
+    ...activeProfile("admin", "staff"),
+    name: "Admin",
+  });
+  await db.collection("users").doc("attended-member").set({
+    ...activeProfile("user", "stripe"),
+    name: "Attended Member",
+  });
+  const subscriptionId = await seedStripeBookingAuthority("attended-member");
+  const pastId = "whole-class-cancel-started";
+  await db.collection("classes").doc(pastId).set({
+    status: "scheduled",
+    startTime: admin.firestore.Timestamp.fromMillis(Date.now() - 60_000),
+    endTime: admin.firestore.Timestamp.fromMillis(Date.now() + 3_540_000),
+    capacity: 10,
+    bookedCount: 0,
+    paygUnpaidHoldCount: 0,
+  });
+  await assert.rejects(
+    beginClassCancellation(request({classId: pastId}, "admin")),
+    (error) => error.code === "failed-precondition" &&
+      error.details?.reason === "class_cancellation_already_started"
+  );
+  assert.notEqual(
+    (await db.collection("classes").doc(pastId).get()).get("bookingOpen"),
+    false
+  );
+
+  const attendedClassId = "whole-class-cancel-attended";
+  const attendedBookingId = `${attendedClassId}_attended-member`;
+  await db.collection("classes").doc(attendedClassId).set({
+    status: "scheduled",
+    startTime: admin.firestore.Timestamp.fromMillis(Date.now() + 86_400_000),
+    endTime: admin.firestore.Timestamp.fromMillis(Date.now() + 90_000_000),
+    capacity: 10,
+    bookedCount: 1,
+    paygUnpaidHoldCount: 0,
+  });
+  await db.collection("bookings").doc(attendedBookingId).set({
+    classId: attendedClassId,
+    userId: "attended-member",
+    userName: "Attended Member",
+    status: "booked",
+    bookingKind: "member",
+    entitlementSubscriptionId: subscriptionId,
+    attendanceStatus: "dip",
+    attended: false,
+    createdAt: admin.firestore.Timestamp.now(),
+  });
+  await assert.rejects(
+    beginClassCancellation(request({classId: attendedClassId}, "admin")),
+    (error) => error.code === "failed-precondition" &&
+      error.details?.reason === "class_cancellation_attendance_already_recorded"
+  );
+  assert.equal(
+    (await db.collection("bookings").doc(attendedBookingId).get()).get("status"),
+    "booked"
   );
 });
 

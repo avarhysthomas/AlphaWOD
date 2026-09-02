@@ -18,6 +18,7 @@ const {
 const {
   assertClearedStripeDeliveryBacklogEvidence,
   assertEvidence,
+  assertEvidenceContainsNoCustomerPii,
   assertOperationalEvidenceContent,
   assertOperationalGateSpecificContent,
   assertPaygPrivacyOwnerDecision,
@@ -81,23 +82,29 @@ test("recorded Stripe/browser evidence stays PII-free and partial", () => {
 
   const conditioning = JSON.parse(fs.readFileSync(path.join(
     root,
-    "ops/release/evidence/conditioning-stripe-test-and-local-browser-2026-09-01.json"
+    "ops/release/evidence/conditioning-stripe-test-full-app-2026-09-02.json"
   ), "utf8"));
   const payg = JSON.parse(fs.readFileSync(path.join(
     root,
-    "ops/release/evidence/payg-stripe-test-browser-purchase-2026-09-01.json"
+    "ops/release/evidence/payg-stripe-test-purchase-refund-dispute-2026-09-02.json"
   ), "utf8"));
   assert.equal(conditioning.customerPiiRecorded, false);
-  assert.equal(conditioning.stripeReadback.confirmationDelivered, false);
-  assert.equal(conditioning.localBrowserRerun.newStripeRequestPerformed, false);
+  assert.equal(conditioning.verification.confirmationDelivered, false);
+  assert.equal(conditioning.testProviderMutationPerformed, true);
   assert.equal(
-    conditioning.releaseGateAssessment.fullConditioningOperationalGateVerified,
-    false
+    conditioning.verification.purchasedMemberAppBookingVerified,
+    true
   );
   assert.equal(payg.customerPiiRecorded, false);
-  assert.equal(payg.localApplicationReadback.confirmationEmailDelivered, false);
-  assert.equal(payg.releaseGateAssessment.refundVerified, false);
-  assert.equal(payg.releaseGateAssessment.disputeVerified, false);
+  assert.equal(payg.emailDelivery.confirmationDelivered, false);
+  assert.equal(
+    payg.releaseGateAssessment.refundableCancellationAndProviderRefundVerified,
+    true
+  );
+  assert.equal(
+    payg.releaseGateAssessment.separateProviderDisputeConvergenceVerified,
+    true
+  );
   assert.equal(payg.releaseGateAssessment.fullPaygOperationalGateVerified, false);
 });
 
@@ -117,8 +124,10 @@ test("pending recorded gate still requires its exact partial evidence", () => {
     verified: false,
     evidence: null,
     partialEvidence:
-      "ops/release/evidence/conditioning-stripe-test-and-local-browser-2026-09-01.json",
-    remainingControls: ["confirmation-email-delivered"],
+      "ops/release/evidence/conditioning-stripe-test-full-app-2026-09-02.json",
+    remainingControls: [
+      "confirmation-email-delivered",
+    ],
   };
   assert.doesNotThrow(
     () => assertRecordedBrowserEvidence(operationalEvidence)
@@ -444,6 +453,7 @@ test("pending operational gates require concrete journey, drill, and publication
           webhookAcknowledged: true,
           membershipCreated: true,
           entitlementActivated: true,
+          purchasedMemberAppBookingVerified: true,
           limitedAppAccessVerified: true,
           twoClassesPerLondonWeekEnforced: true,
           flexibleEligibleClassChangesVerified: true,
@@ -461,17 +471,69 @@ test("pending operational gates require concrete journey, drill, and publication
         stripeMode: "test",
         productKey: "adult_payg_class",
         amountPence: 700,
+        currency: "gbp",
         accountRequired: false,
-        providerReferences: {
-          checkoutSessionId: "cs_test_payg",
-          paymentIntentId: "pi_payg",
-          refundId: "re_payg",
-          disputeId: "dp_payg",
+        providerScenarios: {
+          purchase: {
+            checkoutSessionId: "cs_test_payg_purchase",
+            paymentIntentId: "pi_payg_purchase",
+            checkoutCompletedEventId: "evt_payg_purchase",
+            productId: "prod_VAOxXxpax1MuRt",
+            priceId: "price_1UAmVVFzNDZoGGA04z8hX10N",
+            amountPence: 700,
+            currency: "gbp",
+          },
+          refund: {
+            checkoutSessionId: "cs_test_payg_refund",
+            paymentIntentId: "pi_payg_refund",
+            refundId: "re_payg",
+            webhookEventIds: ["evt_payg_refund"],
+            productId: "prod_VAOxXxpax1MuRt",
+            priceId: "price_1UAmVVFzNDZoGGA04z8hX10N",
+            amountPence: 700,
+            currency: "gbp",
+          },
+          dispute: {
+            checkoutSessionId: "cs_test_payg_dispute",
+            paymentIntentId: "pi_payg_dispute",
+            disputeId: "du_payg",
+            webhookEventId: "evt_payg_dispute",
+            productId: "prod_VAOxXxpax1MuRt",
+            priceId: "price_1UAmVVFzNDZoGGA04z8hX10N",
+            amountPence: 700,
+            currency: "gbp",
+          },
         },
-        applicationReferences: {guestBookingId: "booking_payg"},
+        applicationReferences: {
+          purchaseOrderId: `payg_${"a".repeat(64)}`,
+          purchaseGuestBookingId: `payg_guest_${"a".repeat(64)}`,
+          refundOrderId: `payg_${"b".repeat(64)}`,
+          refundGuestBookingId: `payg_guest_${"b".repeat(64)}`,
+          disputeOrderId: `payg_${"c".repeat(64)}`,
+          disputeGuestBookingId: `payg_guest_${"c".repeat(64)}`,
+          purchaseProviderBinding: {
+            checkoutSessionId: "cs_test_payg_purchase",
+            paymentIntentId: "pi_payg_purchase",
+            orderId: `payg_${"a".repeat(64)}`,
+            guestBookingId: `payg_guest_${"a".repeat(64)}`,
+          },
+          refundProviderBinding: {
+            checkoutSessionId: "cs_test_payg_refund",
+            paymentIntentId: "pi_payg_refund",
+            orderId: `payg_${"b".repeat(64)}`,
+            guestBookingId: `payg_guest_${"b".repeat(64)}`,
+          },
+          disputeProviderBinding: {
+            checkoutSessionId: "cs_test_payg_dispute",
+            paymentIntentId: "pi_payg_dispute",
+            orderId: `payg_${"c".repeat(64)}`,
+            guestBookingId: `payg_guest_${"c".repeat(64)}`,
+          },
+        },
         verification: {
           hostedCheckoutCompleted: true,
           paidWebhookCreatedBooking: true,
+          providerApplicationBindingsVerified: true,
           confirmationEmailDelivered: true,
           refundConverged: true,
           refundEmailDelivered: true,
@@ -482,7 +544,7 @@ test("pending operational gates require concrete journey, drill, and publication
         liveProviderMutation: false,
       },
       invalidate: (evidence) => {
-        evidence.providerReferences.disputeId = "missing";
+        evidence.providerScenarios.dispute.disputeId = "missing";
       },
     },
     {
@@ -495,6 +557,9 @@ test("pending operational gates require concrete journey, drill, and publication
         drillReferences: {
           conditioningMemberIdHash: "a".repeat(64),
           paygOrderId: "payg_order_test",
+          conditioningOccurrenceIdHash: "b".repeat(64),
+          paygOrderIdsHash: "c".repeat(64),
+          auditRecordId: "audit_record_test",
         },
         verification: {
           thirdConditioningBookingRejected: true,
@@ -505,6 +570,25 @@ test("pending operational gates require concrete journey, drill, and publication
           noShowStayedNonRefundable: true,
           paygBookingNeverBecameCredit: true,
           refundedCapacityReleased: true,
+          newBookingsStoppedBeforeWholeClassCancellation: true,
+          wholeClassCancelledAfterBookingStop: true,
+          everyConditioningBookingMarkedAuthorisedAbsence: true,
+          everyConditioningBookingReleasedCapacityAndQuota: true,
+          allAdmissionsAndRosterMutationsRejectedAfterFreeze: true,
+          memberCleanupSkippedFrozenOccurrence: true,
+          unpaidPaygHoldsReleased: true,
+          duplicatePaygLocksReconciled: true,
+          everyCheckoutProviderStateAuthoritativeBeforeFinalize: true,
+          ambiguousCheckoutOrPaymentStateBlockedFinalize: true,
+          unknownPaymentReviewBlockedFinalize: true,
+          everyPaidPaygGuestIdentifiedBeforeClose: true,
+          everyPaygOrderBoundToCancellationOperation: true,
+          everyPaidPaygRefundReconciled: true,
+          unsentCustomerConfirmationsSuppressed: true,
+          acceptedCustomerConfirmationsCorrectedBeforeFinalize: true,
+          finalizationAuditBindingVerified: true,
+          finalizationIdempotent: true,
+          operationsAuditRecordRetained: true,
         },
         liveProviderMutation: false,
         observedByRole: "Zero Alpha Fitness operations",
@@ -606,6 +690,100 @@ test("pending operational gates require concrete journey, drill, and publication
     );
   }
 
+  const paygGate = cases.find(
+    ({id}) => id === "payg-stripe-test-purchase-refund-dispute-email-journey"
+  );
+  const combinedPayment = JSON.parse(JSON.stringify(paygGate.evidence));
+  combinedPayment.providerScenarios.dispute.checkoutSessionId =
+    combinedPayment.providerScenarios.refund.checkoutSessionId;
+  combinedPayment.providerScenarios.dispute.paymentIntentId =
+    combinedPayment.providerScenarios.refund.paymentIntentId;
+  assert.throws(
+    () => assertOperationalGateSpecificContent(paygGate, combinedPayment),
+    /failed its content validator/,
+    "refund and dispute evidence must use separate provider payments"
+  );
+
+  const legacyDisputePrefix = JSON.parse(JSON.stringify(paygGate.evidence));
+  legacyDisputePrefix.providerScenarios.dispute.disputeId = "dp_legacy";
+  assert.throws(
+    () => assertOperationalGateSpecificContent(paygGate, legacyDisputePrefix),
+    /failed its content validator/,
+    "Stripe dispute evidence must use the canonical du_ object prefix"
+  );
+
+  const wrongCurrency = JSON.parse(JSON.stringify(paygGate.evidence));
+  wrongCurrency.providerScenarios.purchase.currency = "usd";
+  assert.throws(
+    () => assertOperationalGateSpecificContent(paygGate, wrongCurrency),
+    /failed its content validator/,
+    "every PAYG payment scenario must remain exact GBP 7.00"
+  );
+
+  const sharedApplicationBooking = JSON.parse(JSON.stringify(paygGate.evidence));
+  sharedApplicationBooking.applicationReferences.disputeOrderId =
+    sharedApplicationBooking.applicationReferences.refundOrderId;
+  sharedApplicationBooking.applicationReferences.disputeGuestBookingId =
+    sharedApplicationBooking.applicationReferences.refundGuestBookingId;
+  assert.throws(
+    () => assertOperationalGateSpecificContent(
+      paygGate,
+      sharedApplicationBooking
+    ),
+    /failed its content validator/,
+    "separate provider scenarios need separate application records"
+  );
+
+  const misboundApplication = JSON.parse(JSON.stringify(paygGate.evidence));
+  misboundApplication.applicationReferences.disputeProviderBinding.paymentIntentId =
+    misboundApplication.providerScenarios.refund.paymentIntentId;
+  assert.throws(
+    () => assertOperationalGateSpecificContent(paygGate, misboundApplication),
+    /failed its content validator/,
+    "every application record must bind its exact provider payment"
+  );
+
+  const cancellationGate = cases.find(
+    ({id}) => id === "class-cancellation-quota-and-payg-refund-drill"
+  );
+  const unorderedWholeClass = JSON.parse(JSON.stringify(cancellationGate.evidence));
+  unorderedWholeClass.verification.newBookingsStoppedBeforeWholeClassCancellation =
+    false;
+  assert.throws(
+    () => assertOperationalGateSpecificContent(
+      cancellationGate,
+      unorderedWholeClass
+    ),
+    /failed its content validator/,
+    "whole-class cancellation must stop bookings before cancellation"
+  );
+
+  const ambiguousProviderState = JSON.parse(JSON.stringify(cancellationGate.evidence));
+  ambiguousProviderState.verification
+    .ambiguousCheckoutOrPaymentStateBlockedFinalize = false;
+  assert.throws(
+    () => assertOperationalGateSpecificContent(
+      cancellationGate,
+      ambiguousProviderState
+    ),
+    /failed its content validator/,
+    "ambiguous Stripe state must prevent whole-class finalization"
+  );
+
+  const unresolvedConfirmationRace = JSON.parse(JSON.stringify(
+    cancellationGate.evidence
+  ));
+  unresolvedConfirmationRace.verification
+    .acceptedCustomerConfirmationsCorrectedBeforeFinalize = false;
+  assert.throws(
+    () => assertOperationalGateSpecificContent(
+      cancellationGate,
+      unresolvedConfirmationRace
+    ),
+    /failed its content validator/,
+    "accepted confirmation races require correction before finalization"
+  );
+
   const legalGate = cases.find(
     ({id}) => id === "product-legal-publication-and-runtime-binding"
   );
@@ -623,6 +801,53 @@ test("approved owner decisions cannot retain partial evidence", () => {
     ], "approved"),
     /must remove partial evidence/
   );
+});
+
+test("pending partial evidence is bound to its checked-in SHA-256", () => {
+  const readiness = JSON.parse(fs.readFileSync(
+    path.join(root, "ops/release/conditioning-payg-readiness.json"),
+    "utf8"
+  ));
+  const pending = readiness.operationalEvidence.filter(
+    ({verified, partialEvidence}) => !verified && partialEvidence
+  );
+  assert.doesNotThrow(
+    () => assertPartialEvidence(pending, "verified")
+  );
+  const stale = {
+    ...pending[0],
+    partialEvidenceSha256: "0".repeat(64),
+  };
+  assert.throws(
+    () => assertPartialEvidence([stale], "verified"),
+    /partial evidence is unbound or stale/
+  );
+});
+
+test("partial release evidence rejects customer PII fields and secret values", () => {
+  const safe = {
+    providerReferences: {checkoutSessionId: "cs_test_safe"},
+    verification: {customerPiiRecorded: false},
+  };
+  assert.doesNotThrow(() => assertEvidenceContainsNoCustomerPii(safe));
+
+  const unsafeValues = [
+    {applicationReadback: {emailAddress: "redacted"}},
+    {providerReadback: {detail: "customer@example.test"}},
+    {browserReadback: {url: "https://example.test/cancel?token=secret"}},
+    {browserReadback: {
+      detail: "cancellation_token=secret",
+    }},
+    {providerReadback: {
+      detail: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjdXN0b21lciJ9.signaturepart",
+    }},
+  ];
+  for (const unsafe of unsafeValues) {
+    assert.throws(
+      () => assertEvidenceContainsNoCustomerPii(unsafe),
+      /prohibited customer PII/
+    );
+  }
 });
 
 test("PAYG Privacy Notice owner approval binds the exact draft and final", () => {

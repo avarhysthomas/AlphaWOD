@@ -30,6 +30,12 @@ type ClassDoc = {
   capacity?: number;
   bookedCount?: number;
   status?: "scheduled" | "cancelled";
+  bookingOpen?: boolean;
+  cancellationState?:
+    | "processing"
+    | "awaiting_payg_refunds"
+    | "ready_to_finalize"
+    | "cancelled";
   conditioningSlotKey?: ConditioningSlotKey | null;
 };
 
@@ -45,6 +51,24 @@ type BookingDoc = {
 };
 
 type ClassRow = { id: string; data: ClassDoc };
+
+function isClassVisibleToMembers(data: ClassDoc) {
+  return (
+    data.status !== "cancelled" &&
+    data.bookingOpen !== false &&
+    data.cancellationState === undefined
+  );
+}
+
+function classClosureLabel(data: ClassDoc) {
+  if (data.status === "cancelled" || data.cancellationState === "cancelled") {
+    return "Class cancelled";
+  }
+  if (data.bookingOpen === false || data.cancellationState !== undefined) {
+    return "Class frozen";
+  }
+  return null;
+}
 
 const DEFAULT_TZ = "Europe/London";
 type StrengthBlock = "A" | "B" | "none";
@@ -646,10 +670,16 @@ export default function Schedule() {
   );
   const entitlementWeeklyBookingLimit = appUser?.entitlementWeeklyBookingLimit;
   const visibleClasses = useMemo(
-    () =>
-      limitedAccess ? classes : classes.filter(({ data }) =>
-        canAccessClass(data, memberStrengthBlock, isAdmin, strengthBlocksEnabled)
-      ),
+    () => {
+      const operationallyVisible = isAdmin
+        ? classes
+        : classes.filter(({ data }) => isClassVisibleToMembers(data));
+      return limitedAccess
+        ? operationallyVisible
+        : operationallyVisible.filter(({ data }) =>
+            canAccessClass(data, memberStrengthBlock, isAdmin, strengthBlocksEnabled)
+          );
+    },
     [classes, isAdmin, limitedAccess, memberStrengthBlock, strengthBlocksEnabled]
   );
 
@@ -765,6 +795,8 @@ export default function Schedule() {
 
     const classRow = classes.find((item) => item.id === classId);
     if (classRow) {
+      const closure = classClosureLabel(classRow.data);
+      if (closure) return alert(`${closure}. Booking is unavailable.`);
       const access = resolveClassAccess({
         classData: classRow.data,
         limited: limitedAccess,
@@ -1201,6 +1233,7 @@ const ScheduleClassCard = React.memo(function ScheduleClassCard({
   const waitlist = capacity > 0 ? Math.max(0, bookedCount - capacity) : 0;
   const bookingNotIncluded = bookingState === "ready" && !access.allowed && !booked;
   const bookingActionUnavailable = bookingState !== "ready";
+  const operationalClosure = classClosureLabel(data);
 
   return (
     <article
@@ -1264,6 +1297,11 @@ const ScheduleClassCard = React.memo(function ScheduleClassCard({
             Booking unavailable
           </span>
         ) : null}
+        {operationalClosure ? (
+          <span className="rounded-full bg-red-400/12 px-4 py-2 text-[12px] font-bold uppercase tracking-[0.12em] text-red-200">
+            {operationalClosure}
+          </span>
+        ) : null}
         {!booked && !full && bs.state === "open" && bs.closes ? (
           <span className="rounded-full bg-[#8a633e]/24 px-4 py-2 text-[12px] font-bold uppercase tracking-[0.12em] text-[#f4b16d]">
             Book by {formatCutoff(bs.closes, tz)}
@@ -1303,7 +1341,15 @@ const ScheduleClassCard = React.memo(function ScheduleClassCard({
           </button>
         ) : null}
 
-        {booked ? (
+        {operationalClosure ? (
+          <button
+            type="button"
+            disabled
+            className="rounded-full bg-white/[0.06] px-5 py-4 text-sm font-bold text-white/45 disabled:cursor-not-allowed sm:min-w-[150px]"
+          >
+            {operationalClosure}
+          </button>
+        ) : booked ? (
           <button
             type="button"
             onClick={() => onCancel(id)}

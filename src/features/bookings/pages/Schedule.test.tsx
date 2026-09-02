@@ -153,6 +153,7 @@ async function flushUpdates() {
 
 describe("member schedule hardening", () => {
   beforeEach(() => {
+    mockAppUser.role = "user";
     jest.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-08T09:00:00.000Z"));
     jest.spyOn(window, "alert").mockImplementation(() => undefined);
     jest.spyOn(console, "error").mockImplementation(() => undefined);
@@ -268,6 +269,88 @@ describe("member schedule hardening", () => {
     expect(mockBookClass).toHaveBeenCalledTimes(1);
     expect(mockCancelBooking).toHaveBeenCalledTimes(1);
     expect(bookingFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("excludes frozen and cancelled classes from the member schedule", async () => {
+    mockGetDocs.mockImplementation((ref: { path: string }) =>
+      ref.path === "classes"
+        ? Promise.resolve(
+            firestoreSnapshot([
+              {
+                id: "open-class",
+                data: { ...classData, title: "Open Conditioning", bookingOpen: true },
+              },
+              {
+                id: "frozen-class",
+                data: {
+                  ...classData,
+                  title: "Frozen Conditioning",
+                  bookingOpen: false,
+                  cancellationState: "awaiting_payg_refunds",
+                },
+              },
+              {
+                id: "cancelled-class",
+                data: {
+                  ...classData,
+                  title: "Cancelled Conditioning",
+                  bookingOpen: false,
+                  status: "cancelled",
+                  cancellationState: "cancelled",
+                },
+              },
+            ])
+          )
+        : Promise.resolve(bookingsSnapshot(false))
+    );
+
+    render(<Schedule />);
+    await flushUpdates();
+
+    expect(screen.getByRole("heading", { name: "OPEN CONDITIONING" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "FROZEN CONDITIONING" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "CANCELLED CONDITIONING" })).not.toBeInTheDocument();
+    expect(screen.getByText("1 session")).toBeInTheDocument();
+  });
+
+  it("shows admins frozen and cancelled classes but blocks booking controls", async () => {
+    mockAppUser.role = "admin";
+    mockGetDocs.mockImplementation((ref: { path: string }) =>
+      ref.path === "classes"
+        ? Promise.resolve(
+            firestoreSnapshot([
+              {
+                id: "frozen-class",
+                data: {
+                  ...classData,
+                  title: "Frozen Conditioning",
+                  bookingOpen: false,
+                  cancellationState: "awaiting_payg_refunds",
+                },
+              },
+              {
+                id: "cancelled-class",
+                data: {
+                  ...classData,
+                  title: "Cancelled Conditioning",
+                  bookingOpen: false,
+                  status: "cancelled",
+                  cancellationState: "cancelled",
+                },
+              },
+            ])
+          )
+        : Promise.resolve(bookingsSnapshot(false))
+    );
+
+    render(<Schedule />);
+    await flushUpdates();
+
+    expect(screen.getByRole("heading", { name: "FROZEN CONDITIONING" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "CANCELLED CONDITIONING" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Class frozen" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Class cancelled" })).toBeDisabled();
+    expect(screen.getAllByRole("button", { name: "Roster" })).toHaveLength(2);
   });
 });
 

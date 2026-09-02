@@ -1,0 +1,120 @@
+{
+  "schemaVersion": 3,
+  "evidenceType": "conditioning-stripe-test-provider-app-partial",
+  "readinessItemId": "conditioning-stripe-test-purchase-to-booking-journey",
+  "recordedAt": "2026-09-02T00:32:40Z",
+  "testedSourceCommit": "f0d9efc54d3c0d46e38b9515ba367450d142b03d",
+  "customerPiiRecorded": false,
+  "stripeMode": "test",
+  "planKey": "adult_conditioning",
+  "providerReferences": {
+    "checkoutSessionId": "cs_test_a1keBmeAxXZAYTeeyxRhRsBvjNFFgtMW46K6sULUSzTnc2xjE9ONq0UnoD",
+    "subscriptionId": "sub_1UB1yPFzNDZoGGA0w7j4zdXC",
+    "checkoutCompletedEventId": "evt_1UB1yRFzNDZoGGA0Ui9GZrJv"
+  },
+  "catalogue": {
+    "testProductId": "prod_VAOvaoryJOeb04",
+    "testPriceId": "price_1UA47fFzNDZoGGA0lgyZPUZ9",
+    "recurringAmountPence": 3000,
+    "initialProratedAmountPence": 2900,
+    "currency": "gbp",
+    "interval": "month",
+    "intervalCount": 1,
+    "quantity": 1
+  },
+  "providerReadback": {
+    "checkoutMode": "subscription",
+    "checkoutStatus": "complete",
+    "checkoutPaymentStatus": "paid",
+    "subscriptionStatus": "active",
+    "cancelAtPeriodEnd": false,
+    "checkoutEventType": "checkout.session.completed",
+    "checkoutEventAcknowledged": true,
+    "planMetadataMatched": true,
+    "limitedAccessMetadataMatched": true,
+    "weeklyLimitMetadataMatched": true,
+    "eligibleSlotMetadataMatched": true
+  },
+  "applicationReferences": {
+    "membershipId": "sub_1UB1yPFzNDZoGGA0w7j4zdXC",
+    "quotaWeekKey": "2026-08-31",
+    "fixtureClassIds": [
+      "conditioning_browser_thursday_a",
+      "conditioning_browser_thursday_b",
+      "conditioning_browser_friday_a",
+      "conditioning_browser_friday_b"
+    ]
+  },
+  "applicationReadback": {
+    "membershipState": "active",
+    "entitlementState": "active",
+    "membershipClaimVerifierConsumed": true,
+    "entitlementProjectionApplied": true,
+    "appAccessTier": "limited",
+    "restrictedRoutesVerified": [
+      "/dashboard",
+      "/leaderboard",
+      "/training"
+    ],
+    "weeklyBookingLimit": 2,
+    "flexibleEligibleClassSelection": true,
+    "eligibleSlotKeys": [
+      "monday_0600",
+      "tuesday_1800",
+      "thursday_1800",
+      "friday_0530"
+    ],
+    "waiverVersion": "ZAF-ADULT-WAIVER-2026-08-23-01",
+    "waiverExactAcknowledgementSetMatched": true,
+    "activeBookingFixtureLabels": [
+      "Thursday A",
+      "Friday B"
+    ],
+    "cancelledBookingFixtureLabels": [
+      "Friday A"
+    ],
+    "rejectedBookingFixtureLabels": [
+      "Thursday B"
+    ],
+    "quotaBookedCount": 2,
+    "fixtureBookedCounts": {
+      "Thursday A": 1,
+      "Thursday B": 0,
+      "Friday A": 0,
+      "Friday B": 1
+    },
+    "confirmationOutboxState": "pending",
+    "confirmationTransport": "disabled",
+    "confirmationDelivered": false
+  },
+  "verification": {
+    "hostedCheckoutCompleted": true,
+    "webhookAcknowledged": true,
+    "membershipCreated": true,
+    "entitlementActivated": true,
+    "singleRunProviderToClaimedMembershipWithoutFixtureSubstitution": true,
+    "limitedAppAccessVerified": true,
+    "currentWaiverAccepted": true,
+    "purchasedMemberAppBookingVerified": true,
+    "thirdBookingRejectedWithoutMutation": true,
+    "eligibleCancellationReleasedCapacityAndQuota": true,
+    "replacementBookingSucceeded": true,
+    "twoClassesPerLondonWeekEnforced": true,
+    "flexibleEligibleClassChangesVerified": true,
+    "confirmationDelivered": false
+  },
+  "supportingEvidence": [
+    "ops/release/evidence/conditioning-stripe-test-provider-membership-2026-09-02.json",
+    "ops/release/evidence/conditioning-stripe-test-and-local-browser-2026-09-01.json"
+  ],
+  "limitations": [
+    "The exact Stripe test purchase was claimed into a newly created emulator account and used for the recorded booking, quota, cancellation and restricted-route checks.",
+    "The durable confirmation outbox is pending because transport was disabled during the isolated purchase and booking journey.",
+    "No live Stripe object, production Firebase document, deployment or purchase gate was changed."
+  ],
+  "testProviderMutationPerformed": true,
+  "liveProviderMutation": false,
+  "productionWritePerformed": false,
+  "deploymentPerformed": false,
+  "newProductPurchaseGatesRemainClosed": true
+}

@@ -87,6 +87,10 @@ import {
   filterDipLeaderboardRows,
   resolveBoundedLeaderboardMonthKey,
 } from "./leaderboard";
+import {
+  buildBeginClassCancellation,
+  buildFinalizeClassCancellation,
+} from "./classCancellation";
 
 setGlobalOptions({region: "europe-west1"});
 
@@ -163,6 +167,16 @@ type ClassDoc = {
   bookedCount: number;
   location: string;
   status: "scheduled" | "cancelled";
+  bookingOpen?: boolean;
+  bookingClosedReason?: string;
+  bookingClosedAt?: FieldValue | Timestamp;
+  bookingClosedBy?: string;
+  cancellationOperationId?: string;
+  cancellationState?:
+    | "processing"
+    | "awaiting_payg_refunds"
+    | "ready_to_finalize"
+    | "cancelled";
   conditioningSlotKey?: ConditioningSlotKey | null;
   paygEligible?: boolean;
   createdAt: FieldValue | Timestamp;
@@ -528,11 +542,25 @@ function assertBookingWindowOpen(classData: Partial<ClassDoc>, message: string) 
 }
 
 function assertClassScheduledForBooking(classData: Partial<ClassDoc>) {
-  if (classData.status !== "scheduled") {
+  if (classData.status !== "scheduled" || classData.bookingOpen === false) {
     throw new HttpsError(
       "failed-precondition",
       "This class is not available for booking.",
       {reason: "class_unavailable"}
+    );
+  }
+}
+
+function assertClassRosterMutationOpen(classData: Partial<ClassDoc>): void {
+  if (classData.status !== "scheduled" || classData.bookingOpen === false ||
+    classData.bookingClosedReason === "class_cancellation" ||
+    typeof classData.cancellationOperationId === "string" ||
+    (typeof classData.cancellationState === "string" &&
+      classData.cancellationState !== "cancelled")) {
+    throw new HttpsError(
+      "failed-precondition",
+      "This class is frozen while whole-class cancellation is processed.",
+      {reason: "class_cancellation_in_progress"}
     );
   }
 }
@@ -1090,6 +1118,7 @@ export const cancelBooking = onCall(async (request) => {
     if (!classSnap.exists) throw new HttpsError("not-found", "Class not found");
 
     const classData = classSnap.data() as Partial<ClassDoc>;
+    assertClassRosterMutationOpen(classData);
     assertBookingWindowOpen(classData, "Cancellation closed");
     const bookedCount = Number(classData.bookedCount ?? 0);
     const quotaRelease = await prepareConditioningQuotaRelease(
@@ -1423,6 +1452,12 @@ export const checkInBooking = onCall(async (request) => {
         throw new HttpsError("failed-precondition", "Not an active booking.");
       }
 
+      const classRef = db.collection("classes").doc(booking.classId);
+      const classSnap = await tx.get(classRef);
+      if (!classSnap.exists) throw new HttpsError("not-found", "Class not found.");
+      const classDoc = classSnap.data() as ClassDoc;
+      assertClassRosterMutationOpen(classDoc);
+
       if (isPaygGuestBooking(booking)) {
         return updatePaygGuestAttendance(
           tx,
@@ -1433,14 +1468,8 @@ export const checkInBooking = onCall(async (request) => {
         );
       }
 
-      const classRef = db.collection("classes").doc(booking.classId);
       const userRef = db.collection("users").doc(booking.userId);
-      const [classSnap, userSnap] = await Promise.all([
-        tx.get(classRef),
-        tx.get(userRef),
-      ]);
-      if (!classSnap.exists) throw new HttpsError("not-found", "Class not found.");
-      const classDoc = classSnap.data() as ClassDoc;
+      const userSnap = await tx.get(userRef);
       const u = (userSnap.data() || {}) as UserDoc;
       await assertStripeMembershipBookingEligibility(
         tx,
@@ -1730,6 +1759,7 @@ export const markBookingStatus = onCall(async (request) => {
     if (!classSnap.exists) throw new HttpsError("not-found", "Class not found.");
 
     const classDoc = classSnap.data() as ClassDoc;
+    assertClassRosterMutationOpen(classDoc);
     if (isPaygGuestBooking(booking)) {
       if (status === "authorised_absence") {
         throw new HttpsError(
@@ -2912,6 +2942,12 @@ export const releaseAbandonedMembershipCheckout =
 export const linkMembershipParticipant = buildLinkMembershipParticipant(
   requireAdmin,
   convergeUserDerivedAccess
+);
+
+/** Admin-only, audited two-phase cancellation of one class occurrence. */
+export const beginClassCancellation = buildBeginClassCancellation(requireAdmin);
+export const finalizeClassCancellation = buildFinalizeClassCancellation(
+  requireAdmin
 );
 
 /** Separate, account-free one-time PAYG purchase domain. */

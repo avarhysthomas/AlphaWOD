@@ -9,6 +9,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const {isDeepStrictEqual} = require("node:util");
 const {verifyBillingMonitoring} = require("./verifyBillingMonitoring");
 const {
   verifyBillingWebhookEvents,
@@ -63,14 +64,25 @@ const OPERATIONAL_EVIDENCE_REQUIREMENTS = Object.freeze({
       "payg-refund-over-24h-verified",
       "payg-no-refund-under-24h-verified",
       "payg-capacity-released-after-refund",
+      "ordered-whole-class-cancellation-and-booking-stop",
+      "authorised-absence-release-for-every-conditioning-booking",
+      "all-admission-roster-and-cleanup-mutations-blocked-after-freeze",
+      "unpaid-payg-holds-and-duplicate-locks-reconciled",
+      "exact-provider-terminal-state-required-before-finalize",
+      "ambiguous-payment-and-review-state-blocked-finalize",
+      "all-payg-orders-inventoried-and-operation-bound",
+      "paid-payg-guest-identification-and-provider-refund-reconciliation",
+      "confirmation-suppression-or-correction-resolved-before-finalize",
+      "bound-idempotent-operations-audit",
     ]),
   }),
   "conditioning-stripe-test-purchase-to-booking-journey": Object.freeze({
     evidenceType: "stripe-test-membership-checkout",
     verifiedControls: Object.freeze([
       "stripe-test-checkout-completed",
-      "webhook-booking-created",
+      "webhook-membership-created",
       "membership-entitlement-active",
+      "purchased-member-app-booking",
       "two-per-week-enforced",
       "confirmation-delivered",
     ]),
@@ -154,9 +166,9 @@ const PAYG_PRIVACY_DECISION_ID = "payg-privacy-notice";
 const PAYG_PRIVACY_ENGINEERING_EVIDENCE =
   "ops/release/evidence/payg-privacy-runtime-binding-readiness-2026-09-01.json";
 const CONDITIONING_BROWSER_PARTIAL_EVIDENCE =
-  "ops/release/evidence/conditioning-stripe-test-and-local-browser-2026-09-01.json";
+  "ops/release/evidence/conditioning-stripe-test-full-app-2026-09-02.json";
 const PAYG_BROWSER_PARTIAL_EVIDENCE =
-  "ops/release/evidence/payg-stripe-test-browser-purchase-2026-09-01.json";
+  "ops/release/evidence/payg-stripe-test-purchase-refund-dispute-2026-09-02.json";
 const BILLING_ALERT_PARTIAL_EVIDENCE =
   "ops/release/evidence/billing-alert-policy-suite-2026-09-01.json";
 const PAYG_RETENTION_POLICY_VERSION =
@@ -357,6 +369,7 @@ function assertOperationalGateSpecificContent(item, evidence, options = {}) {
         evidence.verification?.webhookAcknowledged === true &&
         evidence.verification?.membershipCreated === true &&
         evidence.verification?.entitlementActivated === true &&
+        evidence.verification?.purchasedMemberAppBookingVerified === true &&
         evidence.verification?.limitedAppAccessVerified === true &&
         evidence.verification?.twoClassesPerLondonWeekEnforced === true &&
         evidence.verification?.flexibleEligibleClassChangesVerified === true &&
@@ -364,33 +377,110 @@ function assertOperationalGateSpecificContent(item, evidence, options = {}) {
         evidence.liveProviderMutation === false;
       break;
     case "payg-stripe-test-purchase-refund-dispute-email-journey":
-      valid = evidence.stripeMode === "test" &&
-        evidence.productKey === "adult_payg_class" &&
-        evidence.amountPence === 700 &&
-        evidence.accountRequired === false &&
-        /^cs_test_[A-Za-z0-9_]+$/.test(
-          evidence.providerReferences?.checkoutSessionId || ""
-        ) &&
-        /^pi_[A-Za-z0-9_]+$/.test(
-          evidence.providerReferences?.paymentIntentId || ""
-        ) &&
-        /^re_[A-Za-z0-9_]+$/.test(
-          evidence.providerReferences?.refundId || ""
-        ) &&
-        /^dp_[A-Za-z0-9_]+$/.test(
-          evidence.providerReferences?.disputeId || ""
-        ) &&
-        typeof evidence.applicationReferences?.guestBookingId === "string" &&
-        evidence.applicationReferences.guestBookingId.length >= 8 &&
-        evidence.verification?.hostedCheckoutCompleted === true &&
-        evidence.verification?.paidWebhookCreatedBooking === true &&
-        evidence.verification?.confirmationEmailDelivered === true &&
-        evidence.verification?.refundConverged === true &&
-        evidence.verification?.refundEmailDelivered === true &&
-        evidence.verification?.disputeConverged === true &&
-        evidence.verification?.disputeEmailDelivered === true &&
-        evidence.verification?.noAccountJourneyVerified === true &&
-        evidence.liveProviderMutation === false;
+      {
+        const purchase = evidence.providerScenarios?.purchase;
+        const refund = evidence.providerScenarios?.refund;
+        const dispute = evidence.providerScenarios?.dispute;
+        const application = evidence.applicationReferences;
+        const scenarios = [purchase, refund, dispute];
+        const orderIds = [
+          application?.purchaseOrderId,
+          application?.refundOrderId,
+          application?.disputeOrderId,
+        ];
+        const bookingIds = [
+          application?.purchaseGuestBookingId,
+          application?.refundGuestBookingId,
+          application?.disputeGuestBookingId,
+        ];
+        const applicationBindings = [
+          application?.purchaseProviderBinding,
+          application?.refundProviderBinding,
+          application?.disputeProviderBinding,
+        ];
+        valid = evidence.stripeMode === "test" &&
+          evidence.productKey === "adult_payg_class" &&
+          evidence.amountPence === 700 &&
+          evidence.currency === "gbp" &&
+          evidence.accountRequired === false &&
+          scenarios.every((scenario) =>
+            scenario?.amountPence === 700 &&
+            scenario.currency === "gbp" &&
+            scenario.productId === "prod_VAOxXxpax1MuRt" &&
+            scenario.priceId === "price_1UAmVVFzNDZoGGA04z8hX10N"
+          ) &&
+          /^cs_test_[A-Za-z0-9_]+$/.test(
+            purchase?.checkoutSessionId || ""
+          ) &&
+          /^pi_[A-Za-z0-9_]+$/.test(
+            purchase?.paymentIntentId || ""
+          ) &&
+          /^evt_[A-Za-z0-9_]+$/.test(
+            purchase?.checkoutCompletedEventId || ""
+          ) &&
+          /^cs_test_[A-Za-z0-9_]+$/.test(
+            refund?.checkoutSessionId || ""
+          ) &&
+          /^pi_[A-Za-z0-9_]+$/.test(
+            refund?.paymentIntentId || ""
+          ) &&
+          /^re_[A-Za-z0-9_]+$/.test(
+            refund?.refundId || ""
+          ) &&
+          Array.isArray(refund?.webhookEventIds) &&
+          refund.webhookEventIds.length >= 1 &&
+          refund.webhookEventIds.every((id) =>
+            /^evt_[A-Za-z0-9_]+$/.test(id)
+          ) &&
+          /^cs_test_[A-Za-z0-9_]+$/.test(
+            dispute?.checkoutSessionId || ""
+          ) &&
+          /^pi_[A-Za-z0-9_]+$/.test(
+            dispute?.paymentIntentId || ""
+          ) &&
+          /^du_[A-Za-z0-9_]+$/.test(
+            dispute?.disputeId || ""
+          ) &&
+          /^evt_[A-Za-z0-9_]+$/.test(
+            dispute?.webhookEventId || ""
+          ) &&
+          refund.checkoutSessionId !== dispute.checkoutSessionId &&
+          refund.paymentIntentId !== dispute.paymentIntentId &&
+          new Set(scenarios.map(({checkoutSessionId}) => checkoutSessionId))
+            .size === 3 &&
+          new Set(scenarios.map(({paymentIntentId}) => paymentIntentId))
+            .size === 3 &&
+          orderIds.every((id) =>
+            typeof id === "string" && /^payg_[a-f0-9]{64}$/.test(id)
+          ) &&
+          new Set(orderIds).size === 3 &&
+          typeof application?.purchaseGuestBookingId === "string" &&
+          application.purchaseGuestBookingId ===
+            `payg_guest_${application.purchaseOrderId.slice("payg_".length)}` &&
+          typeof application?.refundGuestBookingId === "string" &&
+          application.refundGuestBookingId ===
+            `payg_guest_${application.refundOrderId.slice("payg_".length)}` &&
+          typeof application?.disputeGuestBookingId === "string" &&
+          application.disputeGuestBookingId ===
+            `payg_guest_${application.disputeOrderId.slice("payg_".length)}` &&
+          new Set(bookingIds).size === 3 &&
+          applicationBindings.every((binding, index) =>
+            binding?.checkoutSessionId === scenarios[index].checkoutSessionId &&
+            binding?.paymentIntentId === scenarios[index].paymentIntentId &&
+            binding?.orderId === orderIds[index] &&
+            binding?.guestBookingId === bookingIds[index]
+          ) &&
+          evidence.verification?.hostedCheckoutCompleted === true &&
+          evidence.verification?.paidWebhookCreatedBooking === true &&
+          evidence.verification?.providerApplicationBindingsVerified === true &&
+          evidence.verification?.confirmationEmailDelivered === true &&
+          evidence.verification?.refundConverged === true &&
+          evidence.verification?.refundEmailDelivered === true &&
+          evidence.verification?.disputeConverged === true &&
+          evidence.verification?.disputeEmailDelivered === true &&
+          evidence.verification?.noAccountJourneyVerified === true &&
+          evidence.liveProviderMutation === false;
+      }
       break;
     case "production-access-tier-backfill-and-claims-readback":
       valid = evidence.firebaseProjectId === "alphawod-d1f2f" &&
@@ -431,6 +521,14 @@ function assertOperationalGateSpecificContent(item, evidence, options = {}) {
         ) &&
         typeof evidence.drillReferences?.paygOrderId === "string" &&
         evidence.drillReferences.paygOrderId.length >= 8 &&
+        /^[a-f0-9]{64}$/.test(
+          evidence.drillReferences?.conditioningOccurrenceIdHash || ""
+        ) &&
+        /^[a-f0-9]{64}$/.test(
+          evidence.drillReferences?.paygOrderIdsHash || ""
+        ) &&
+        typeof evidence.drillReferences?.auditRecordId === "string" &&
+        evidence.drillReferences.auditRecordId.length >= 8 &&
         evidence.verification?.thirdConditioningBookingRejected === true &&
         evidence.verification?.eligibleCancellationReleasedQuota === true &&
         evidence.verification?.replacementConditioningBookingSucceeded === true &&
@@ -439,6 +537,33 @@ function assertOperationalGateSpecificContent(item, evidence, options = {}) {
         evidence.verification?.noShowStayedNonRefundable === true &&
         evidence.verification?.paygBookingNeverBecameCredit === true &&
         evidence.verification?.refundedCapacityReleased === true &&
+        evidence.verification?.newBookingsStoppedBeforeWholeClassCancellation ===
+          true &&
+        evidence.verification?.wholeClassCancelledAfterBookingStop === true &&
+        evidence.verification
+          ?.everyConditioningBookingMarkedAuthorisedAbsence === true &&
+        evidence.verification
+          ?.everyConditioningBookingReleasedCapacityAndQuota === true &&
+        evidence.verification
+          ?.allAdmissionsAndRosterMutationsRejectedAfterFreeze === true &&
+        evidence.verification?.memberCleanupSkippedFrozenOccurrence === true &&
+        evidence.verification?.unpaidPaygHoldsReleased === true &&
+        evidence.verification?.duplicatePaygLocksReconciled === true &&
+        evidence.verification
+          ?.everyCheckoutProviderStateAuthoritativeBeforeFinalize === true &&
+        evidence.verification
+          ?.ambiguousCheckoutOrPaymentStateBlockedFinalize === true &&
+        evidence.verification?.unknownPaymentReviewBlockedFinalize === true &&
+        evidence.verification?.everyPaidPaygGuestIdentifiedBeforeClose === true &&
+        evidence.verification
+          ?.everyPaygOrderBoundToCancellationOperation === true &&
+        evidence.verification?.everyPaidPaygRefundReconciled === true &&
+        evidence.verification?.unsentCustomerConfirmationsSuppressed === true &&
+        evidence.verification
+          ?.acceptedCustomerConfirmationsCorrectedBeforeFinalize === true &&
+        evidence.verification?.finalizationAuditBindingVerified === true &&
+        evidence.verification?.finalizationIdempotent === true &&
+        evidence.verification?.operationsAuditRecordRetained === true &&
         evidence.liveProviderMutation === false &&
         evidence.observedByRole === "Zero Alpha Fitness operations";
       break;
@@ -541,13 +666,76 @@ function readEvidence(relativePath, label) {
   return JSON.parse(fs.readFileSync(evidencePath(relativePath, label), "utf8"));
 }
 
+const PROHIBITED_PARTIAL_EVIDENCE_KEYS = new Set([
+  "attendee",
+  "contact",
+  "recipient",
+  "to",
+  "email",
+  "emailaddress",
+  "phone",
+  "mobile",
+  "dateofbirth",
+  "dob",
+  "fullname",
+  "customername",
+  "cancellationtoken",
+]);
+
+function assertEvidenceContainsNoCustomerPii(value) {
+  const visit = (candidate) => {
+    if (Array.isArray(candidate)) {
+      candidate.forEach(visit);
+      return;
+    }
+    if (candidate && typeof candidate === "object") {
+      for (const [key, child] of Object.entries(candidate)) {
+        const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+        if (PROHIBITED_PARTIAL_EVIDENCE_KEYS.has(normalizedKey)) {
+          throw new Error("Partial evidence contains a prohibited customer PII field.");
+        }
+        visit(child);
+      }
+      return;
+    }
+    if (typeof candidate !== "string") return;
+    const containsEmailAddress =
+      /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i.test(candidate);
+    const containsTokenQuery =
+      /(?:^|[?&])(?:cancellation[_-]?token|token)=[^&#\s]+/i.test(candidate);
+    const containsNamedCancellationToken =
+      /cancellation[_-]?token\s*[:=]\s*[^\s,;]+/i.test(candidate);
+    const containsJwtLikeSecret =
+      /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/.test(
+        candidate
+      );
+    if (containsEmailAddress || containsTokenQuery ||
+      containsNamedCancellationToken || containsJwtLikeSecret) {
+      throw new Error("Partial evidence contains a prohibited customer PII value.");
+    }
+  };
+  visit(value);
+}
+
 function assertPartialEvidence(items, statusField) {
   for (const item of items) {
     if (item.partialEvidence === undefined) continue;
     if (item[statusField]) {
       throw new Error(`${item.id} must remove partial evidence once fully verified.`);
     }
-    readEvidence(item.partialEvidence, `Partial evidence for ${item.id}`);
+    const absolutePath = evidencePath(
+      item.partialEvidence,
+      `Partial evidence for ${item.id}`
+    );
+    if (!/^[a-f0-9]{64}$/.test(item.partialEvidenceSha256 || "") ||
+      evidenceSha256(absolutePath) !== item.partialEvidenceSha256) {
+      throw new Error(`${item.id} partial evidence is unbound or stale.`);
+    }
+    const evidence = JSON.parse(fs.readFileSync(absolutePath, "utf8"));
+    if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
+      throw new Error(`${item.id} partial evidence must be a JSON object.`);
+    }
+    assertEvidenceContainsNoCustomerPii(evidence);
   }
 }
 
@@ -893,18 +1081,20 @@ function assertRecordedBrowserEvidence(operationalEvidence) {
 
   const conditioningPending = assertPendingRecordedGate(conditioningGate, {
     partialEvidence: CONDITIONING_BROWSER_PARTIAL_EVIDENCE,
-    remainingControls: ["confirmation-email-delivered"],
+    remainingControls: [
+      "confirmation-email-delivered",
+    ],
   });
   const paygPending = assertPendingRecordedGate(paygGate, {
     partialEvidence: PAYG_BROWSER_PARTIAL_EVIDENCE,
     remainingControls: [
       "confirmation-email-delivered",
-      "refund-converged-and-email-delivered",
-      "dispute-converged-and-email-delivered",
+      "refund-email-delivered",
+      "dispute-email-delivered",
     ],
   });
   const cancellationPending = assertPendingRecordedGate(cancellationDrill, {
-    partialEvidence: CONDITIONING_BROWSER_PARTIAL_EVIDENCE,
+    partialEvidence: PAYG_BROWSER_PARTIAL_EVIDENCE,
   });
   const alertPending = assertPendingRecordedGate(alertGate, {
     partialEvidence: BILLING_ALERT_PARTIAL_EVIDENCE,
@@ -916,141 +1106,271 @@ function assertRecordedBrowserEvidence(operationalEvidence) {
   assertPendingRecordedGate(backlogGate);
   assertPendingRecordedGate(publicationGate);
 
-  if (conditioningPending || cancellationPending) {
+  if (conditioningPending) {
     const conditioning = readEvidence(
       CONDITIONING_BROWSER_PARTIAL_EVIDENCE,
       "Conditioning Stripe/browser partial evidence"
     );
-    const conditioningSequence = conditioning.localBrowserRerun?.bookingSequence;
-    if (conditioning.schemaVersion !== 1 ||
+    if (conditioning.schemaVersion !== 3 ||
       conditioning.evidenceType !==
-        "conditioning-stripe-test-and-local-browser-partial" ||
+        "conditioning-stripe-test-provider-app-partial" ||
       conditioning.readinessItemId !== conditioningGate.id ||
+      conditioning.testedSourceCommit !==
+        "f0d9efc54d3c0d46e38b9515ba367450d142b03d" ||
       conditioning.customerPiiRecorded !== false ||
-      conditioning.stripeReadback?.mode !== "test" ||
-      conditioning.stripeReadback?.planKey !== "adult_conditioning" ||
-      conditioning.stripeReadback?.checkoutSessionId !==
-        "cs_test_a1SfbXmndUQS5DBMWcx95iFdk2xXLU2tucJO7DzhERuGDuIQB69oanwIXj" ||
-      conditioning.stripeReadback?.subscriptionId !==
-        "sub_1UAroiFzNDZoGGA04ISXiiwj" ||
-      conditioning.stripeReadback?.amountPence !== 3000 ||
-      conditioning.stripeReadback?.currency !== "gbp" ||
-      conditioning.stripeReadback?.checkoutPaymentStatus !== "paid" ||
-      conditioning.stripeReadback?.subscriptionStatus !== "active" ||
-      conditioning.stripeReadback?.appAccessTier !== "limited" ||
-      conditioning.stripeReadback?.weeklyBookingLimit !== 2 ||
-      conditioning.stripeReadback?.flexibleEligibleClassSelection !== true ||
-      conditioning.stripeReadback?.confirmationOutboxState !== "pending" ||
-      conditioning.stripeReadback?.confirmationDeliveryEnabled !== false ||
-      conditioning.stripeReadback?.confirmationDelivered !== false ||
-      conditioning.localBrowserRerun?.environment !== "local-emulator-fixture" ||
-      conditioning.localBrowserRerun
-        ?.fixtureBoundToRecordedCheckoutAndSubscription !== true ||
-      conditioning.localBrowserRerun?.newStripeRequestPerformed !== false ||
-      conditioning.localBrowserRerun?.newStripeObjectCreatedOrChanged !== false ||
-      conditioning.localBrowserRerun?.productionWritePerformed !== false ||
-      conditioning.localBrowserRerun?.waiver?.version !==
-        "ZAF-ADULT-WAIVER-2026-08-23-01" ||
-      conditioning.localBrowserRerun?.waiver?.currentMarkerObserved !== true ||
-      conditioning.localBrowserRerun?.waiver?.requiredAcknowledgementCount !== 1 ||
-      conditioning.localBrowserRerun?.waiver?.storedAcknowledgementCount !== 1 ||
-      conditioning.localBrowserRerun?.waiver?.exactAcknowledgementSetMatched !==
+      conditioning.stripeMode !== "test" ||
+      conditioning.planKey !== "adult_conditioning" ||
+      conditioning.providerReferences?.checkoutSessionId !==
+        "cs_test_a1keBmeAxXZAYTeeyxRhRsBvjNFFgtMW46K6sULUSzTnc2xjE9ONq0UnoD" ||
+      conditioning.providerReferences?.subscriptionId !==
+        "sub_1UB1yPFzNDZoGGA0w7j4zdXC" ||
+      conditioning.providerReferences?.checkoutCompletedEventId !==
+        "evt_1UB1yRFzNDZoGGA0Ui9GZrJv" ||
+      conditioning.catalogue?.testProductId !== "prod_VAOvaoryJOeb04" ||
+      conditioning.catalogue?.testPriceId !==
+        "price_1UA47fFzNDZoGGA0lgyZPUZ9" ||
+      conditioning.catalogue?.recurringAmountPence !== 3000 ||
+      conditioning.catalogue?.initialProratedAmountPence !== 2900 ||
+      conditioning.catalogue?.currency !== "gbp" ||
+      conditioning.providerReadback?.checkoutStatus !== "complete" ||
+      conditioning.providerReadback?.checkoutPaymentStatus !== "paid" ||
+      conditioning.providerReadback?.subscriptionStatus !== "active" ||
+      conditioning.providerReadback?.checkoutEventAcknowledged !== true ||
+      conditioning.applicationReferences?.membershipId !==
+        conditioning.providerReferences.subscriptionId ||
+      conditioning.applicationReferences?.quotaWeekKey !== "2026-08-31" ||
+      !isDeepStrictEqual(
+        conditioning.applicationReferences?.fixtureClassIds,
+        [
+          "conditioning_browser_thursday_a",
+          "conditioning_browser_thursday_b",
+          "conditioning_browser_friday_a",
+          "conditioning_browser_friday_b",
+        ]
+      ) ||
+      conditioning.applicationReadback?.membershipState !== "active" ||
+      conditioning.applicationReadback?.entitlementState !== "active" ||
+      conditioning.applicationReadback?.membershipClaimVerifierConsumed !==
         true ||
+      conditioning.applicationReadback?.entitlementProjectionApplied !== true ||
+      conditioning.applicationReadback?.appAccessTier !== "limited" ||
+      !isDeepStrictEqual(
+        conditioning.applicationReadback?.restrictedRoutesVerified,
+        ["/dashboard", "/leaderboard", "/training"]
+      ) ||
+      conditioning.applicationReadback?.weeklyBookingLimit !== 2 ||
+      conditioning.applicationReadback?.flexibleEligibleClassSelection !== true ||
+      !isDeepStrictEqual(
+        conditioning.applicationReadback?.eligibleSlotKeys,
+        [
+          "monday_0600",
+          "tuesday_1800",
+          "thursday_1800",
+          "friday_0530",
+        ]
+      ) ||
+      conditioning.applicationReadback?.waiverVersion !==
+        "ZAF-ADULT-WAIVER-2026-08-23-01" ||
+      conditioning.applicationReadback?.waiverExactAcknowledgementSetMatched !==
+        true ||
+      !isDeepStrictEqual(
+        conditioning.applicationReadback?.activeBookingFixtureLabels,
+        ["Thursday A", "Friday B"]
+      ) ||
+      !isDeepStrictEqual(
+        conditioning.applicationReadback?.cancelledBookingFixtureLabels,
+        ["Friday A"]
+      ) ||
+      !isDeepStrictEqual(
+        conditioning.applicationReadback?.rejectedBookingFixtureLabels,
+        ["Thursday B"]
+      ) ||
+      conditioning.applicationReadback?.quotaBookedCount !== 2 ||
+      !isDeepStrictEqual(
+        conditioning.applicationReadback?.fixtureBookedCounts,
+        {"Thursday A": 1, "Thursday B": 0, "Friday A": 0, "Friday B": 1}
+      ) ||
+      conditioning.applicationReadback?.confirmationOutboxState !== "pending" ||
+      conditioning.applicationReadback?.confirmationTransport !== "disabled" ||
+      conditioning.applicationReadback?.confirmationDelivered !== false ||
+      conditioning.verification?.hostedCheckoutCompleted !== true ||
+      conditioning.verification?.webhookAcknowledged !== true ||
+      conditioning.verification?.membershipCreated !== true ||
+      conditioning.verification?.entitlementActivated !== true ||
+      conditioning.verification
+        ?.singleRunProviderToClaimedMembershipWithoutFixtureSubstitution !==
+        true ||
+      conditioning.verification?.limitedAppAccessVerified !== true ||
+      conditioning.verification?.currentWaiverAccepted !== true ||
+      conditioning.verification?.purchasedMemberAppBookingVerified !== true ||
+      conditioning.verification?.thirdBookingRejectedWithoutMutation !== true ||
+      conditioning.verification?.eligibleCancellationReleasedCapacityAndQuota !==
+        true ||
+      conditioning.verification?.replacementBookingSucceeded !== true ||
+      conditioning.verification?.twoClassesPerLondonWeekEnforced !== true ||
+      conditioning.verification?.flexibleEligibleClassChangesVerified !== true ||
+      conditioning.verification?.confirmationDelivered !== false ||
+      conditioning.testProviderMutationPerformed !== true ||
+      conditioning.liveProviderMutation !== false ||
+      conditioning.productionWritePerformed !== false ||
+      conditioning.deploymentPerformed !== false ||
+      conditioning.newProductPurchaseGatesRemainClosed !== true) {
+      throw new Error(
+        "Conditioning Stripe/browser partial evidence is stale or unsafe."
+      );
+    }
+
+    const fixture = readEvidence(
+      "ops/release/evidence/conditioning-stripe-test-and-local-browser-2026-09-01.json",
+      "Conditioning local-browser supporting evidence"
+    );
+    const conditioningSequence = fixture.localBrowserRerun?.bookingSequence;
+    if (fixture.schemaVersion !== 1 ||
+      fixture.evidenceType !==
+        "conditioning-stripe-test-and-local-browser-partial" ||
+      fixture.customerPiiRecorded !== false ||
+      fixture.localBrowserRerun?.environment !== "local-emulator-fixture" ||
+      fixture.localBrowserRerun?.waiver?.version !==
+        "ZAF-ADULT-WAIVER-2026-08-23-01" ||
+      fixture.localBrowserRerun?.waiver?.exactAcknowledgementSetMatched !== true ||
       !Array.isArray(conditioningSequence) || conditioningSequence.length !== 5 ||
       conditioningSequence[2]?.result !== "blocked-weekly-quota" ||
       conditioningSequence[3]?.result !==
         "succeeded-capacity-and-quota-released" ||
       conditioningSequence[4]?.result !== "succeeded" ||
-      conditioning.localBrowserRerun?.finalEmulatorReadback?.quotaBookedCount !==
-        2 ||
-      conditioning.localBrowserRerun?.finalEmulatorReadback
+      fixture.localBrowserRerun?.finalEmulatorReadback?.quotaBookedCount !== 2 ||
+      fixture.localBrowserRerun?.finalEmulatorReadback
         ?.allObservedUnbookedCandidateBookedCountsZero !== true ||
-      conditioning.releaseGateAssessment
-        ?.fullConditioningOperationalGateVerified !== false ||
-      conditioning.releaseGateAssessment?.confirmationDeliveryVerified !== false ||
-      conditioning.releaseGateAssessment
-        ?.classCancellationOperationsDrillVerified !== false ||
-      conditioning.liveProviderMutation !== false ||
-      conditioning.productionWritePerformed !== false ||
-      conditioning.deploymentPerformed !== false) {
-      throw new Error(
-        "Conditioning Stripe/browser partial evidence is stale or unsafe."
-      );
+      fixture.liveProviderMutation !== false ||
+      fixture.productionWritePerformed !== false) {
+      throw new Error("Conditioning browser support is stale or unsafe.");
     }
     assertSameValues(
-      conditioning.localBrowserRerun.finalEmulatorReadback
+      fixture.localBrowserRerun.finalEmulatorReadback
         .activeBookingFixtureLabels,
       ["Thursday A", "Friday D"],
       "Conditioning active browser fixtures"
     );
     assertSameValues(
-      conditioning.localBrowserRerun.finalEmulatorReadback
+      fixture.localBrowserRerun.finalEmulatorReadback
         .cancelledBookingFixtureLabels,
       ["Friday C"],
       "Conditioning cancelled browser fixtures"
     );
     assertSameValues(
-      conditioning.localBrowserRerun.finalEmulatorReadback
+      fixture.localBrowserRerun.finalEmulatorReadback
         .quotaActiveBookingFixtureLabels,
       ["Thursday A", "Friday D"],
       "Conditioning quota browser fixtures"
     );
     assertSameValues(
-      conditioning.localBrowserRerun.accessReadback.available,
+      fixture.localBrowserRerun.accessReadback.available,
       ["Schedule", "Profile", "Membership"],
       "Conditioning available app surfaces"
     );
     assertSameValues(
-      conditioning.localBrowserRerun.accessReadback.notIncluded,
+      fixture.localBrowserRerun.accessReadback.notIncluded,
       ["Dashboard", "Training", "Leaderboard"],
       "Conditioning excluded app surfaces"
     );
-    if (conditioning.localBrowserRerun.accessReadback.notIncludedCopy !==
+    if (fixture.localBrowserRerun.accessReadback.notIncludedCopy !==
       "Not included") {
       throw new Error("Conditioning excluded app copy is stale.");
     }
   }
 
-  if (paygPending) {
+  if (paygPending || cancellationPending) {
     const payg = readEvidence(
       PAYG_BROWSER_PARTIAL_EVIDENCE,
       "PAYG Stripe/browser partial evidence"
     );
-    if (payg.schemaVersion !== 1 ||
-      payg.evidenceType !== "payg-stripe-test-browser-purchase-partial" ||
+    const refund = payg.refundScenario;
+    const dispute = payg.disputeScenario;
+    if (payg.schemaVersion !== 2 ||
+      payg.evidenceType !==
+        "payg-stripe-test-purchase-refund-dispute-partial" ||
       payg.readinessItemId !== paygGate.id ||
+      payg.testedSourceCommit !==
+        "f0d9efc54d3c0d46e38b9515ba367450d142b03d" ||
       payg.customerPiiRecorded !== false ||
       payg.stripeMode !== "test" || payg.productKey !== "adult_payg_class" ||
-      payg.providerReferences?.checkoutSessionId !==
-        "cs_test_a1xQ0XbmZ4PBZ95tdA0plOVJinI7RcSVnMg7X8i90v7CF78gEfLB6roPe2" ||
-      payg.providerReferences?.refundIdRecorded !== false ||
-      payg.providerReferences?.disputeIdRecorded !== false ||
-      payg.catalogue?.approvedTestPriceId !==
+      payg.accountRequired !== false ||
+      payg.catalogue?.testProductId !== "prod_VAOxXxpax1MuRt" ||
+      payg.catalogue?.testPriceId !==
         "price_1UAmVVFzNDZoGGA04z8hX10N" ||
       payg.catalogue?.amountPence !== 700 ||
       payg.catalogue?.currency !== "gbp" ||
       payg.catalogue?.exactApprovedTestPriceVerified !== true ||
-      payg.localApplicationReadback?.hostedCheckoutCompleted !== true ||
-      payg.localApplicationReadback?.accountRequired !== false ||
-      payg.localApplicationReadback?.authenticationAccountCreated !== false ||
-      payg.localApplicationReadback?.orderConfirmed !== true ||
-      payg.localApplicationReadback?.bookingCreated !== true ||
-      payg.localApplicationReadback?.bookingKind !== "payg_guest" ||
-      payg.localApplicationReadback?.confirmationOutboxState !== "pending" ||
-      payg.localApplicationReadback?.confirmationDeliveryEnabled !== false ||
-      payg.localApplicationReadback?.confirmationEmailDelivered !== false ||
-      payg.localApplicationReadback?.productionWrites !== false ||
+      refund?.providerReferences?.checkoutSessionId !==
+        "cs_test_a1GeAMCx49zZtgYLXSV7UHp3QTX8YjVxcm75jUlSECBh2FFj2BSI3azwgz" ||
+      refund?.providerReferences?.paymentIntentId !==
+        "pi_3UB0vRFzNDZoGGA01ItZF4Hw" ||
+      refund?.providerReferences?.refundId !==
+        "re_3UB0vRFzNDZoGGA01ZUuC7ZB" ||
+      refund?.purchaseReadback?.checkoutCompleted !== true ||
+      refund?.purchaseReadback?.paymentSucceeded !== true ||
+      refund?.purchaseReadback?.authenticationAccountCreated !== false ||
+      refund?.purchaseReadback?.orderInitiallyConfirmed !== true ||
+      refund?.purchaseReadback?.guestBookingInitiallyBooked !== true ||
+      refund?.refundReadback?.refundStatus !== "succeeded" ||
+      refund?.refundReadback?.refundedAmountPence !== 700 ||
+      refund?.refundReadback?.orderStatus !== "refunded" ||
+      refund?.refundReadback?.capacityState !== "released" ||
+      refund?.refundReadback?.bookingStatus !== "cancelled" ||
+      refund?.refundReadback?.cancellationPolicyOutcome !==
+        "at_least_24_hours_refundable" ||
+      refund?.refundReadback?.finalBookedCount !== 0 ||
+      refund?.refundReadback?.confirmationOutboxStatus !== "tombstoned" ||
+      refund?.refundReadback?.allRecordedRefundEventsProcessed !== true ||
+      dispute?.providerReferences?.checkoutSessionId !==
+        "cs_test_a1GLqudYJzDzoDtfknS0zz2xKohjEPlGmzHyS26rLL7unL8Qgebl3XuZa1" ||
+      dispute?.providerReferences?.paymentIntentId !==
+        "pi_3UB12zFzNDZoGGA01AT8PDoe" ||
+      dispute?.providerReferences?.disputeId !==
+        "du_1UB132FzNDZoGGA0kLiyc8C2" ||
+      dispute?.providerReadback?.disputeStatus !== "needs_response" ||
+      dispute?.providerReadback?.disputeReason !== "product_not_received" ||
+      dispute?.providerReadback?.disputeOpen !== true ||
+      dispute?.providerReadback?.disputeEventProcessed !== true ||
+      dispute?.applicationReadback?.orderStatus !== "disputed" ||
+      dispute?.applicationReadback?.capacityState !== "released" ||
+      dispute?.applicationReadback?.bookingStatus !== "cancelled" ||
+      dispute?.applicationReadback?.refundAutomationStatus !==
+        "suspended_dispute" ||
+      dispute?.applicationReadback?.refundObligationReviewRequired !== true ||
+      dispute?.applicationReadback?.finalBookedCount !== 0 ||
+      dispute?.applicationReadback?.confirmationOutboxStatus !== "tombstoned" ||
+      refund.providerReferences.checkoutSessionId ===
+        dispute.providerReferences.checkoutSessionId ||
+      refund.providerReferences.paymentIntentId ===
+        dispute.providerReferences.paymentIntentId ||
+      payg.emailDelivery?.transport !== "disabled" ||
+      payg.emailDelivery?.confirmationDelivered !== false ||
+      payg.emailDelivery?.refundEmailDelivered !== false ||
+      payg.emailDelivery?.disputeEmailDelivered !== false ||
       payg.releaseGateAssessment?.fullPaygOperationalGateVerified !== false ||
       payg.releaseGateAssessment?.confirmationDeliveryVerified !== false ||
-      payg.releaseGateAssessment?.refundVerified !== false ||
-      payg.releaseGateAssessment?.disputeVerified !== false ||
-      payg.releaseGateAssessment?.classCancellationOperationsDrillVerified !==
-        false ||
+      payg.releaseGateAssessment?.refundableCancellationAndProviderRefundVerified !==
+        true ||
+      payg.releaseGateAssessment?.separateProviderDisputeConvergenceVerified !==
+        true ||
+      payg.releaseGateAssessment?.lateCancellationAndNoShowVerified !== false ||
+      payg.testProviderMutationPerformed !== true ||
       payg.liveProviderMutation !== false ||
       payg.productionWritePerformed !== false ||
-      payg.deploymentPerformed !== false) {
+      payg.deploymentPerformed !== false ||
+      payg.newProductPurchaseGatesRemainClosed !== true) {
       throw new Error("PAYG Stripe/browser partial evidence is stale or unsafe.");
     }
+    assertSameValues(
+      refund.providerReferences.refundEventIds,
+      [
+        "evt_3UB0vRFzNDZoGGA01zkXDQl5",
+        "evt_3UB0vRFzNDZoGGA01AUKFE6S",
+        "evt_3UB0vRFzNDZoGGA01VA4m4Qi",
+      ],
+      "PAYG refund webhook events"
+    );
   }
 
   if (alertPending) {
@@ -1139,6 +1459,7 @@ if (require.main === module) {
 module.exports = {
   assertClearedStripeDeliveryBacklogEvidence,
   assertEvidence,
+  assertEvidenceContainsNoCustomerPii,
   assertOperationalEvidenceContent,
   assertOperationalGateSpecificContent,
   assertPaygPrivacyOwnerDecision,

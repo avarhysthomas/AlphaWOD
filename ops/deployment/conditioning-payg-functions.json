@@ -71,7 +71,9 @@
         "adminAddBooking",
         "checkInBooking",
         "markBookingStatus",
-        "getClassRoster"
+        "getClassRoster",
+        "beginClassCancellation",
+        "finalizeClassCancellation"
       ]
     },
     {

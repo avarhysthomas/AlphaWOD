@@ -90,6 +90,125 @@ Price before starting. It cannot select PAYG or silently widen to another
 membership plan; `npm run stripe:test` continues to require the complete test
 catalogue and all shared offers.
 
+The Conditioning scope also seeds four visibly labelled, non-PAYG classes into
+the currently visible London week in the demo emulator only: Thursday A and B
+at 18:00, then Friday A and B at 05:30. The seed is hard-bound to
+`demo-alphawod-stripe`, loopback Firestore and the loopback browser origin. It
+refuses to start after Thursday 15:00 London time when the visible week no
+longer contains three open candidates; after Schedule's Saturday 10:00 cutover
+it uses the following visible week. Capacity starts at 10 for every fixture,
+and every title and location says that it is a local browser test.
+
+Complete Adult Conditioning Checkout in Stripe test mode. Stripe should show
+the current prorated amount due and the continuing £30 monthly price. On the
+success page choose **Create Zero Alpha App account**, use the same email as
+Checkout, and finish account creation. `/account/membership` automatically
+consumes the browser-held Checkout verifier and claims that exact membership.
+Choose **Continue to my schedule**, type the member name into the current Adult
+Waiver, tick its one acknowledgement and choose **I agree**.
+
+Exercise the exact Schedule sequence:
+
+1. Book **Conditioning Browser Thursday A**.
+2. Book **Conditioning Browser Friday A**.
+3. Try to book **Conditioning Browser Thursday B**. It must remain enabled long
+   enough to reach the server, then show: “You’ve used both Conditioning
+   bookings for this Monday–Sunday week. Cancel an eligible booking before its
+   cutoff to choose another class.”
+4. Cancel **Conditioning Browser Friday A**.
+5. Book **Conditioning Browser Friday B** as the replacement.
+
+While the stack remains open, first run the provider verifier. If the browser
+has already removed the Session id from its URL, omit `--session` and copy the
+exact Session id printed by the successful newest-session verification:
+
+```bash
+npm run verify:stripe-test-journey --prefix functions
+```
+
+Then pass that exact id to the separate full-app verifier:
+
+```bash
+npm run verify:stripe-test-conditioning-app-journey --prefix functions -- \
+  --session=cs_test_...
+```
+
+The second verifier reads only the local emulator. It binds the real fulfilled
+membership to its consumed account claim, active entitlement owner, limited
+profile projection, canonical current waiver, exact final booking rows, weekly
+quota and all four class counts. Its successful output contains no member name,
+email, user id, Checkout id or Subscription id. It also states explicitly that
+Resend remains disabled and makes no email-delivery claim.
+
+## Explicit one-shot test email delivery
+
+The local runner never enables its scheduled email workers. A release operator
+may deliver one already-created test outbox only after receiving explicit
+approval for the selected Stripe TEST purchase, its frozen rendered content and
+the fixed recipient `hello@zeroalphafitness.co.uk`. The tooling has no latest,
+list, batch or recipient-override mode and rejects production Firebase.
+
+Store the existing Resend key only in an owner-readable temporary file outside
+the repository. Never print it or place it in a dotenv file. With the local
+journey still running, first run the mutation-free preflight using the exact
+Checkout Session and exact outbox document ID:
+
+```bash
+GCLOUD_PROJECT=demo-alphawod-stripe \
+GOOGLE_CLOUD_PROJECT=demo-alphawod-stripe \
+FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 \
+FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 \
+npm --prefix functions run preflight:stripe-test-email -- \
+  --session=cs_test_... \
+  --outbox-id=sub_... \
+  --resend-key-file=/absolute/protected/resend.key
+```
+
+Only a `STRIPE_TEST_EMAIL_PREFLIGHT` result with `status=ready`,
+`recipientVerified=true`, `senderVerified=true`, `resendNetworkCalled=false`
+and `outboxMutated=false` may proceed. Then use the same three exact inputs:
+
+```bash
+GCLOUD_PROJECT=demo-alphawod-stripe \
+GOOGLE_CLOUD_PROJECT=demo-alphawod-stripe \
+FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 \
+FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 \
+npm --prefix functions run deliver:stripe-test-email-once -- \
+  --session=cs_test_... \
+  --outbox-id=sub_... \
+  --resend-key-file=/absolute/protected/resend.key
+```
+
+The sender repeats every preflight, calls the existing leased/idempotent outbox
+state machine once, requires its application projection to persist `sent`, and
+polls only the returned Resend message ID until `last_event` proves delivery
+(`delivered`, `opened` or `clicked`). Its
+output contains provider/application identifiers and state only, never the
+customer name, address or message body. If provider acceptance is ambiguous,
+the exact outbox is quarantined for manual review with no scheduled retry; do
+not reset or run it again automatically.
+
+If Resend accepted the POST and the application projection is already `sent`,
+but the final delivery readback timed out or had a transient failure, repeat
+the same command with `--mode=readback`. This mode revalidates the exact Stripe
+Session, outbox, provider ID, sender, recipient, reply-to and subject, performs
+GET-only Resend polling and makes no Firebase write or second email POST:
+
+```bash
+GCLOUD_PROJECT=demo-alphawod-stripe \
+GOOGLE_CLOUD_PROJECT=demo-alphawod-stripe \
+FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 \
+FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 \
+npm --prefix functions run deliver:stripe-test-email-once -- \
+  --session=cs_test_... \
+  --outbox-id=sub_... \
+  --resend-key-file=/absolute/protected/resend.key \
+  --mode=readback
+```
+
+Remove the protected temporary key file as soon as the selected deliveries
+finish.
+
 To exercise the anonymous PAYG browser journey against the exact £7 Stripe
 sandbox Product and Price, start the stack in **Terminal 1**:
 
@@ -228,42 +347,34 @@ intent, membership and confirmation outbox for every participant name, the
 matching count, frozen discount schedule and accepted statements. Do not cite
 the existing verifier alone as evidence of the family offer.
 
-## Recorded partial browser evidence — 1 September 2026
+## Recorded partial browser evidence — 2 September 2026
 
 The exact Conditioning test Session
-`cs_test_a1SfbXmndUQS5DBMWcx95iFdk2xXLU2tucJO7DzhERuGDuIQB69oanwIXj`
-and Subscription `sub_1UAroiFzNDZoGGA04ISXiiwj` were read back as a paid,
+`cs_test_a1keBmeAxXZAYTeeyxRhRsBvjNFFgtMW46K6sULUSzTnc2xjE9ONq0UnoD`
+and Subscription `sub_1UB1yPFzNDZoGGA0w7j4zdXC` were read back as a paid,
 active £30 `adult_conditioning` membership with limited app access and the
-flexible two-class weekly allowance. A later app-only browser rerun used a
-local emulator fixture bound to those verified references; it did not contact
-Stripe or create or change another provider object.
+flexible two-class weekly allowance. That exact anonymous purchase was claimed
+into a fresh emulator account. The browser accepted the current adult waiver,
+kept only Schedule, Profile and Membership available, booked two eligible
+classes in one Europe/London week, rejected a third without changing capacity,
+cancelled one booking with quota and capacity restored, and booked a different
+replacement. Its exact confirmation outbox remains pending; delivery has not
+been claimed.
 
-That browser rerun showed the current
-`ZAF-ADULT-WAIVER-2026-08-23-01` marker and retained exactly its one required
-acknowledgement. It booked Thursday A and Friday C, blocked a third eligible
-class in the same Europe/London week, cancelled Friday C with capacity and
-quota released, and booked Friday D as the replacement. The final emulator
-readback contained active Thursday A and Friday D bookings, cancelled Friday C,
-and `bookedCount=2` bound to the two active fixtures; every observed unbooked
-candidate remained at zero. Schedule, Profile and Membership remained
-available, while Dashboard, Training and Leaderboard each rendered
-`Not included`.
-
-The earlier real PAYG browser journey used test Session
-`cs_test_a1xQ0XbmZ4PBZ95tdA0plOVJinI7RcSVnMg7X8i90v7CF78gEfLB6roPe2`
-and the approved £7 one-time test Price. It required no AlphaWOD account, and
-the local readback confirmed an order and a `payg_guest` booking. Its
-confirmation outbox stayed `pending`; email delivery was disabled. No
-production write occurred.
+The current PAYG evidence binds one genuine £7 no-account test purchase to a
+`payg_guest` booking and a successful full test-mode provider refund with
+capacity released. It binds a separate genuine £7 payment to a test dispute,
+cancelled booking, released capacity and suspended refund automation. The
+refund and dispute use different provider and application records. Email
+delivery remained disabled, so confirmation, refund and dispute delivery are
+still outstanding.
 
 The PII-free durable records are
-`ops/release/evidence/conditioning-stripe-test-and-local-browser-2026-09-01.json`
-and
-`ops/release/evidence/payg-stripe-test-browser-purchase-2026-09-01.json`.
-They are partial evidence only. Neither proves delivered email, PAYG refund or
-dispute convergence, the ordered whole-class cancellation operations drill,
-synthetic alert acknowledgement by named responders, live backlog clearance,
-deployment or production legal publication.
+`ops/release/evidence/conditioning-stripe-test-full-app-2026-09-02.json` and
+`ops/release/evidence/payg-stripe-test-purchase-refund-dispute-2026-09-02.json`.
+They are partial evidence only. Neither clears its end-to-end email gate or the
+two-phase whole-class cancellation drill. No production write, deployment, or
+purchase-gate change occurred.
 
 ## Historical provider baseline — 19 August 2026
 

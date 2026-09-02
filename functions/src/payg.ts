@@ -395,6 +395,16 @@ type PaygOrderDoc = {
   bookingId: string | null;
   duplicateLockId: string;
   confirmationEmailStatus: "pending" | "not_required" | "sent" | "manual_review";
+  refundEmailStatus?: "pending" | "not_required" | "sent" | "manual_review";
+  refundEmailOutboxId?: string;
+  refundEmailSentAt?: FieldValue | Timestamp;
+  refundEmailProviderId?: string | null;
+  refundEmailError?: string;
+  disputeEmailStatus?: "pending" | "not_required" | "sent" | "manual_review";
+  disputeEmailOutboxId?: string;
+  disputeEmailSentAt?: FieldValue | Timestamp;
+  disputeEmailProviderId?: string | null;
+  disputeEmailError?: string;
   cancellationCutoffAt: FieldValue | Timestamp;
   noShowReviewAt?: FieldValue | Timestamp;
   refundRecoveryAt?: FieldValue | Timestamp;
@@ -410,6 +420,7 @@ type PaygRefundStatus = "pending" | "succeeded" | "failed" | "canceled";
 
 type PaygRefundReason =
   | "guest_cancellation"
+  | "class_cancellation"
   | "hold_released_before_payment"
   | "paid_contract_mismatch";
 
@@ -1399,7 +1410,8 @@ export function sanitizePublicPaygClass(
     PAYG_MINIMUM_CHECKOUT_WINDOW_SECONDS * 1000;
   // PAYG covers the whole adult schedule. An explicit false is the operational
   // escape hatch for a special occurrence; legacy occurrences default on.
-  const eligible = value.paygEligible !== false && checkoutWindowOpen && capacity > 0;
+  const eligible = value.bookingOpen !== false && value.paygEligible !== false &&
+    checkoutWindowOpen && capacity > 0;
   const availability: PublicPaygClass["availability"] = !eligible ?
     "unavailable" : spacesRemaining > 0 ? "available" : "full";
   return Object.freeze({
@@ -2439,6 +2451,183 @@ async function releasePaygHold(
   });
 }
 
+/**
+ * Releases an unpaid local reservation when staff freeze its whole class. The
+ * exact provider Session remains a cancellation blocker until read-only Stripe
+ * observation proves terminal nonpayment or normal webhook recovery records
+ * and refunds a payment.
+ */
+export async function releasePaygHoldForClassCancellation(
+  intentRef: DocumentReference,
+  classId: string,
+  operationId: string
+): Promise<boolean> {
+  const snapshot = await intentRef.get();
+  if (!snapshot.exists) {
+    throw new Error(
+      `PAYG intent ${intentRef.id} does not match class cancellation ${operationId}.`
+    );
+  }
+  const intentClass = snapshot.get("class") as Record<string, unknown> | null;
+  if (!intentClass || intentClass.classId !== classId) {
+    throw new Error(
+      `PAYG intent ${intentRef.id} does not match class cancellation ${operationId}.`
+    );
+  }
+  const released = await releasePaygHold(intentRef, "class_cancellation");
+  await intentRef.set({
+    classCancellationOperationId: operationId,
+    classCancellationRequestedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }, {merge: true});
+  return released;
+}
+
+export type PaygClassCancellationProviderObservation = Readonly<{
+  intentId: string;
+  checkoutSessionId: string | null;
+  checkoutStatus: string | null;
+  paymentStatus: string | null;
+  paymentIntentId: string | null;
+  paymentIntentStatus: string | null;
+  terminalNonpayment: boolean;
+  disposition:
+    | "session_reference_missing"
+    | "provider_create_definitively_failed"
+    | "session_expired"
+    | "payment_intent_canceled"
+    | "paid_observed"
+    | "payment_pending";
+}>;
+
+/**
+ * Re-reads the exact Stripe Session (and PaymentIntent when present) for a
+ * frozen class. This is deliberately read-only: ordinary signed webhooks and
+ * the existing recovery worker remain the only paths that create paid orders
+ * or issue refunds. A local expiry clock is never accepted as nonpayment proof.
+ */
+export async function observePaygCheckoutForClassCancellation(
+  intentRef: DocumentReference,
+  classId: string,
+  operationId: string
+): Promise<PaygClassCancellationProviderObservation> {
+  const initial = await intentRef.get();
+  if (!initial.exists) {
+    throw new Error(`PAYG intent ${intentRef.id} disappeared during class cancellation.`);
+  }
+  const intent = initial.data() as PaygIntentDoc;
+  if (intent.class?.classId !== classId ||
+    initial.get("classCancellationOperationId") !== operationId) {
+    throw new Error(
+      `PAYG intent ${intentRef.id} is not owned by class cancellation ${operationId}.`
+    );
+  }
+  const rawSessionId = intent.checkoutSessionId;
+  const sessionId = typeof rawSessionId === "string" && rawSessionId.trim() ?
+    rawSessionId.trim() : null;
+  const persist = async (
+    evidence: Omit<PaygClassCancellationProviderObservation, "intentId">
+  ): Promise<PaygClassCancellationProviderObservation> => {
+    const classRef = db().collection("classes").doc(classId);
+    await db().runTransaction(async (tx) => {
+      const [freshIntent, frozenClass] = await Promise.all([
+        tx.get(intentRef),
+        tx.get(classRef),
+      ]);
+      const freshClass = freshIntent.get("class") as
+        Record<string, unknown> | null;
+      const freshSessionId = freshIntent.get("checkoutSessionId");
+      const freshPaymentIntentId = freshIntent.get("paymentIntentId");
+      if (!freshIntent.exists || !frozenClass.exists ||
+        frozenClass.get("status") !== "scheduled" ||
+        frozenClass.get("bookingOpen") !== false ||
+        frozenClass.get("bookingClosedReason") !== "class_cancellation" ||
+        frozenClass.get("cancellationOperationId") !== operationId ||
+        freshIntent.get("classCancellationOperationId") !== operationId ||
+        freshClass?.classId !== classId ||
+        (typeof freshSessionId === "string" && freshSessionId.trim() ?
+          freshSessionId.trim() : null) !== evidence.checkoutSessionId ||
+        (typeof freshPaymentIntentId === "string" && freshPaymentIntentId &&
+          freshPaymentIntentId !== evidence.paymentIntentId)) {
+        throw new Error(
+          `Class cancellation ${operationId} changed during Stripe observation.`
+        );
+      }
+      tx.set(intentRef, {
+        classCancellationProviderObservationVersion: 1,
+        classCancellationProviderSessionId: evidence.checkoutSessionId,
+        classCancellationProviderSessionStatus: evidence.checkoutStatus,
+        classCancellationProviderPaymentStatus: evidence.paymentStatus,
+        classCancellationProviderPaymentIntentId: evidence.paymentIntentId,
+        classCancellationProviderPaymentIntentStatus: evidence.paymentIntentStatus,
+        classCancellationProviderTerminalNonpayment: evidence.terminalNonpayment,
+        classCancellationProviderDisposition: evidence.disposition,
+        classCancellationProviderObservedAt: serverTimestamp(),
+        ...(evidence.paymentIntentId && !freshPaymentIntentId ? {
+          paymentIntentId: evidence.paymentIntentId,
+        } : {}),
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+    });
+    return Object.freeze({intentId: intentRef.id, ...evidence});
+  };
+
+  if (!sessionId) {
+    const definitiveCreateFailure =
+      (intent.status === "failed" &&
+        initial.get("releaseReason") === "checkout_create_failed" ||
+        initial.get("releaseReason") === "recovery_confirmed_no_session") &&
+      intent.capacityState === "released" &&
+      intent.unpaidHoldState === "released" &&
+      timestampMillis(initial.get("releasedAt")) !== null;
+    return persist({
+      checkoutSessionId: null,
+      checkoutStatus: null,
+      paymentStatus: null,
+      paymentIntentId: null,
+      paymentIntentStatus: null,
+      // Stripe may have accepted an idempotent create before local Session
+      // persistence failed. Missing local identity is therefore ambiguous.
+      terminalNonpayment: definitiveCreateFailure,
+      disposition: definitiveCreateFailure ?
+        "provider_create_definitively_failed" : "session_reference_missing",
+    });
+  }
+
+  const client = stripe();
+  const session = await client.checkout.sessions.retrieve(sessionId);
+  assertSessionBinding(session, intentRef.id, intent);
+  const paymentIntentId = idOf(session.payment_intent);
+  const paymentIntent = paymentIntentId ?
+    await client.paymentIntents.retrieve(paymentIntentId) : null;
+  if (paymentIntent) {
+    assertStripeObjectMode(
+      "PaymentIntent",
+      paymentIntent.id,
+      paymentIntent.livemode
+    );
+  }
+  const providerHasPayment = session.payment_status === "paid" ||
+    Boolean(paymentIntent &&
+      (paymentIntent.status === "succeeded" || paymentIntent.amount_received > 0));
+  const paymentIntentCanceled = session.payment_status === "unpaid" &&
+    paymentIntent?.status === "canceled" && paymentIntent.amount_received === 0;
+  const sessionExpired = session.status === "expired" &&
+    session.payment_status === "unpaid" && !providerHasPayment &&
+    (paymentIntent === null || paymentIntentCanceled);
+  return persist({
+    checkoutSessionId: session.id,
+    checkoutStatus: session.status,
+    paymentStatus: session.payment_status,
+    paymentIntentId,
+    paymentIntentStatus: paymentIntent?.status ?? null,
+    terminalNonpayment: sessionExpired || paymentIntentCanceled,
+    disposition: providerHasPayment ? "paid_observed" :
+      sessionExpired ? "session_expired" :
+        paymentIntentCanceled ? "payment_intent_canceled" : "payment_pending",
+  });
+}
+
 async function resumeExistingPaygCheckout(
   client: Stripe,
   intentRef: DocumentReference
@@ -3321,6 +3510,8 @@ function buildPaygOrder(
     bookingId,
     duplicateLockId: intent.duplicateLockId,
     confirmationEmailStatus: status === "confirmed" ? "pending" : "not_required",
+    refundEmailStatus: "not_required",
+    disputeEmailStatus: "not_required",
     cancellationCutoffAt: Timestamp.fromMillis(
       intent.classStartMillis - PAYG_CANCELLATION_CUTOFF_HOURS * 60 * 60 * 1000
     ),
@@ -3604,6 +3795,117 @@ export function buildPaygConfirmationCorrectionOutboxPayload(input: Readonly<{
   });
 }
 
+function assertPaygLifecycleStripeId(
+  value: string,
+  prefix: "pi_" | "ch_" | "re_" | "du_",
+  field: string
+): string {
+  if (!value.startsWith(prefix) ||
+    !/^[A-Za-z0-9_]{7,255}$/.test(value)) {
+    throw new Error(`PAYG lifecycle ${field} is invalid.`);
+  }
+  return value;
+}
+
+export function paygRefundOutboxId(orderId: string): string {
+  if (!/^payg_[a-f0-9]{64}$/.test(orderId)) {
+    throw new Error("PAYG refund email order ID is invalid.");
+  }
+  return `payg_refund_${sha256(`payg-refund-confirmed:v1:${orderId}`)}`;
+}
+
+export function paygDisputeOutboxId(orderId: string): string {
+  if (!/^payg_[a-f0-9]{64}$/.test(orderId)) {
+    throw new Error("PAYG dispute email order ID is invalid.");
+  }
+  return `payg_dispute_${sha256(`payg-dispute-detected:v1:${orderId}`)}`;
+}
+
+export function buildPaygRefundOutboxPayload(input: Readonly<{
+  orderId: string;
+  recipientEmail: string;
+  attendeeName: string;
+  class: PaygClassSnapshot;
+  paymentIntentId: string;
+  chargeId: string;
+  refundId: string;
+}>) {
+  const outboxId = paygRefundOutboxId(input.orderId);
+  const paymentIntentId = assertPaygLifecycleStripeId(
+    input.paymentIntentId,
+    "pi_",
+    "PaymentIntent ID"
+  );
+  const chargeId = assertPaygLifecycleStripeId(
+    input.chargeId,
+    "ch_",
+    "Charge ID"
+  );
+  const refundId = assertPaygLifecycleStripeId(
+    input.refundId,
+    "re_",
+    "Refund ID"
+  );
+  return Object.freeze({
+    schemaVersion: PAYG_SCHEMA_VERSION,
+    kind: "payg_guest_refund_confirmation" as const,
+    orderId: input.orderId,
+    outboxId,
+    idempotencyKey: `payg-refund-confirmed/${input.orderId}/v1`,
+    to: Object.freeze([input.recipientEmail]),
+    templateData: Object.freeze({
+      attendeeName: input.attendeeName,
+      class: input.class,
+      amountPence: PAYG_AMOUNT_PENCE,
+      currency: PAYG_CURRENCY,
+      paymentIntentId,
+      chargeId,
+      refundId,
+    }),
+  });
+}
+
+export function buildPaygDisputeOutboxPayload(input: Readonly<{
+  orderId: string;
+  recipientEmail: string;
+  attendeeName: string;
+  class: PaygClassSnapshot;
+  paymentIntentId: string;
+  chargeId: string;
+  disputeId: string;
+}>) {
+  const outboxId = paygDisputeOutboxId(input.orderId);
+  return Object.freeze({
+    schemaVersion: PAYG_SCHEMA_VERSION,
+    kind: "payg_guest_dispute_notice" as const,
+    orderId: input.orderId,
+    outboxId,
+    idempotencyKey: `payg-dispute-detected/${input.orderId}/v1`,
+    to: Object.freeze([input.recipientEmail]),
+    templateData: Object.freeze({
+      attendeeName: input.attendeeName,
+      class: input.class,
+      amountPence: PAYG_AMOUNT_PENCE,
+      currency: PAYG_CURRENCY,
+      paymentIntentId: assertPaygLifecycleStripeId(
+        input.paymentIntentId,
+        "pi_",
+        "PaymentIntent ID"
+      ),
+      chargeId: assertPaygLifecycleStripeId(
+        input.chargeId,
+        "ch_",
+        "Charge ID"
+      ),
+      disputeId: assertPaygLifecycleStripeId(
+        input.disputeId,
+        "du_",
+        "Dispute ID"
+      ),
+    }),
+  });
+}
+
 export type PaygPostSendDecision = Readonly<{
   disposition: "lost" | "sent" | "accepted_after_state_change";
   enqueueCorrection: boolean;
@@ -3766,6 +4068,231 @@ function tombstonePaygConfirmation(
   }, {merge: true});
 }
 
+/**
+ * Stops the original guest confirmation as soon as an administrator freezes a
+ * whole class. Provider refund convergence remains authoritative for releasing
+ * the paid booking and recording the final refund binding.
+ */
+export function suppressPaygConfirmationForClassCancellation(
+  tx: Transaction,
+  outbox: DocumentSnapshot | null,
+  orderRef: DocumentReference,
+  operationId: string
+): void {
+  tombstonePaygConfirmation(
+    tx,
+    outbox,
+    "class_cancellation_pending"
+  );
+  tx.set(orderRef, {
+    confirmationEmailStatus: "not_required",
+    classCancellationOperationId: operationId,
+    classCancellationRequestedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }, {merge: true});
+}
+
+type PaygLifecycleEmailPayload =
+  | ReturnType<typeof buildPaygRefundOutboxPayload>
+  | ReturnType<typeof buildPaygDisputeOutboxPayload>;
+
+function isPaygOrdinaryLifecycleEmailOrder(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const order = value as Record<string, unknown>;
+  // A paid contract-mismatch order can retain the same customer/provider
+  // identifiers as an ordinary order while also being linked to the fail-closed
+  // payment-review workflow. Customer lifecycle wording is never authorized by
+  // review evidence, even if a later provider event has the expected amount.
+  return (order.paymentReviewId === undefined || order.paymentReviewId === null) &&
+    (order.providerContractStatus === undefined ||
+      order.providerContractStatus === null);
+}
+
+function validPaygLifecycleClass(value: unknown): value is PaygClassSnapshot {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.classId === "string" && candidate.classId.length > 0 &&
+    typeof candidate.title === "string" && candidate.title.length > 0 &&
+    typeof candidate.startTime === "string" &&
+    Number.isFinite(Date.parse(candidate.startTime)) &&
+    typeof candidate.endTime === "string" &&
+    Number.isFinite(Date.parse(candidate.endTime)) &&
+    typeof candidate.timezone === "string" && candidate.timezone.length > 0 &&
+    typeof candidate.location === "string" && candidate.location.length > 0;
+}
+
+function paygLifecycleExistingOutboxMatches(
+  outbox: DocumentSnapshot,
+  payload: PaygLifecycleEmailPayload
+): boolean {
+  if (!outbox.exists || !validPaygOutboxPayload(outbox.id, outbox.data())) {
+    return false;
+  }
+  const existing = outbox.data() as PaygEmailOutboxPayload;
+  if (existing.kind !== payload.kind || existing.orderId !== payload.orderId ||
+    existing.outboxId !== payload.outboxId ||
+    existing.idempotencyKey !== payload.idempotencyKey ||
+    existing.to.length !== 1 || existing.to[0] !== payload.to[0] ||
+    existing.templateData.attendeeName !== payload.templateData.attendeeName ||
+    existing.templateData.amountPence !== payload.templateData.amountPence ||
+    existing.templateData.currency !== payload.templateData.currency ||
+    !paygLifecycleClassMatches(
+      existing.templateData.class,
+      payload.templateData.class
+    )) return false;
+  if (payload.kind === "payg_guest_refund_confirmation") {
+    if (existing.kind !== payload.kind) return false;
+    return existing.templateData.paymentIntentId ===
+      payload.templateData.paymentIntentId &&
+      existing.templateData.chargeId === payload.templateData.chargeId &&
+      existing.templateData.refundId === payload.templateData.refundId;
+  }
+  if (existing.kind !== payload.kind) return false;
+  return existing.templateData.paymentIntentId ===
+    payload.templateData.paymentIntentId &&
+    existing.templateData.chargeId === payload.templateData.chargeId &&
+    existing.templateData.disputeId === payload.templateData.disputeId;
+}
+
+function paygLifecycleExistingStatus(value: unknown):
+  "pending" | "not_required" | "sent" | "manual_review" {
+  if (value === "sent") return "sent";
+  if (value === "manual_review" || value === "dead_letter") {
+    return "manual_review";
+  }
+  if (value === "tombstoned") return "not_required";
+  return "pending";
+}
+
+function buildPaygLifecyclePayloadForOrder(
+  order: DocumentSnapshot,
+  binding: Readonly<{
+    kind: "refund";
+    paymentIntentId: string;
+    chargeId: string;
+    refundId: string;
+  }> | Readonly<{
+    kind: "dispute";
+    paymentIntentId: string;
+    chargeId: string;
+    disputeId: string;
+  }>
+): PaygLifecycleEmailPayload | null {
+  if (hasNonNullDocumentField(order, "piiRedactedAt")) return null;
+  const contact = order.get("contact") as Record<string, unknown> | null;
+  const attendee = order.get("attendee") as Record<string, unknown> | null;
+  const classSnapshot = order.get("class");
+  const recipientEmail = contact && typeof contact.email === "string" ?
+    contact.email.trim() : "";
+  const attendeeName = attendee && typeof attendee.fullName === "string" ?
+    attendee.fullName.trim() : "";
+  if (!recipientEmail || recipientEmail.length > 320 ||
+    /[\r\n]/.test(recipientEmail) ||
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail) ||
+    !attendeeName || !validPaygLifecycleClass(classSnapshot)) return null;
+  return binding.kind === "refund" ? buildPaygRefundOutboxPayload({
+    orderId: order.id,
+    recipientEmail,
+    attendeeName,
+    class: classSnapshot,
+    paymentIntentId: binding.paymentIntentId,
+    chargeId: binding.chargeId,
+    refundId: binding.refundId,
+  }) : buildPaygDisputeOutboxPayload({
+    orderId: order.id,
+    recipientEmail,
+    attendeeName,
+    class: classSnapshot,
+    paymentIntentId: binding.paymentIntentId,
+    chargeId: binding.chargeId,
+    disputeId: binding.disputeId,
+  });
+}
+
+function enqueuePaygLifecycleEmail(
+  tx: Transaction,
+  order: DocumentSnapshot,
+  outbox: DocumentSnapshot,
+  binding: Readonly<{
+    kind: "refund";
+    paymentIntentId: string;
+    chargeId: string;
+    refundId: string;
+  }> | Readonly<{
+    kind: "dispute";
+    paymentIntentId: string;
+    chargeId: string;
+    disputeId: string;
+  }>,
+  nowMillis = Date.now()
+): void {
+  const projectionPrefix = binding.kind;
+  const statusField = `${projectionPrefix}EmailStatus`;
+  const outboxIdField = `${projectionPrefix}EmailOutboxId`;
+  const errorField = `${projectionPrefix}EmailError`;
+  const closureField = `${projectionPrefix}EmailClosureReason`;
+  const cutoff = timestampMillis(order.get(PAYG_PII_RETENTION_CUTOFF_FIELD));
+  const payload = cutoff !== null && cutoff > nowMillis ?
+    buildPaygLifecyclePayloadForOrder(order, binding) : null;
+  if (!payload) {
+    const reason = hasNonNullDocumentField(order, "piiRedactedAt") ?
+      "pii_already_redacted" : cutoff === null ?
+        "pii_retention_cutoff_missing" : cutoff <= nowMillis ?
+          "pii_retention_cutoff_reached" : "recipient_unavailable";
+    tx.set(order.ref, {
+      [statusField]: "not_required",
+      [closureField]: reason,
+      [errorField]: FieldValue.delete(),
+      updatedAt: serverTimestamp(),
+    }, {merge: true});
+    return;
+  }
+  if (outbox.exists) {
+    if (!paygLifecycleExistingOutboxMatches(outbox, payload)) {
+      tx.set(order.ref, {
+        [statusField]: "manual_review",
+        [outboxIdField]: outbox.id,
+        [errorField]: "lifecycle_outbox_binding_mismatch",
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+      console.error("CRITICAL_BILLING_PAYG_LIFECYCLE_OUTBOX_MISMATCH", {
+        orderId: order.id,
+        lifecycle: binding.kind,
+        outboxId: outbox.id,
+      });
+      return;
+    }
+    tx.set(order.ref, {
+      [statusField]: paygLifecycleExistingStatus(outbox.get("status")),
+      [outboxIdField]: outbox.id,
+      [errorField]: FieldValue.delete(),
+      [closureField]: FieldValue.delete(),
+      updatedAt: serverTimestamp(),
+    }, {merge: true});
+    return;
+  }
+  if (cutoff === null) {
+    throw new Error("PAYG lifecycle email retention cutoff disappeared.");
+  }
+  tx.create(outbox.ref, {
+    ...payload,
+    status: "pending",
+    attemptCount: 0,
+    nextAttemptAt: serverTimestamp(),
+    piiRetentionCutoffAt: Timestamp.fromMillis(cutoff),
+    piiRedactionRetryAt: Timestamp.fromMillis(cutoff),
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+  tx.set(order.ref, {
+    [statusField]: "pending",
+    [outboxIdField]: outbox.id,
+    [errorField]: FieldValue.delete(),
+    [closureField]: FieldValue.delete(),
+    updatedAt: serverTimestamp(),
+  }, {merge: true});
+}
+
 function paygDuplicateLockRef(lockId: unknown): DocumentReference | null {
   return typeof lockId === "string" && /^[a-f0-9]{64}$/.test(lockId) ?
     db().collection(PAYG_DUPLICATE_LOCK_COLLECTION).doc(lockId) : null;
@@ -3831,13 +4358,23 @@ async function convergePaygRefund(refund: Stripe.Refund): Promise<boolean> {
       db().collection("bookings").doc(order.bookingId) : null;
     const classRef = db().collection("classes").doc(order.class.classId);
     const outboxRef = db().collection("paygEmailOutbox").doc(orderRef.id);
+    const refundOutboxRef = db().collection("paygEmailOutbox")
+      .doc(paygRefundOutboxId(orderRef.id));
     const lockRef = paygDuplicateLockRef(order.duplicateLockId);
     const reviewRef = paygPaymentReviewRef(orderSnap.get("paymentReviewId"));
-    const [bookingSnap, classSnap, outboxSnap, lockSnap, reviewSnap] =
+    const [
+      bookingSnap,
+      classSnap,
+      outboxSnap,
+      refundOutboxSnap,
+      lockSnap,
+      reviewSnap,
+    ] =
       await Promise.all([
         bookingRef ? tx.get(bookingRef) : Promise.resolve(null),
         tx.get(classRef),
         tx.get(outboxRef),
+        tx.get(refundOutboxRef),
         lockRef ? tx.get(lockRef) : Promise.resolve(null),
         reviewRef ? tx.get(reviewRef) : Promise.resolve(null),
       ]);
@@ -3848,11 +4385,27 @@ async function convergePaygRefund(refund: Stripe.Refund): Promise<boolean> {
     const expectedAmount = Number.isSafeInteger(storedExpectedAmount) &&
       storedExpectedAmount > 0 ? storedExpectedAmount : order.amountPence;
     const paymentIntentId = idOf(refund.payment_intent);
+    const refundChargeId = idOf(refund.charge);
+    const storedRefundId = orderSnap.get("refundId");
+    const lifecycleRefundIdUnconflicted = storedRefundId === null ||
+      storedRefundId === undefined || storedRefundId === "" ||
+      storedRefundId === refund.id;
     const exactProviderBinding = order.purchaseKind === PAYG_PURCHASE_KIND &&
       order.paymentIntentId !== null &&
       paymentIntentId === order.paymentIntentId &&
       refund.currency === order.currency &&
       refund.amount === expectedAmount;
+    const exactLifecycleEmailBinding = exactProviderBinding &&
+      /^re_[A-Za-z0-9_]{4,252}$/.test(refund.id) &&
+      isPaygOrdinaryLifecycleEmailOrder(orderSnap.data()) &&
+      expectedAmount === PAYG_AMOUNT_PENCE &&
+      order.amountPence === PAYG_AMOUNT_PENCE &&
+      order.currency === PAYG_CURRENCY &&
+      refund.amount === PAYG_AMOUNT_PENCE &&
+      refund.currency === PAYG_CURRENCY &&
+      refundChargeId !== null && order.chargeId === refundChargeId &&
+      lifecycleRefundIdUnconflicted &&
+      !orderSnap.get("conflictingRefundId");
     const knownStatus = refund.status === "pending" ||
       refund.status === "succeeded" || refund.status === "failed" ||
       refund.status === "canceled";
@@ -3955,6 +4508,23 @@ async function convergePaygRefund(refund: Stripe.Refund): Promise<boolean> {
           updatedAt: serverTimestamp(),
         }, {merge: true});
       }
+      const storedRefundedAmount = Number(orderSnap.get("refundedAmountPence"));
+      if (exactLifecycleEmailBinding &&
+        orderSnap.get("refundStatus") === "succeeded" &&
+        storedRefundedAmount === PAYG_AMOUNT_PENCE &&
+        paymentIntentId !== null && refundChargeId !== null) {
+        enqueuePaygLifecycleEmail(
+          tx,
+          orderSnap,
+          refundOutboxSnap,
+          {
+            kind: "refund",
+            paymentIntentId,
+            chargeId: refundChargeId,
+            refundId: refund.id,
+          }
+        );
+      }
       return;
     }
     const decision = resolvePaygRefundState(order.status, status);
@@ -4046,6 +4616,26 @@ async function convergePaygRefund(refund: Stripe.Refund): Promise<boolean> {
           refundedAt: serverTimestamp(),
         }
       );
+      if (exactLifecycleEmailBinding && paymentIntentId !== null &&
+        refundChargeId !== null) {
+        enqueuePaygLifecycleEmail(
+          tx,
+          orderSnap,
+          refundOutboxSnap,
+          {
+            kind: "refund",
+            paymentIntentId,
+            chargeId: refundChargeId,
+            refundId: refund.id,
+          }
+        );
+      } else {
+        tx.set(orderRef, {
+          refundEmailStatus: "manual_review",
+          refundEmailError: "provider_contract_mismatch",
+          updatedAt: serverTimestamp(),
+        }, {merge: true});
+      }
       return;
     }
 
@@ -5320,6 +5910,7 @@ export async function fulfilPaygCheckoutSession(
   let outcome: Readonly<{
     status: PaygOrderStatus | "payment_review";
     alreadyFulfilled: boolean;
+    refundReason?: PaygRefundReason;
   }>;
   try {
     outcome = await db().runTransaction(async (tx) => {
@@ -5383,8 +5974,14 @@ export async function fulfilPaygCheckoutSession(
       if (freshPrivacyPromotionMismatch !== null) {
         throw new PaygPiiPromotionClosedError(freshPrivacyPromotionMismatch);
       }
+      const classCancellationOperationId = classSnap.exists &&
+        classSnap.get("bookingOpen") === false &&
+        classSnap.get("bookingClosedReason") === "class_cancellation" &&
+        typeof classSnap.get("cancellationOperationId") === "string" ?
+        classSnap.get("cancellationOperationId") as string : null;
       const classUnavailable = !classSnap.exists ||
       classSnap.get("status") !== "scheduled" ||
+      classSnap.get("bookingOpen") === false ||
       classSnap.get("paygEligible") === false;
       const duplicateLockInvalid = !duplicateLockSnap.exists ||
       duplicateLockSnap.get("intentId") !== intentId ||
@@ -5421,7 +6018,12 @@ export async function fulfilPaygCheckoutSession(
         );
         tx.create(orderRef, {
           ...order,
-          refundReason: "hold_released_before_payment",
+          refundReason: classCancellationOperationId ?
+            "class_cancellation" : "hold_released_before_payment",
+          ...(classCancellationOperationId ? {
+            classCancellationOperationId,
+            classCancellationRequestedAt: serverTimestamp(),
+          } : {}),
         });
         if (!waiverSnap.exists) {
           const waiverPiiRetentionCutoffAt =
@@ -5455,7 +6057,13 @@ export async function fulfilPaygCheckoutSession(
           piiDeleteAt: FieldValue.delete(),
           updatedAt: serverTimestamp(),
         }, {merge: true});
-        return {status: "refund_pending" as const, alreadyFulfilled: false};
+        return {
+          status: "refund_pending" as const,
+          alreadyFulfilled: false,
+          refundReason: classCancellationOperationId ?
+            "class_cancellation" as const :
+            "hold_released_before_payment" as const,
+        };
       }
       if (bookingSnap.exists) {
         throw new Error(`PAYG guest booking ${bookingId} already exists without its order.`);
@@ -5553,7 +6161,10 @@ export async function fulfilPaygCheckoutSession(
   }
 
   if (outcome.status === "refund_pending") {
-    await issuePaygRefund(intentId, "hold_released_before_payment");
+    await issuePaygRefund(
+      intentId,
+      outcome.refundReason ?? "hold_released_before_payment"
+    );
   }
 }
 
@@ -6231,6 +6842,25 @@ async function applyPaygPaymentReviewChargeRefund(
   });
 }
 
+function canonicalPaygRefundIdFromCharge(
+  charge: Stripe.Charge,
+  paymentIntentId: string
+): string | null {
+  const refunds = (charge as Stripe.Charge & {
+    refunds?: {data?: readonly Stripe.Refund[]};
+  }).refunds?.data;
+  if (!Array.isArray(refunds)) return null;
+  const exact = refunds.filter((refund) =>
+    /^re_[A-Za-z0-9_]{4,252}$/.test(refund.id) &&
+    refund.status === "succeeded" &&
+    refund.amount === PAYG_AMOUNT_PENCE &&
+    refund.currency === PAYG_CURRENCY &&
+    idOf(refund.payment_intent) === paymentIntentId &&
+    idOf(refund.charge) === charge.id
+  );
+  return exact.length === 1 ? exact[0].id : null;
+}
+
 async function applyPaygChargeRefund(
   charge: Stripe.Charge,
   paymentIntent: Stripe.PaymentIntent
@@ -6249,13 +6879,23 @@ async function applyPaygChargeRefund(
     const bookingRef = order.bookingId ?
       db().collection("bookings").doc(order.bookingId) : null;
     const outboxRef = db().collection("paygEmailOutbox").doc(orderRef.id);
+    const refundOutboxRef = db().collection("paygEmailOutbox")
+      .doc(paygRefundOutboxId(orderRef.id));
     const lockRef = paygDuplicateLockRef(order.duplicateLockId);
     const reviewRef = paygPaymentReviewRef(freshOrder.get("paymentReviewId"));
-    const [bookingSnap, classSnap, outboxSnap, lockSnap, reviewSnap] =
+    const [
+      bookingSnap,
+      classSnap,
+      outboxSnap,
+      refundOutboxSnap,
+      lockSnap,
+      reviewSnap,
+    ] =
       await Promise.all([
         bookingRef ? tx.get(bookingRef) : Promise.resolve(null),
         tx.get(db().collection("classes").doc(order.class.classId)),
         tx.get(outboxRef),
+        tx.get(refundOutboxRef),
         lockRef ? tx.get(lockRef) : Promise.resolve(null),
         reviewRef ? tx.get(reviewRef) : Promise.resolve(null),
       ]);
@@ -6265,6 +6905,27 @@ async function applyPaygChargeRefund(
     const fullyRefunded = charge.amount_refunded >= charge.amount &&
       charge.amount === expectedAmount && charge.currency === order.currency &&
       idOf(charge.payment_intent) === order.paymentIntentId;
+    const canonicalRefundId = canonicalPaygRefundIdFromCharge(
+      charge,
+      paymentIntent.id
+    );
+    const storedRefundId = freshOrder.get("refundId");
+    const hasStoredRefundId = storedRefundId !== undefined &&
+      storedRefundId !== null && storedRefundId !== "";
+    const canonicalRefundConflictId = canonicalRefundId !== null &&
+      hasStoredRefundId && storedRefundId !== canonicalRefundId ?
+      canonicalRefundId : null;
+    const exactLifecycleEmailBinding = fullyRefunded &&
+      canonicalRefundConflictId === null &&
+      isPaygOrdinaryLifecycleEmailOrder(freshOrder.data()) &&
+      charge.amount_refunded === PAYG_AMOUNT_PENCE &&
+      charge.amount === PAYG_AMOUNT_PENCE &&
+      charge.currency === PAYG_CURRENCY &&
+      order.amountPence === PAYG_AMOUNT_PENCE &&
+      order.currency === PAYG_CURRENCY &&
+      order.paymentIntentId === paymentIntent.id &&
+      order.chargeId === charge.id &&
+      !freshOrder.get("conflictingRefundId");
     const linkedReview = reviewSnap?.exists &&
       reviewSnap.get("orderId") === orderRef.id &&
       reviewSnap.get("paymentIntentId") === paymentIntent.id;
@@ -6279,18 +6940,60 @@ async function applyPaygChargeRefund(
       );
     if (orderRefundSucceeded) {
       tx.set(orderRef, {
+        ...(canonicalRefundConflictId ? {
+          status: order.status === "disputed" ? "disputed" : "manual_review",
+          refundStatus: "conflicting_refund_id",
+          conflictingRefundId: canonicalRefundConflictId,
+          refundEmailStatus: "manual_review",
+          refundEmailError: "refund_id_conflict",
+        } : exactLifecycleEmailBinding ? {
+          chargeId: charge.id,
+          refundedAmountPence: PAYG_AMOUNT_PENCE,
+          refundStatus: "succeeded",
+          ...(canonicalRefundId ? {refundId: canonicalRefundId} : {}),
+        } : {}),
         refundRecoveryAt: FieldValue.delete(),
         ...paygRefundClaimCleanup(),
         updatedAt: serverTimestamp(),
       }, {merge: true});
       if (linkedReview && !linkedReviewRefundSucceeded) {
         tx.set(reviewSnap.ref, {
-          status: "refunded",
-          refundStatus: "succeeded",
+          status: canonicalRefundConflictId ? "manual_review" : "refunded",
+          refundStatus: canonicalRefundConflictId ?
+            "conflicting_refund_id" : "succeeded",
+          ...(canonicalRefundConflictId ? {
+            conflictingRefundId: canonicalRefundConflictId,
+          } : {}),
           refundRecoveryAt: FieldValue.delete(),
           ...paygRefundClaimCleanup(),
           updatedAt: serverTimestamp(),
         }, {merge: true});
+      }
+      if (exactLifecycleEmailBinding && canonicalRefundId) {
+        enqueuePaygLifecycleEmail(
+          tx,
+          freshOrder,
+          refundOutboxSnap,
+          {
+            kind: "refund",
+            paymentIntentId: paymentIntent.id,
+            chargeId: charge.id,
+            refundId: canonicalRefundId,
+          }
+        );
+      } else if (exactLifecycleEmailBinding && !refundOutboxSnap.exists) {
+        tx.set(orderRef, {
+          refundEmailStatus: "not_required",
+          refundEmailClosureReason: "canonical_refund_reference_pending",
+          updatedAt: serverTimestamp(),
+        }, {merge: true});
+      }
+      if (canonicalRefundConflictId) {
+        console.error("CRITICAL_BILLING_PAYG_REFUND_ID_CONFLICT", {
+          orderId: orderRef.id,
+          storedRefundId,
+          incomingRefundId: canonicalRefundConflictId,
+        });
       }
       return;
     }
@@ -6302,8 +7005,14 @@ async function applyPaygChargeRefund(
           fullyRefunded
         ),
         chargeId: charge.id,
-        refundStatus: fullyRefunded ?
-          "succeeded" : "partial_refund_manual_review",
+        ...(canonicalRefundId && !canonicalRefundConflictId ?
+          {refundId: canonicalRefundId} : {}),
+        refundStatus: canonicalRefundConflictId ?
+          "conflicting_refund_id" : fullyRefunded ?
+            "succeeded" : "partial_refund_manual_review",
+        ...(canonicalRefundConflictId ? {
+          conflictingRefundId: canonicalRefundConflictId,
+        } : {}),
         refundedAmountPence: charge.amount_refunded,
         refundedAt: fullyRefunded ? serverTimestamp() : FieldValue.delete(),
         refundRecoveryAt: FieldValue.delete(),
@@ -6346,16 +7055,58 @@ async function applyPaygChargeRefund(
       outboxSnap,
       lockSnap,
       {
-        status: order.status === "refunded" || order.status === "disputed" ||
-          order.status === "manual_review" ? order.status : "refunded",
-        cancelledReason: "payg_refunded",
+        status: canonicalRefundConflictId ?
+          order.status === "disputed" ? "disputed" : "manual_review" :
+          order.status === "refunded" || order.status === "disputed" ||
+            order.status === "manual_review" ? order.status : "refunded",
+        cancelledReason: canonicalRefundConflictId ?
+          "refund_id_conflict_manual_review" : "payg_refunded",
         chargeId: charge.id,
+        ...(canonicalRefundId && !canonicalRefundConflictId ?
+          {refundId: canonicalRefundId} : {}),
+        ...(canonicalRefundConflictId ? {
+          conflictingRefundId: canonicalRefundConflictId,
+        } : {}),
         refundedAmountPence: charge.amount_refunded,
-        refundStatus: "succeeded",
+        refundStatus: canonicalRefundConflictId ?
+          "conflicting_refund_id" : "succeeded",
         refundRecoveryAt: FieldValue.delete(),
         refundedAt: serverTimestamp(),
       }
     );
+    if (exactLifecycleEmailBinding && canonicalRefundId) {
+      enqueuePaygLifecycleEmail(
+        tx,
+        freshOrder,
+        refundOutboxSnap,
+        {
+          kind: "refund",
+          paymentIntentId: paymentIntent.id,
+          chargeId: charge.id,
+          refundId: canonicalRefundId,
+        }
+      );
+    } else if (exactLifecycleEmailBinding && !refundOutboxSnap.exists) {
+      tx.set(orderRef, {
+        refundEmailStatus: "not_required",
+        refundEmailClosureReason: "canonical_refund_reference_pending",
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+    } else {
+      tx.set(orderRef, {
+        refundEmailStatus: "manual_review",
+        refundEmailError: canonicalRefundConflictId ?
+          "refund_id_conflict" : "provider_contract_mismatch",
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+    }
+    if (canonicalRefundConflictId) {
+      console.error("CRITICAL_BILLING_PAYG_REFUND_ID_CONFLICT", {
+        orderId: orderRef.id,
+        storedRefundId,
+        incomingRefundId: canonicalRefundConflictId,
+      });
+    }
   });
 }
 
@@ -6451,13 +7202,23 @@ async function applyPaygDispute(
     const bookingRef = order.bookingId ?
       db().collection("bookings").doc(order.bookingId) : null;
     const outboxRef = db().collection("paygEmailOutbox").doc(orderRef.id);
+    const disputeOutboxRef = db().collection("paygEmailOutbox")
+      .doc(paygDisputeOutboxId(orderRef.id));
     const lockRef = paygDuplicateLockRef(order.duplicateLockId);
     const reviewRef = paygPaymentReviewRef(freshOrder.get("paymentReviewId"));
-    const [bookingSnap, classSnap, outboxSnap, lockSnap, reviewSnap] =
+    const [
+      bookingSnap,
+      classSnap,
+      outboxSnap,
+      disputeOutboxSnap,
+      lockSnap,
+      reviewSnap,
+    ] =
       await Promise.all([
         bookingRef ? tx.get(bookingRef) : Promise.resolve(null),
         tx.get(db().collection("classes").doc(order.class.classId)),
         tx.get(outboxRef),
+        tx.get(disputeOutboxRef),
         lockRef ? tx.get(lockRef) : Promise.resolve(null),
         reviewRef ? tx.get(reviewRef) : Promise.resolve(null),
       ]);
@@ -6470,7 +7231,42 @@ async function applyPaygDispute(
     const linkedReview = reviewSnap?.exists &&
       reviewSnap.get("orderId") === orderRef.id &&
       reviewSnap.get("paymentIntentId") === paymentIntent.id;
+    const disputeChargeId = idOf(dispute.charge);
+    const disputeLifecycle = classifyPaygDisputeStatus(dispute.status);
+    const exactLifecycleEmailBinding =
+      disputeLifecycle !== "unknown" &&
+      /^du_[A-Za-z0-9_]{4,252}$/.test(dispute.id) &&
+      isPaygOrdinaryLifecycleEmailOrder(freshOrder.data()) &&
+      order.purchaseKind === PAYG_PURCHASE_KIND &&
+      order.amountPence === PAYG_AMOUNT_PENCE &&
+      order.currency === PAYG_CURRENCY &&
+      order.paymentIntentId === paymentIntent.id &&
+      paymentIntent.currency === PAYG_CURRENCY &&
+      disputeChargeId !== null && order.chargeId === disputeChargeId &&
+      dispute.amount === PAYG_AMOUNT_PENCE &&
+      dispute.currency === PAYG_CURRENCY &&
+      !freshOrder.get("conflictingDisputeId");
     if (observation === "preserve_terminal") {
+      // This handler may have retrieved an older open provider snapshot before
+      // another handler committed the terminal state. The fresh Firestore row
+      // is authoritative in this branch: never copy the stale incoming status
+      // or its lifecycle fields back over terminal evidence.
+      const storedDisputeId = freshOrder.get("disputeId");
+      const storedDisputeChargeId = freshOrder.get("disputeChargeId");
+      const storedLifecycleEmailBinding =
+        /^du_[A-Za-z0-9_]{4,252}$/.test(storedDisputeId || "") &&
+        isPaygTerminalDisputeStatus(freshOrder.get("disputeStatus")) &&
+        isPaygOrdinaryLifecycleEmailOrder(freshOrder.data()) &&
+        order.purchaseKind === PAYG_PURCHASE_KIND &&
+        order.amountPence === PAYG_AMOUNT_PENCE &&
+        order.currency === PAYG_CURRENCY &&
+        order.paymentIntentId === paymentIntent.id &&
+        paymentIntent.currency === PAYG_CURRENCY &&
+        typeof storedDisputeChargeId === "string" &&
+        order.chargeId === storedDisputeChargeId &&
+        freshOrder.get("disputeAmountPence") === PAYG_AMOUNT_PENCE &&
+        freshOrder.get("disputeCurrency") === PAYG_CURRENCY &&
+        !freshOrder.get("conflictingDisputeId");
       await releasePaidOrderCapacity(
         tx,
         orderRef,
@@ -6491,6 +7287,25 @@ async function applyPaygDispute(
           refundRecoveryAt: FieldValue.delete(),
           refundAutomationStatus: "suspended_dispute",
           ...paygRefundClaimCleanup(),
+          updatedAt: serverTimestamp(),
+        }, {merge: true});
+      }
+      if (storedLifecycleEmailBinding) {
+        enqueuePaygLifecycleEmail(
+          tx,
+          freshOrder,
+          disputeOutboxSnap,
+          {
+            kind: "dispute",
+            paymentIntentId: paymentIntent.id,
+            chargeId: storedDisputeChargeId,
+            disputeId: storedDisputeId,
+          }
+        );
+      } else if (!disputeOutboxSnap.exists) {
+        tx.set(orderRef, {
+          disputeEmailStatus: "manual_review",
+          disputeEmailError: "stored_terminal_provider_binding_mismatch",
           updatedAt: serverTimestamp(),
         }, {merge: true});
       }
@@ -6564,6 +7379,11 @@ async function applyPaygDispute(
         cancelledReason: "payg_dispute",
         disputeId: dispute.id,
         disputeStatus: dispute.status,
+        ...(exactLifecycleEmailBinding ? {
+          disputeAmountPence: dispute.amount,
+          disputeCurrency: dispute.currency,
+          disputeChargeId,
+        } : {}),
         disputeOpen: isOpenDispute(dispute.status),
         disputeUpdatedAt: serverTimestamp(),
         refundRecoveryAt: FieldValue.delete(),
@@ -6571,6 +7391,25 @@ async function applyPaygDispute(
         refundObligationReviewRequired: true,
       }
     );
+    if (exactLifecycleEmailBinding && disputeChargeId !== null) {
+      enqueuePaygLifecycleEmail(
+        tx,
+        freshOrder,
+        disputeOutboxSnap,
+        {
+          kind: "dispute",
+          paymentIntentId: paymentIntent.id,
+          chargeId: disputeChargeId,
+          disputeId: dispute.id,
+        }
+      );
+    } else {
+      tx.set(orderRef, {
+        disputeEmailStatus: "manual_review",
+        disputeEmailError: "provider_contract_mismatch",
+        updatedAt: serverTimestamp(),
+      }, {merge: true});
+    }
   });
 }
 
@@ -7805,6 +8644,7 @@ async function recoverDuePaygRefunds(
     try {
       const storedReason = order.get("refundReason");
       const reason: PaygRefundReason = storedReason === "guest_cancellation" ||
+        storedReason === "class_cancellation" ||
         storedReason === "hold_released_before_payment" ||
         storedReason === "paid_contract_mismatch" ? storedReason :
         order.get("cancellation") ? "guest_cancellation" :
@@ -7926,9 +8766,17 @@ type PaygConfirmationOutboxPayload = ReturnType<
 type PaygConfirmationCorrectionOutboxPayload = ReturnType<
   typeof buildPaygConfirmationCorrectionOutboxPayload
 >;
+type PaygRefundOutboxPayload = ReturnType<
+  typeof buildPaygRefundOutboxPayload
+>;
+type PaygDisputeOutboxPayload = ReturnType<
+  typeof buildPaygDisputeOutboxPayload
+>;
 type PaygEmailOutboxPayload =
   | PaygConfirmationOutboxPayload
-  | PaygConfirmationCorrectionOutboxPayload;
+  | PaygConfirmationCorrectionOutboxPayload
+  | PaygRefundOutboxPayload
+  | PaygDisputeOutboxPayload;
 
 type PaygConfirmationEmail = Readonly<{
   from: string;
@@ -8089,23 +8937,220 @@ export function buildPaygConfirmationCorrectionEmail(
   });
 }
 
+function assertPaygEmailSubject(value: string): string {
+  if (!value || value.length > 998 || /[\r\n]/.test(value)) {
+    throw new Error("PAYG email subject is not configured safely.");
+  }
+  return value;
+}
+
+function paygLifecycleClassWhen(
+  classSnapshot: PaygClassSnapshot,
+  label: string
+): string {
+  const classStart = DateTime.fromISO(classSnapshot.startTime, {setZone: true})
+    .setZone(classSnapshot.timezone);
+  if (!classStart.isValid) throw new Error(`PAYG ${label} class time is invalid.`);
+  return classStart.toFormat("cccc d LLLL yyyy 'at' HH:mm ZZZZ");
+}
+
+function validatedPaygEmailRecipients(
+  recipients: readonly string[]
+): readonly string[] {
+  if (recipients.length !== 1) {
+    throw new Error("PAYG email recipient is not configured safely.");
+  }
+  return Object.freeze([
+    assertEmailRoutingAddress(recipients[0], "PAYG recipient"),
+  ]);
+}
+
+export function buildPaygRefundEmail(
+  outbox: PaygRefundOutboxPayload,
+  from: string,
+  replyTo: string
+): PaygConfirmationEmail {
+  const data = outbox.templateData;
+  const when = paygLifecycleClassWhen(data.class, "refund");
+  const paid = `£${(data.amountPence / 100).toFixed(2)} ${
+    data.currency.toUpperCase()
+  }`;
+  const subject = assertPaygEmailSubject(
+    `Your PAYG refund is confirmed — ${data.class.title}`
+  );
+  const text = [
+    `Hi ${data.attendeeName},`,
+    "",
+    `Stripe has confirmed your ${paid} refund to the original payment method.`,
+    "Your bank may take additional time to display the refund.",
+    "",
+    `Class: ${data.class.title}`,
+    `When: ${when}`,
+    `Where: ${data.class.location}`,
+  ].join("\n");
+  const html = `<!doctype html>
+<html lang="en"><body style="margin:0;background:#f4f4f2;color:#111;font-family:Arial,sans-serif">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center" style="padding:32px 16px">
+    <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;background:#fff;border:1px solid #ddd">
+      <tr><td style="padding:32px">
+        <p style="margin:0 0 8px;font-size:12px;letter-spacing:.16em;font-weight:700">ZERO ALPHA FITNESS</p>
+        <h1 style="margin:0 0 24px;font-size:28px">Your refund is confirmed</h1>
+        <p>Hi ${escapeHtml(data.attendeeName)},</p>
+        <p><strong>Stripe has confirmed your ${escapeHtml(paid)} refund to the original payment method.</strong></p>
+        <p>Your bank may take additional time to display the refund.</p>
+        <p>${escapeHtml(data.class.title)}<br>${escapeHtml(when)}<br>
+          ${escapeHtml(data.class.location)}</p>
+      </td></tr>
+    </table>
+  </td></tr></table>
+</body></html>`;
+  return Object.freeze({
+    from: assertEmailRoutingAddress(from, "PAYG_FROM_EMAIL"),
+    to: validatedPaygEmailRecipients(outbox.to),
+    reply_to: assertEmailRoutingAddress(replyTo, "PAYG_REPLY_TO_EMAIL"),
+    subject,
+    text,
+    html,
+  });
+}
+
+export function buildPaygDisputeEmail(
+  outbox: PaygDisputeOutboxPayload,
+  from: string,
+  replyTo: string
+): PaygConfirmationEmail {
+  const data = outbox.templateData;
+  const when = paygLifecycleClassWhen(data.class, "dispute");
+  const paid = `£${(data.amountPence / 100).toFixed(2)} ${
+    data.currency.toUpperCase()
+  }`;
+  const subject = assertPaygEmailSubject(
+    `Important: dispute reported for your PAYG class — ${data.class.title}`
+  );
+  const notice = `Stripe reported a dispute on the ${paid} payment for this booking. The booking is inactive and automated refund handling has been stopped.`;
+  const contact = "If you did not expect this, reply to this email so we can review it with you.";
+  const text = [
+    `Hi ${data.attendeeName},`,
+    "",
+    notice,
+    contact,
+    "",
+    `Class: ${data.class.title}`,
+    `When: ${when}`,
+    `Where: ${data.class.location}`,
+  ].join("\n");
+  const html = `<!doctype html>
+<html lang="en"><body style="margin:0;background:#f4f4f2;color:#111;font-family:Arial,sans-serif">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center" style="padding:32px 16px">
+    <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;background:#fff;border:1px solid #ddd">
+      <tr><td style="padding:32px">
+        <p style="margin:0 0 8px;font-size:12px;letter-spacing:.16em;font-weight:700">ZERO ALPHA FITNESS</p>
+        <h1 style="margin:0 0 24px;font-size:28px">Important payment update</h1>
+        <p>Hi ${escapeHtml(data.attendeeName)},</p>
+        <p><strong>${escapeHtml(notice)}</strong></p>
+        <p>${escapeHtml(contact)}</p>
+        <p>${escapeHtml(data.class.title)}<br>${escapeHtml(when)}<br>
+          ${escapeHtml(data.class.location)}</p>
+      </td></tr>
+    </table>
+  </td></tr></table>
+</body></html>`;
+  return Object.freeze({
+    from: assertEmailRoutingAddress(from, "PAYG_FROM_EMAIL"),
+    to: validatedPaygEmailRecipients(outbox.to),
+    reply_to: assertEmailRoutingAddress(replyTo, "PAYG_REPLY_TO_EMAIL"),
+    subject,
+    text,
+    html,
+  });
+}
+
 function buildPaygOutboxEmail(
   outbox: PaygEmailOutboxPayload,
   from: string,
   replyTo: string
 ): PaygConfirmationEmail {
-  return outbox.kind === "payg_guest_confirmation" ?
-    buildPaygConfirmationEmail(outbox, from, replyTo) :
-    buildPaygConfirmationCorrectionEmail(outbox, from, replyTo);
+  switch (outbox.kind) {
+  case "payg_guest_confirmation":
+    return buildPaygConfirmationEmail(outbox, from, replyTo);
+  case "payg_guest_confirmation_correction":
+    return buildPaygConfirmationCorrectionEmail(outbox, from, replyTo);
+  case "payg_guest_refund_confirmation":
+    return buildPaygRefundEmail(outbox, from, replyTo);
+  case "payg_guest_dispute_notice":
+    return buildPaygDisputeEmail(outbox, from, replyTo);
+  }
+}
+
+function paygLifecycleClassMatches(
+  left: unknown,
+  right: unknown
+): boolean {
+  if (!validPaygLifecycleClass(left) || !validPaygLifecycleClass(right)) {
+    return false;
+  }
+  return left.classId === right.classId && left.title === right.title &&
+    left.startTime === right.startTime && left.endTime === right.endTime &&
+    left.timezone === right.timezone && left.location === right.location;
+}
+
+export function isPaygLifecycleEmailBindingValid(
+  payload: unknown,
+  orderValue: unknown
+): boolean {
+  if (!payload || typeof payload !== "object" ||
+    !orderValue || typeof orderValue !== "object") return false;
+  const message = payload as PaygEmailOutboxPayload;
+  const order = orderValue as Record<string, any>;
+  if (message.kind !== "payg_guest_refund_confirmation" &&
+    message.kind !== "payg_guest_dispute_notice") return false;
+  const data = message.templateData;
+  const contact = order.contact as Record<string, unknown> | null;
+  const attendee = order.attendee as Record<string, unknown> | null;
+  const common = order.purchaseKind === PAYG_PURCHASE_KIND &&
+    isPaygOrdinaryLifecycleEmailOrder(order) &&
+    order.orderId === message.orderId &&
+    order.amountPence === PAYG_AMOUNT_PENCE &&
+    order.currency === PAYG_CURRENCY &&
+    order.paymentIntentId === data.paymentIntentId &&
+    order.chargeId === data.chargeId &&
+    data.amountPence === PAYG_AMOUNT_PENCE &&
+    data.currency === PAYG_CURRENCY &&
+    Array.isArray(message.to) && message.to.length === 1 &&
+    contact && contact.email === message.to[0] &&
+    attendee && attendee.fullName === data.attendeeName &&
+    paygLifecycleClassMatches(order.class, data.class);
+  if (!common) return false;
+  if (message.kind === "payg_guest_refund_confirmation") {
+    const refundData = message.templateData;
+    return typeof refundData.refundId === "string" &&
+      order.refundId === refundData.refundId &&
+      order.refundStatus === "succeeded" &&
+      !order.conflictingRefundId &&
+      order.refundedAmountPence === PAYG_AMOUNT_PENCE;
+  }
+  const disputeData = message.templateData;
+  return order.disputeId === disputeData.disputeId &&
+    order.disputeChargeId === disputeData.chargeId &&
+    order.disputeAmountPence === PAYG_AMOUNT_PENCE &&
+    order.disputeCurrency === PAYG_CURRENCY &&
+    !order.conflictingDisputeId &&
+    classifyPaygDisputeStatus(order.disputeStatus) !== "unknown" &&
+    order.refundAutomationStatus === "suspended_dispute";
 }
 
 function isPaygEmailPayloadDeliverable(
   payload: PaygEmailOutboxPayload,
-  status: PaygOrderStatus
+  order: DocumentSnapshot
 ): boolean {
-  return payload.kind === "payg_guest_confirmation" ?
-    shouldSendPaygConfirmation(status) :
-    shouldEnqueuePaygConfirmationCorrection(status);
+  const status = order.get("status") as PaygOrderStatus;
+  if (payload.kind === "payg_guest_confirmation") {
+    return shouldSendPaygConfirmation(status);
+  }
+  if (payload.kind === "payg_guest_confirmation_correction") {
+    return shouldEnqueuePaygConfirmationCorrection(status);
+  }
+  return isPaygLifecycleEmailBindingValid(payload, order.data());
 }
 
 type PaygEmailLease =
@@ -8244,12 +9289,132 @@ function redactAndTombstonePaygOutbox(
   }, {merge: true});
 }
 
+function redactOrDeferActivePaygSiblingOutbox(
+  tx: Transaction,
+  outbox: DocumentSnapshot,
+  reason: PaygOutboxPrivacyClosureReason,
+  nowMillis: number
+): void {
+  const privacyAlreadyClosed = hasNonNullDocumentField(
+    outbox,
+    "piiRedactedAt"
+  );
+  const cutoff = timestampMillis(
+    outbox.get(PAYG_PII_RETENTION_CUTOFF_FIELD)
+  );
+  const leaseStartedAt = timestampMillis(outbox.get("lastAttemptAt"));
+  const leaseExpiresAt = timestampMillis(outbox.get("leaseExpiresAt"));
+
+  // A worker that acquired a valid lease before the approved cutoff may have
+  // already handed the message to the provider. Preserve that lease until the
+  // worker records the provider result; its own completion path immediately
+  // redacts the payload. Missing cutoff evidence or an already-closed privacy
+  // record can never authorize this short deferral.
+  if (!privacyAlreadyClosed && cutoff !== null && cutoff <= nowMillis &&
+    isActivePaygEmailLease({
+      status: outbox.get("status"),
+      leaseToken: outbox.get("leaseToken"),
+      leaseStartedAtMillis: leaseStartedAt,
+      leaseExpiresAtMillis: leaseExpiresAt,
+      retentionCutoffAtMillis: cutoff,
+      nowMillis,
+    })) {
+    tx.set(outbox.ref, {
+      [PAYG_PII_REDACTION_RETRY_FIELD]:
+        Timestamp.fromMillis(leaseExpiresAt as number),
+      piiRedactionDeferredAt: serverTimestamp(),
+      piiRedactionDeferredReason: "active_email_lease",
+      updatedAt: serverTimestamp(),
+    }, {merge: true});
+    return;
+  }
+
+  redactAndTombstonePaygOutbox(tx, outbox, reason);
+}
+
+type PaygEmailKind = PaygEmailOutboxPayload["kind"];
+
+function paygEmailOrderProjection(kind: PaygEmailKind): Readonly<{
+  status: string;
+  error: string;
+  sentAt: string;
+  providerId: string;
+}> {
+  switch (kind) {
+  case "payg_guest_confirmation":
+    return Object.freeze({
+      status: "confirmationEmailStatus",
+      error: "confirmationEmailError",
+      sentAt: "confirmationEmailSentAt",
+      providerId: "confirmationEmailProviderId",
+    });
+  case "payg_guest_confirmation_correction":
+    return Object.freeze({
+      status: "confirmationCorrectionEmailStatus",
+      error: "confirmationCorrectionEmailError",
+      sentAt: "confirmationCorrectionEmailSentAt",
+      providerId: "confirmationCorrectionEmailProviderId",
+    });
+  case "payg_guest_refund_confirmation":
+    return Object.freeze({
+      status: "refundEmailStatus",
+      error: "refundEmailError",
+      sentAt: "refundEmailSentAt",
+      providerId: "refundEmailProviderId",
+    });
+  case "payg_guest_dispute_notice":
+    return Object.freeze({
+      status: "disputeEmailStatus",
+      error: "disputeEmailError",
+      sentAt: "disputeEmailSentAt",
+      providerId: "disputeEmailProviderId",
+    });
+  }
+}
+
+function paygOrderEmailStatusUpdate(
+  kind: PaygEmailKind,
+  status: "pending" | "not_required" | "sent" | "manual_review",
+  error: string | null = null
+): Record<string, unknown> {
+  const projection = paygEmailOrderProjection(kind);
+  return {
+    [projection.status]: status,
+    [projection.error]: error === null ? FieldValue.delete() : error,
+  };
+}
+
+function paygUndeliverableOrderEmailUpdate(
+  kind: PaygEmailKind
+): Record<string, unknown> {
+  return kind === "payg_guest_refund_confirmation" ||
+    kind === "payg_guest_dispute_notice" ?
+    paygOrderEmailStatusUpdate(
+      kind,
+      "manual_review",
+      "provider_binding_mismatch"
+    ) : paygOrderEmailStatusUpdate(kind, "not_required");
+}
+
+function paygOrderEmailSentUpdate(
+  kind: PaygEmailKind,
+  providerMessageId: string | null
+): Record<string, unknown> {
+  const projection = paygEmailOrderProjection(kind);
+  return {
+    [projection.status]: "sent",
+    [projection.sentAt]: serverTimestamp(),
+    [projection.providerId]: providerMessageId,
+    [projection.error]: FieldValue.delete(),
+  };
+}
+
 function paygPrivacyClosedOrderEmailUpdate(kind: unknown) {
-  return kind === "payg_guest_confirmation" ? {
-    confirmationEmailStatus: "not_required",
-  } : kind === "payg_guest_confirmation_correction" ? {
-    confirmationCorrectionEmailStatus: "not_required",
-  } : {};
+  return kind === "payg_guest_confirmation" ||
+    kind === "payg_guest_confirmation_correction" ||
+    kind === "payg_guest_refund_confirmation" ||
+    kind === "payg_guest_dispute_notice" ?
+    paygOrderEmailStatusUpdate(kind, "not_required") : {};
 }
 
 function paygEmailRetryAt(attemptCount: number, nowMillis: number): number {
@@ -8281,17 +9446,72 @@ function validPaygOutboxPayload(
     typeof payload.templateData.cancellationUrl === "string" &&
     payload.templateData.cancellationUrl.includes("/pay-as-you-go/cancel?token=");
   }
-  return payload.kind === "payg_guest_confirmation_correction" &&
-    payload.outboxId === outboxId &&
-    outboxId === paygConfirmationCorrectionOutboxId(payload.orderId) &&
-    payload.idempotencyKey ===
-      `payg-confirmation-correction/${payload.orderId}/v1` &&
-    shouldEnqueuePaygConfirmationCorrection(payload.templateData.orderStatus) &&
-    payload.templateData.amountPence === PAYG_AMOUNT_PENCE &&
+  const lifecycleCommon = payload.templateData.amountPence ===
+    PAYG_AMOUNT_PENCE &&
     payload.templateData.currency === PAYG_CURRENCY &&
     typeof payload.templateData.attendeeName === "string" &&
-    payload.templateData.class &&
-    typeof payload.templateData.class.title === "string";
+    validPaygLifecycleClass(payload.templateData.class);
+  if (payload.kind === "payg_guest_confirmation_correction") {
+    return payload.outboxId === outboxId &&
+      outboxId === paygConfirmationCorrectionOutboxId(payload.orderId) &&
+      payload.idempotencyKey ===
+        `payg-confirmation-correction/${payload.orderId}/v1` &&
+      shouldEnqueuePaygConfirmationCorrection(payload.templateData.orderStatus) &&
+      lifecycleCommon;
+  }
+  const validPaymentIntentId = typeof payload.templateData.paymentIntentId ===
+    "string" && /^pi_[A-Za-z0-9_]{4,252}$/.test(
+    payload.templateData.paymentIntentId
+  );
+  const validChargeId = typeof payload.templateData.chargeId === "string" &&
+    /^ch_[A-Za-z0-9_]{4,252}$/.test(payload.templateData.chargeId);
+  if (!lifecycleCommon || !validPaymentIntentId || !validChargeId) return false;
+  if (payload.kind === "payg_guest_refund_confirmation") {
+    const refundId = payload.templateData.refundId;
+    return payload.outboxId === outboxId &&
+      outboxId === paygRefundOutboxId(payload.orderId) &&
+      payload.idempotencyKey ===
+        `payg-refund-confirmed/${payload.orderId}/v1` &&
+      typeof refundId === "string" &&
+      /^re_[A-Za-z0-9_]{4,252}$/.test(refundId);
+  }
+  return payload.kind === "payg_guest_dispute_notice" &&
+    payload.outboxId === outboxId &&
+    outboxId === paygDisputeOutboxId(payload.orderId) &&
+    payload.idempotencyKey ===
+      `payg-dispute-detected/${payload.orderId}/v1` &&
+    typeof payload.templateData.disputeId === "string" &&
+    /^du_[A-Za-z0-9_]{4,252}$/.test(
+      payload.templateData.disputeId
+    );
+}
+
+function paygOutboxPayloadValue(outbox: DocumentSnapshot): unknown {
+  return {
+    schemaVersion: outbox.get("schemaVersion"),
+    kind: outbox.get("kind"),
+    orderId: outbox.get("orderId"),
+    outboxId: outbox.get("outboxId"),
+    idempotencyKey: outbox.get("idempotencyKey"),
+    to: outbox.get("to"),
+    templateData: outbox.get("templateData"),
+  };
+}
+
+export function shouldSuppressPaygConfirmationCorrectionForLifecycle(
+  input: Readonly<{
+    outboxId: string;
+    status: unknown;
+    payload: unknown;
+    order: unknown;
+  }>
+): boolean {
+  if (input.status !== "pending" && input.status !== "sending" &&
+    input.status !== "reconciling" && input.status !== "sent") return false;
+  if (!validPaygOutboxPayload(input.outboxId, input.payload)) return false;
+  if (input.payload.kind !== "payg_guest_refund_confirmation" &&
+    input.payload.kind !== "payg_guest_dispute_notice") return false;
+  return isPaygLifecycleEmailBindingValid(input.payload, input.order);
 }
 
 async function acquirePaygEmailLease(
@@ -8325,15 +9545,7 @@ async function acquirePaygEmailLease(
       }
       return {state: "terminal" as const};
     }
-    const rawPayload: unknown = {
-      schemaVersion: outbox.get("schemaVersion"),
-      kind: outbox.get("kind"),
-      orderId: outbox.get("orderId"),
-      outboxId: outbox.get("outboxId"),
-      idempotencyKey: outbox.get("idempotencyKey"),
-      to: outbox.get("to"),
-      templateData: outbox.get("templateData"),
-    };
+    const rawPayload = paygOutboxPayloadValue(outbox);
     if (!validPaygOutboxPayload(outboxId, rawPayload)) {
       const reason = "PAYG email outbox payload is missing or invalid.";
       tx.set(outboxRef, {
@@ -8383,24 +9595,17 @@ async function acquirePaygEmailLease(
         providerAcceptanceState: outbox.get("providerAcceptanceState"),
         tombstonedLeaseCorrelation: outbox.get("tombstonedLeaseCorrelation"),
       });
-    const deliverable = payload.kind === "payg_guest_confirmation" ?
-      shouldSendPaygConfirmation(orderStatus) :
-      shouldEnqueuePaygConfirmationCorrection(orderStatus);
+    const deliverable = isPaygEmailPayloadDeliverable(payload, order);
     if (!deliverable && !reconcileAfterStateChange) {
       tombstonePaygConfirmation(tx, outbox, `order_${String(orderStatus)}`);
       tx.set(orderRef, {
-        ...(payload.kind === "payg_guest_confirmation" ? {
-          confirmationEmailStatus: "not_required",
-        } : {
-          confirmationCorrectionEmailStatus: "not_required",
-        }),
+        ...paygUndeliverableOrderEmailUpdate(payload.kind),
         updatedAt: serverTimestamp(),
       }, {merge: true});
       return {state: "terminal" as const};
     }
     if (status === "sent") {
-      const orderEmailField = payload.kind === "payg_guest_confirmation" ?
-        "confirmationEmailStatus" : "confirmationCorrectionEmailStatus";
+      const orderEmailField = paygEmailOrderProjection(payload.kind).status;
       if (order.get(orderEmailField) !== "sent") {
         tx.set(orderRef, {
           [orderEmailField]: "sent",
@@ -8439,13 +9644,11 @@ async function acquirePaygEmailLease(
           confirmationEmailStatus: "not_required",
           confirmationCorrectionEmailStatus: "manual_review",
           confirmationAcceptanceState: "manual_review",
-        } : payload.kind === "payg_guest_confirmation" ? {
-          confirmationEmailStatus: "manual_review",
-          confirmationEmailError: reason,
-        } : {
-          confirmationCorrectionEmailStatus: "manual_review",
-          confirmationCorrectionEmailError: reason,
-        }),
+        } : paygOrderEmailStatusUpdate(
+          payload.kind,
+          "manual_review",
+          reason
+        )),
         updatedAt: serverTimestamp(),
       }, {merge: true});
       console.error("CRITICAL_BILLING_PAYG_CONFIRMATION_MANUAL_REVIEW", {
@@ -8604,7 +9807,7 @@ async function processPaygConfirmationOutbox(
     }
     const currentlyDeliverable = matchingOrder && isPaygEmailPayloadDeliverable(
       lease.payload,
-      order.get("status") as PaygOrderStatus
+      order
     );
     if (!matchingOrder || (!lease.reconcileAfterStateChange &&
       !currentlyDeliverable)) {
@@ -8615,11 +9818,7 @@ async function processPaygConfirmationOutbox(
       );
       if (matchingOrder) {
         tx.set(orderRef, {
-          ...(lease.payload.kind === "payg_guest_confirmation" ? {
-            confirmationEmailStatus: "not_required",
-          } : {
-            confirmationCorrectionEmailStatus: "not_required",
-          }),
+          ...paygUndeliverableOrderEmailUpdate(lease.payload.kind),
           updatedAt: serverTimestamp(),
         }, {merge: true});
       }
@@ -8644,11 +9843,22 @@ async function processPaygConfirmationOutbox(
         db().collection("paygEmailOutbox").doc(
           paygConfirmationCorrectionOutboxId(lease.orderId)
         ) : null;
-      const [outbox, order, correction] = await Promise.all([
-        tx.get(outboxRef),
-        tx.get(orderRef),
-        correctionRef ? tx.get(correctionRef) : Promise.resolve(null),
-      ]);
+      const refundNoticeRef = lease.payload.kind === "payg_guest_confirmation" ?
+        db().collection("paygEmailOutbox").doc(
+          paygRefundOutboxId(lease.orderId)
+        ) : null;
+      const disputeNoticeRef = lease.payload.kind === "payg_guest_confirmation" ?
+        db().collection("paygEmailOutbox").doc(
+          paygDisputeOutboxId(lease.orderId)
+        ) : null;
+      const [outbox, order, correction, refundNotice, disputeNotice] =
+        await Promise.all([
+          tx.get(outboxRef),
+          tx.get(orderRef),
+          correctionRef ? tx.get(correctionRef) : Promise.resolve(null),
+          refundNoticeRef ? tx.get(refundNoticeRef) : Promise.resolve(null),
+          disputeNoticeRef ? tx.get(disputeNoticeRef) : Promise.resolve(null),
+        ]);
       if (!outbox.exists) return "lost" as const;
       const orderStatus = order.exists ?
         order.get("status") as PaygOrderStatus : null;
@@ -8659,11 +9869,25 @@ async function processPaygConfirmationOutbox(
           tombstonedLeaseCorrelation: outbox.get("tombstonedLeaseCorrelation"),
           leaseToken: lease.leaseToken,
           orderStatus,
-          correctionExists: Boolean(correction?.exists),
+          correctionExists: Boolean(
+            correction?.exists || (order.exists && refundNotice?.exists &&
+              shouldSuppressPaygConfirmationCorrectionForLifecycle({
+                outboxId: refundNotice.id,
+                status: refundNotice.get("status"),
+                payload: paygOutboxPayloadValue(refundNotice),
+                order: order.data(),
+              })) || (order.exists && disputeNotice?.exists &&
+              shouldSuppressPaygConfirmationCorrectionForLifecycle({
+                outboxId: disputeNotice.id,
+                status: disputeNotice.get("status"),
+                payload: paygOutboxPayloadValue(disputeNotice),
+                order: order.data(),
+              }))
+          ),
         }) : outbox.get("status") === "sending" &&
           outbox.get("leaseToken") === lease.leaseToken ? Object.freeze({
-            disposition: orderStatus !== null &&
-              isPaygEmailPayloadDeliverable(lease.payload, orderStatus) ?
+            disposition: order.exists &&
+              isPaygEmailPayloadDeliverable(lease.payload, order) ?
               "sent" as const : "accepted_after_state_change" as const,
             enqueueCorrection: false,
           }) : Object.freeze({
@@ -8705,26 +9929,44 @@ async function processPaygConfirmationOutbox(
           }),
         });
         if (correctionRef && correction?.exists) {
-          redactAndTombstonePaygOutbox(
+          redactOrDeferActivePaygSiblingOutbox(
             tx,
             correction,
-            privacyClosure
+            privacyClosure,
+            acceptanceNow
+          );
+        }
+        if (refundNoticeRef && refundNotice?.exists) {
+          redactOrDeferActivePaygSiblingOutbox(
+            tx,
+            refundNotice,
+            privacyClosure,
+            acceptanceNow
+          );
+        }
+        if (disputeNoticeRef && disputeNotice?.exists) {
+          redactOrDeferActivePaygSiblingOutbox(
+            tx,
+            disputeNotice,
+            privacyClosure,
+            acceptanceNow
           );
         }
         if (order.exists) {
-          tx.set(orderRef, {
-            ...(lease.payload.kind === "payg_guest_confirmation" ?
+          const privacyOrderEmailUpdate = lease.payload.kind ===
+            "payg_guest_confirmation" ? acceptedAfterStateChange ? {
+              confirmationEmailStatus: "not_required",
+              confirmationAcceptedAfterStateChange: true,
+              confirmationCorrectionEmailStatus: "not_required",
+            } : {
+              confirmationEmailStatus: "sent",
+              confirmationEmailSentAt: serverTimestamp(),
+              confirmationEmailProviderId: providerMessageId,
+              confirmationEmailError: FieldValue.delete(),
+              confirmationCorrectionEmailStatus: "not_required",
+            } : lease.payload.kind ===
+              "payg_guest_confirmation_correction" ?
               acceptedAfterStateChange ? {
-                confirmationEmailStatus: "not_required",
-                confirmationAcceptedAfterStateChange: true,
-                confirmationCorrectionEmailStatus: "not_required",
-              } : {
-                confirmationEmailStatus: "sent",
-                confirmationEmailSentAt: serverTimestamp(),
-                confirmationEmailProviderId: providerMessageId,
-                confirmationEmailError: FieldValue.delete(),
-                confirmationCorrectionEmailStatus: "not_required",
-              } : acceptedAfterStateChange ? {
                 confirmationCorrectionEmailStatus: "not_required",
                 confirmationCorrectionAcceptedAfterStateChange: true,
               } : {
@@ -8732,7 +9974,16 @@ async function processPaygConfirmationOutbox(
                 confirmationCorrectionEmailSentAt: serverTimestamp(),
                 confirmationCorrectionEmailProviderId: providerMessageId,
                 confirmationCorrectionEmailError: FieldValue.delete(),
-              }),
+              } : acceptedAfterStateChange ?
+                paygOrderEmailStatusUpdate(
+                  lease.payload.kind,
+                  "not_required"
+                ) : paygOrderEmailSentUpdate(
+                  lease.payload.kind,
+                  providerMessageId
+                );
+          tx.set(orderRef, {
+            ...privacyOrderEmailUpdate,
             updatedAt: serverTimestamp(),
           }, {merge: true});
         }
@@ -8781,18 +10032,26 @@ async function processPaygConfirmationOutbox(
           updatedAt: serverTimestamp(),
         }, {merge: true});
         if (order.exists) {
-          tx.set(orderRef, {
-            ...(lease.payload.kind === "payg_guest_confirmation" ? {
+          const stateChangedOrderEmailUpdate = lease.payload.kind ===
+            "payg_guest_confirmation" ? {
               confirmationEmailStatus: "not_required",
               confirmationAcceptedAfterStateChange: true,
               confirmationCorrectionEmailStatus: correction?.exists ?
                 correction.get("status") : correctionOutboxId ? "pending" :
                   "not_required",
-              ...(correctionOutboxId ? {confirmationCorrectionOutboxId: correctionOutboxId} : {}),
-            } : {
-              confirmationCorrectionEmailStatus: "not_required",
-              confirmationCorrectionAcceptedAfterStateChange: true,
-            }),
+              ...(correctionOutboxId ? {
+                confirmationCorrectionOutboxId: correctionOutboxId,
+              } : {}),
+            } : lease.payload.kind ===
+              "payg_guest_confirmation_correction" ? {
+                confirmationCorrectionEmailStatus: "not_required",
+                confirmationCorrectionAcceptedAfterStateChange: true,
+              } : paygOrderEmailStatusUpdate(
+                lease.payload.kind,
+                "not_required"
+              );
+          tx.set(orderRef, {
+            ...stateChangedOrderEmailUpdate,
             updatedAt: serverTimestamp(),
           }, {merge: true});
         }
@@ -8813,17 +10072,7 @@ async function processPaygConfirmationOutbox(
         updatedAt: serverTimestamp(),
       }, {merge: true});
       tx.set(orderRef, {
-        ...(lease.payload.kind === "payg_guest_confirmation" ? {
-          confirmationEmailStatus: "sent",
-          confirmationEmailSentAt: serverTimestamp(),
-          confirmationEmailProviderId: providerMessageId,
-          confirmationEmailError: FieldValue.delete(),
-        } : {
-          confirmationCorrectionEmailStatus: "sent",
-          confirmationCorrectionEmailSentAt: serverTimestamp(),
-          confirmationCorrectionEmailProviderId: providerMessageId,
-          confirmationCorrectionEmailError: FieldValue.delete(),
-        }),
+        ...paygOrderEmailSentUpdate(lease.payload.kind, providerMessageId),
         updatedAt: serverTimestamp(),
       }, {merge: true});
       return "sent" as const;
@@ -8972,7 +10221,7 @@ async function processPaygConfirmationOutbox(
       }
       if (!order.exists || !isPaygEmailPayloadDeliverable(
         lease.payload,
-        order.get("status") as PaygOrderStatus
+        order
       )) {
         tombstonePaygConfirmation(
           tx,
@@ -8992,11 +10241,7 @@ async function processPaygConfirmationOutbox(
         }, {merge: true});
         if (order.exists) {
           tx.set(orderRef, {
-            ...(lease.payload.kind === "payg_guest_confirmation" ? {
-              confirmationEmailStatus: "not_required",
-            } : {
-              confirmationCorrectionEmailStatus: "not_required",
-            }),
+            ...paygUndeliverableOrderEmailUpdate(lease.payload.kind),
             updatedAt: serverTimestamp(),
           }, {merge: true});
         }
@@ -9029,13 +10274,11 @@ async function processPaygConfirmationOutbox(
       }, {merge: true});
       if (order.exists) {
         tx.set(orderRef, {
-          ...(lease.payload.kind === "payg_guest_confirmation" ? {
-            confirmationEmailStatus: terminal ? "manual_review" : "pending",
-            confirmationEmailError: message.slice(0, 500),
-          } : {
-            confirmationCorrectionEmailStatus: terminal ? "manual_review" : "pending",
-            confirmationCorrectionEmailError: message.slice(0, 500),
-          }),
+          ...paygOrderEmailStatusUpdate(
+            lease.payload.kind,
+            terminal ? "manual_review" : "pending",
+            message.slice(0, 500)
+          ),
           updatedAt: serverTimestamp(),
         }, {merge: true});
       }

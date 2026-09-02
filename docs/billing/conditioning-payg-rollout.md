@@ -185,18 +185,35 @@ owner decisions or external operational proofs in
 `ops/release/conditioning-payg-readiness.json` are still pending. Do not replace
 evidence with an unsupported `true` value.
 
-The 1 September browser and emulator reruns are retained as partial, PII-free
+The 2 September Stripe test/browser reruns are retained as partial, PII-free
 evidence in
-`ops/release/evidence/conditioning-stripe-test-and-local-browser-2026-09-01.json`
+`ops/release/evidence/conditioning-stripe-test-full-app-2026-09-02.json`
 and
-`ops/release/evidence/payg-stripe-test-browser-purchase-2026-09-01.json`.
-They prove the paid/active £30 Conditioning test readback, the current adult
-waiver acknowledgement, limited navigation, two-per-week block/cancel/rebook
-behavior, and the prior £7 no-account PAYG purchase through a local
-`payg_guest` booking. Both confirmation outboxes remained `pending` with email
-delivery disabled. They do not close either end-to-end journey gate, the
-whole-class cancellation/refund drill, alert acknowledgement, live delivery
-backlog, deployment or publication gates.
+`ops/release/evidence/payg-stripe-test-purchase-refund-dispute-2026-09-02.json`.
+The Conditioning run proves a genuine paid Checkout and acknowledged webhook
+created an active limited membership carrying the flexible two-per-week policy.
+That exact purchase was claimed into a fresh emulator account, accepted the
+current waiver, showed the restricted app routes, booked two eligible classes,
+rejected a third without mutating capacity, cancelled one and booked a
+replacement. The remaining Conditioning control is delivery of that exact
+purchase's queued confirmation.
+
+The PAYG evidence binds a genuine £7 no-account purchase and guest booking to a
+successful full provider refund, released capacity and tombstoned confirmation.
+It also binds a second, separate £7 payment to a genuine test dispute, cancelled
+booking, released capacity and suspended refund automation. Refund and dispute
+references must remain separate because one fully refunded payment cannot serve
+as an honest dispute scenario. Email transport remained disabled, so no
+confirmation, refund or dispute delivery is claimed. These partial results do
+not close either end-to-end email gate or the remaining
+whole-class/late-cancellation/no-show drill.
+
+The staffed alert route is fully verified in
+`ops/release/evidence/billing-alert-policy-suite-2026-09-01.json`: all nine
+policies are enabled, the Zero Alpha operations route and independent AEVI
+technical backup route are attached, and both inboxes acknowledged the same
+synthetic missed-payment incident. This validation did not deploy application
+code or open a purchase gate.
 
 Before either gate is opened:
 
@@ -244,7 +261,10 @@ the default full-catalogue preflight remains the release-wide drift check.
    `npm run verify:deployment-manifest`. The authoritative target list is
    `ops/deployment/conditioning-payg-functions.json`; it contains every shared
    billing worker, PAYG Function, and modified booking/access Function in
-   batches of ten or fewer. Deploy the access-aware Functions only under a
+   batches of ten or fewer. The booking batch includes the two-phase admin
+   callables `beginClassCancellation` and `finalizeClassCancellation`; both bind
+   the existing Stripe secret because reconciliation observes exact Checkout
+   and PaymentIntent state. Deploy the access-aware Functions only under a
    separately authorised maintenance change with gates closed, run the reviewed claims
    backfill so every existing entitled account has an explicit tier, verify a
    sample of staff/member claims, and only then deploy the stricter Firestore
@@ -268,22 +288,24 @@ the default full-catalogue preflight remains the release-wide drift check.
    eligible bookings in one Europe/London Monday-to-Sunday week; rejection of a
    third concurrent booking in that week; cancellation restoring one place;
    different class choices in the following week; restricted app navigation;
-   and membership cancellation/claim flows. Before cancelling a whole class
-   occurrence, stop new bookings and mark each affected member booking as an
-   authorised absence through the supported staff action, then verify both the
-   class capacity and that week's Conditioning allowance were released. Do not
-   mark the occurrence cancelled first and do not repair quota rows with direct
-   Firestore edits.
+   and membership cancellation/claim flows. For a whole-class cancellation,
+   use the roster's explicit freeze/reconcile phase, verify member bookings were
+   released as authorised absences and both capacity and weekly Conditioning
+   allowance were restored, then use the separate finalization phase only after
+   every blocker is clear. Prove booking, cancellation, check-in, status and
+   cleanup paths all fail closed after the freeze. Do not mark the occurrence
+   cancelled first and do not repair quota rows with direct Firestore edits.
 7. For PAYG, prove full and nearly-full classes, concurrent holds, guest roster
    check-in, cancellation on both sides of exactly 24 hours, refund success and
    failure recovery, `refund.created`/`refund.updated`/`refund.failed` webhook
    convergence, no-show handling, dispute handling and confirmation-email retry.
    The class-cancellation drill must also identify every paid guest before the
-   occurrence is closed, run the approved provider refund/reconciliation path,
-   verify released capacity and suppressed customer confirmations, and retain an
-   audit record. Keep `class-cancellation-quota-and-payg-refund-drill` false in
-   the readiness manifest until that entire ordered procedure has durable
-   evidence.
+   occurrence is closed, prove exact provider state for every opened Checkout,
+   run the approved provider refund/reconciliation path, verify released
+   capacity, distinguish genuinely suppressed confirmations from accepted
+   messages requiring correction, and retain the deterministic audit record.
+   Keep `class-cancellation-quota-and-payg-refund-drill` false in the readiness
+   manifest until that entire two-phase procedure has durable evidence.
 8. Verify production alerts against `ops/monitoring/billing-alerts.json`, Stripe
    webhook delivery against the exact event manifest, Resend authentication and
    the scheduled recovery/email workers with staffed notification routes. The

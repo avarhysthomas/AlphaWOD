@@ -38,6 +38,10 @@ const {
   buildPaygConfirmationCorrectionEmail,
   buildPaygConfirmationCorrectionOutboxPayload,
   buildPaygConfirmationOutboxPayload,
+  buildPaygDisputeEmail,
+  buildPaygDisputeOutboxPayload,
+  buildPaygRefundEmail,
+  buildPaygRefundOutboxPayload,
   canonicalizePaygSourceAddress,
   classifyPaygDisputeStatus,
   collectPaygPaidContractMismatches,
@@ -50,12 +54,15 @@ const {
   isPaygDuplicateLockKeyringConfigured,
   isActivePaygEmailLease,
   isPaygEmailFailureAmbiguous,
+  isPaygLifecycleEmailBindingValid,
   hasPaygSucceededRefundEvidence,
   isPaygPaymentRefundSafe,
   isPaygTerminalDisputeStatus,
   normalizePaygCheckoutRequest,
   paygIntentIdFromCheckoutSession,
   paygConfirmationCorrectionOutboxId,
+  paygDisputeOutboxId,
+  paygRefundOutboxId,
   paygCheckoutRequestFingerprint,
   paygEmailLeaseCorrelation,
   paygPaymentCompletedBeforePiiCutoff,
@@ -72,6 +79,7 @@ const {
   resolvePaygCatalogueIds,
   resolvePaygPaymentReviewDisposition,
   resolvePaygConfirmationPostSend,
+  shouldSuppressPaygConfirmationCorrectionForLifecycle,
   resolvePaygEmailFailureAfterStateChange,
   resolvePaygDisputeObservation,
   resolvePaygDisputeOwnerStatus,
@@ -1063,6 +1071,257 @@ test("confirmation email is deterministic, escaped, and carries the guest cancel
   );
 });
 
+const LIFECYCLE_CLASS = Object.freeze({
+  classId: "class_lifecycle",
+  title: "Conditioning <script>",
+  startTime: "2026-09-10T18:00:00.000+01:00",
+  endTime: "2026-09-10T19:00:00.000+01:00",
+  timezone: "Europe/London",
+  location: "Unit 3 & Studio",
+});
+
+test("PAYG lifecycle outboxes use deterministic semantic IDs and exact provider bindings", () => {
+  const refund = buildPaygRefundOutboxPayload({
+    orderId: INTENT_ID,
+    recipientEmail: "guest@example.test",
+    attendeeName: "Guest Person",
+    class: LIFECYCLE_CLASS,
+    paymentIntentId: "pi_payg_refund_exact",
+    chargeId: "ch_payg_refund_exact",
+    refundId: "re_payg_refund_exact",
+  });
+  assert.equal(refund.outboxId, paygRefundOutboxId(INTENT_ID));
+  assert.equal(
+    refund.idempotencyKey,
+    `payg-refund-confirmed/${INTENT_ID}/v1`
+  );
+  assert.equal(refund.templateData.amountPence, 700);
+  assert.equal(refund.templateData.currency, "gbp");
+  assert.equal(refund.templateData.refundId, "re_payg_refund_exact");
+
+  const dispute = buildPaygDisputeOutboxPayload({
+    orderId: INTENT_ID,
+    recipientEmail: "guest@example.test",
+    attendeeName: "Guest Person",
+    class: LIFECYCLE_CLASS,
+    paymentIntentId: "pi_payg_dispute_exact",
+    chargeId: "ch_payg_dispute_exact",
+    disputeId: "du_payg_dispute_exact",
+  });
+  assert.equal(dispute.outboxId, paygDisputeOutboxId(INTENT_ID));
+  assert.equal(
+    dispute.idempotencyKey,
+    `payg-dispute-detected/${INTENT_ID}/v1`
+  );
+  assert.throws(
+    () => buildPaygDisputeOutboxPayload({
+      orderId: INTENT_ID,
+      recipientEmail: "guest@example.test",
+      attendeeName: "Guest Person",
+      class: LIFECYCLE_CLASS,
+      paymentIntentId: "pi_payg_dispute_legacy",
+      chargeId: "ch_payg_dispute_legacy",
+      disputeId: "dp_legacy_dispute_id",
+    }),
+    /Dispute ID is invalid/i
+  );
+  assert.throws(
+    () => buildPaygRefundOutboxPayload({
+      orderId: INTENT_ID,
+      recipientEmail: "guest@example.test",
+      attendeeName: "Guest Person",
+      class: LIFECYCLE_CLASS,
+      paymentIntentId: "not_a_payment",
+      chargeId: "ch_payg_refund_exact",
+      refundId: "re_payg_refund_exact",
+    }),
+    /PaymentIntent ID is invalid/i
+  );
+});
+
+test("PAYG refund email states only confirmed full refund facts and escapes content", () => {
+  const payload = buildPaygRefundOutboxPayload({
+    orderId: INTENT_ID,
+    recipientEmail: "guest@example.test",
+    attendeeName: "Guest <Admin>",
+    class: LIFECYCLE_CLASS,
+    paymentIntentId: "pi_payg_refund_email",
+    chargeId: "ch_payg_refund_email",
+    refundId: "re_payg_refund_email",
+  });
+  const email = buildPaygRefundEmail(
+    payload,
+    "Zero Alpha Fitness <hello@zeroalphafitness.co.uk>",
+    "support@zeroalphafitness.co.uk"
+  );
+  assert.match(email.text, /Stripe has confirmed your £7\.00 GBP refund/i);
+  assert.match(email.text, /original payment method/i);
+  assert.match(email.text, /bank may take additional time/i);
+  assert.doesNotMatch(email.text, /cancel\?token|reschedul/i);
+  assert.match(email.html, /Guest &lt;Admin&gt;/);
+  assert.match(email.html, /Conditioning &lt;script&gt;/);
+  assert.match(email.html, /Unit 3 &amp; Studio/);
+  assert.doesNotMatch(email.html, /<script>/);
+
+  const injected = buildPaygRefundOutboxPayload({
+    orderId: INTENT_ID,
+    recipientEmail: "guest@example.test\nBcc:bad@example.test",
+    attendeeName: "Guest Person",
+    class: LIFECYCLE_CLASS,
+    paymentIntentId: "pi_payg_refund_header",
+    chargeId: "ch_payg_refund_header",
+    refundId: "re_payg_refund_header",
+  });
+  assert.throws(
+    () => buildPaygRefundEmail(
+      injected,
+      "hello@zeroalphafitness.co.uk",
+      "support@zeroalphafitness.co.uk"
+    ),
+    /recipient.*safely/i
+  );
+});
+
+test("PAYG dispute email is outcome-neutral and makes the inactive booking explicit", () => {
+  const payload = buildPaygDisputeOutboxPayload({
+    orderId: INTENT_ID,
+    recipientEmail: "guest@example.test",
+    attendeeName: "Guest <Admin>",
+    class: LIFECYCLE_CLASS,
+    paymentIntentId: "pi_payg_dispute_email",
+    chargeId: "ch_payg_dispute_email",
+    disputeId: "du_payg_dispute_email",
+  });
+  const email = buildPaygDisputeEmail(
+    payload,
+    "Zero Alpha Fitness <hello@zeroalphafitness.co.uk>",
+    "support@zeroalphafitness.co.uk"
+  );
+  assert.match(email.text, /Stripe reported a dispute on the £7\.00 GBP payment/i);
+  assert.match(email.text, /booking is inactive/i);
+  assert.match(email.text, /automated refund handling has been stopped/i);
+  assert.match(email.text, /reply to this email/i);
+  assert.doesNotMatch(email.text, /we (won|lost)|final outcome|refund confirmed/i);
+  assert.match(email.html, /Guest &lt;Admin&gt;/);
+  assert.doesNotMatch(email.html, /<script>/);
+});
+
+test("PAYG lifecycle delivery binding fails closed for partial, conflicting, or review-only facts", () => {
+  const refund = buildPaygRefundOutboxPayload({
+    orderId: INTENT_ID,
+    recipientEmail: "guest@example.test",
+    attendeeName: "Guest Person",
+    class: LIFECYCLE_CLASS,
+    paymentIntentId: "pi_payg_refund_binding",
+    chargeId: "ch_payg_refund_binding",
+    refundId: "re_payg_refund_binding",
+  });
+  const refundOrder = {
+    orderId: INTENT_ID,
+    purchaseKind: "payg_class",
+    status: "refunded",
+    amountPence: 700,
+    currency: "gbp",
+    paymentIntentId: "pi_payg_refund_binding",
+    chargeId: "ch_payg_refund_binding",
+    refundId: "re_payg_refund_binding",
+    refundStatus: "succeeded",
+    refundedAmountPence: 700,
+    attendee: {fullName: "Guest Person"},
+    contact: {email: "guest@example.test"},
+    class: LIFECYCLE_CLASS,
+  };
+  assert.equal(isPaygLifecycleEmailBindingValid(refund, refundOrder), true);
+  assert.equal(isPaygLifecycleEmailBindingValid(refund, {
+    ...refundOrder,
+    refundedAmountPence: 350,
+  }), false, "a partial refund must never be described as complete");
+  assert.equal(isPaygLifecycleEmailBindingValid(refund, {
+    ...refundOrder,
+    refundId: "re_conflicting_refund",
+  }), false, "a different Refund must fail closed");
+  assert.equal(isPaygLifecycleEmailBindingValid(refund, {
+    ...refundOrder,
+    conflictingRefundId: "re_second_refund",
+  }), false, "a recorded Refund conflict must stop a queued email");
+  assert.equal(isPaygLifecycleEmailBindingValid(refund, {
+    ...refundOrder,
+    contact: undefined,
+  }), false, "a review-only or privacy-closed row has no trusted recipient");
+  assert.equal(isPaygLifecycleEmailBindingValid(refund, {
+    ...refundOrder,
+    paymentReviewId: `${INTENT_ID}_${"a".repeat(24)}`,
+    providerContractStatus: "mismatch",
+  }), false, "a linked payment-review order must never route ordinary wording");
+
+  const dispute = buildPaygDisputeOutboxPayload({
+    orderId: INTENT_ID,
+    recipientEmail: "guest@example.test",
+    attendeeName: "Guest Person",
+    class: LIFECYCLE_CLASS,
+    paymentIntentId: "pi_payg_dispute_binding",
+    chargeId: "ch_payg_dispute_binding",
+    disputeId: "du_payg_dispute_binding",
+  });
+  const disputeOrder = {
+    ...refundOrder,
+    status: "disputed",
+    paymentIntentId: "pi_payg_dispute_binding",
+    chargeId: "ch_payg_dispute_binding",
+    disputeId: "du_payg_dispute_binding",
+    disputeChargeId: "ch_payg_dispute_binding",
+    disputeAmountPence: 700,
+    disputeCurrency: "gbp",
+    disputeStatus: "needs_response",
+    refundAutomationStatus: "suspended_dispute",
+  };
+  assert.equal(isPaygLifecycleEmailBindingValid(dispute, disputeOrder), true);
+  assert.equal(isPaygLifecycleEmailBindingValid(dispute, {
+    ...disputeOrder,
+    disputeId: "du_conflicting_dispute",
+  }), false);
+  assert.equal(isPaygLifecycleEmailBindingValid(dispute, {
+    ...disputeOrder,
+    conflictingDisputeId: "du_second_dispute",
+  }), false, "a recorded dispute conflict must stop a queued notice");
+  assert.equal(isPaygLifecycleEmailBindingValid(dispute, {
+    ...disputeOrder,
+    disputeStatus: "future_provider_state",
+  }), false, "unknown dispute states must not route customer wording");
+  assert.equal(isPaygLifecycleEmailBindingValid(dispute, {
+    ...disputeOrder,
+    paymentReviewId: `${INTENT_ID}_${"b".repeat(24)}`,
+    providerContractStatus: "mismatch",
+  }), false, "a linked payment-review dispute must not route ordinary wording");
+
+  assert.equal(shouldSuppressPaygConfirmationCorrectionForLifecycle({
+    outboxId: refund.outboxId,
+    status: "pending",
+    payload: refund,
+    order: refundOrder,
+  }), true, "a valid pending refund notice replaces the generic correction");
+  assert.equal(shouldSuppressPaygConfirmationCorrectionForLifecycle({
+    outboxId: refund.outboxId,
+    status: "sent",
+    payload: refund,
+    order: refundOrder,
+  }), true, "a delivered refund notice replaces the generic correction");
+  for (const status of ["manual_review", "dead_letter", "tombstoned"]) {
+    assert.equal(shouldSuppressPaygConfirmationCorrectionForLifecycle({
+      outboxId: refund.outboxId,
+      status,
+      payload: refund,
+      order: refundOrder,
+    }), false, `${status} lifecycle evidence must not suppress the correction`);
+  }
+  assert.equal(shouldSuppressPaygConfirmationCorrectionForLifecycle({
+    outboxId: refund.outboxId,
+    status: "pending",
+    payload: refund,
+    order: {...refundOrder, conflictingRefundId: "re_other_refund"},
+  }), false, "an invalid lifecycle binding must not suppress the correction");
+});
+
 test("post-send correlation recovers only the exact tombstoned confirmation lease", () => {
   const leaseToken = "123e4567-e89b-12d3-a456-426614174000";
   const correlation = paygEmailLeaseCorrelation(leaseToken);
@@ -1644,39 +1903,39 @@ test("terminal dispute evidence is monotonic across out-of-order events", () => 
     "future_status"
   ), "manual_review");
   assert.equal(resolvePaygDisputeObservation({
-    storedDisputeId: "dp_1",
+    storedDisputeId: "du_1",
     storedDisputeStatus: "won",
-    incomingDisputeId: "dp_1",
+    incomingDisputeId: "du_1",
     incomingDisputeStatus: "under_review",
   }), "preserve_terminal");
   assert.equal(resolvePaygDisputeObservation({
-    storedDisputeId: "dp_1",
+    storedDisputeId: "du_1",
     storedDisputeStatus: "lost",
-    incomingDisputeId: "dp_1",
+    incomingDisputeId: "du_1",
     incomingDisputeStatus: "needs_response",
   }), "preserve_terminal");
   assert.equal(resolvePaygDisputeObservation({
-    storedDisputeId: "dp_1",
+    storedDisputeId: "du_1",
     storedDisputeStatus: "warning_closed",
-    incomingDisputeId: "dp_1",
+    incomingDisputeId: "du_1",
     incomingDisputeStatus: "warning_under_review",
   }), "preserve_terminal");
   assert.equal(resolvePaygDisputeObservation({
-    storedDisputeId: "dp_1",
+    storedDisputeId: "du_1",
     storedDisputeStatus: "prevented",
-    incomingDisputeId: "dp_1",
+    incomingDisputeId: "du_1",
     incomingDisputeStatus: "needs_response",
   }), "preserve_terminal");
   assert.equal(resolvePaygDisputeObservation({
-    storedDisputeId: "dp_1",
+    storedDisputeId: "du_1",
     storedDisputeStatus: "won",
-    incomingDisputeId: "dp_2",
+    incomingDisputeId: "du_2",
     incomingDisputeStatus: "under_review",
   }), "conflict_manual_review");
   assert.equal(resolvePaygDisputeObservation({
-    storedDisputeId: "dp_1",
+    storedDisputeId: "du_1",
     storedDisputeStatus: "under_review",
-    incomingDisputeId: "dp_1",
+    incomingDisputeId: "du_1",
     incomingDisputeStatus: "won",
   }), "apply");
 });

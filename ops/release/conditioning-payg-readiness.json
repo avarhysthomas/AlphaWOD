@@ -62,21 +62,14 @@
     },
     {
       "id": "billing-alert-policies-and-staffed-notification-route",
-      "verified": false,
-      "evidence": null,
-      "partialEvidence": "ops/release/evidence/billing-alert-policy-suite-2026-09-01.json",
+      "verified": true,
+      "evidence": "ops/release/evidence/billing-alert-policy-suite-2026-09-01.json",
+      "evidenceSha256": "ae3e2479f22de6a875e37b1af0466abccf24ae2a8d564cb6043340cb6f02f13f",
       "supportingEvidence": [
         "ops/release/evidence/billing-missed-payment-email-alert-2026-09-01.json"
       ],
       "configurationVerified": true,
-      "remainingControls": [
-        "primary-route-delivery-acknowledged",
-        "independent-backup-route-delivery-acknowledged",
-        "synthetic-alert-delivery-test-and-human-acknowledgement",
-        "named-primary-responder",
-        "named-backup-responder"
-      ],
-      "syntheticDeliveryAcknowledged": false
+      "syntheticDeliveryAcknowledged": true
     },
     {
       "id": "resend-domain-and-confirmation-delivery",
@@ -88,40 +81,56 @@
       "id": "conditioning-stripe-test-purchase-to-booking-journey",
       "verified": false,
       "evidence": null,
-      "partialEvidence": "ops/release/evidence/conditioning-stripe-test-and-local-browser-2026-09-01.json",
+      "partialEvidence": "ops/release/evidence/conditioning-stripe-test-full-app-2026-09-02.json",
+      "partialEvidenceSha256": "d0f5a9d10b2e83c22f4e168e47c1718ecce50264ed8acccf38d01ec401b0ba57",
       "supportingEvidence": [
+        "ops/release/evidence/conditioning-stripe-test-provider-membership-2026-09-02.json",
+        "ops/release/evidence/conditioning-stripe-test-and-local-browser-2026-09-01.json",
         "ops/release/evidence/conditioning-stripe-test-purchase-2026-08-31.json"
       ],
       "partialControls": [
-        "stripe-test-paid-active-subscription-readback",
+        "stripe-test-checkout-completed",
+        "checkout-session-webhook-acknowledged",
+        "webhook-membership-created",
+        "membership-entitlement-active",
+        "single-run-provider-to-membership-without-fixture-substitution",
         "limited-app-access-local-browser",
         "two-per-week-block-cancel-rebook-local-browser",
-        "current-waiver-exact-acknowledgement-local-emulator"
+        "current-waiver-exact-acknowledgement-local-emulator",
+        "purchased-member-app-booking",
+        "third-booking-blocked-without-mutation",
+        "eligible-cancellation-released-capacity-and-quota",
+        "replacement-booking-succeeded"
       ],
       "remainingControls": [
-        "confirmation-email-delivered",
-        "single-run-provider-to-app-journey-without-fixture-substitution"
+        "confirmation-email-delivered"
       ]
     },
     {
       "id": "payg-stripe-test-purchase-refund-dispute-email-journey",
       "verified": false,
       "evidence": null,
-      "partialEvidence": "ops/release/evidence/payg-stripe-test-browser-purchase-2026-09-01.json",
+      "partialEvidence": "ops/release/evidence/payg-stripe-test-purchase-refund-dispute-2026-09-02.json",
+      "partialEvidenceSha256": "d64ebaf7096a65e7305c7a2b3329699f9f817773afa6f8834487b8c6d52402c3",
       "supportingEvidence": [
+        "ops/release/evidence/payg-stripe-test-browser-purchase-2026-09-01.json",
         "ops/release/evidence/payg-local-emulator-journey-2026-09-01.json",
         "ops/release/evidence/payg-stripe-test-catalogue-readback-2026-09-01.json",
         "ops/release/evidence/payg-stripe-live-catalogue-readback-2026-09-01.json"
       ],
       "partialControls": [
         "stripe-test-gbp-700-browser-checkout",
-        "local-payg-guest-booking-without-account",
+        "webhook-created-payg-guest-booking-without-account",
+        "refundable-cancellation-full-provider-refund-converged",
+        "refund-capacity-and-confirmation-suppression-converged",
+        "separate-provider-dispute-converged",
+        "dispute-capacity-and-refund-automation-suspension-converged",
         "pending-confirmation-outbox"
       ],
       "remainingControls": [
         "confirmation-email-delivered",
-        "refund-converged-and-email-delivered",
-        "dispute-converged-and-email-delivered"
+        "refund-email-delivered",
+        "dispute-email-delivered"
       ],
       "owner": "Zero Alpha Fitness operations",
       "executionMode": "internal"
@@ -130,16 +139,29 @@
       "id": "class-cancellation-quota-and-payg-refund-drill",
       "verified": false,
       "evidence": null,
-      "partialEvidence": "ops/release/evidence/conditioning-stripe-test-and-local-browser-2026-09-01.json",
+      "partialEvidence": "ops/release/evidence/payg-stripe-test-purchase-refund-dispute-2026-09-02.json",
+      "partialEvidenceSha256": "d64ebaf7096a65e7305c7a2b3329699f9f817773afa6f8834487b8c6d52402c3",
+      "supportingEvidence": [
+        "ops/release/evidence/conditioning-stripe-test-full-app-2026-09-02.json",
+        "ops/release/evidence/conditioning-stripe-test-and-local-browser-2026-09-01.json"
+      ],
       "partialControls": [
-        "member-conditioning-booking-cancellation-released-capacity-and-quota"
+        "member-conditioning-booking-cancellation-released-capacity-and-quota",
+        "paid-payg-guest-identification-and-provider-refund-reconciliation",
+        "payg-refunded-capacity-released",
+        "payg-dispute-released-capacity-and-suspended-refund-automation"
       ],
       "remainingControls": [
         "ordered-whole-class-cancellation-and-booking-stop",
         "authorised-absence-release-for-every-conditioning-booking",
-        "paid-payg-guest-identification-and-provider-refund-reconciliation",
+        "all-admission-roster-and-cleanup-mutations-blocked-after-freeze",
+        "unpaid-payg-holds-and-duplicate-locks-reconciled",
+        "exact-provider-terminal-state-required-before-finalize",
+        "ambiguous-payment-and-review-state-blocked-finalize",
+        "all-payg-orders-inventoried-and-operation-bound",
         "late-cancellation-and-no-show-non-refund-verification",
-        "confirmation-suppression-and-operations-audit"
+        "confirmation-suppression-or-correction-resolved-before-finalize",
+        "bound-idempotent-operations-audit"
       ],
       "owner": "Zero Alpha Fitness operations",
       "executionMode": "internal"

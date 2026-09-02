@@ -340,6 +340,14 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Pseudonymous whole-class cancellation evidence is written only by the
+    // trusted two-phase callable workflow. Authoritative admins may inspect
+    // the audit, but no browser client may create, alter, or delete it.
+    match /classCancellationOperations/{operationId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

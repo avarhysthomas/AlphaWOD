@@ -88,16 +88,31 @@ The older fourteen-service counts below are historical evidence for the prior
 membership-only rollout; they are not the target manifest for Conditioning or
 PAYG.
 
-Whole-class cancellation is currently an ordered staff operation, not one
-atomic product workflow. Before changing an occurrence to cancelled, stop new
-bookings, release each affected member booking through the supported
-authorised-absence action, identify every paid PAYG guest, and complete the
-approved Stripe refund/reconciliation path. Verify quota release, class
-capacity, confirmation suppression and the audit trail. Never cancel the
-occurrence first or repair the result with direct Firestore edits. The release
+Whole-class cancellation uses a resumable two-phase admin workflow on the class
+roster. `beginClassCancellation` first freezes the occurrence, then releases
+eligible member bookings as authorised absences, restores Conditioning quota,
+reconciles and releases only provider-safe unpaid PAYG holds, suppresses
+confirmations that have not been sent, and inventories every paid PAYG guest.
+An ambiguous hold or duplicate lock remains visible as a processing blocker
+until exact idempotent Checkout recovery establishes provider state. Staff must
+resume reconciliation until
+every Stripe Checkout/payment state is authoritative, every required refund is
+successful, and any confirmation already accepted by the email provider has a
+durable corrective/refund communication. `finalizeClassCancellation` is a
+separate fail-closed step: it will not mark the occurrence cancelled while any
+booking, capacity counter, hold, duplicate lock, payment review, refund, or
+email-delivery state is missing or ambiguous. Never repair the result with
+direct Firestore edits.
+
+The pseudonymous operation record in `classCancellationOperations` is
+server-written and admin-readable. It binds the freeze, released member booking
+hashes, every inventoried PAYG order, safe Stripe/PAYG references,
+reconciliation observations, and final state to one deterministic operation
+id. An order that is not durably bound remains a hard blocker. The release
 candidate must remain
 `BLOCKED_BY_OPERATIONS class-cancellation-quota-and-payg-refund-drill` until a
-full drill is attached as durable evidence.
+full emulator and staff-browser drill is attached as durable evidence; the
+presence of the workflow alone does not clear that gate.
 
 The saved production parameter file and live Stripe catalogue must also pass
 their read-only closed-gate checks before any deployment. Record both under

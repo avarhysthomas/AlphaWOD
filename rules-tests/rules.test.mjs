@@ -604,6 +604,47 @@ describe("billing collections are server-only", () => {
   });
 });
 
+describe("whole-class cancellation audit", () => {
+  beforeEach(async () => {
+    await seedFirestore({
+      "users/member": accessProfiles.member,
+      "users/admin": accessProfiles.admin,
+      "users/sgpt": accessProfiles.sgpt,
+      "classCancellationOperations/class_cancel_test": {
+        operationId: "class_cancel_test",
+        classId: "class-1",
+        state: "processing",
+      },
+    });
+  });
+
+  test("only authoritative admins can read the pseudonymous audit", async () => {
+    const path = "classCancellationOperations/class_cancel_test";
+    await assertSucceeds(getDoc(doc(firestoreFor("admin"), path)));
+    await assertSucceeds(
+      getDocs(collection(firestoreFor("admin"), "classCancellationOperations"))
+    );
+    await assertFails(getDoc(doc(firestoreFor("member"), path)));
+    await assertFails(getDoc(doc(firestoreFor("sgpt"), path)));
+    await assertFails(
+      getDoc(doc(testEnv.unauthenticatedContext().firestore(), path))
+    );
+  });
+
+  test("no client role can create or mutate cancellation evidence", async () => {
+    const path = "classCancellationOperations/class_cancel_test";
+    for (const uid of ["admin", "member", "sgpt"]) {
+      const db = firestoreFor(uid);
+      await assertFails(updateDoc(doc(db, path), {state: "cancelled"}));
+      await assertFails(setDoc(doc(db, "classCancellationOperations/new"), {
+        operationId: "new",
+        classId: "class-2",
+        state: "cancelled",
+      }));
+    }
+  });
+});
+
 test("sanity: test fixtures preserve the intended access combinations", () => {
   assert.equal(accessProfiles.admin.entitlementSource, "staff");
   assert.equal(accessProfiles.member.entitlementStatus, "active");

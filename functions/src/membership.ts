@@ -2608,6 +2608,10 @@ async function reconcileMembershipBookingCandidate(
     const classRef = db().collection("classes").doc(classId);
     const classSnap = await tx.get(classRef);
     if (!classSnap.exists) return false;
+    // Once whole-class cancellation owns the occurrence, only that workflow
+    // may release the booking as an audited authorised absence. Reading this
+    // field in the same transaction also makes a concurrent freeze retry here.
+    if (classSnap.get("bookingOpen") === false) return false;
     const classStartMillis = timestampMillis(classSnap.get("startTime"));
     if (classStartMillis === null || classStartMillis < nowMillis) return false;
 

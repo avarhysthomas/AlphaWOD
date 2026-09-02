@@ -1,7 +1,18 @@
 {
   "schemaVersion": 1,
   "evidenceType": "gcp-billing-and-payg-alert-policy-suite",
-  "recordedAt": "2026-09-01T13:07:05Z",
+  "readinessItemId": "billing-alert-policies-and-staffed-notification-route",
+  "verified": true,
+  "newProductPurchaseGatesRemainClosed": true,
+  "customerPiiRecorded": false,
+  "recordedAt": "2026-09-01T23:49:51Z",
+  "verifiedControls": [
+    "nine-policies-enabled",
+    "primary-route-delivery-acknowledged",
+    "independent-backup-route-delivery-acknowledged",
+    "named-primary-responder",
+    "named-backup-responder"
+  ],
   "googleCloudProjectId": "alphawod-d1f2f",
   "sourceManifest": "ops/monitoring/billing-alerts.json",
   "policyCountExpected": 9,
@@ -205,12 +216,25 @@
     "allThresholdWindowsVerified": true,
     "primaryEmailAttachedToEveryPolicy": true,
     "twoIndependentRoutesAttachedToEveryPolicy": true,
-    "namedPrimaryAndBackupRosterRecorded": false,
-    "syntheticDeliveryTestPerformed": false
+    "namedPrimaryAndBackupRosterRecorded": true,
+    "syntheticDeliveryTestPerformed": true
+  },
+  "staffedResponderRoster": {
+    "primaryRole": "Zero Alpha Fitness operations",
+    "primaryRouteProviderId": "10993157459978907641",
+    "backupRole": "AEVI technical support",
+    "backupRouteProviderId": "3298221422599549450",
+    "ownerAcknowledgedRoster": true
+  },
+  "syntheticDeliveryTest": {
+    "alertPolicyProviderId": "1784587597971323419",
+    "incidentId": "0.oc4o62so4p4f",
+    "providerIncidentOpened": true,
+    "primaryInboxDeliveryAcknowledged": true,
+    "backupInboxDeliveryAcknowledged": true,
+    "humanAcknowledgedAt": "2026-09-01T23:49:51Z"
   },
   "limitations": [
-    "Two independent provider email channels are attached to every alert policy; a named human backup responder remains required.",
-    "Synthetic matching logs were not emitted because the named backup responder and staffed acknowledgement plan are not yet recorded.",
     "Policy creation does not deploy application code or open purchase."
   ],
   "exactProviderReadbackPerformed": true,

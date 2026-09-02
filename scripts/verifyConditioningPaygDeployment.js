@@ -44,10 +44,12 @@ const REQUIRED_BOOKING_ACCESS_TARGETS = Object.freeze([
   "acceptCurrentWaiver",
   "adminAddBooking",
   "approveUserAccess",
+  "beginClassCancellation",
   "bookClass",
   "bootstrapUserProfile",
   "cancelBooking",
   "checkInBooking",
+  "finalizeClassCancellation",
   "generateClassOccurrences",
   "generateClassOccurrencesDaily",
   "getClassRoster",
@@ -183,6 +185,44 @@ function verifyConditioningPaygDeployment() {
     throw new Error(`Deployment targets are not exported: ${missingExports.join(", ")}`);
   }
 
+  const classCancellationSource = fs.readFileSync(
+    path.join(root, "functions/src/classCancellation.ts"),
+    "utf8"
+  );
+  if (!/secrets:\s*PAYG_WORKER_SECRETS/.test(classCancellationSource)) {
+    throw new Error("Class-cancellation callables must bind the PAYG Stripe secret set.");
+  }
+  if (!/enforceAppCheck:[^\n]+FUNCTIONS_EMULATOR/.test(classCancellationSource) ||
+    !/consumeAppCheckToken:[^\n]+FUNCTIONS_EMULATOR/.test(
+      classCancellationSource
+    )) {
+    throw new Error(
+      "Class-cancellation callables must enforce and consume production App Check."
+    );
+  }
+  for (const factory of [
+    "buildBeginClassCancellation",
+    "buildFinalizeClassCancellation",
+  ]) {
+    const callableBinding = new RegExp(
+      `export function ${factory}\\([\\s\\S]*?` +
+      "return onCall\\(CLASS_CANCELLATION_CALLABLE_OPTIONS,"
+    );
+    if (!callableBinding.test(classCancellationSource)) {
+      throw new Error(`${factory} must use the reviewed callable options.`);
+    }
+  }
+
+  const firestoreRules = fs.readFileSync(
+    path.join(root, "firestore.rules"),
+    "utf8"
+  );
+  if (!/match \/classCancellationOperations\/\{operationId\}[\s\S]*?allow read: if isAdmin\(\);[\s\S]*?allow write: if false;/.test(
+    firestoreRules
+  )) {
+    throw new Error("Class-cancellation audits must be admin-readable and client-immutable.");
+  }
+
   for (const environmentPath of [
     ".env.production.example",
     "functions/.env.production.example",
@@ -202,6 +242,11 @@ function verifyConditioningPaygDeployment() {
   );
   if (!runbook.includes("ops/deployment/conditioning-payg-functions.json")) {
     throw new Error("Conditioning/PAYG runbook must cite the deployment manifest.");
+  }
+  for (const target of ["beginClassCancellation", "finalizeClassCancellation"]) {
+    if (!runbook.includes(target)) {
+      throw new Error(`Conditioning/PAYG runbook must document ${target}.`);
+    }
   }
   const versions = verifyRunbookSchemaReferences();
 

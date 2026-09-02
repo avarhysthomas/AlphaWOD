@@ -24,6 +24,11 @@ const {
   loadApprovedPaygRelease,
   recoverLocalPaygDotenvOverlay,
 } = require("./localStripePaygJourney");
+const {
+  CONDITIONING_SCOPE,
+  assertLocalConditioningTarget,
+  buildLocalConditioningClassDocuments,
+} = require("./localStripeConditioningJourney");
 
 const PROJECT_ID = "demo-alphawod-stripe";
 const APP_PORT = 3002;
@@ -669,6 +674,38 @@ async function seedLocalPaygClass() {
   return seeded;
 }
 
+async function seedLocalConditioningClasses(nowMillis = Date.now()) {
+  const firestoreHost = "127.0.0.1:8080";
+  assertLocalConditioningTarget({
+    projectId: PROJECT_ID,
+    firestoreHost,
+    appOrigin: APP_ORIGIN,
+  });
+  const seeded = buildLocalConditioningClassDocuments(nowMillis);
+  for (const fixture of seeded.fixtures) {
+    const response = await httpRequest(
+      `http://${firestoreHost}/v1/projects/${PROJECT_ID}/databases/(default)/documents/classes/${fixture.classId}`,
+      {
+        method: "PATCH",
+        // The Firestore emulator recognises this local owner token. The target
+        // above is hard-bound to loopback and the dedicated demo-* project.
+        headers: {
+          authorization: "Bearer owner",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(fixture.body),
+      }
+    );
+    if (response.status !== 200) {
+      throw new Error(
+        `Could not seed isolated Conditioning fixture ${fixture.fixtureLabel} ` +
+        `(HTTP ${response.status}).`
+      );
+    }
+  }
+  return seeded;
+}
+
 async function waitForFrontend(frontend, isReady) {
   await waitUntil(
     "the React development server to compile and pass type-checking",
@@ -763,6 +800,9 @@ async function main() {
   await waitForFirebase(firebase);
   const seededPaygClass = catalogueScope.name === PAYG_SCOPE ?
     await seedLocalPaygClass() : null;
+  const seededConditioningClasses =
+    catalogueScope.name === CONDITIONING_SCOPE ?
+      await seedLocalConditioningClasses() : null;
   await assertAppPortAvailable();
 
   const frontend = spawnChild(
@@ -783,6 +823,9 @@ async function main() {
         REACT_APP_FIREBASE_MESSAGING_SENDER_ID: "000000000000",
         REACT_APP_FIREBASE_PROJECT_ID: PROJECT_ID,
         REACT_APP_FIREBASE_STORAGE_BUCKET: `${PROJECT_ID}.appspot.com`,
+        ...(seededConditioningClasses ? {
+          REACT_APP_ADULT_CONDITIONING_PURCHASE_ENABLED: "true",
+        } : {}),
         REACT_APP_MEMBERSHIP_TEST_JOURNEY_ENABLED: "true",
         REACT_APP_USE_EMULATORS: "true",
       }),
@@ -805,7 +848,8 @@ async function main() {
   console.log("\nLocal Stripe test journey is ready:");
   console.log(`- Catalogue preflight scope: ${catalogueScope.name}`);
   console.log(`- App: ${APP_ORIGIN}${seededPaygClass ?
-    "/pay-as-you-go" : "/memberships"}`);
+    "/pay-as-you-go" : seededConditioningClasses ?
+      "/memberships/checkout/adult_conditioning" : "/memberships"}`);
   console.log("- Firebase UI: http://127.0.0.1:4000");
   console.log(`- Stripe forwarding: ${WEBHOOK_URL}`);
   console.log("- Card: 4242 4242 4242 4242, any future expiry/CVC");
@@ -813,9 +857,23 @@ async function main() {
     console.log(`- Seeded class: ${seededPaygClass.classId} at ${seededPaygClass.startTime}`);
     console.log("- PAYG expectation: one £7 Stripe test-mode payment; no account created");
     console.log("- Email transport: disabled; confirmation remains in the local outbox");
+  } else if (seededConditioningClasses) {
+    console.log("- Expectation: Stripe test mode; current prorated charge, then £30/month");
+    console.log(
+      `- Fixture week: ${seededConditioningClasses.weekKey} to ` +
+      `${seededConditioningClasses.weekEndsOn} (${seededConditioningClasses.timezone})`
+    );
+    for (const fixture of seededConditioningClasses.fixtures) {
+      console.log(
+        `- Seeded ${fixture.fixtureLabel}: ${fixture.classId} at ${fixture.startTime}`
+      );
+    }
+    console.log("- Browser sequence: book Thursday A + Friday A; try Thursday B; cancel Friday A; book Friday B");
+    console.log("- Verify provider: npm run verify:stripe-test-journey --prefix functions -- --session=cs_test_...");
+    console.log("- Verify app journey: npm run verify:stripe-test-conditioning-app-journey --prefix functions -- --session=cs_test_...");
+    console.log("- Email transport: disabled; confirmation remains in the local outbox");
   } else {
-    console.log("- Presale expectation: £0 today; first payment on 1 September 2026");
-    console.log("- Adult Unlimited TEST ONLY shared code: EXISTING5-TEST");
+    console.log("- Expectation: Stripe test mode; review the current amount due and recurring schedule before confirming");
     console.log("- Verify after Checkout: npm run verify:stripe-test-journey --prefix functions");
   }
   console.log("Press Ctrl-C once to stop every local process.\n");
@@ -880,6 +938,7 @@ module.exports = {
   createPrivateRuntimeDirectory,
   firebaseEmulatorLaunch,
   processGroupExists,
+  seedLocalConditioningClasses,
   signalProcessGroup,
   spawnChild,
   trackProcessGroup,
