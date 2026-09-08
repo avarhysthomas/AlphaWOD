@@ -195,7 +195,7 @@ export default function Leaderboard() {
   const tierFloor = myCount < 4 ? 0 : myCount < 8 ? 4 : myCount < 12 ? 8 : myCount < 16 ? 12 : 16;
   const nextTierLabel = myCount < 4 ? "Starter" : myCount < 8 ? "Bronze" : myCount < 12 ? "Silver" : myCount < 16 ? "Gold" : "Gold";
   const progressPct = nextTarget > tierFloor ? Math.min(100, Math.round(((myCount - tierFloor) / (nextTarget - tierFloor)) * 100)) : 100;
-  const navItems = getUserNavItems(appUser?.role);
+  const navItems = getUserNavItems(appUser);
   const firstName = appUser?.name?.split(" ")[0] || appUser?.email?.split("@")[0] || "A";
   const profilePhotoURL = appUser?.photoURL || user?.photoURL || "";
 

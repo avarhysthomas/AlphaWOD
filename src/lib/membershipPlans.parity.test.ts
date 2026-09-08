@@ -102,6 +102,7 @@ describe("membership catalogue parity", () => {
     "YOUTH_FAMILY_OFFER",
     "SUPPORTED_YOUTH_FAMILY_DISCOUNT_PERCENTAGES",
     "MEMBERSHIP_SCHEMA_VERSION",
+    "CONDITIONING_BOOKING_POLICY",
     "COMPANY",
     "PLAN_KEYS",
     "MEMBERSHIP_PLANS",
@@ -121,14 +122,14 @@ describe("membership catalogue parity", () => {
     }
   );
 
-  it("keeps schema v5 and the youth recommendation boundary identical", () => {
+  it("keeps schema v7 and the youth recommendation boundary identical", () => {
     const {
       MEMBERSHIP_SCHEMA_VERSION,
       MEMBERSHIP_PLANS,
       resolveYouthPlanForAge,
     } = require("./membershipPlans") as typeof import("./membershipPlans");
 
-    expect(MEMBERSHIP_SCHEMA_VERSION).toBe(5);
+    expect(MEMBERSHIP_SCHEMA_VERSION).toBe(7);
     expect(resolveYouthPlanForAge(-1)).toBeNull();
     expect(resolveYouthPlanForAge(0)).toBe("youth_youngstars");
     expect(resolveYouthPlanForAge(10)).toBe("youth_youngstars");
@@ -140,14 +141,16 @@ describe("membership catalogue parity", () => {
     );
   });
 
-  it("grants AlphaWOD access on exactly one plan", () => {
+  it("grants app access only to Unlimited and Conditioning with distinct tiers", () => {
     const {
       MEMBERSHIP_PLANS,
       PLAN_KEYS,
     } = require("./membershipPlans") as typeof import("./membershipPlans");
 
     const granting = PLAN_KEYS.filter((key) => MEMBERSHIP_PLANS[key].grantsAlphaWodAccess);
-    expect(granting).toEqual(["adult_unlimited"]);
+    expect(granting).toEqual(["adult_unlimited", "adult_conditioning"]);
+    expect(MEMBERSHIP_PLANS.adult_unlimited.appAccessTier).toBe("full");
+    expect(MEMBERSHIP_PLANS.adult_conditioning.appAccessTier).toBe("limited");
   });
 
   it("freezes the approved version of every checkout document", () => {
@@ -165,6 +168,9 @@ describe("membership catalogue parity", () => {
       privacyNotice: ["ZAF-PRIVACY-2026-08-25-02", "2026-08-25"],
       adultWaiver: ["ZAF-ADULT-WAIVER-2026-08-23-01", "2026-08-23"],
       guardianAddendum: ["ZAF-GUARDIAN-2026-08-27-01", "2026-08-27"],
+      adultConditioningAddendum: [
+        "ZAF-CONDITIONING-ADDENDUM-2026-09-01-01", "2026-09-01",
+      ],
     });
     Object.values(CHECKOUT_DOCUMENTS).forEach((document) => {
       expect(document.sha256).toMatch(/^[a-f0-9]{64}$/);
@@ -222,6 +228,20 @@ describe("membership catalogue parity", () => {
       ]);
     expect(resolveCheckoutSignerRole("adult_unlimited"))
       .toBe("adult_participant_and_payer");
+
+    expect(resolveCheckoutDocuments("adult_conditioning").map(({key}) => key))
+      .toEqual([
+        "membershipTerms", "cancellationPolicy", "adultConditioningAddendum",
+        "privacyNotice", "adultWaiver",
+      ]);
+    const conditioningContract = resolveCheckoutAcceptanceStatements(
+      "adult_conditioning"
+    ).find(({id}) => id === "membership_contract");
+    expect(conditioningContract?.documentKeys).toEqual([
+      "membershipTerms", "cancellationPolicy", "adultConditioningAddendum",
+    ]);
+    expect(conditioningContract?.statement)
+      .toMatch(/Conditioning Only Membership Product Addendum/);
 
     expect(resolveCheckoutDocuments("youth_teenstars").map(({key}) => key)).toEqual([
       "membershipTerms", "cancellationPolicy", "privacyNotice", "guardianAddendum",

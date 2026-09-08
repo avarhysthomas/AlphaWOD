@@ -1,11 +1,15 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { hasAlphaWodAccess } from "../../../context/authUser";
 import { Link, NavLink, useParams } from "react-router-dom";
 import {
+  Ban,
   Bell,
   Check,
+  LockKeyhole,
   Plus,
+  ReceiptText,
   RefreshCcw,
+  TriangleAlert,
   UserCheck,
   UserMinus,
   Users,
@@ -23,12 +27,23 @@ import { db } from "../../../firebase";
 import UserAvatar from "../../../components/ui/UserAvatar";
 import { getUserNavItems } from "../../../components/layout/UserTopNav";
 import { useAuth } from "../../../context/AuthContext";
+import {
+  beginClassCancellation,
+  finalizeClassCancellation,
+  type ClassCancellationPaygGuest,
+  type ClassCancellationResult,
+  type ClassCancellationState,
+} from "../services/classCancellation";
 
 type BookingStatus = "booked" | "checked_in" | "authorised_absence" | "dip";
 
 type AttendanceStatus = "none" | "checked_in" | "dip";
 
 type BookingRow = {
+  bookingId?: string;
+  bookingKind?: "member" | "payg_guest";
+  isGuestBooking?: boolean;
+  paygOrderId?: string;
   userId: string;
   userName?: string;
   name?: string;
@@ -50,6 +65,14 @@ type RosterResponse = {
   attendees: BookingRow[];
 };
 
+type ClassControl = {
+  status: "scheduled" | "cancelled";
+  bookingOpen: boolean;
+  bookingClosedReason?: string;
+  cancellationOperationId?: string;
+  cancellationState?: ClassCancellationState;
+};
+
 type GymUser = {
   id: string;
   name?: string;
@@ -68,7 +91,7 @@ function normalizeStatus(r: BookingRow): BookingStatus {
   return "booked";
 }
 
-function StatusPill({ status }: { status: BookingStatus }) {
+function StatusPill({ status, guest = false }: { status: BookingStatus; guest?: boolean }) {
   const base =
     "text-[10px] uppercase tracking-[0.16em] px-2.5 py-1 rounded-md inline-flex items-center gap-2 font-black";
 
@@ -77,7 +100,7 @@ function StatusPill({ status }: { status: BookingStatus }) {
   }
 
   if (status === "dip") {
-    return <span className={`${base} bg-red-400/90 text-black`}>Dip</span>;
+    return <span className={`${base} bg-red-400/90 text-black`}>{guest ? "No show" : "Dip"}</span>;
   }
 
   if (status === "authorised_absence") {
@@ -85,6 +108,141 @@ function StatusPill({ status }: { status: BookingStatus }) {
   }
 
   return <span className={`${base} bg-white/[0.08] text-white/58`}>Booked</span>;
+}
+
+function cancellationStateLabel(
+  state: ClassCancellationState | undefined,
+  bookingOpen: boolean,
+  status: ClassControl["status"]
+) {
+  if (status === "cancelled" || state === "cancelled") return "Class cancelled";
+  if (state === "ready_to_finalize") return "Ready to finalize";
+  if (state === "awaiting_payg_refunds") return "Refunds outstanding";
+  if (state === "processing") return "Reconciliation in progress";
+  if (!bookingOpen) return "Bookings frozen";
+  return "Bookings open";
+}
+
+function formatCancellationMoney(amountPence: number, currency: string) {
+  const normalizedCurrency = String(currency || "GBP").toUpperCase();
+  try {
+    return new Intl.NumberFormat("en-GB", {
+      style: "currency",
+      currency: normalizedCurrency,
+    }).format(Number(amountPence || 0) / 100);
+  } catch {
+    return `${normalizedCurrency} ${(Number(amountPence || 0) / 100).toFixed(2)}`;
+  }
+}
+
+function readableCancellationBlocker(value: string) {
+  return value.replace(/_/g, " ");
+}
+
+function cancellationBlockerMessages(value: unknown) {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item): item is string => typeof item === "string")
+      .map(readableCancellationBlocker);
+  }
+  if (!value || typeof value !== "object") return [];
+
+  const blockers = value as Record<string, unknown>;
+  const messages: string[] = [];
+  const addCount = (key: string, label: string) => {
+    const count = blockers[key];
+    if (typeof count === "number" && count > 0) messages.push(`${label}: ${count}`);
+  };
+  const addIds = (key: string, label: string) => {
+    const ids = Array.isArray(blockers[key])
+      ? (blockers[key] as unknown[]).filter(
+          (item): item is string => typeof item === "string" && item.length > 0
+        )
+      : [];
+    if (ids.length > 0) messages.push(`${label}: ${ids.join(", ")}`);
+  };
+
+  addCount("activeBookingCount", "Active bookings");
+  addCount("activeMemberBookingCount", "Active member bookings");
+  addCount("activePaygBookingCount", "Active PAYG bookings");
+  addCount("malformedActiveBookingCount", "Malformed active bookings");
+  if (blockers.bookedCount === null) messages.push("Class booked count is invalid");
+  else addCount("bookedCount", "Class booked count");
+  if (blockers.unpaidHoldCount === null) messages.push("PAYG unpaid hold count is invalid");
+  else addCount("unpaidHoldCount", "PAYG unpaid holds");
+  addIds("activePaygIntentIds", "Active PAYG intents");
+  addIds("unreleasedPaygIntentIds", "Unreleased PAYG intents");
+  addIds("activePaygLockIds", "Active PAYG capacity locks");
+  addIds("unresolvedPaymentReviewIds", "Unresolved payment reviews");
+  addIds("unresolvedPaygOrderIds", "Unresolved PAYG orders");
+  addIds("unboundPaygOrderIds", "Unbound PAYG orders");
+  addIds("unresolvedConfirmationOrderIds", "Unresolved PAYG confirmations");
+  addIds("malformedPaygOrderIds", "Malformed PAYG orders");
+  return messages;
+}
+
+function confirmationDispositionLabel(
+  disposition: ClassCancellationPaygGuest["confirmationDisposition"]
+) {
+  switch (disposition) {
+    case "suppressed_before_send":
+      return "Suppressed before send";
+    case "accepted_before_change":
+      return "Original confirmation accepted before cancellation";
+    case "accepted_after_change_corrected":
+      return "Late confirmation accepted; correction sent";
+    case "accepted_after_change_unresolved":
+      return "Late confirmation accepted; correction unresolved";
+    default:
+      return "Provider outcome ambiguous";
+  }
+}
+
+function safePaygReferences(value: unknown): ClassCancellationPaygGuest[] | null {
+  if (!Array.isArray(value)) return null;
+  const references: ClassCancellationPaygGuest[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const candidate = item as Record<string, unknown>;
+    if (
+      typeof candidate.orderId !== "string" ||
+      (candidate.bookingId !== null && typeof candidate.bookingId !== "string") ||
+      (candidate.paymentIntentId !== null && typeof candidate.paymentIntentId !== "string") ||
+      (candidate.chargeId !== null && typeof candidate.chargeId !== "string") ||
+      (candidate.refundId !== null && typeof candidate.refundId !== "string") ||
+      typeof candidate.orderStatus !== "string" ||
+      (candidate.refundStatus !== null && typeof candidate.refundStatus !== "string") ||
+      typeof candidate.amountPence !== "number" ||
+      typeof candidate.currency !== "string" ||
+      typeof candidate.confirmationSuppressed !== "boolean" ||
+      typeof candidate.confirmationResolved !== "boolean" ||
+      ![
+        "suppressed_before_send",
+        "accepted_before_change",
+        "accepted_after_change_corrected",
+        "accepted_after_change_unresolved",
+        "ambiguous",
+      ].includes(String(candidate.confirmationDisposition))
+    ) {
+      continue;
+    }
+    references.push({
+      orderId: candidate.orderId,
+      bookingId: candidate.bookingId,
+      paymentIntentId: candidate.paymentIntentId,
+      chargeId: candidate.chargeId,
+      refundId: candidate.refundId,
+      orderStatus: candidate.orderStatus,
+      refundStatus: candidate.refundStatus,
+      amountPence: candidate.amountPence,
+      currency: candidate.currency,
+      confirmationSuppressed: candidate.confirmationSuppressed,
+      confirmationResolved: candidate.confirmationResolved,
+      confirmationDisposition:
+        candidate.confirmationDisposition as ClassCancellationPaygGuest["confirmationDisposition"],
+    });
+  }
+  return references;
 }
 
 export default function ClassRoster() {
@@ -114,9 +272,23 @@ export default function ClassRoster() {
   const [addingMember, setAddingMember] = useState(false);
   const [addMemberError, setAddMemberError] = useState("");
 
+  const [classControl, setClassControl] = useState<ClassControl | null>(null);
+  const [loadingClassControl, setLoadingClassControl] = useState(true);
+  const [classControlError, setClassControlError] = useState("");
+  const [cancellationResult, setCancellationResult] = useState<ClassCancellationResult | null>(null);
+  const [cancellationBusy, setCancellationBusy] = useState<"begin" | "resume" | "finalize" | null>(null);
+  const [cancellationError, setCancellationError] = useState("");
+  const [cancellationBlockers, setCancellationBlockers] = useState<string[]>([]);
+  const [confirmingCancellation, setConfirmingCancellation] = useState<"begin" | "finalize" | null>(null);
+  const cancellationActionLock = useRef(false);
+
   const selectedIds = useMemo(
     () => Object.entries(selected).filter(([, v]) => v).map(([id]) => id),
     [selected]
+  );
+  const selectedHasGuest = useMemo(
+    () => selectedIds.some((id) => rows.find((row) => row.userId === id)?.isGuestBooking),
+    [rows, selectedIds]
   );
 
   const toggleSelected = useCallback((uid: string) => {
@@ -125,12 +297,18 @@ export default function ClassRoster() {
 
   const clearSelected = useCallback(() => setSelected({}), []);
 
-  useEffect(() => {
+  const loadClassControl = useCallback(async () => {
     if (!classId) return;
 
-    (async () => {
+    setLoadingClassControl(true);
+    setClassControlError("");
+    try {
       const snap = await getDoc(doc(db, "classes", classId));
-      if (!snap.exists()) return;
+      if (!snap.exists()) {
+        setClassControl(null);
+        setClassControlError("This class could not be found. Cancellation controls are disabled.");
+        return;
+      }
 
       const d: any = snap.data();
       setClassTitle(d.title || "Class");
@@ -151,8 +329,36 @@ export default function ClassRoster() {
         : "";
 
       setClassMeta([date, time].filter(Boolean).join(" • "));
-    })();
+      setClassControl({
+        status: d.status === "cancelled" ? "cancelled" : "scheduled",
+        bookingOpen: d.bookingOpen !== false,
+        bookingClosedReason:
+          typeof d.bookingClosedReason === "string" ? d.bookingClosedReason : undefined,
+        cancellationOperationId:
+          typeof d.cancellationOperationId === "string" ? d.cancellationOperationId : undefined,
+        cancellationState: [
+          "processing",
+          "awaiting_payg_refunds",
+          "ready_to_finalize",
+          "cancelled",
+        ].includes(d.cancellationState)
+          ? d.cancellationState
+          : undefined,
+      });
+    } catch (error) {
+      console.error("Class control error:", error);
+      setClassControl(null);
+      setClassControlError(
+        "We couldn’t verify the class state. Cancellation and roster changes are disabled until you retry."
+      );
+    } finally {
+      setLoadingClassControl(false);
+    }
   }, [classId]);
+
+  useEffect(() => {
+    void loadClassControl();
+  }, [loadClassControl]);
 
   useEffect(() => {
     if (!showAddMemberModal || allUsersLoaded) return;
@@ -221,6 +427,122 @@ export default function ClassRoster() {
     loadRoster();
   }, [loadRoster]);
 
+  const canManageCancellation = appUser?.role === "admin";
+  const cancellationState =
+    cancellationResult?.operation.state ?? classControl?.cancellationState;
+  const cancellationStarted = Boolean(
+    cancellationState ||
+      classControl?.cancellationOperationId ||
+      classControl?.bookingClosedReason === "class_cancellation"
+  );
+  const classMutationsFrozen =
+    loadingClassControl ||
+    Boolean(cancellationBusy) ||
+    Boolean(classControlError) ||
+    classControl?.bookingOpen === false ||
+    classControl?.status === "cancelled";
+
+  const applyCancellationResult = useCallback((result: ClassCancellationResult) => {
+    setCancellationResult(result);
+    setShowAddMemberModal(false);
+    setSelectMode(false);
+    setSelected({});
+    setClassControl((current) => ({
+      status:
+        result.alreadyFinalized || result.operation.state === "cancelled"
+          ? "cancelled"
+          : current?.status ?? "scheduled",
+      bookingOpen: false,
+      bookingClosedReason: "class_cancellation",
+      cancellationOperationId: result.operation.id,
+      cancellationState: result.operation.state,
+    }));
+  }, []);
+
+  async function handleBeginCancellation(mode: "begin" | "resume") {
+    if (!classId || cancellationBusy || cancellationActionLock.current || !canManageCancellation) return;
+    if (!auth.currentUser) {
+      setCancellationError("Log in as an administrator before changing this class.");
+      return;
+    }
+
+    cancellationActionLock.current = true;
+    setConfirmingCancellation(null);
+    setCancellationBusy(mode);
+    setCancellationError("");
+    setCancellationBlockers([]);
+    try {
+      const result = await beginClassCancellation({ classId });
+      applyCancellationResult(result);
+      await Promise.all([loadClassControl(), loadRoster()]);
+    } catch (error: any) {
+      console.error("Begin class cancellation error:", error);
+      // The callable freezes bookings before it releases/reconciles records.
+      // A transport error is therefore ambiguous: hold the UI closed until an
+      // authoritative class re-read proves whether the first phase committed.
+      setClassControl((current) =>
+        current
+          ? {
+              ...current,
+              bookingOpen: false,
+              bookingClosedReason: "class_cancellation",
+              cancellationState: current.cancellationState ?? "processing",
+            }
+          : current
+      );
+      setCancellationError(
+        error?.code === "permission-denied"
+          ? "Your admin permission could not be verified. No class changes were made."
+          : error?.message ||
+              "The cancellation could not be started. Bookings may already be frozen; retry to resume safely."
+      );
+      await Promise.all([loadClassControl(), loadRoster()]);
+    } finally {
+      cancellationActionLock.current = false;
+      setCancellationBusy(null);
+    }
+  }
+
+  async function handleFinalizeCancellation() {
+    if (!classId || cancellationBusy || cancellationActionLock.current || !canManageCancellation) return;
+    if (!auth.currentUser) {
+      setCancellationError("Log in as an administrator before changing this class.");
+      return;
+    }
+
+    cancellationActionLock.current = true;
+    setConfirmingCancellation(null);
+    setCancellationBusy("finalize");
+    setCancellationError("");
+    setCancellationBlockers([]);
+    try {
+      const result = await finalizeClassCancellation({ classId });
+      applyCancellationResult(result);
+      await Promise.all([loadClassControl(), loadRoster()]);
+    } catch (error: any) {
+      console.error("Finalize class cancellation error:", error);
+      const details = error?.details ?? {};
+      const blockers = cancellationBlockerMessages(details.blockers);
+      const latestPaygGuests = safePaygReferences(details.paygGuests);
+      if (latestPaygGuests) {
+        setCancellationResult((current) =>
+          current ? { ...current, paygGuests: latestPaygGuests } : current
+        );
+      }
+      setCancellationBlockers(blockers);
+      setCancellationError(
+        details.reason === "class_cancellation_not_ready"
+          ? "Cancellation cannot be finalized yet. Resolve every blocker, then resume reconciliation."
+          : error?.message ||
+              "The class was not finalized. Resume reconciliation to confirm the current state before retrying."
+      );
+      await Promise.all([loadClassControl(), loadRoster()]);
+    } finally {
+      cancellationActionLock.current = false;
+      setCancellationBusy(null);
+    }
+  }
+
   const localCheckedInCount = useMemo(
     () => rows.filter((r) => normalizeStatus(r) === "checked_in").length,
     [rows]
@@ -266,18 +588,28 @@ export default function ClassRoster() {
     const user = auth.currentUser;
     if (!user) return alert("Log in first.");
     if (!classId) return;
+    if (classMutationsFrozen) {
+      return alert("Roster changes are paused while this class is frozen or cancelled.");
+    }
 
     try {
       setBusyUserId(userId);
+      const rosterRow = rows.find((row) => row.userId === userId);
+      const bookingPayload = rosterRow?.bookingId
+        ? { bookingId: rosterRow.bookingId }
+        : { classId, userId };
 
       if (next === "checked_in" || next === "booked") {
         const attended = next === "checked_in";
         const mod = await import("../services/checkin");
-        await mod.checkInBooking({ classId, userId, attended });
+        await mod.checkInBooking({ ...bookingPayload, attended });
       } else {
+        if (next === "authorised_absence" && rosterRow?.isGuestBooking) {
+          return alert("PAYG cancellations must use the PAYG cancellation flow so the refund policy is applied correctly.");
+        }
         const functions = getFunctions(undefined, "europe-west1");
         const mark = httpsCallable(functions, "markBookingStatus");
-        await mark({ classId, userId, status: next });
+        await mark({ ...bookingPayload, status: next });
       }
 
       await loadRoster();
@@ -299,9 +631,18 @@ export default function ClassRoster() {
     const user = auth.currentUser;
     if (!user) return alert("Log in first.");
     if (!classId) return;
+    if (classMutationsFrozen) {
+      return alert("Roster changes are paused while this class is frozen or cancelled.");
+    }
 
     const ids = idsArg ?? selectedIds;
     if (!ids.length) return;
+    const selectedRows = ids.map((id) => rows.find((row) => row.userId === id)).filter(
+      (row): row is BookingRow => Boolean(row)
+    );
+    if (next === "authorised_absence" && selectedRows.some((row) => row.isGuestBooking)) {
+      return alert("PAYG cancellations must use the PAYG cancellation flow, so guest bookings were not changed.");
+    }
 
     try {
       setBulkBusy(true);
@@ -311,7 +652,10 @@ export default function ClassRoster() {
         const mod = await import("../services/checkin");
 
         const results = await Promise.allSettled(
-          ids.map((uid) => mod.checkInBooking({ classId, userId: uid, attended }))
+          selectedRows.map((row) => mod.checkInBooking({
+            ...(row.bookingId ? { bookingId: row.bookingId } : { classId, userId: row.userId }),
+            attended,
+          }))
         );
 
         const failed = results.filter((x) => x.status === "rejected").length;
@@ -324,7 +668,10 @@ export default function ClassRoster() {
         const functions = getFunctions(undefined, "europe-west1");
         const mark = httpsCallable(functions, "markBookingStatus");
 
-        const results = await Promise.allSettled(ids.map((uid) => mark({ classId, userId: uid, status: next })));
+        const results = await Promise.allSettled(selectedRows.map((row) => mark({
+          ...(row.bookingId ? { bookingId: row.bookingId } : { classId, userId: row.userId }),
+          status: next,
+        })));
         const failed = results.filter((x) => x.status === "rejected").length;
 
         await loadRoster();
@@ -364,6 +711,10 @@ export default function ClassRoster() {
 
   async function handleAdminAddMember() {
   if (!classId) return;
+  if (classMutationsFrozen) {
+    setAddMemberError("Members cannot be added while this class is frozen or cancelled.");
+    return;
+  }
 
   const selectedUser =
     addableUsers.find((u) => u.id === selectedUserId) ??
@@ -398,10 +749,32 @@ export default function ClassRoster() {
 }
 
   const progressPct = totalShown ? Math.round((checkedInShown / totalShown) * 100) : 0;
-  const canBulkCheckIn = !loadingRoster && !bulkBusy && rows.some((r) => normalizeStatus(r) !== "checked_in");
-  const canBulkUncheck = !loadingRoster && !bulkBusy && rows.some((r) => normalizeStatus(r) === "checked_in");
-  const canBulkSelected = !loadingRoster && !bulkBusy && selectedIds.length > 0;
-  const navItems = getUserNavItems(appUser?.role);
+  const canBulkCheckIn =
+    !classMutationsFrozen &&
+    !loadingRoster &&
+    !bulkBusy &&
+    rows.some((r) => normalizeStatus(r) !== "checked_in");
+  const canBulkUncheck =
+    !classMutationsFrozen &&
+    !loadingRoster &&
+    !bulkBusy &&
+    rows.some((r) => normalizeStatus(r) === "checked_in");
+  const canBulkSelected =
+    !classMutationsFrozen && !loadingRoster && !bulkBusy && selectedIds.length > 0;
+  const cancellationFinalized =
+    classControl?.status === "cancelled" || cancellationState === "cancelled";
+  const cancellationReadyToFinalize =
+    cancellationResult?.operation.state === "ready_to_finalize";
+  const cancellationLabel = loadingClassControl
+    ? "Checking class state"
+    : classControlError
+    ? "State unavailable"
+    : cancellationStateLabel(
+        cancellationState,
+        classControl?.bookingOpen ?? false,
+        classControl?.status ?? "scheduled"
+      );
+  const navItems = getUserNavItems(appUser);
   const firstName = appUser?.name?.split(" ")[0] || appUser?.email?.split("@")[0] || "A";
   const profilePhotoURL = appUser?.photoURL || user?.photoURL || "";
 
@@ -449,6 +822,301 @@ export default function ClassRoster() {
           <p className="mt-5 max-w-lg text-base font-medium leading-7 text-white/52">{classMeta}</p>
         </section>
 
+        {canManageCancellation ? (
+          <section
+            className="mt-8 overflow-hidden rounded-2xl bg-[#151311] shadow-[0_18px_54px_rgba(0,0,0,0.28)]"
+            aria-labelledby="class-cancellation-title"
+          >
+            <div className="flex flex-wrap items-start justify-between gap-4 border-b border-white/10 p-5">
+              <div className="min-w-0">
+                <h2 id="class-cancellation-title" className="font-heading text-3xl uppercase text-white">
+                  Class cancellation
+                </h2>
+                <p className="mt-2 max-w-xl text-sm leading-6 text-white/65">
+                  Freeze new bookings, release member places, reconcile every paid PAYG guest, then finalize.
+                </p>
+              </div>
+              <span
+                className={[
+                  "inline-flex min-h-9 items-center gap-2 rounded-full px-3 py-2 text-xs font-black uppercase tracking-[0.12em]",
+                  cancellationFinalized
+                    ? "bg-red-400/15 text-red-100"
+                    : cancellationReadyToFinalize
+                    ? "bg-emerald-300/15 text-emerald-100"
+                    : cancellationStarted || classControl?.bookingOpen === false
+                    ? "bg-amber-300/15 text-amber-100"
+                    : "bg-white/[0.07] text-white/70",
+                ].join(" ")}
+                role="status"
+              >
+                {cancellationFinalized ? <Ban className="h-4 w-4" /> : <LockKeyhole className="h-4 w-4" />}
+                {cancellationLabel}
+              </span>
+            </div>
+
+            <div className="p-5">
+              {loadingClassControl ? (
+                <p className="text-sm leading-6 text-white/65" role="status">
+                  Verifying the durable class state…
+                </p>
+              ) : classControlError ? (
+                <div className="rounded-xl bg-red-400/10 p-4" role="alert">
+                  <div className="flex items-start gap-3">
+                    <TriangleAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-200" />
+                    <div>
+                      <p className="text-sm leading-6 text-red-100">{classControlError}</p>
+                      <button
+                        type="button"
+                        onClick={() => void loadClassControl()}
+                        disabled={loadingClassControl}
+                        className="mt-3 inline-flex min-h-11 items-center justify-center rounded-xl bg-[#f2eee8] px-4 py-2 text-sm font-bold text-black outline-none transition hover:bg-white focus-visible:ring-2 focus-visible:ring-white disabled:opacity-40"
+                      >
+                        Retry class state
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : cancellationFinalized ? (
+                <div className="rounded-xl bg-red-400/10 p-4">
+                  <p className="text-sm font-bold text-red-100">This class is cancelled.</p>
+                  <p className="mt-2 text-sm leading-6 text-red-100/75">
+                    Booking remains closed. The operation record and payment references below are retained for audit.
+                  </p>
+                </div>
+              ) : !cancellationStarted ? (
+                <div>
+                  <p className="text-sm leading-6 text-white/65">
+                    Starting is fail-closed: the class stops accepting bookings before member releases and PAYG refund checks begin.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingCancellation("begin")}
+                    disabled={Boolean(cancellationBusy)}
+                    className="mt-5 inline-flex min-h-12 items-center justify-center rounded-xl bg-red-400/15 px-5 py-3 text-sm font-bold text-red-100 outline-none transition hover:bg-red-400/22 focus-visible:ring-2 focus-visible:ring-red-200 disabled:opacity-40"
+                  >
+                    Cancel whole class
+                  </button>
+                </div>
+              ) : (
+                <div>
+                  <div className="flex items-start gap-3 rounded-xl bg-amber-300/10 p-4">
+                    <LockKeyhole className="mt-0.5 h-5 w-5 shrink-0 text-amber-100" />
+                    <div>
+                      <p className="text-sm font-bold text-amber-50">New bookings are frozen.</p>
+                      <p className="mt-1 text-sm leading-6 text-amber-50/75">
+                        This operation is resumable. Re-running reconciliation does not create a second cancellation.
+                      </p>
+                      {classControl?.cancellationOperationId ? (
+                        <p className="mt-2 break-all font-mono text-xs text-amber-50/65">
+                          Operation {classControl.cancellationOperationId}
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  {!cancellationResult ? (
+                    <div className="mt-4">
+                      <p className="text-sm leading-6 text-white/65">
+                        Load the authoritative reconciliation snapshot before taking the next action.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => void handleBeginCancellation("resume")}
+                        disabled={Boolean(cancellationBusy)}
+                        className="mt-4 inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-[#f2eee8] px-5 py-3 text-sm font-bold text-black outline-none transition hover:bg-white focus-visible:ring-2 focus-visible:ring-white disabled:opacity-40"
+                      >
+                        <RefreshCcw className={`h-4 w-4 ${cancellationBusy === "resume" ? "animate-spin" : ""}`} />
+                        {cancellationBusy === "resume" ? "Reconciling…" : "Resume reconciliation"}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              )}
+
+              {confirmingCancellation === "begin" ? (
+                <div className="mt-5 rounded-xl bg-red-400/10 p-5" role="alert">
+                  <h3 className="text-lg font-extrabold text-red-50">Freeze this class and start cancellation?</h3>
+                  <p className="mt-2 text-sm leading-6 text-red-100/80">
+                    Members will have their places released. Paid PAYG guests must be fully reconciled before final cancellation.
+                  </p>
+                  <div className="mt-5 flex flex-col gap-3 sm:flex-row">
+                    <button
+                      type="button"
+                      onClick={() => setConfirmingCancellation(null)}
+                      disabled={Boolean(cancellationBusy)}
+                      className="min-h-12 rounded-xl border border-white/15 px-5 py-3 text-sm font-bold text-white outline-none focus-visible:ring-2 focus-visible:ring-white disabled:opacity-40"
+                    >
+                      Keep class
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleBeginCancellation("begin")}
+                      disabled={Boolean(cancellationBusy)}
+                      className="min-h-12 rounded-xl bg-red-300 px-5 py-3 text-sm font-black text-black outline-none transition hover:bg-red-200 focus-visible:ring-2 focus-visible:ring-red-100 disabled:opacity-40"
+                    >
+                      {cancellationBusy === "begin" ? "Freezing bookings…" : "Freeze bookings and start"}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              {cancellationResult ? (
+                <div className="mt-5" aria-live="polite">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <h3 className="text-lg font-extrabold text-white">Reconciliation snapshot</h3>
+                    <span className="break-all font-mono text-xs text-white/55">
+                      {cancellationResult.operation.id}
+                    </span>
+                  </div>
+
+                  <dl className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-white/10 sm:grid-cols-3">
+                    {[
+                      ["Member places released", cancellationResult.operation.memberBookingsReleased],
+                      ["Member bookings remaining", cancellationResult.operation.activeMemberBookingsRemaining],
+                      ["Paid PAYG guests", cancellationResult.operation.paidPaygGuestCount],
+                      ["PAYG refunds recorded", cancellationResult.operation.refundedPaygGuestCount],
+                      ["PAYG unresolved", cancellationResult.operation.unresolvedPaygGuestCount],
+                      ["Unpaid holds", cancellationResult.operation.unpaidHoldCount],
+                    ].map(([label, value]) => (
+                      <div key={String(label)} className="min-w-0 bg-[#151311] p-4">
+                        <dt className="text-xs leading-5 text-white/58">{label}</dt>
+                        <dd className="mt-2 font-mono text-2xl font-bold text-white">{value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+
+                  <div className="mt-5">
+                    <div className="flex items-center gap-2">
+                      <ReceiptText className="h-5 w-5 text-white/65" />
+                      <h3 className="text-base font-extrabold text-white">PAYG payment references</h3>
+                    </div>
+                    {cancellationResult.paygGuests.length === 0 ? (
+                      <p className="mt-3 rounded-xl bg-white/[0.04] p-4 text-sm leading-6 text-white/65">
+                        No paid PAYG guests require reconciliation.
+                      </p>
+                    ) : (
+                      <div className="mt-3 overflow-hidden rounded-xl bg-white/10">
+                        {cancellationResult.paygGuests.map((guest) => (
+                          <dl
+                            key={guest.orderId}
+                            className="grid gap-3 border-b border-white/10 bg-[#151311] p-4 text-sm last:border-b-0 sm:grid-cols-2"
+                          >
+                            <div className="min-w-0">
+                              <dt className="text-xs font-bold uppercase tracking-[0.1em] text-white/50">Order</dt>
+                              <dd className="mt-1 break-all font-mono text-white">{guest.orderId}</dd>
+                            </div>
+                            <div className="min-w-0">
+                              <dt className="text-xs font-bold uppercase tracking-[0.1em] text-white/50">Booking</dt>
+                              <dd className="mt-1 break-all font-mono text-white">{guest.bookingId ?? "Not recorded"}</dd>
+                            </div>
+                            <div className="min-w-0">
+                              <dt className="text-xs font-bold uppercase tracking-[0.1em] text-white/50">Payment intent</dt>
+                              <dd className="mt-1 break-all font-mono text-white">{guest.paymentIntentId ?? "Not recorded"}</dd>
+                            </div>
+                            <div className="min-w-0">
+                              <dt className="text-xs font-bold uppercase tracking-[0.1em] text-white/50">Charge</dt>
+                              <dd className="mt-1 break-all font-mono text-white">{guest.chargeId ?? "Not recorded"}</dd>
+                            </div>
+                            <div className="min-w-0">
+                              <dt className="text-xs font-bold uppercase tracking-[0.1em] text-white/50">Refund</dt>
+                              <dd className="mt-1 break-all font-mono text-white">{guest.refundId ?? "Not recorded"}</dd>
+                            </div>
+                            <div className="min-w-0">
+                              <dt className="text-xs font-bold uppercase tracking-[0.1em] text-white/50">Amount</dt>
+                              <dd className="mt-1 text-white">{formatCancellationMoney(guest.amountPence, guest.currency)}</dd>
+                            </div>
+                            <div className="min-w-0">
+                              <dt className="text-xs font-bold uppercase tracking-[0.1em] text-white/50">Order / refund</dt>
+                              <dd className="mt-1 break-words text-white">{guest.orderStatus} / {guest.refundStatus ?? "not recorded"}</dd>
+                            </div>
+                            <div className="min-w-0">
+                              <dt className="text-xs font-bold uppercase tracking-[0.1em] text-white/50">Confirmation resolution</dt>
+                              <dd className="mt-1 text-white">{guest.confirmationResolved ? "Resolved" : "Unresolved"}</dd>
+                            </div>
+                            <div className="min-w-0 sm:col-span-2">
+                              <dt className="text-xs font-bold uppercase tracking-[0.1em] text-white/50">Confirmation disposition</dt>
+                              <dd className="mt-1 break-words text-white">{confirmationDispositionLabel(guest.confirmationDisposition)}</dd>
+                            </div>
+                          </dl>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {!cancellationFinalized ? (
+                    <div className="mt-5 flex flex-col gap-3 sm:flex-row">
+                      <button
+                        type="button"
+                        onClick={() => void handleBeginCancellation("resume")}
+                        disabled={Boolean(cancellationBusy)}
+                        className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-white/15 px-5 py-3 text-sm font-bold text-white outline-none transition hover:bg-white/[0.05] focus-visible:ring-2 focus-visible:ring-white disabled:opacity-40"
+                      >
+                        <RefreshCcw className={`h-4 w-4 ${cancellationBusy === "resume" ? "animate-spin" : ""}`} />
+                        {cancellationBusy === "resume" ? "Reconciling…" : "Refresh reconciliation"}
+                      </button>
+                      {cancellationReadyToFinalize ? (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmingCancellation("finalize")}
+                          disabled={Boolean(cancellationBusy)}
+                          className="min-h-12 rounded-xl bg-red-400/15 px-5 py-3 text-sm font-bold text-red-100 outline-none transition hover:bg-red-400/22 focus-visible:ring-2 focus-visible:ring-red-200 disabled:opacity-40"
+                        >
+                          Finalize class cancellation
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {confirmingCancellation === "finalize" ? (
+                <div className="mt-5 rounded-xl bg-red-400/10 p-5" role="alert">
+                  <h3 className="text-lg font-extrabold text-red-50">Permanently mark this class cancelled?</h3>
+                  <p className="mt-2 text-sm leading-6 text-red-100/80">
+                    Finalize only when every member place is released and each paid PAYG guest shows a resolved refund state.
+                  </p>
+                  <div className="mt-5 flex flex-col gap-3 sm:flex-row">
+                    <button
+                      type="button"
+                      onClick={() => setConfirmingCancellation(null)}
+                      disabled={Boolean(cancellationBusy)}
+                      className="min-h-12 rounded-xl border border-white/15 px-5 py-3 text-sm font-bold text-white outline-none focus-visible:ring-2 focus-visible:ring-white disabled:opacity-40"
+                    >
+                      Review again
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleFinalizeCancellation()}
+                      disabled={Boolean(cancellationBusy)}
+                      className="min-h-12 rounded-xl bg-red-300 px-5 py-3 text-sm font-black text-black outline-none transition hover:bg-red-200 focus-visible:ring-2 focus-visible:ring-red-100 disabled:opacity-40"
+                    >
+                      {cancellationBusy === "finalize" ? "Finalizing…" : "Confirm final cancellation"}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              {cancellationError ? (
+                <div className="mt-5 rounded-xl bg-red-400/10 p-4" role="alert">
+                  <div className="flex items-start gap-3">
+                    <TriangleAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-200" />
+                    <div className="min-w-0">
+                      <p className="text-sm leading-6 text-red-100">{cancellationError}</p>
+                      {cancellationBlockers.length > 0 ? (
+                        <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-red-100/80">
+                          {cancellationBlockers.map((blocker) => (
+                            <li key={blocker} className="break-all">{blocker}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </section>
+        ) : null}
+
         <section className="mt-8 overflow-hidden rounded-[28px] border border-white/10 bg-[#151311] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.35)]">
           <div className="grid grid-cols-3 divide-x divide-white/10 text-center">
             <div>
@@ -489,7 +1157,7 @@ export default function ClassRoster() {
                   setSelectMode((v) => !v);
                   clearSelected();
                 }}
-                disabled={loadingRoster || bulkBusy}
+                disabled={loadingRoster || bulkBusy || classMutationsFrozen}
                 className={[
                   "inline-flex shrink-0 items-center gap-2 rounded-full border px-4 py-3 text-sm font-bold transition disabled:opacity-35",
                   selectMode
@@ -525,7 +1193,7 @@ export default function ClassRoster() {
                   setSelectedUserId("");
                   setShowAddMemberModal(true);
                 }}
-                disabled={loadingRoster || bulkBusy}
+                disabled={loadingRoster || bulkBusy || classMutationsFrozen}
                 className="inline-flex shrink-0 items-center gap-2 rounded-full border border-white/10 bg-[#151311] px-4 py-3 text-sm font-bold text-white/68 transition hover:bg-white/[0.06] disabled:opacity-35"
               >
                 <Plus className="h-4 w-4" />
@@ -533,12 +1201,12 @@ export default function ClassRoster() {
               </button>
 
               <button
-                onClick={loadRoster}
-                disabled={loadingRoster || bulkBusy}
+                onClick={() => void Promise.all([loadRoster(), loadClassControl()])}
+                disabled={loadingRoster || loadingClassControl || bulkBusy}
                 className="inline-flex shrink-0 items-center gap-2 rounded-full border border-white/10 bg-[#151311] px-4 py-3 text-sm font-bold text-white/68 transition hover:bg-white/[0.06] disabled:opacity-35"
               >
                 <RefreshCcw className="h-4 w-4" />
-                {loadingRoster ? "Loading..." : "Refresh"}
+                {loadingRoster || loadingClassControl ? "Loading..." : "Refresh"}
               </button>
           </div>
 
@@ -560,7 +1228,8 @@ export default function ClassRoster() {
 
                 <button
                   onClick={() => bulkSetStatus("authorised_absence")}
-                  disabled={!canBulkSelected}
+                  disabled={!canBulkSelected || selectedHasGuest}
+                  title={selectedHasGuest ? "Use the PAYG cancellation flow for guest bookings" : undefined}
                   className="rounded-[14px] border border-white/10 bg-white/[0.04] px-3 py-3 text-sm font-bold text-white transition hover:bg-white/[0.07] disabled:opacity-35"
                 >
                   Auth absence
@@ -597,8 +1266,9 @@ export default function ClassRoster() {
             <div className="overflow-hidden rounded-[28px] border border-white/10 bg-[#151311] shadow-[0_24px_60px_rgba(0,0,0,0.28)]">
               {sortedRows.map((r) => {
                 const status = normalizeStatus(r);
-                const isBusy = busyUserId === r.userId || bulkBusy;
+                const isBusy = busyUserId === r.userId || bulkBusy || classMutationsFrozen;
                 const isSelected = !!selected[r.userId];
+                const isPaygGuest = r.bookingKind === "payg_guest" || r.isGuestBooking === true;
 
                 return (
                   <div
@@ -640,7 +1310,9 @@ export default function ClassRoster() {
 
                       <div className="min-w-0 flex-1">
                         <div className="truncate text-base font-extrabold text-white">{r.name ?? "Member"}</div>
-                        <div className="mt-1 truncate text-sm font-medium text-white/38">{r.email ?? ""}</div>
+                        <div className="mt-1 truncate text-sm font-medium text-white/38">
+                          {isPaygGuest ? "PAYG guest · no app account" : r.email ?? ""}
+                        </div>
                       </div>
                       </div>
 
@@ -651,7 +1323,10 @@ export default function ClassRoster() {
                               Admin
                             </span>
                           )}
-                          <StatusPill status={status} />
+                          {isPaygGuest ? (
+                            <span className="rounded-md border border-amber-300/20 bg-amber-300/10 px-2 py-1 text-[10px] font-black uppercase tracking-[0.08em] text-amber-200">PAYG</span>
+                          ) : null}
+                          <StatusPill status={status} guest={isPaygGuest} />
                         </div>
                         {!selectMode && (
                           <div className="flex items-center gap-1">
@@ -665,9 +1340,9 @@ export default function ClassRoster() {
                             </button>
                             <button
                               onClick={() => setStatus(r.userId, "authorised_absence")}
-                              disabled={isBusy}
+                              disabled={isBusy || isPaygGuest}
                               className="grid h-9 w-9 place-items-center rounded-full text-white/38 transition hover:bg-white/[0.07] hover:text-white disabled:opacity-35"
-                              aria-label="Mark authorised absence"
+                              aria-label={isPaygGuest ? "PAYG cancellation uses its cancellation flow" : "Mark authorised absence"}
                             >
                               A
                             </button>

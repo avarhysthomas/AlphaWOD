@@ -58,6 +58,11 @@ test("publication manifest fixes the mixed immutable document bundle", () => {
       ["privacyNotice", "ZAF-PRIVACY-2026-08-25-02", "2026-08-25"],
       ["adultWaiver", "ZAF-ADULT-WAIVER-2026-08-23-01", "2026-08-23"],
       ["guardianAddendum", "ZAF-GUARDIAN-2026-08-27-01", "2026-08-27"],
+      [
+        "adultConditioningAddendum",
+        "ZAF-CONDITIONING-ADDENDUM-2026-09-01-01",
+        "2026-09-01",
+      ],
     ]
   );
 });
@@ -67,17 +72,14 @@ test("registry rendering freezes bytes, digests, and per-entry effective dates",
     const documents = readPublicationDocuments(directory, publicationManifest);
     const registry = renderDocumentRegistry(documents);
 
-    assert.equal(documents.length, 5);
+    assert.equal(documents.length, 6);
     for (const [index, document] of documents.entries()) {
       assert.match(document.sha256, /^[a-f0-9]{64}$/);
       assert.equal(
         document.effectiveDate,
         publicationManifest[index].effectiveDate
       );
-      assert.equal(
-        document.publicUrl,
-        `/legal/memberships/${document.version}.txt`
-      );
+      assert.ok(document.publicUrl.endsWith(`/${document.version}.txt`));
       assert.ok(registry.includes(JSON.stringify(document.content)));
       assert.ok(registry.includes(JSON.stringify(document.sha256)));
       assert.ok(registry.includes(JSON.stringify(document.effectiveDate)));

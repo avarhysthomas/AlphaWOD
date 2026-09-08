@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "stripe-test-membership-checkout",
+  "recordedAt": "2026-08-31T20:50:00Z",
+  "stripeMode": "test",
+  "planKey": "adult_conditioning",
+  "productId": "prod_VAOvaoryJOeb04",
+  "priceId": "price_1UA47fFzNDZoGGA0lgyZPUZ9",
+  "checkoutSessionId": "cs_test_a1TSjXrXvFmmbtRLBg4RHYCllq4uYcgrKLsyZLuc7wmTf1kI7aEYxG20J3",
+  "subscriptionId": "sub_1UAbDFFzNDZoGGA0BLWGWOyb",
+  "verification": {
+    "checkoutComplete": true,
+    "paymentStatus": "no_payment_required",
+    "billingMode": "presale_deferred",
+    "membershipState": "scheduled",
+    "appAccessTier": "limited",
+    "weeklyBookingLimit": 2,
+    "eligibleSlotKeys": [
+      "monday_0600",
+      "tuesday_1800",
+      "thursday_1800",
+      "friday_0530"
+    ],
+    "providerBindingVerified": true,
+    "confirmationOutboxCreated": true
+  },
+  "limitations": [
+    "The presale membership does not become bookable until its first scheduled payment succeeds.",
+    "Account claim and a real post-payment class booking were not performed, so the broader purchase-to-booking readiness item remains pending."
+  ],
+  "productionMutation": false,
+  "deploymentPerformed": false
+}

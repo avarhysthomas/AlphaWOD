@@ -3,6 +3,8 @@
 const PRODUCTION_FIREBASE_PROJECT_ID = "alphawod-d1f2f";
 const FRONTEND_PURCHASE_GATE_NAME =
   "REACT_APP_MEMBERSHIP_PURCHASE_ENABLED";
+const CONDITIONING_PURCHASE_GATE_NAME =
+  "REACT_APP_ADULT_CONDITIONING_PURCHASE_ENABLED";
 const REQUIRED_FIREBASE_WEB_KEYS = [
   "REACT_APP_FIREBASE_API_KEY",
   "REACT_APP_FIREBASE_AUTH_DOMAIN",
@@ -65,11 +67,13 @@ function assertFirebaseWebConfigShape(values) {
  *
  * @param {NodeJS.ProcessEnv|Record<string, string|undefined>} environment Env.
  * @param {boolean|undefined} expectedPurchaseEnabled Optional required state.
+ * @param {boolean} expectedConditioningEnabled Required Conditioning state.
  * @return {boolean} Whether the frontend purchase gate is open.
  */
 function assertFrontendProductionEnvironment(
   environment,
-  expectedPurchaseEnabled = undefined
+  expectedPurchaseEnabled = undefined,
+  expectedConditioningEnabled = false
 ) {
   const values = Object.fromEntries(
     REQUIRED_FIREBASE_WEB_KEYS.map((name) => [name, required(environment, name)])
@@ -101,45 +105,72 @@ function assertFrontendProductionEnvironment(
     environment,
     FRONTEND_PURCHASE_GATE_NAME
   );
+  const conditioningPurchaseEnabled = requiredBoolean(
+    environment,
+    CONDITIONING_PURCHASE_GATE_NAME
+  );
+  if (conditioningPurchaseEnabled && !purchaseEnabled) {
+    throw new Error(
+      `${CONDITIONING_PURCHASE_GATE_NAME} requires ${FRONTEND_PURCHASE_GATE_NAME}.`
+    );
+  }
   if (expectedPurchaseEnabled !== undefined &&
     purchaseEnabled !== expectedPurchaseEnabled) {
     throw new Error(
       `${FRONTEND_PURCHASE_GATE_NAME} must be ${expectedPurchaseEnabled}.`
     );
   }
+  if (conditioningPurchaseEnabled !== expectedConditioningEnabled) {
+    throw new Error(
+      `${CONDITIONING_PURCHASE_GATE_NAME} must be ${expectedConditioningEnabled}.`
+    );
+  }
 
   return purchaseEnabled;
 }
 
-function parseExpectedPurchaseEnabled(argumentsList) {
+function parseExpectedPurchaseStates(argumentsList) {
   const allowed = new Set([
     "--expect-purchase-closed",
     "--expect-purchase-open",
+    "--expect-conditioning-closed",
+    "--expect-conditioning-open",
   ]);
   const unknown = argumentsList.filter((argument) => !allowed.has(argument));
-  if (unknown.length > 0 || argumentsList.length > 1) {
+  const purchaseArguments = argumentsList.filter((argument) =>
+    argument.startsWith("--expect-purchase-"));
+  const conditioningArguments = argumentsList.filter((argument) =>
+    argument.startsWith("--expect-conditioning-"));
+  if (unknown.length > 0 || purchaseArguments.length > 1 ||
+    conditioningArguments.length > 1) {
     throw new Error(
-      "Use at most one of --expect-purchase-closed or --expect-purchase-open."
+      "Use at most one open/closed expectation for each frontend purchase gate."
     );
   }
-  if (argumentsList[0] === "--expect-purchase-closed") return false;
-  if (argumentsList[0] === "--expect-purchase-open") return true;
-  return undefined;
+  return {
+    purchaseEnabled: purchaseArguments[0] === "--expect-purchase-open" ? true :
+      purchaseArguments[0] === "--expect-purchase-closed" ? false : undefined,
+    conditioningEnabled:
+      conditioningArguments[0] === "--expect-conditioning-open",
+  };
 }
 
 if (require.main === module) {
   try {
-    const expectedPurchaseEnabled = parseExpectedPurchaseEnabled(
+    const expected = parseExpectedPurchaseStates(
       process.argv.slice(2)
     );
     const purchaseEnabled = assertFrontendProductionEnvironment(
       process.env,
-      expectedPurchaseEnabled
+      expected.purchaseEnabled,
+      expected.conditioningEnabled
     );
     console.log(
       "Frontend production environment verified; emulator and test-journey " +
       `switches are closed and the frontend purchase gate is ${
         purchaseEnabled ? "open" : "closed"
+      }; Adult Conditioning is ${
+        expected.conditioningEnabled ? "open" : "closed"
       }.`
     );
   } catch (error) {
@@ -149,9 +180,10 @@ if (require.main === module) {
 }
 
 module.exports = {
+  CONDITIONING_PURCHASE_GATE_NAME,
   FRONTEND_PURCHASE_GATE_NAME,
   PRODUCTION_FIREBASE_PROJECT_ID,
   REQUIRED_FIREBASE_WEB_KEYS,
   assertFrontendProductionEnvironment,
-  parseExpectedPurchaseEnabled,
+  parseExpectedPurchaseStates,
 };

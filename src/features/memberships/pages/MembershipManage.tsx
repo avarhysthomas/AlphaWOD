@@ -2,8 +2,13 @@ import React, { useCallback, useEffect, useState } from "react";
 import { sendEmailVerification } from "firebase/auth";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../../../context/AuthContext";
-import { hasAlphaWodAccess } from "../../../context/authUser";
-import { COMPANY, POLICY_TEXT } from "../../../lib/membershipPlans";
+import { getEffectiveAppAccessTier, hasAlphaWodAccess } from "../../../context/authUser";
+import {
+  COMPANY,
+  CONDITIONING_SLOT_OPTIONS,
+  POLICY_TEXT,
+  formatConditioningSlot,
+} from "../../../lib/membershipPlans";
 import {
   MEMBERSHIP_STATE_LABEL,
   claimMembership,
@@ -26,6 +31,16 @@ import {resolveParticipantFullNames} from "../components/membershipPresentation"
 const CARD =
   "rounded-[28px] border border-white/10 bg-[#151311] p-7 shadow-[0_26px_80px_rgba(0,0,0,0.42)]";
 const EYEBROW = "text-[12px] font-bold uppercase tracking-[0.28em] text-white/34";
+
+function historicalConditioningSlots(membership: MyMembership) {
+  if (membership.entitlementWeeklyBookingLimit != null) return [];
+  if (membership.entitlementClassSlots?.length === 2) {
+    return membership.entitlementClassSlots;
+  }
+  return membership.selectedConditioningSlots?.length === 2
+    ? membership.selectedConditioningSlots
+    : [];
+}
 
 function CancellationPreview({
   preview,
@@ -129,6 +144,7 @@ function cancellationKindLabel(kind: CancellationRequestKind): string {
 export default function MembershipManage() {
   const { user, appUser, refreshAppUser } = useAuth();
   const appAccessAvailable = hasAlphaWodAccess(appUser);
+  const limitedAppAccess = getEffectiveAppAccessTier(appUser) === "limited";
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const emailClaimRequested = searchParams.get("claim") === "email";
@@ -338,10 +354,10 @@ export default function MembershipManage() {
 
         {appAccessAvailable && (
           <Link
-            to="/dashboard"
+            to={limitedAppAccess ? "/schedule" : "/dashboard"}
             className="mt-6 inline-flex rounded-2xl bg-white px-5 py-3 text-sm font-bold uppercase tracking-[0.14em] text-black"
           >
-            Continue to Zero Alpha App
+            {limitedAppAccess ? "Continue to my schedule" : "Continue to Zero Alpha App"}
           </Link>
         )}
 
@@ -460,6 +476,7 @@ export default function MembershipManage() {
               membership.participantFullNames,
               membership.participantCount
             );
+            const legacyConditioningSlots = historicalConditioningSlots(membership);
 
             return (
               <div key={membership.subscriptionId} className={CARD}>
@@ -478,7 +495,9 @@ export default function MembershipManage() {
                     <span className="rounded-full border border-amber-500/25 bg-amber-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-200">
                       {isScheduled && !appAccessAvailable
                         ? "Zero Alpha App after first payment"
-                        : "Zero Alpha App"}
+                        : membership.appAccessTier === "limited"
+                          ? "Limited Zero Alpha App"
+                          : "Full Zero Alpha App"}
                     </span>
                   )}
                 </div>
@@ -527,6 +546,40 @@ export default function MembershipManage() {
                     </dd>
                   </div>
                 </dl>
+
+                {membership.appAccessTier === "limited" &&
+                  membership.entitlementWeeklyBookingLimit === 2 ? (
+                  <div className="mt-5 rounded-2xl border border-amber-300/20 bg-amber-300/10 p-5">
+                    <p className="text-sm font-bold text-amber-100">
+                      2 Conditioning bookings each week
+                    </p>
+                    <p className="mt-2 text-sm leading-6 text-amber-50/80">
+                      Choose any eligible class. Your bookings can change from one
+                      Monday–Sunday week to the next.
+                    </p>
+                    <ul className="mt-3 grid gap-2 text-sm text-amber-50/80 sm:grid-cols-2">
+                      {CONDITIONING_SLOT_OPTIONS.map((slot) => (
+                        <li key={slot.key} className="rounded-xl bg-black/15 px-3 py-2">
+                          {slot.label}
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="mt-3 text-xs leading-5 text-amber-50/55">Included app areas: Schedule, Profile and Membership. Dashboard, Training and Leaderboards require full access.</p>
+                  </div>
+                ) : membership.appAccessTier === "limited" &&
+                  legacyConditioningSlots.length === 2 ? (
+                    <div className="mt-5 rounded-2xl border border-amber-300/20 bg-amber-300/10 p-5">
+                      <p className="text-sm font-bold text-amber-100">
+                        Selected weekly conditioning slots
+                      </p>
+                      <ul className="mt-3 space-y-2 text-sm text-amber-50/80">
+                        {legacyConditioningSlots.map((slot) => (
+                          <li key={slot}>{formatConditioningSlot(slot)}</li>
+                        ))}
+                      </ul>
+                      <p className="mt-3 text-xs leading-5 text-amber-50/55">Included app areas: Schedule, Profile and Membership. Dashboard, Training and Leaderboards require full access.</p>
+                    </div>
+                  ) : null}
 
                 {isScheduled && (
                   <div className="mt-5 rounded-2xl border border-sky-400/25 bg-sky-400/10 p-5 text-sm leading-7 text-sky-50/90">

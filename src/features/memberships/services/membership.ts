@@ -6,6 +6,8 @@ import {
   resolveCheckoutDocuments,
   resolveCheckoutSignerRole,
   type CheckoutAcceptanceId,
+  type ConditioningBookingPolicy,
+  type ConditioningSlotKey,
   type PlanKey,
 } from "../../../lib/membershipPlans";
 
@@ -99,6 +101,11 @@ export type MyMembership = {
   discount?: MembershipDiscount | null;
   paymentSchedule?: MembershipPaymentSchedule | null;
   grantsAlphaWodAccess: boolean;
+  appAccessTier?: "none" | "limited" | "full";
+  conditioningBookingPolicy?: ConditioningBookingPolicy | null;
+  entitlementClassSlots?: ConditioningSlotKey[];
+  selectedConditioningSlots?: ConditioningSlotKey[];
+  entitlementWeeklyBookingLimit?: number | null;
   participantFullName: string;
   participantFullNames?: string[];
   participantCount?: number;
@@ -125,7 +132,7 @@ export type MyMembership = {
 
 export type CheckoutRequest = {
   /** Versioned request contract for the multi-participant checkout implementation. */
-  checkoutSchemaVersion: 4;
+  checkoutSchemaVersion: 6;
   /** Stable across retries of the same form submission for Stripe idempotency. */
   checkoutAttemptId: string;
   /**
@@ -515,6 +522,11 @@ export type AdminMembership = {
   revenueState: "projected" | "at_risk" | "excluded";
   stripeStatus: string;
   grantsAlphaWodAccess: boolean;
+  appAccessTier?: "none" | "limited" | "full";
+  conditioningBookingPolicy?: ConditioningBookingPolicy | null;
+  entitlementClassSlots?: ConditioningSlotKey[];
+  selectedConditioningSlots?: ConditioningSlotKey[];
+  entitlementWeeklyBookingLimit?: number | null;
   entitlementTargetUid: string | null;
   participantFullName: string;
   participantFullNames?: string[];
@@ -576,6 +588,9 @@ export type AdminCheckoutIssue = {
   intentId: string;
   planKey: PlanKey;
   planName: string;
+  conditioningBookingPolicy?: ConditioningBookingPolicy | null;
+  entitlementClassSlots?: ConditioningSlotKey[];
+  entitlementWeeklyBookingLimit?: number | null;
   participantFullNames: string[];
   participantCount: number;
   payerUid: string | null;

@@ -296,11 +296,15 @@ it ignores the migration's unrelated access fields but aborts before archiving
 or clearing if any waiver field was added, removed, or changed. Firestore then
 retries/aborts the transaction if the profile changes again before commit. An
 already-present quarantine document must also exactly match the audited payload.
-The only rerun exception is a minimally validated, server-only legacy quarantine
+One rerun exception accepts a minimally validated, server-only legacy quarantine
 when the live profile has no legacy detail fields and its two markers exactly
-match a fully validated canonical current-version acceptance. Full or incomplete
-live legacy evidence still requires exact quarantine equality, so the migration
-never clears those profiles behind conflicting archived evidence.
+match a fully validated canonical current-version acceptance. A second,
+preservation-only exception handles a marker-only profile whose version matches
+an existing richer valid legacy quarantine but whose timestamp conflicts: the
+richer quarantine remains unchanged, the exact marker evidence is created at
+the deterministic `__legacy__phase0_marker_conflict` record, and only then are
+the non-authoritative profile markers cleared. All other full, incomplete, or
+conflicting live evidence still requires exact quarantine equality.
 
 ### 7. Create the four new hardened callables, then re-block them
 
@@ -385,15 +389,16 @@ Verify with separate test accounts and an incognito session:
 Keep maintenance active until these checks pass and Function/rules logs show no
 unexpected permission failures.
 
-## Still blocked after Phase 0
+## Waiver transition completed after Phase 0
 
-The checkout Adult Participant Waiver is approved as
-`ZAF-ADULT-WAIVER-2026-08-20-01`, but the separate pre-existing AlphaWOD in-app
-waiver identifier remains the legacy value `2026-30-05` in this release. Do not
-switch the frontend gate alone: migrating current, legacy/manual and staff users
-requires a coordinated backend-first compatibility rollout and an evidence
-model appropriate to those users. The public purchase flow uses the approved
-immutable document versions/hashes and guardian addendum.
+The membership checkout and AlphaWOD in-app gate now share the approved Adult
+Participant Waiver `ZAF-ADULT-WAIVER-2026-08-23-01`. The backend derives the
+current version, title and single exact acknowledgement from the canonical
+membership registry, which prevents frontend/backend drift. Acceptance evidence
+under the former `2026-30-05` identifier is retained under its original record
+key as historical evidence but cannot satisfy the current gate. A profile with
+only that older marker is therefore prompted to sign the approved current
+waiver once; the new callable evidence then becomes authoritative.
 
 Stripe, public membership routes, payment/webhook fulfilment, billing-cycle
 proration, cancellation automation, Customer Portal, and paid Adult Unlimited

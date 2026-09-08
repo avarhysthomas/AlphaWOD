@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { sendEmailVerification, signInWithEmailAndPassword } from "firebase/auth";
 import { auth } from "../../../firebaseApp";
-import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import AuthShell from "../components/AuthShell";
 import { readPendingClaim } from "../../memberships/services/membership";
 
@@ -107,6 +107,17 @@ const Login = () => {
           {loading ? "Signing in..." : "Log In"}
         </button>
       </form>
+      <div className="mt-6 border-t border-white/10 pt-5">
+        <p className="text-sm leading-6 text-neutral-400">Not looking for the member app?</p>
+        <div className="mt-3 flex flex-wrap gap-4 text-sm font-bold">
+          <Link to="/pay-as-you-go" className="text-amber-200 underline decoration-amber-400/40 underline-offset-4 transition hover:text-amber-100">
+            Book one PAYG class
+          </Link>
+          <Link to="/memberships" className="text-white/65 underline decoration-white/20 underline-offset-4 transition hover:text-white">
+            View memberships
+          </Link>
+        </div>
+      </div>
     </AuthShell>
   );
 };

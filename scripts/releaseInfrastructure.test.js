@@ -1,0 +1,970 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const test = require("node:test");
+const crypto = require("node:crypto");
+
+const {
+  PAYMENT_FAILED_NOTIFICATION_ROUTE,
+  PAYMENT_FAILED_POLICY_ID,
+  PAYMENT_FAILED_SIGNAL,
+  verifyBillingMonitoring,
+} = require("./verifyBillingMonitoring");
+const {
+  PAYG_REQUIRED_EVENTS,
+  verifyBillingWebhookEvents,
+} = require("./verifyBillingWebhookEvents");
+const {
+  assertClearedStripeDeliveryBacklogEvidence,
+  assertEvidence,
+  assertEvidenceContainsNoCustomerPii,
+  assertOperationalEvidenceContent,
+  assertOperationalGateSpecificContent,
+  assertPaygPrivacyOwnerDecision,
+  assertPartialEvidence,
+  assertRecordedBrowserEvidence,
+} = require("./verifyConditioningPaygReleaseCandidate");
+
+const root = path.resolve(__dirname, "..");
+
+test("monitoring covers every explicit PAYG runtime error signal", () => {
+  assert.doesNotThrow(() => verifyBillingMonitoring());
+});
+
+test("each failed membership payment immediately routes a PII-free signal to owner email", () => {
+  const manifest = JSON.parse(fs.readFileSync(
+    path.join(root, "ops/monitoring/billing-alerts.json"),
+    "utf8"
+  ));
+  const policy = manifest.policies.find(({id}) => id === PAYMENT_FAILED_POLICY_ID);
+  assert.deepEqual(policy.sourceSignals, [PAYMENT_FAILED_SIGNAL]);
+  assert.equal(policy.priority, "page");
+  assert.equal(policy.windowSeconds, 60);
+  assert.equal(policy.threshold, 1);
+  assert.equal(policy.notificationRoute, PAYMENT_FAILED_NOTIFICATION_ROUTE);
+  assert.match(policy.cloudLoggingFilter, /severity>=WARNING/);
+});
+
+test("webhook manifest includes PAYG refund and dispute convergence", () => {
+  assert.doesNotThrow(() => verifyBillingWebhookEvents());
+  const manifest = JSON.parse(fs.readFileSync(
+    path.join(root, "ops/stripe/billing-webhook-events.json"),
+    "utf8"
+  ));
+  for (const event of PAYG_REQUIRED_EVENTS) {
+    assert.ok(manifest.requiredEvents.includes(event), event);
+  }
+  assert.equal(manifest.requiredEvents.length, 18);
+});
+
+test("release readiness remains read-only with every production gate closed", () => {
+  const readiness = JSON.parse(fs.readFileSync(
+    path.join(root, "ops/release/conditioning-payg-readiness.json"),
+    "utf8"
+  ));
+  assert.equal(readiness.verificationMode, "read-only-no-deploy");
+  assert.equal(readiness.productionGatesExpectedClosed, true);
+  assert.ok(readiness.ownerDecisions.every((decision) => decision.approved));
+  assert.ok(readiness.operationalEvidence.every(
+    (check) => typeof check.verified === "boolean"
+  ));
+});
+
+test("recorded Stripe/browser evidence stays PII-free and partial", () => {
+  const readiness = JSON.parse(fs.readFileSync(
+    path.join(root, "ops/release/conditioning-payg-readiness.json"),
+    "utf8"
+  ));
+  assert.doesNotThrow(
+    () => assertRecordedBrowserEvidence(readiness.operationalEvidence)
+  );
+
+  const conditioning = JSON.parse(fs.readFileSync(path.join(
+    root,
+    "ops/release/evidence/conditioning-stripe-test-full-app-2026-09-02.json"
+  ), "utf8"));
+  const payg = JSON.parse(fs.readFileSync(path.join(
+    root,
+    "ops/release/evidence/payg-stripe-test-purchase-refund-dispute-2026-09-02.json"
+  ), "utf8"));
+  assert.equal(conditioning.customerPiiRecorded, false);
+  assert.equal(conditioning.verification.confirmationDelivered, false);
+  assert.equal(conditioning.testProviderMutationPerformed, true);
+  assert.equal(
+    conditioning.verification.purchasedMemberAppBookingVerified,
+    true
+  );
+  assert.equal(payg.customerPiiRecorded, false);
+  assert.equal(payg.emailDelivery.confirmationDelivered, false);
+  assert.equal(
+    payg.releaseGateAssessment.refundableCancellationAndProviderRefundVerified,
+    true
+  );
+  assert.equal(
+    payg.releaseGateAssessment.separateProviderDisputeConvergenceVerified,
+    true
+  );
+  assert.equal(payg.releaseGateAssessment.fullPaygOperationalGateVerified, false);
+});
+
+test("pending recorded gate still requires its exact partial evidence", () => {
+  const readiness = JSON.parse(fs.readFileSync(
+    path.join(root, "ops/release/conditioning-payg-readiness.json"),
+    "utf8"
+  ));
+  const operationalEvidence = JSON.parse(JSON.stringify(
+    readiness.operationalEvidence
+  ));
+  const gateIndex = operationalEvidence.findIndex(
+    ({id}) => id === "conditioning-stripe-test-purchase-to-booking-journey"
+  );
+  operationalEvidence[gateIndex] = {
+    ...operationalEvidence[gateIndex],
+    verified: false,
+    evidence: null,
+    partialEvidence:
+      "ops/release/evidence/conditioning-stripe-test-full-app-2026-09-02.json",
+    remainingControls: [
+      "confirmation-email-delivered",
+    ],
+  };
+  assert.doesNotThrow(
+    () => assertRecordedBrowserEvidence(operationalEvidence)
+  );
+
+  delete operationalEvidence[gateIndex].partialEvidence;
+  assert.throws(
+    () => assertRecordedBrowserEvidence(operationalEvidence),
+    /must retain every external blocker/
+  );
+});
+
+test("completed recorded gate relies on full evidence without partial evidence", () => {
+  const readiness = JSON.parse(fs.readFileSync(
+    path.join(root, "ops/release/conditioning-payg-readiness.json"),
+    "utf8"
+  ));
+  const operationalEvidence = JSON.parse(JSON.stringify(
+    readiness.operationalEvidence
+  ));
+  const evidence = {
+    schemaVersion: 1,
+    evidenceType: "gcp-billing-and-payg-alert-policy-suite",
+    readinessItemId: "billing-alert-policies-and-staffed-notification-route",
+    verified: true,
+    newProductPurchaseGatesRemainClosed: true,
+    customerPiiRecorded: false,
+    recordedAt: "2026-09-01T15:00:00.000Z",
+    verifiedControls: [
+      "nine-policies-enabled",
+      "primary-route-delivery-acknowledged",
+      "independent-backup-route-delivery-acknowledged",
+      "named-primary-responder",
+      "named-backup-responder",
+    ],
+    googleCloudProjectId: "alphawod-d1f2f",
+    policyCountExpected: 9,
+    policyCountVerified: 9,
+    notificationRoutes: [
+      {
+        providerId: "primary-route",
+        enabled: true,
+        recipientConfiguredInProvider: true,
+      },
+      {
+        providerId: "backup-route",
+        enabled: true,
+        recipientConfiguredInProvider: true,
+      },
+    ],
+    verification: {
+      allManifestPoliciesCreated: true,
+      allPoliciesEnabled: true,
+      allFiltersMatchCheckedInManifest: true,
+      allThresholdWindowsVerified: true,
+      primaryEmailAttachedToEveryPolicy: true,
+      twoIndependentRoutesAttachedToEveryPolicy: true,
+      namedPrimaryAndBackupRosterRecorded: true,
+      syntheticDeliveryTestPerformed: true,
+    },
+  };
+  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "release-evidence-"));
+  const evidenceFile = path.join(tempDirectory, "completed-alert.json");
+  fs.writeFileSync(evidenceFile, `${JSON.stringify(evidence)}\n`);
+  const completedGate = {
+    id: "billing-alert-policies-and-staffed-notification-route",
+    verified: true,
+    evidence: "ops/release/evidence/completed-alert.json",
+    evidenceSha256: crypto.createHash("sha256")
+      .update(fs.readFileSync(evidenceFile))
+      .digest("hex"),
+  };
+
+  try {
+    assert.doesNotThrow(
+      () => assertOperationalEvidenceContent(completedGate, evidence, evidenceFile)
+    );
+    const gateIndex = operationalEvidence.findIndex(
+      ({id}) => id === completedGate.id
+    );
+    operationalEvidence[gateIndex] = completedGate;
+    assert.equal(operationalEvidence[gateIndex].partialEvidence, undefined);
+    assert.doesNotThrow(
+      () => assertRecordedBrowserEvidence(operationalEvidence)
+    );
+  } finally {
+    fs.unlinkSync(evidenceFile);
+    fs.rmdirSync(tempDirectory);
+  }
+});
+
+test("product terms approval remains separate from publication and runtime binding", () => {
+  const readiness = JSON.parse(fs.readFileSync(
+    path.join(root, "ops/release/conditioning-payg-readiness.json"),
+    "utf8"
+  ));
+  const decisions = readiness.ownerDecisions.filter(({id}) => [
+    "adult-conditioning-product-terms",
+    "payg-product-terms-and-waiver",
+  ].includes(id));
+  assert.equal(decisions.length, 2);
+  assert.ok(decisions.every(({approved}) => approved));
+  assert.equal(decisions[0].evidence, decisions[1].evidence);
+  const publication = readiness.operationalEvidence.find(
+    ({id}) => id === "product-legal-publication-and-runtime-binding"
+  );
+  if (publication?.verified) {
+    assert.equal(publication.partialEvidence, undefined);
+    assert.doesNotThrow(
+      () => assertEvidence([publication], "verified", "Operational evidence")
+    );
+  } else {
+    assert.equal(publication?.evidence, null);
+    assert.equal(
+      publication?.partialEvidence,
+      "ops/release/evidence/payg-privacy-runtime-binding-readiness-2026-09-01.json"
+    );
+  }
+  assert.deepEqual(publication?.supportingEvidence, [
+    decisions[0].evidence,
+    "ops/release/evidence/payg-privacy-notice-owner-approval-2026-09-01.json",
+  ]);
+});
+
+test("live Stripe delivery backlog has pending or completed evidence", () => {
+  const readiness = JSON.parse(fs.readFileSync(
+    path.join(root, "ops/release/conditioning-payg-readiness.json"),
+    "utf8"
+  ));
+  const blocker = readiness.operationalEvidence.find(
+    ({id}) => id === "live-stripe-delivery-backlog-cleared"
+  );
+  if (blocker?.verified) {
+    assert.equal(blocker.partialEvidence, undefined);
+    assert.doesNotThrow(
+      () => assertEvidence([blocker], "verified", "Operational evidence")
+    );
+    return;
+  }
+  assert.equal(blocker?.evidence, null);
+  const pending = JSON.parse(fs.readFileSync(
+    path.join(root, blocker.partialEvidence),
+    "utf8"
+  ));
+  assert.equal(pending.readback.unsuccessfulEventCount, 1);
+  assert.equal(pending.readback.events[0].pendingWebhooks, 1);
+  assert.equal(pending.applicationLedger.state, "dead-lettered");
+  assert.equal(pending.customerPiiRecorded, false);
+  assert.equal(pending.amountRecorded, false);
+  assert.equal(pending.subscriptionIdRecorded, false);
+  assert.equal(pending.remediationRequired.zeroUnsuccessfulEventsReadback, false);
+  assert.equal(pending.deploymentPerformed, false);
+});
+
+test("cleared Stripe backlog evidence binds deployment, reconciliation and full live readback", () => {
+  const sourceSha256 = crypto.createHash("sha256")
+    .update(fs.readFileSync(path.join(root, "functions/src/membership.ts")))
+    .digest("hex");
+  const valid = {
+    schemaVersion: 2,
+    evidenceType: "stripe-live-delivery-backlog-cleared-readback",
+    deployment: {
+      compatibleCodeDeployed: true,
+      environment: "production",
+      firebaseProjectId: "alphawod-d1f2f",
+      sourceCommit: "a".repeat(40),
+      compatibilitySourceSha256: sourceSha256,
+      stripeWebhookRevision: "stripewebhook-00042-abc",
+      reconcilePastDueMembershipsRevision:
+        "reconcilepastduememberships-00042-def",
+      completedAt: "2026-09-01T10:00:00.000Z",
+    },
+    reconciliation: {
+      eventId: "evt_1UAgFqFzNDZoGGA0UDdTWXmb",
+      eventCreated: 1788225169,
+      invoiceId: "in_1UAfI7FzNDZoGGA0axkViBtH",
+      subscriptionIdSha256:
+        "603678ab7502208430a4b7ce131e220ece946adccca58e35d28baca51e27386a",
+      eventAndCustomerStateSafelyReconciled: true,
+      reconciliationFunction: "reconcilePastDueMemberships",
+      reconciliationFunctionRevision:
+        "reconcilepastduememberships-00042-def",
+      applicationLedgerState: "dead_letter",
+      applicationLedgerResolution: "authoritative_state_reconciled",
+      resolutionAuditId:
+        "legacy-presale-discount-recovery-in_1UAfI7FzNDZoGGA0axkViBtH",
+      membershipProviderContractStatus: "verified",
+      firstPaymentRecorded: true,
+      firstPaidInvoiceId: "in_1UAfI7FzNDZoGGA0axkViBtH",
+      legacyPresaleDiscountRecoveryVersion: 1,
+      completedAt: "2026-09-01T10:10:00.000Z",
+    },
+    deliveryAcknowledgement: {
+      eventId: "evt_1UAgFqFzNDZoGGA0UDdTWXmb",
+      handler: "stripeWebhook",
+      handlerRevision: "stripewebhook-00042-abc",
+      httpStatus: 200,
+      disposition: "accepted_for_manual_review_after_reconciliation",
+      completedAt: "2026-09-01T10:15:00.000Z",
+    },
+    readback: {
+      stripeAccountId: "acct_1Q1PQcFzNDZoGGA0",
+      stripeMode: "live",
+      deliverySuccess: false,
+      windowStart: "2026-08-25T00:00:00.000Z",
+      windowEnd: "2026-09-01T10:20:00.000Z",
+      paginationComplete: true,
+      pagesRead: 1,
+      unsuccessfulEventCount: 0,
+      events: [],
+      completedAt: "2026-09-01T10:20:00.000Z",
+    },
+    customerPiiRecorded: false,
+  };
+  assert.doesNotThrow(() => assertClearedStripeDeliveryBacklogEvidence(valid));
+
+  const unsafeMutations = [
+    (evidence) => { evidence.deployment.compatibilitySourceSha256 = "0".repeat(64); },
+    (evidence) => { evidence.reconciliation.firstPaidInvoiceId = "in_other"; },
+    (evidence) => { evidence.reconciliation.applicationLedgerState = "processed"; },
+    (evidence) => { evidence.deliveryAcknowledgement.handlerRevision = "other-revision"; },
+    (evidence) => { evidence.readback.paginationComplete = false; },
+    (evidence) => {
+      evidence.readback.windowStart = "2026-09-01T02:00:00.000Z";
+    },
+    (evidence) => {
+      evidence.readback.windowEnd = "2026-09-01T09:00:00.000Z";
+      evidence.readback.completedAt = "2026-09-01T09:00:00.000Z";
+    },
+  ];
+  for (const mutate of unsafeMutations) {
+    const unsafe = JSON.parse(JSON.stringify(valid));
+    mutate(unsafe);
+    assert.throws(
+      () => assertClearedStripeDeliveryBacklogEvidence(unsafe),
+      /compatible deployment, exact reconciliation/
+    );
+  }
+});
+
+test("cleared Stripe backlog uses its schema-v2 operational evidence envelope", () => {
+  const evidence = {
+    schemaVersion: 2,
+    evidenceType: "stripe-live-delivery-backlog-cleared-readback",
+    readinessItemId: "live-stripe-delivery-backlog-cleared",
+    verified: true,
+    newProductPurchaseGatesRemainClosed: true,
+    customerPiiRecorded: false,
+    recordedAt: "2026-09-01T10:20:00.000Z",
+    verifiedControls: [
+      "compatible-code-deployed",
+      "exact-event-reconciled",
+      "redelivery-acknowledged",
+      "zero-unsuccessful-events-full-readback",
+    ],
+  };
+  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "release-evidence-"));
+  const evidenceFile = path.join(tempDirectory, "cleared.json");
+  fs.writeFileSync(evidenceFile, `${JSON.stringify(evidence)}\n`);
+  const evidenceSha256 = crypto.createHash("sha256")
+    .update(fs.readFileSync(evidenceFile))
+    .digest("hex");
+  const item = {
+    id: "live-stripe-delivery-backlog-cleared",
+    evidenceSha256,
+  };
+  assert.doesNotThrow(
+    () => assertOperationalEvidenceContent(item, evidence, evidenceFile)
+  );
+
+  const stale = {...evidence, schemaVersion: 1};
+  fs.writeFileSync(evidenceFile, `${JSON.stringify(stale)}\n`);
+  assert.throws(
+    () => assertOperationalEvidenceContent(item, stale, evidenceFile),
+    /unbound, incomplete or stale/
+  );
+});
+
+test("pending operational gates require concrete journey, drill, and publication results", () => {
+  const legalDocumentKeys = [
+    "adultConditioningAddendum",
+    "paygPrivacyNotice",
+    "paygTerms",
+    "paygWaiver",
+  ];
+  const legalContents = Object.fromEntries(legalDocumentKeys.map((key) => [
+    key,
+    Buffer.from(`Immutable ${key} publication\n`, "utf8"),
+  ]));
+  const legalManifestDocuments = Object.fromEntries(legalDocumentKeys.map((key) => {
+    const version = `ZAF-${key.toUpperCase()}-2026-09-01-01`;
+    const bytes = legalContents[key];
+    return [key, {
+      version,
+      filename: `${version}.txt`,
+      publicUrl: `/legal/products/${version}.txt`,
+      bytes: bytes.length,
+      sha256: crypto.createHash("sha256").update(bytes).digest("hex"),
+      approvedForPublication: true,
+    }];
+  }));
+  const legalManifest = {
+    approvedForPublication: true,
+    productionPurchaseGatesRemainClosed: true,
+    ownerDecisions: {paygPrivacyNoticeApproved: true},
+    documents: legalManifestDocuments,
+  };
+  const cases = [
+    {
+      id: "conditioning-stripe-test-purchase-to-booking-journey",
+      evidence: {
+        stripeMode: "test",
+        planKey: "adult_conditioning",
+        amountPence: 3000,
+        providerReferences: {
+          checkoutSessionId: "cs_test_conditioning",
+          subscriptionId: "sub_conditioning",
+          webhookEventId: "evt_conditioning",
+        },
+        applicationReferences: {membershipId: "membership_conditioning"},
+        verification: {
+          hostedCheckoutCompleted: true,
+          webhookAcknowledged: true,
+          membershipCreated: true,
+          entitlementActivated: true,
+          purchasedMemberAppBookingVerified: true,
+          limitedAppAccessVerified: true,
+          twoClassesPerLondonWeekEnforced: true,
+          flexibleEligibleClassChangesVerified: true,
+          confirmationDelivered: true,
+        },
+        liveProviderMutation: false,
+      },
+      invalidate: (evidence) => {
+        evidence.verification.twoClassesPerLondonWeekEnforced = false;
+      },
+    },
+    {
+      id: "payg-stripe-test-purchase-refund-dispute-email-journey",
+      evidence: {
+        stripeMode: "test",
+        productKey: "adult_payg_class",
+        amountPence: 700,
+        currency: "gbp",
+        accountRequired: false,
+        providerScenarios: {
+          purchase: {
+            checkoutSessionId: "cs_test_payg_purchase",
+            paymentIntentId: "pi_payg_purchase",
+            checkoutCompletedEventId: "evt_payg_purchase",
+            productId: "prod_VAOxXxpax1MuRt",
+            priceId: "price_1UAmVVFzNDZoGGA04z8hX10N",
+            amountPence: 700,
+            currency: "gbp",
+          },
+          refund: {
+            checkoutSessionId: "cs_test_payg_refund",
+            paymentIntentId: "pi_payg_refund",
+            refundId: "re_payg",
+            webhookEventIds: ["evt_payg_refund"],
+            productId: "prod_VAOxXxpax1MuRt",
+            priceId: "price_1UAmVVFzNDZoGGA04z8hX10N",
+            amountPence: 700,
+            currency: "gbp",
+          },
+          dispute: {
+            checkoutSessionId: "cs_test_payg_dispute",
+            paymentIntentId: "pi_payg_dispute",
+            disputeId: "du_payg",
+            webhookEventId: "evt_payg_dispute",
+            productId: "prod_VAOxXxpax1MuRt",
+            priceId: "price_1UAmVVFzNDZoGGA04z8hX10N",
+            amountPence: 700,
+            currency: "gbp",
+          },
+        },
+        applicationReferences: {
+          purchaseOrderId: `payg_${"a".repeat(64)}`,
+          purchaseGuestBookingId: `payg_guest_${"a".repeat(64)}`,
+          refundOrderId: `payg_${"b".repeat(64)}`,
+          refundGuestBookingId: `payg_guest_${"b".repeat(64)}`,
+          disputeOrderId: `payg_${"c".repeat(64)}`,
+          disputeGuestBookingId: `payg_guest_${"c".repeat(64)}`,
+          purchaseProviderBinding: {
+            checkoutSessionId: "cs_test_payg_purchase",
+            paymentIntentId: "pi_payg_purchase",
+            orderId: `payg_${"a".repeat(64)}`,
+            guestBookingId: `payg_guest_${"a".repeat(64)}`,
+          },
+          refundProviderBinding: {
+            checkoutSessionId: "cs_test_payg_refund",
+            paymentIntentId: "pi_payg_refund",
+            orderId: `payg_${"b".repeat(64)}`,
+            guestBookingId: `payg_guest_${"b".repeat(64)}`,
+          },
+          disputeProviderBinding: {
+            checkoutSessionId: "cs_test_payg_dispute",
+            paymentIntentId: "pi_payg_dispute",
+            orderId: `payg_${"c".repeat(64)}`,
+            guestBookingId: `payg_guest_${"c".repeat(64)}`,
+          },
+        },
+        verification: {
+          hostedCheckoutCompleted: true,
+          paidWebhookCreatedBooking: true,
+          providerApplicationBindingsVerified: true,
+          confirmationEmailDelivered: true,
+          refundConverged: true,
+          refundEmailDelivered: true,
+          disputeConverged: true,
+          disputeEmailDelivered: true,
+          noAccountJourneyVerified: true,
+        },
+        liveProviderMutation: false,
+      },
+      invalidate: (evidence) => {
+        evidence.providerScenarios.dispute.disputeId = "missing";
+      },
+    },
+    {
+      id: "class-cancellation-quota-and-payg-refund-drill",
+      evidence: {
+        environment: "isolated-test",
+        timezone: "Europe/London",
+        conditioningWeeklyBookingLimit: 2,
+        paygCancellationCutoffHours: 24,
+        drillReferences: {
+          conditioningMemberIdHash: "a".repeat(64),
+          paygOrderId: "payg_order_test",
+          conditioningOccurrenceIdHash: "b".repeat(64),
+          paygOrderIdsHash: "c".repeat(64),
+          auditRecordId: "audit_record_test",
+        },
+        verification: {
+          thirdConditioningBookingRejected: true,
+          eligibleCancellationReleasedQuota: true,
+          replacementConditioningBookingSucceeded: true,
+          refundAtOrBeforeCutoffSucceeded: true,
+          insideCutoffStayedNonRefundable: true,
+          noShowStayedNonRefundable: true,
+          paygBookingNeverBecameCredit: true,
+          refundedCapacityReleased: true,
+          newBookingsStoppedBeforeWholeClassCancellation: true,
+          wholeClassCancelledAfterBookingStop: true,
+          everyConditioningBookingMarkedAuthorisedAbsence: true,
+          everyConditioningBookingReleasedCapacityAndQuota: true,
+          allAdmissionsAndRosterMutationsRejectedAfterFreeze: true,
+          memberCleanupSkippedFrozenOccurrence: true,
+          unpaidPaygHoldsReleased: true,
+          duplicatePaygLocksReconciled: true,
+          everyCheckoutProviderStateAuthoritativeBeforeFinalize: true,
+          ambiguousCheckoutOrPaymentStateBlockedFinalize: true,
+          unknownPaymentReviewBlockedFinalize: true,
+          everyPaidPaygGuestIdentifiedBeforeClose: true,
+          everyPaygOrderBoundToCancellationOperation: true,
+          everyPaidPaygRefundReconciled: true,
+          unsentCustomerConfirmationsSuppressed: true,
+          acceptedCustomerConfirmationsCorrectedBeforeFinalize: true,
+          finalizationAuditBindingVerified: true,
+          finalizationIdempotent: true,
+          operationsAuditRecordRetained: true,
+        },
+        liveProviderMutation: false,
+        observedByRole: "Zero Alpha Fitness operations",
+      },
+      invalidate: (evidence) => {
+        evidence.verification.noShowStayedNonRefundable = false;
+      },
+    },
+    {
+      id: "production-access-tier-backfill-and-claims-readback",
+      evidence: {
+        firebaseProjectId: "alphawod-d1f2f",
+        accessSchemaVersion: 3,
+        sourceCommit: "d".repeat(40),
+        dryRun: {
+          reportSha256: "e".repeat(64),
+          scannedProfiles: 12,
+          scannedAuthUsers: 13,
+          invalidCount: 0,
+          missingAuthUsersCount: 0,
+          incompleteLegacyWaiverCount: 0,
+          reviewedByRole: "Zero Alpha Fitness operations",
+        },
+        apply: {
+          approvedReportSha256: "e".repeat(64),
+          mode: "apply",
+          completedAt: "2026-09-01T11:00:00.000Z",
+        },
+        readback: {
+          allProfilesHaveValidAppAccessTier: true,
+          allManagedClaimsMatchProfiles: true,
+          unresolvedCount: 0,
+          profilesVerified: 12,
+        },
+        rulesDeployment: {
+          firestoreRulesDeployedAfterApply: true,
+          storageRulesDeployedAfterApply: true,
+          completedAt: "2026-09-01T11:30:00.000Z",
+        },
+      },
+      invalidate: (evidence) => {
+        evidence.readback.allManagedClaimsMatchProfiles = false;
+      },
+    },
+    {
+      id: "product-legal-publication-and-runtime-binding",
+      evidence: {
+        productionOrigin: "https://alpha-wod.vercel.app",
+        documents: legalDocumentKeys.map((key) => ({
+          key,
+          version: legalManifestDocuments[key].version,
+          bytes: legalManifestDocuments[key].bytes,
+          sha256: legalManifestDocuments[key].sha256,
+          publicUrl: legalManifestDocuments[key].publicUrl,
+        })),
+        deployment: {
+          environment: "production",
+          sourceCommit: "c".repeat(40),
+          completedAt: "2026-09-01T12:00:00.000Z",
+          adultConditioningPurchaseEnabled: false,
+          paygAvailabilityEnabled: false,
+          paygLegalApproved: false,
+        },
+        verification: {
+          http200Utf8ExactBytes: true,
+          manifestHashesMatched: true,
+          runtimeVersionUrlHashBindingsMatched: true,
+          deployedReadbackMatched: true,
+          privacyNoticeShownBeforePersonalData: true,
+          privacyNoticeTreatedAsConsent: false,
+          allNewProductGatesStayedClosed: true,
+        },
+      },
+      options: {
+        publicationManifest: legalManifest,
+        readPublishedDocument: (_entry, key) => legalContents[key],
+      },
+      invalidate: (evidence) => {
+        evidence.documents[1].sha256 = "b".repeat(64);
+      },
+    },
+  ];
+
+  for (const gate of cases) {
+    assert.doesNotThrow(
+      () => assertOperationalGateSpecificContent(
+        gate,
+        gate.evidence,
+        gate.options
+      ),
+      gate.id
+    );
+    const invalid = JSON.parse(JSON.stringify(gate.evidence));
+    gate.invalidate(invalid);
+    assert.throws(
+      () => assertOperationalGateSpecificContent(gate, invalid, gate.options),
+      /failed its content validator/,
+      gate.id
+    );
+  }
+
+  const paygGate = cases.find(
+    ({id}) => id === "payg-stripe-test-purchase-refund-dispute-email-journey"
+  );
+  const combinedPayment = JSON.parse(JSON.stringify(paygGate.evidence));
+  combinedPayment.providerScenarios.dispute.checkoutSessionId =
+    combinedPayment.providerScenarios.refund.checkoutSessionId;
+  combinedPayment.providerScenarios.dispute.paymentIntentId =
+    combinedPayment.providerScenarios.refund.paymentIntentId;
+  assert.throws(
+    () => assertOperationalGateSpecificContent(paygGate, combinedPayment),
+    /failed its content validator/,
+    "refund and dispute evidence must use separate provider payments"
+  );
+
+  const legacyDisputePrefix = JSON.parse(JSON.stringify(paygGate.evidence));
+  legacyDisputePrefix.providerScenarios.dispute.disputeId = "dp_legacy";
+  assert.throws(
+    () => assertOperationalGateSpecificContent(paygGate, legacyDisputePrefix),
+    /failed its content validator/,
+    "Stripe dispute evidence must use the canonical du_ object prefix"
+  );
+
+  const wrongCurrency = JSON.parse(JSON.stringify(paygGate.evidence));
+  wrongCurrency.providerScenarios.purchase.currency = "usd";
+  assert.throws(
+    () => assertOperationalGateSpecificContent(paygGate, wrongCurrency),
+    /failed its content validator/,
+    "every PAYG payment scenario must remain exact GBP 7.00"
+  );
+
+  const sharedApplicationBooking = JSON.parse(JSON.stringify(paygGate.evidence));
+  sharedApplicationBooking.applicationReferences.disputeOrderId =
+    sharedApplicationBooking.applicationReferences.refundOrderId;
+  sharedApplicationBooking.applicationReferences.disputeGuestBookingId =
+    sharedApplicationBooking.applicationReferences.refundGuestBookingId;
+  assert.throws(
+    () => assertOperationalGateSpecificContent(
+      paygGate,
+      sharedApplicationBooking
+    ),
+    /failed its content validator/,
+    "separate provider scenarios need separate application records"
+  );
+
+  const misboundApplication = JSON.parse(JSON.stringify(paygGate.evidence));
+  misboundApplication.applicationReferences.disputeProviderBinding.paymentIntentId =
+    misboundApplication.providerScenarios.refund.paymentIntentId;
+  assert.throws(
+    () => assertOperationalGateSpecificContent(paygGate, misboundApplication),
+    /failed its content validator/,
+    "every application record must bind its exact provider payment"
+  );
+
+  const cancellationGate = cases.find(
+    ({id}) => id === "class-cancellation-quota-and-payg-refund-drill"
+  );
+  const unorderedWholeClass = JSON.parse(JSON.stringify(cancellationGate.evidence));
+  unorderedWholeClass.verification.newBookingsStoppedBeforeWholeClassCancellation =
+    false;
+  assert.throws(
+    () => assertOperationalGateSpecificContent(
+      cancellationGate,
+      unorderedWholeClass
+    ),
+    /failed its content validator/,
+    "whole-class cancellation must stop bookings before cancellation"
+  );
+
+  const ambiguousProviderState = JSON.parse(JSON.stringify(cancellationGate.evidence));
+  ambiguousProviderState.verification
+    .ambiguousCheckoutOrPaymentStateBlockedFinalize = false;
+  assert.throws(
+    () => assertOperationalGateSpecificContent(
+      cancellationGate,
+      ambiguousProviderState
+    ),
+    /failed its content validator/,
+    "ambiguous Stripe state must prevent whole-class finalization"
+  );
+
+  const unresolvedConfirmationRace = JSON.parse(JSON.stringify(
+    cancellationGate.evidence
+  ));
+  unresolvedConfirmationRace.verification
+    .acceptedCustomerConfirmationsCorrectedBeforeFinalize = false;
+  assert.throws(
+    () => assertOperationalGateSpecificContent(
+      cancellationGate,
+      unresolvedConfirmationRace
+    ),
+    /failed its content validator/,
+    "accepted confirmation races require correction before finalization"
+  );
+
+  const legalGate = cases.find(
+    ({id}) => id === "product-legal-publication-and-runtime-binding"
+  );
+  assert.throws(
+    () => assertOperationalGateSpecificContent(legalGate, legalGate.evidence),
+    /failed its content validator/,
+    "synthetic evidence cannot claim the checked-in final document bytes"
+  );
+});
+
+test("approved owner decisions cannot retain partial evidence", () => {
+  assert.throws(
+    () => assertPartialEvidence([
+      {id: "owner-decision", approved: true, partialEvidence: "stale.json"},
+    ], "approved"),
+    /must remove partial evidence/
+  );
+});
+
+test("pending partial evidence is bound to its checked-in SHA-256", () => {
+  const readiness = JSON.parse(fs.readFileSync(
+    path.join(root, "ops/release/conditioning-payg-readiness.json"),
+    "utf8"
+  ));
+  const pending = readiness.operationalEvidence.filter(
+    ({verified, partialEvidence}) => !verified && partialEvidence
+  );
+  assert.doesNotThrow(
+    () => assertPartialEvidence(pending, "verified")
+  );
+  const stale = {
+    ...pending[0],
+    partialEvidenceSha256: "0".repeat(64),
+  };
+  assert.throws(
+    () => assertPartialEvidence([stale], "verified"),
+    /partial evidence is unbound or stale/
+  );
+});
+
+test("partial release evidence rejects customer PII fields and secret values", () => {
+  const safe = {
+    providerReferences: {checkoutSessionId: "cs_test_safe"},
+    verification: {customerPiiRecorded: false},
+  };
+  assert.doesNotThrow(() => assertEvidenceContainsNoCustomerPii(safe));
+
+  const unsafeValues = [
+    {applicationReadback: {emailAddress: "redacted"}},
+    {providerReadback: {detail: "customer@example.test"}},
+    {browserReadback: {url: "https://example.test/cancel?token=secret"}},
+    {browserReadback: {
+      detail: "cancellation_token=secret",
+    }},
+    {providerReadback: {
+      detail: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjdXN0b21lciJ9.signaturepart",
+    }},
+  ];
+  for (const unsafe of unsafeValues) {
+    assert.throws(
+      () => assertEvidenceContainsNoCustomerPii(unsafe),
+      /prohibited customer PII/
+    );
+  }
+});
+
+test("PAYG Privacy Notice owner approval binds the exact draft and final", () => {
+  const approved = {
+    id: "payg-privacy-notice",
+    approved: true,
+    evidence:
+      "ops/release/evidence/payg-privacy-notice-owner-approval-2026-09-01.json",
+  };
+  assert.doesNotThrow(() => assertPaygPrivacyOwnerDecision([approved]));
+  assert.throws(
+    () => assertPaygPrivacyOwnerDecision([{
+      ...approved,
+      evidence: "ops/release/evidence/bogus.json",
+    }]),
+    /stale or unsafe/
+  );
+});
+
+test("verified operational gates require bound, typed and hashed evidence", () => {
+  const readiness = JSON.parse(fs.readFileSync(
+    path.join(root, "ops/release/conditioning-payg-readiness.json"),
+    "utf8"
+  ));
+  const verified = readiness.operationalEvidence.filter(({verified: value}) => value);
+  assert.doesNotThrow(
+    () => assertEvidence(verified, "verified", "Operational evidence")
+  );
+
+  const stale = {...verified[0], evidenceSha256: "0".repeat(64)};
+  assert.throws(
+    () => assertEvidence([stale], "verified", "Operational evidence"),
+    /unbound, incomplete or stale/
+  );
+
+  const unrelatedSource = verified.find(
+    ({id}) => id === "resend-domain-and-confirmation-delivery"
+  );
+  const unrelated = {
+    ...verified[0],
+    evidence: unrelatedSource.evidence,
+    evidenceSha256: unrelatedSource.evidenceSha256,
+  };
+  assert.throws(
+    () => assertEvidence([unrelated], "verified", "Operational evidence"),
+    /unbound, incomplete or stale/
+  );
+
+  assert.throws(
+    () => assertEvidence([{
+      ...verified[0],
+      evidence: "ops/release/evidence/does-not-exist.json",
+    }], "verified", "Operational evidence"),
+    /does not resolve to checked-in evidence/
+  );
+});
+
+test("verified Stripe webhook and catalogue evidence cannot contradict its summaries", () => {
+  const webhook = JSON.parse(fs.readFileSync(path.join(
+    root,
+    "ops/release/evidence/live-stripe-webhook-exact-event-readback-2026-09-01.json"
+  ), "utf8"));
+  const catalogue = JSON.parse(fs.readFileSync(path.join(
+    root,
+    "ops/release/evidence/production-provider-app-check-and-closed-config-readback-2026-09-01.json"
+  ), "utf8"));
+  assert.doesNotThrow(() => assertOperationalGateSpecificContent(
+    {id: "live-stripe-webhook-exact-event-readback"},
+    webhook
+  ));
+  assert.doesNotThrow(() => assertOperationalGateSpecificContent(
+    {id: "live-product-catalogue-and-closed-config-readback"},
+    catalogue
+  ));
+
+  const wrongEvents = JSON.parse(JSON.stringify(webhook));
+  wrongEvents.endpoint.enabledEvents[0] = "account.updated";
+  assert.throws(
+    () => assertOperationalGateSpecificContent(
+      {id: "live-stripe-webhook-exact-event-readback"},
+      wrongEvents
+    ),
+    /failed its content validator/
+  );
+
+  const wrongPrice = JSON.parse(JSON.stringify(catalogue));
+  wrongPrice.stripeCatalogue.payg.priceId = "price_wrong";
+  assert.throws(
+    () => assertOperationalGateSpecificContent(
+      {id: "live-product-catalogue-and-closed-config-readback"},
+      wrongPrice
+    ),
+    /failed its content validator/
+  );
+});
+
+test("owner-approved PAYG retention evidence is exact without claiming legal approval", () => {
+  const readiness = JSON.parse(fs.readFileSync(
+    path.join(root, "ops/release/conditioning-payg-readiness.json"),
+    "utf8"
+  ));
+  const decision = readiness.ownerDecisions.find(
+    (item) => item.id === "payg-pii-retention-and-redaction-policy"
+  );
+  assert.equal(decision?.approved, true);
+  const evidence = JSON.parse(fs.readFileSync(
+    path.join(root, decision.evidence),
+    "utf8"
+  ));
+  assert.equal(evidence.policy.abandonedUnpaidIntent.retentionDays, 30);
+  assert.equal(evidence.policy.paidOrderAfterClassEnd.retentionDays, 90);
+  assert.equal(evidence.policy.waiverIdentityAfterClassEnd.retentionDays, 2190);
+  assert.equal(evidence.policy.execution.bounded, true);
+  assert.equal(evidence.policy.execution.resumable, true);
+  assert.equal(evidence.policy.execution.idempotent, true);
+  assert.equal(evidence.legalReviewStatus, "pending");
+  assert.equal(evidence.customerFacingDocumentsApproved, false);
+  assert.equal(evidence.deploymentAuthorized, false);
+  assert.equal(evidence.productionGatesRemainClosed, true);
+});

@@ -92,7 +92,7 @@ export default function DipLeaderboard() {
   const myRow = myIndex >= 0 ? rankedRows[myIndex] : null;
   const myDips = Number(myRow?.dipCount || 0);
   const burpees = myDips * 25;
-  const navItems = getUserNavItems(appUser?.role);
+  const navItems = getUserNavItems(appUser);
   const firstName = appUser?.name?.split(" ")[0] || appUser?.email?.split("@")[0] || "A";
   const profilePhotoURL = appUser?.photoURL || user?.photoURL || "";
 

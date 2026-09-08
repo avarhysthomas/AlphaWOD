@@ -1,5 +1,5 @@
 // src/pages/Schedule.tsx
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import {
   collection,
@@ -13,7 +13,10 @@ import {
 } from "firebase/firestore";
 import { db } from "../../../firebase";
 import { useAuth } from "../../../context/AuthContext";
+import type { ConditioningSlotKey } from "../../../context/authUser";
 import { getUserNavItems } from "../../../components/layout/UserTopNav";
+import { isLimitedAppUser } from "../../../lib/appAccess";
+import { CONDITIONING_SLOT_OPTIONS } from "../../../lib/membershipPlans";
 import { Flame, Dumbbell, PersonStanding, Award, Activity, Bell, Search } from "lucide-react";
 import { bookClass as bookClassCallable, cancelBooking as cancelBookingCallable } from "../services/bookings";
 
@@ -27,6 +30,13 @@ type ClassDoc = {
   capacity?: number;
   bookedCount?: number;
   status?: "scheduled" | "cancelled";
+  bookingOpen?: boolean;
+  cancellationState?:
+    | "processing"
+    | "awaiting_payg_refunds"
+    | "ready_to_finalize"
+    | "cancelled";
+  conditioningSlotKey?: ConditioningSlotKey | null;
 };
 
 type BookingDoc = {
@@ -34,11 +44,31 @@ type BookingDoc = {
   userId: string;
   userName?: string;
   status: "booked" | "cancelled";
+  conditioningQuotaWeekKey?: string;
+  conditioningQuotaWeeklyLimit?: number;
   createdAt?: Timestamp;
   cancelledAt?: Timestamp;
 };
 
 type ClassRow = { id: string; data: ClassDoc };
+
+function isClassVisibleToMembers(data: ClassDoc) {
+  return (
+    data.status !== "cancelled" &&
+    data.bookingOpen !== false &&
+    data.cancellationState === undefined
+  );
+}
+
+function classClosureLabel(data: ClassDoc) {
+  if (data.status === "cancelled" || data.cancellationState === "cancelled") {
+    return "Class cancelled";
+  }
+  if (data.bookingOpen === false || data.cancellationState !== undefined) {
+    return "Class frozen";
+  }
+  return null;
+}
 
 const DEFAULT_TZ = "Europe/London";
 type StrengthBlock = "A" | "B" | "none";
@@ -47,33 +77,129 @@ type StrengthBlock = "A" | "B" | "none";
  *  - 06:00 class closes previous day 21:00
  *  - 18:00 class closes same day 15:00
  */
-function computeBookingClosesAt(startTs?: Timestamp) {
+type ZonedDateParts = {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+};
+
+function zonedDateParts(value: Date, timeZone: string): ZonedDateParts {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+    timeZone,
+  }).formatToParts(value);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((entry) => entry.type === type)?.value ?? 0);
+  return {
+    year: part("year"),
+    month: part("month"),
+    day: part("day"),
+    hour: part("hour"),
+    minute: part("minute"),
+    second: part("second"),
+  };
+}
+
+function zonedDateTimeToDate(parts: ZonedDateParts, timeZone: string) {
+  const desiredAsUtc = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second
+  );
+  let instant = desiredAsUtc;
+
+  // Resolve the zone offset at the requested wall-clock time. A few passes
+  // also cover the offset changing between the initial UTC guess and target.
+  for (let pass = 0; pass < 4; pass += 1) {
+    const actual = zonedDateParts(new Date(instant), timeZone);
+    const actualAsUtc = Date.UTC(
+      actual.year,
+      actual.month - 1,
+      actual.day,
+      actual.hour,
+      actual.minute,
+      actual.second
+    );
+    const adjustment = desiredAsUtc - actualAsUtc;
+    instant += adjustment;
+    if (adjustment === 0) break;
+  }
+
+  return new Date(instant);
+}
+
+function parseDayKey(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  return { year, month, day };
+}
+
+function dayKeyFromParts({ year, month, day }: Pick<ZonedDateParts, "year" | "month" | "day">) {
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function shiftDayKey(value: string, days: number) {
+  const { year, month, day } = parseDayKey(value);
+  const shifted = new Date(Date.UTC(year, month - 1, day + days, 12));
+  return dayKeyFromParts({
+    year: shifted.getUTCFullYear(),
+    month: shifted.getUTCMonth() + 1,
+    day: shifted.getUTCDate(),
+  });
+}
+
+function dateForDayKey(value: string) {
+  const { year, month, day } = parseDayKey(value);
+  return new Date(Date.UTC(year, month - 1, day, 12));
+}
+
+function dateAtStartOfDay(value: string, timeZone: string) {
+  return zonedDateTimeToDate(
+    { ...parseDayKey(value), hour: 0, minute: 0, second: 0 },
+    timeZone
+  );
+}
+
+export function computeBookingClosesAt(startTs?: Timestamp, timeZone = DEFAULT_TZ) {
   const start = startTs?.toDate?.();
   if (!start) return null;
 
-  const closes = new Date(start);
-  const hour = start.getHours();
+  const startParts = zonedDateParts(start, timeZone);
+  const startDayKey = dayKeyFromParts(startParts);
 
-  if (hour === 5 || hour === 6) {
-    closes.setDate(closes.getDate() - 1);
-    closes.setHours(21, 0, 0, 0);
-    return closes;
+  if (startParts.hour === 5 || startParts.hour === 6) {
+    return zonedDateTimeToDate(
+      { ...parseDayKey(shiftDayKey(startDayKey, -1)), hour: 21, minute: 0, second: 0 },
+      timeZone
+    );
   }
 
-  if (hour === 18) {
-    closes.setHours(15, 0, 0, 0);
-    return closes;
+  if (startParts.hour === 18) {
+    return zonedDateTimeToDate(
+      { ...parseDayKey(startDayKey), hour: 15, minute: 0, second: 0 },
+      timeZone
+    );
   }
 
-  closes.setTime(start.getTime() - 2 * 60 * 60 * 1000);
-  return closes;
+  return new Date(start.getTime() - 2 * 60 * 60 * 1000);
 }
 
-function bookingStatus(startTs?: Timestamp) {
+function bookingStatus(startTs?: Timestamp, timeZone = DEFAULT_TZ) {
   const start = startTs?.toDate?.();
   if (!start) return { state: "unknown" as const };
 
-  const closes = computeBookingClosesAt(startTs);
+  const closes = computeBookingClosesAt(startTs, timeZone);
   const now = Date.now();
 
   if (now >= start.getTime()) return { state: "started" as const, closes };
@@ -86,15 +212,91 @@ function bookingStatus(startTs?: Timestamp) {
   };
 }
 
-function fmtRemaining(ms: number) {
-  const mins = Math.ceil(ms / 60000);
-  const h = Math.floor(mins / 60);
-  const m = mins % 60;
-  return h ? `${h}h ${m}m` : `${m}m`;
-}
-
 function normalizeStrengthBlock(value: unknown): StrengthBlock {
   return value === "A" || value === "B" ? value : "none";
+}
+
+const CONDITIONING_SLOT_BY_DAY_TIME: Record<string, ConditioningSlotKey> = {
+  "Monday|06:00": "monday_0600",
+  "Tuesday|18:00": "tuesday_1800",
+  "Thursday|18:00": "thursday_1800",
+  "Friday|05:30": "friday_0530",
+};
+
+function getConditioningSlotForClass(classData: ClassDoc): ConditioningSlotKey | null {
+  if (classData.timezone !== DEFAULT_TZ || classData.conditioningSlotKey === null) {
+    return null;
+  }
+  const start = classData.startTime?.toDate?.();
+  if (!start) return null;
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    weekday: "long",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: DEFAULT_TZ,
+  }).formatToParts(start);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((entry) => entry.type === type)?.value ?? "";
+  const derived = CONDITIONING_SLOT_BY_DAY_TIME[`${part("weekday")}|${part("hour")}:${part("minute")}`] ?? null;
+  if (classData.conditioningSlotKey !== undefined) {
+    return classData.conditioningSlotKey === derived ? derived : null;
+  }
+  return derived;
+}
+
+type ClassAccess = {
+  allowed: boolean;
+  reason?: "not_conditioning_slot" | "conditioning_class_not_in_agreement" | "strength_block";
+  message?: string;
+};
+
+function resolveClassAccess({
+  classData,
+  limited,
+  entitlementClassSlots,
+  entitlementWeeklyBookingLimit,
+  strengthBlock,
+  isAdmin,
+  strengthBlocksEnabled,
+}: {
+  classData: ClassDoc;
+  limited: boolean;
+  entitlementClassSlots: ConditioningSlotKey[];
+  entitlementWeeklyBookingLimit?: number;
+  strengthBlock: StrengthBlock;
+  isAdmin: boolean;
+  strengthBlocksEnabled: boolean;
+}): ClassAccess {
+  if (limited) {
+    const conditioningSlot = getConditioningSlotForClass(classData);
+    if (!conditioningSlot) {
+      return {
+        allowed: false,
+        reason: "not_conditioning_slot",
+        message: "Conditioning Only covers the four eligible classes shown in your weekly allowance.",
+      };
+    }
+    // Current memberships can use any of the four eligible classes and are
+    // capped by the server across the Monday–Sunday week. Historical v6
+    // memberships retain their original fixed-slot eligibility.
+    if (entitlementWeeklyBookingLimit === undefined &&
+        !entitlementClassSlots.includes(conditioningSlot)) {
+      return {
+        allowed: false,
+        reason: "conditioning_class_not_in_agreement",
+        message: "This class is not included in your current Conditioning agreement.",
+      };
+    }
+  }
+  if (!canAccessClass(classData, strengthBlock, isAdmin, strengthBlocksEnabled)) {
+    return {
+      allowed: false,
+      reason: "strength_block",
+      message: "You are not assigned to the strength block for this class.",
+    };
+  }
+  return { allowed: true };
 }
 
 function getStrengthSlotForClass(classData: ClassDoc): "A" | "B" | null {
@@ -104,8 +306,10 @@ function getStrengthSlotForClass(classData: ClassDoc): "A" | "B" | null {
   const start = classData.startTime?.toDate?.();
   if (!start) return null;
 
-  const day = start.getDay(); // Sun=0 ... Sat=6
-  const hour = start.getHours();
+  const timeZone = classData.timezone || DEFAULT_TZ;
+  const parts = zonedDateParts(start, timeZone);
+  const day = dateForDayKey(dayKeyFromParts(parts)).getUTCDay(); // Sun=0 ... Sat=6
+  const hour = parts.hour;
 
   if ((day === 2 || day === 4) && hour === 6) return "A";
   if ((day === 1 || day === 3) && hour === 18) return "B";
@@ -137,15 +341,17 @@ function fmtTime(d: Date, timeZone: string) {
 }
 
 function dayKey(d: Date, timeZone = DEFAULT_TZ) {
-  return new Intl.DateTimeFormat("en-CA", { timeZone }).format(d);
+  return dayKeyFromParts(zonedDateParts(d, timeZone));
 }
 
 function shortWeekday(d: Date) {
-  return new Intl.DateTimeFormat("en-GB", { weekday: "short" }).format(d).toUpperCase();
+  return new Intl.DateTimeFormat("en-GB", { weekday: "short", timeZone: "UTC" })
+    .format(d)
+    .toUpperCase();
 }
 
 function dayNumber(d: Date) {
-  return new Intl.DateTimeFormat("en-GB", { day: "2-digit" }).format(d);
+  return new Intl.DateTimeFormat("en-GB", { day: "2-digit", timeZone: "UTC" }).format(d);
 }
 
 function shortDayLabel(d: Date) {
@@ -153,7 +359,21 @@ function shortDayLabel(d: Date) {
     weekday: "short",
     day: "numeric",
     month: "short",
+    timeZone: "UTC",
   }).format(d);
+}
+
+function formatCutoff(value: Date, timeZone: string) {
+  const formatted = new Intl.DateTimeFormat("en-GB", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone,
+  }).format(value);
+  return timeZone === DEFAULT_TZ ? `${formatted} UK time` : `${formatted} ${timeZone}`;
 }
 
 function isTuesdayHyroxClass(classData: ClassDoc) {
@@ -233,38 +453,56 @@ function capacityPercent(bookedCount: number, capacity: number) {
 /** Cancel close rule:
  *  - cannot cancel after booking closes (same as booking close time)
  */
-function cancelStatus(startTs?: Timestamp) {
-  return bookingStatus(startTs);
+function cancelStatus(startTs?: Timestamp, timeZone = DEFAULT_TZ) {
+  return bookingStatus(startTs, timeZone);
 }
 
-
-/** Next calendar week (Mon 00:00 -> Mon 00:00) in local time */
-function startOfWeekMonday(d: Date) {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  const day = x.getDay(); // Sun=0 ... Sat=6
-  const diffToMonday = (day + 6) % 7; // Mon=0 ... Sun=6
-  x.setDate(x.getDate() - diffToMonday);
-  return x;
-}
-
-function scheduleWindowWithSaturdayCutover(now = new Date()) {
-  const thisMon = startOfWeekMonday(now);
-
-  // Cutover time: Saturday 10:00 of the current week
-  const cutover = new Date(thisMon);
-  cutover.setDate(cutover.getDate() + 5); // Monday + 5 days = Saturday
-  cutover.setHours(10, 0, 0, 0);
-
+/** Visible Monday–Sunday schedule, with Saturday 10:00 cutover in London. */
+export function scheduleWindowWithSaturdayCutover(now = new Date()) {
+  const currentDayKey = dayKey(now, DEFAULT_TZ);
+  const currentWeekday = dateForDayKey(currentDayKey).getUTCDay();
+  const thisMondayKey = shiftDayKey(currentDayKey, -((currentWeekday + 6) % 7));
+  const saturdayKey = shiftDayKey(thisMondayKey, 5);
+  const cutover = zonedDateTimeToDate(
+    { ...parseDayKey(saturdayKey), hour: 10, minute: 0, second: 0 },
+    DEFAULT_TZ
+  );
   const showNextWeek = now.getTime() >= cutover.getTime();
+  const fromDayKey = shiftDayKey(thisMondayKey, showNextWeek ? 7 : 0);
+  const toDayKey = shiftDayKey(fromDayKey, 7);
 
-  const from = new Date(thisMon);
-  if (showNextWeek) from.setDate(from.getDate() + 7); // next Monday
+  return {
+    from: dateAtStartOfDay(fromDayKey, DEFAULT_TZ),
+    to: dateAtStartOfDay(toDayKey, DEFAULT_TZ),
+    fromDayKey,
+    toDayKey,
+    showNextWeek,
+  };
+}
 
-  const to = new Date(from);
-  to.setDate(to.getDate() + 7);
+async function fetchActiveBookings(userId: string) {
+  const bookingsRef = collection(db, "bookings");
+  const q = query(bookingsRef, where("userId", "==", userId), where("status", "==", "booked"));
+  const snap = await getDocs(q);
+  const map: Record<string, BookingDoc> = {};
+  snap.docs.forEach((bookingSnapshot) => {
+    const booking = bookingSnapshot.data() as BookingDoc;
+    if (booking?.classId) map[booking.classId] = booking;
+  });
+  return map;
+}
 
-  return { from, to, showNextWeek };
+function confirmedConditioningUsage(
+  bookings: Record<string, BookingDoc>,
+  weekKey: string,
+  weeklyLimit: number
+) {
+  return Object.values(bookings).filter(
+    (booking) =>
+      booking.status === "booked" &&
+      booking.conditioningQuotaWeekKey === weekKey &&
+      booking.conditioningQuotaWeeklyLimit === weeklyLimit
+  ).length;
 }
 
 function adjustClassBookedCount(rows: ClassRow[], classId: string, delta: number) {
@@ -291,27 +529,39 @@ export default function Schedule() {
   const navigate = useNavigate();
 
   const { user, appUser } = useAuth();
+  const userId = user?.uid;
   const isAdmin = appUser?.role === "admin";
+  const limitedAccess = isLimitedAppUser(appUser);
 
   const [classes, setClasses] = useState<ClassRow[]>([]);
   const [loadingClasses, setLoadingClasses] = useState(true);
+  const [classesError, setClassesError] = useState("");
+  const [classesLoadAttempt, setClassesLoadAttempt] = useState(0);
   const [activeBookingsByClassId, setActiveBookingsByClassId] = useState<Record<string, BookingDoc>>(
     {}
   );
+  const [loadingBookings, setLoadingBookings] = useState(true);
+  const [bookingsError, setBookingsError] = useState("");
+  const [bookingsLoadAttempt, setBookingsLoadAttempt] = useState(0);
+  const [bookingAnnouncement, setBookingAnnouncement] = useState("");
   const [busyClassId, setBusyClassId] = useState<string | null>(null);
+  const bookingActionLock = useRef(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [strengthBlocksEnabled, setStrengthBlocksEnabled] = useState(true);
   const [selectedDayKey, setSelectedDayKey] = useState(() => {
-    const windowLocal = scheduleWindowWithSaturdayCutover(new Date());
-    const today = new Date();
+    const today = new Date(Date.now());
+    const windowLocal = scheduleWindowWithSaturdayCutover(today);
     return today >= windowLocal.from && today < windowLocal.to
       ? dayKey(today)
-      : dayKey(windowLocal.from);
+      : windowLocal.fromDayKey;
   });
 
-  // Next calendar week only
-  const windowLocal = useMemo(() => scheduleWindowWithSaturdayCutover(new Date()), []);
+  // One London calendar week at a time, with the Saturday publishing cutover.
+  const windowLocal = useMemo(
+    () => scheduleWindowWithSaturdayCutover(new Date(Date.now())),
+    []
+  );
 
   // Load the visible week once. Keeping this live made Schedule re-render whenever
   // anyone booked/cancelled, which is costly on the busiest screen.
@@ -326,6 +576,8 @@ export default function Schedule() {
     );
 
     async function loadClasses() {
+      setLoadingClasses(true);
+      setClassesError("");
       try {
         const snap = await getDocs(q);
         if (!isMounted) return;
@@ -337,6 +589,7 @@ export default function Schedule() {
       } catch (err) {
         if (!isMounted) return;
         console.error("classes fetch error:", err);
+        setClassesError("We couldn’t load the schedule. Check your connection and try again.");
       } finally {
         if (isMounted) setLoadingClasses(false);
       }
@@ -347,7 +600,7 @@ export default function Schedule() {
     return () => {
       isMounted = false;
     };
-  }, [windowLocal.from, windowLocal.to]);
+  }, [classesLoadAttempt, windowLocal.from, windowLocal.to]);
 
   useEffect(() => {
     let isMounted = true;
@@ -372,58 +625,70 @@ export default function Schedule() {
     };
   }, []);
 
-  // Load this user's active bookings once. Successful book/cancel actions update
-  // local state immediately, avoiding an always-on listener while scrolling.
+  // Verify this user's current bookings before showing any booking state or
+  // enabling actions. The server remains authoritative after every mutation.
   useEffect(() => {
-    if (!user) {
+    if (!userId) {
       setActiveBookingsByClassId({});
+      setBookingsError("");
+      setLoadingBookings(false);
       return;
     }
+    const activeUserId = userId;
 
-    const bookingsRef = collection(db, "bookings");
-    const q = query(bookingsRef, where("userId", "==", user.uid), where("status", "==", "booked"));
+    let isMounted = true;
 
     async function loadBookings() {
+      setLoadingBookings(true);
+      setBookingsError("");
       try {
-        const snap = await getDocs(q);
+        const map = await fetchActiveBookings(activeUserId);
         if (!isMounted) return;
-        const map: Record<string, BookingDoc> = {};
-        snap.docs.forEach((d) => {
-          const b = d.data() as BookingDoc;
-          if (b?.classId) map[b.classId] = b;
-        });
         setActiveBookingsByClassId(map);
       } catch (err) {
         if (!isMounted) return;
         console.error("bookings fetch error:", err);
+        setBookingsError(
+          "We couldn’t verify your bookings. Booking and cancellation controls are paused."
+        );
+      } finally {
+        if (isMounted) setLoadingBookings(false);
       }
     }
 
-    let isMounted = true;
     loadBookings();
 
     return () => {
       isMounted = false;
     };
-  }, [user]);
+  }, [bookingsLoadAttempt, userId]);
 
   const memberStrengthBlock = normalizeStrengthBlock(appUser?.strengthBlock);
+  const entitlementClassSlots = useMemo(
+    () => appUser?.entitlementClassSlots ?? [],
+    [appUser?.entitlementClassSlots]
+  );
+  const entitlementWeeklyBookingLimit = appUser?.entitlementWeeklyBookingLimit;
   const visibleClasses = useMemo(
-    () =>
-      classes.filter(({ data }) =>
-        canAccessClass(data, memberStrengthBlock, isAdmin, strengthBlocksEnabled)
-      ),
-    [classes, isAdmin, memberStrengthBlock, strengthBlocksEnabled]
+    () => {
+      const operationallyVisible = isAdmin
+        ? classes
+        : classes.filter(({ data }) => isClassVisibleToMembers(data));
+      return limitedAccess
+        ? operationallyVisible
+        : operationallyVisible.filter(({ data }) =>
+            canAccessClass(data, memberStrengthBlock, isAdmin, strengthBlocksEnabled)
+          );
+    },
+    [classes, isAdmin, limitedAccess, memberStrengthBlock, strengthBlocksEnabled]
   );
 
   const weekDays = useMemo(
     () =>
-      Array.from({ length: 7 }, (_, index) => {
-        const d = new Date(windowLocal.from);
-        d.setDate(d.getDate() + index);
-        return d;
-      }),
-    [windowLocal.from]
+      Array.from({ length: 7 }, (_, index) =>
+        dateForDayKey(shiftDayKey(windowLocal.fromDayKey, index))
+      ),
+    [windowLocal.fromDayKey]
   );
 
   const classCountsByDay = useMemo(() => {
@@ -459,18 +724,94 @@ export default function Schedule() {
     );
   }, [searchTerm, selectedDayClasses]);
 
+  const bookingState: "loading" | "error" | "ready" = loadingBookings
+    ? "loading"
+    : bookingsError || !user
+    ? "error"
+    : "ready";
+  const bookingsVerified = bookingState === "ready";
+  const confirmedWeeklyUsage = useMemo(
+    () =>
+      typeof entitlementWeeklyBookingLimit === "number"
+        ? confirmedConditioningUsage(
+            activeBookingsByClassId,
+            windowLocal.fromDayKey,
+            entitlementWeeklyBookingLimit
+          )
+        : 0,
+    [
+      activeBookingsByClassId,
+      entitlementWeeklyBookingLimit,
+      windowLocal.fromDayKey,
+    ]
+  );
+  const confirmedWeeklyRemaining = Math.max(
+    0,
+    Number(entitlementWeeklyBookingLimit ?? 0) - confirmedWeeklyUsage
+  );
+
+  const refreshBookingsAfterMutation = useCallback(
+    async (verb: "Booked" | "Cancelled", classTitle: string) => {
+      if (!user) return;
+      setLoadingBookings(true);
+      setBookingsError("");
+      try {
+        const map = await fetchActiveBookings(user.uid);
+        setActiveBookingsByClassId(map);
+        if (limitedAccess && typeof entitlementWeeklyBookingLimit === "number") {
+          const used = confirmedConditioningUsage(
+            map,
+            windowLocal.fromDayKey,
+            entitlementWeeklyBookingLimit
+          );
+          const remaining = Math.max(0, entitlementWeeklyBookingLimit - used);
+          setBookingAnnouncement(
+            `${verb} ${classTitle}. ${used} of ${entitlementWeeklyBookingLimit} Conditioning bookings used; ${remaining} remaining this Monday–Sunday week.`
+          );
+        } else {
+          setBookingAnnouncement(`${verb} ${classTitle}.`);
+        }
+      } catch (error) {
+        console.error("bookings refresh error:", error);
+        setBookingsError(
+          "Your change was saved, but we couldn’t refresh your bookings. Try again before making another change."
+        );
+        setBookingAnnouncement(
+          `${verb} ${classTitle}. We couldn’t refresh your ${limitedAccess ? "remaining allowance" : "booking status"} yet.`
+        );
+      } finally {
+        setLoadingBookings(false);
+      }
+    },
+    [entitlementWeeklyBookingLimit, limitedAccess, user, windowLocal.fromDayKey]
+  );
+
   const handleBook = useCallback(async (classId: string) => {
     if (!user) return alert("Log in first.");
+    if (!bookingsVerified) {
+      return alert("Wait until your bookings have been verified, then try again.");
+    }
+    if (bookingActionLock.current) return;
 
     const classRow = classes.find((item) => item.id === classId);
-    if (
-      classRow &&
-      !canAccessClass(classRow.data, memberStrengthBlock, isAdmin, strengthBlocksEnabled)
-    ) {
-      return alert("You are not assigned to the strength block for this class.");
+    if (classRow) {
+      const closure = classClosureLabel(classRow.data);
+      if (closure) return alert(`${closure}. Booking is unavailable.`);
+      const access = resolveClassAccess({
+        classData: classRow.data,
+        limited: limitedAccess,
+        entitlementClassSlots,
+        entitlementWeeklyBookingLimit,
+        strengthBlock: memberStrengthBlock,
+        isAdmin,
+        strengthBlocksEnabled,
+      });
+      if (!access.allowed) return alert(access.message || "This class is not included in your membership.");
     }
 
+    bookingActionLock.current = true;
     setBusyClassId(classId);
+    setBookingAnnouncement("");
     try {
       await bookClassCallable({ classId });
       setActiveBookingsByClassId((current) => ({
@@ -483,25 +824,44 @@ export default function Schedule() {
         },
       }));
       setClasses((current) => adjustClassBookedCount(current, classId, 1));
+      await refreshBookingsAfterMutation("Booked", classRow?.data.title || "class");
     } catch (e: any) {
       console.error("Book failed:", e);
       const message = String(e?.message ?? "");
       if (e?.code === "already-exists" || message.includes("Already booked")) return alert("Already booked");
       if (e?.code === "failed-precondition" && message.includes("Class is full")) return alert("Class is full");
       if (e?.code === "failed-precondition" && message.includes("Booking closed")) return alert("Booking closed for this class");
+      const reason = e?.details?.reason;
+      if (reason === "class_not_conditioning_membership_slot") {
+        return alert("Conditioning Only covers the four eligible classes shown in your weekly allowance.");
+      }
+      if (reason === "conditioning_slot_not_selected") {
+        return alert("This class is not included in your current Conditioning agreement.");
+      }
+      if (reason === "conditioning_weekly_booking_limit_reached") {
+        return alert("You’ve used both Conditioning bookings for this Monday–Sunday week. Cancel an eligible booking before its cutoff to choose another class.");
+      }
       if (e?.code === "permission-denied" || message.includes("strength block")) {
         return alert("You are not assigned to the strength block for this class.");
       }
       alert(message || "Booking failed");
     } finally {
+      bookingActionLock.current = false;
       setBusyClassId(null);
     }
-  }, [appUser?.name, classes, isAdmin, memberStrengthBlock, strengthBlocksEnabled, user]);
+  }, [appUser?.name, bookingsVerified, classes, entitlementClassSlots, entitlementWeeklyBookingLimit, isAdmin, limitedAccess, memberStrengthBlock, refreshBookingsAfterMutation, strengthBlocksEnabled, user]);
 
   const handleCancel = useCallback(async (classId: string) => {
     if (!user) return alert("Log in first.");
+    if (!bookingsVerified) {
+      return alert("Wait until your bookings have been verified, then try again.");
+    }
+    if (bookingActionLock.current) return;
 
+    const classRow = classes.find((item) => item.id === classId);
+    bookingActionLock.current = true;
     setBusyClassId(classId);
+    setBookingAnnouncement("");
     try {
       await cancelBookingCallable({ classId });
       setActiveBookingsByClassId((current) => {
@@ -510,38 +870,57 @@ export default function Schedule() {
         return next;
       });
       setClasses((current) => adjustClassBookedCount(current, classId, -1));
+      await refreshBookingsAfterMutation("Cancelled", classRow?.data.title || "class");
     } catch (e: any) {
       console.error("Cancel failed:", e);
       const message = String(e?.message ?? "");
       if (e?.code === "not-found" || message.includes("No active booking") || message.includes("No booking")) return alert("No active booking found");
-      if (e?.code === "failed-precondition" && message.includes("Cancellation closed"))
-        return alert("Too late to cancel — cancellations close 1 hour before class.");
+      if (e?.code === "failed-precondition" && message.includes("Cancellation closed")) {
+        const timeZone = classRow?.data.timezone || DEFAULT_TZ;
+        const closesAt = computeBookingClosesAt(classRow?.data.startTime, timeZone);
+        return alert(
+          closesAt
+            ? `Cancellation closed at ${formatCutoff(closesAt, timeZone)}.`
+            : "Cancellation is closed for this class."
+        );
+      }
       alert(message || "Cancel failed");
     } finally {
+      bookingActionLock.current = false;
       setBusyClassId(null);
     }
-  }, [user]);
+  }, [bookingsVerified, classes, refreshBookingsAfterMutation, user]);
 
   const weekLabel = useMemo(() => {
-    const a = windowLocal.from.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
-    const endMinus1 = new Date(windowLocal.to.getTime() - 1);
-    const b = endMinus1.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+    const a = dateForDayKey(windowLocal.fromDayKey).toLocaleDateString("en-GB", {
+      day: "numeric",
+      month: "short",
+      timeZone: "UTC",
+    });
+    const b = dateForDayKey(shiftDayKey(windowLocal.toDayKey, -1)).toLocaleDateString("en-GB", {
+      day: "numeric",
+      month: "short",
+      timeZone: "UTC",
+    });
     return `${a} - ${b}`;
-  }, [windowLocal.from, windowLocal.to]);
+  }, [windowLocal.fromDayKey, windowLocal.toDayKey]);
 
   const handleRoster = useCallback((classId: string) => {
     navigate(`/admin/classes/${classId}`);
   }, [navigate]);
 
-  const navItems = getUserNavItems(appUser?.role);
+  const navItems = getUserNavItems(appUser);
   const firstName = appUser?.name?.split(" ")[0] || appUser?.email?.split("@")[0] || "there";
   const profilePhotoURL = appUser?.photoURL || user?.photoURL || "";
 
   return (
     <div className="carbon-fiber-bg min-h-screen overflow-x-hidden text-[#f4f0ea]">
       <main className="relative mx-auto min-h-screen max-w-xl px-5 pb-32 pt-7 sm:max-w-3xl sm:px-8">
+        <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+          {bookingAnnouncement}
+        </p>
         <header className="flex items-center justify-between" style={{ paddingTop: "env(safe-area-inset-top)" }}>
-          <Link to="/dashboard" aria-label="Zero Alpha home" className="block">
+          <Link to={limitedAccess ? "/schedule" : "/dashboard"} aria-label="Zero Alpha home" className="block">
             <img src="/ZERO-ALPHA.png" alt="ZERO-ALPHA" className="h-20 w-auto object-contain" />
           </Link>
           <div className="flex items-center gap-3">
@@ -588,6 +967,47 @@ export default function Schedule() {
           </h1>
         </section>
 
+        {limitedAccess && entitlementWeeklyBookingLimit === 2 ? (
+          <section
+            className="mt-7 rounded-2xl border border-amber-300/20 bg-amber-300/10 p-5"
+            aria-labelledby="conditioning-weekly-allowance-title"
+          >
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="max-w-lg">
+                <h2
+                  id="conditioning-weekly-allowance-title"
+                  className="font-heading text-2xl uppercase text-white"
+                >
+                  Your weekly allowance
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-amber-50/78">
+                  Book up to {entitlementWeeklyBookingLimit ?? 2} eligible Conditioning
+                  classes in each Monday–Sunday week. Your choices can change every week.
+                </p>
+              </div>
+              <p
+                className="rounded-xl border border-amber-200/25 bg-black/20 px-4 py-3 text-xs font-black uppercase tracking-[0.12em] text-amber-100"
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+              >
+                {loadingBookings
+                  ? "Checking confirmed bookings…"
+                  : bookingsError
+                  ? "Allowance unavailable"
+                  : `${confirmedWeeklyUsage} of ${entitlementWeeklyBookingLimit} booked · ${confirmedWeeklyRemaining} remaining`}
+              </p>
+            </div>
+            <p className="mt-4 text-xs leading-5 text-amber-50/60">
+              Eligible: {CONDITIONING_SLOT_OPTIONS.map(({label}) => label).join(" · ")}.
+              Cancel before the class cutoff to free that booking and choose another.
+            </p>
+            <p className="mt-2 text-xs leading-5 text-amber-50/60">
+              The count comes from your server-confirmed bookings for the London-time week shown here.
+            </p>
+          </section>
+        ) : null}
+
         {searchOpen ? (
           <section className="mt-6">
             <label className="sr-only" htmlFor="schedule-search">
@@ -615,6 +1035,7 @@ export default function Schedule() {
                   key={key}
                   type="button"
                   onClick={() => setSelectedDayKey(key)}
+                  aria-pressed={selected}
                   className={[
                     "grid min-h-[110px] min-w-[78px] place-items-center rounded-[18px] border px-3 py-4 text-center transition",
                     selected
@@ -639,7 +1060,11 @@ export default function Schedule() {
                 {shortDayLabel(selectedDate)}
               </h2>
               <p className="mt-2 text-sm text-white/36">
-                {filteredSelectedDayClasses.length} {filteredSelectedDayClasses.length === 1 ? "session" : "sessions"}
+                {loadingClasses
+                  ? "Loading sessions…"
+                  : classesError
+                  ? "Schedule unavailable"
+                  : `${filteredSelectedDayClasses.length} ${filteredSelectedDayClasses.length === 1 ? "session" : "sessions"}`}
               </p>
             </div>
             <div className="text-sm font-bold text-white/58">
@@ -647,14 +1072,55 @@ export default function Schedule() {
             </div>
           </div>
 
+          {!loadingClasses && !classesError && loadingBookings ? (
+            <div
+              className="mb-4 rounded-xl border border-white/10 bg-white/[0.04] p-4 text-sm leading-6 text-white/65"
+              role="status"
+            >
+              Checking your current bookings. Actions will unlock when they are verified.
+            </div>
+          ) : null}
+
+          {!loadingClasses && !classesError && bookingsError ? (
+            <div
+              className="mb-4 rounded-xl border border-red-400/25 bg-red-400/10 p-4 text-sm leading-6 text-red-100"
+              role="alert"
+            >
+              <p>{bookingsError}</p>
+              <button
+                type="button"
+                onClick={() => setBookingsLoadAttempt((attempt) => attempt + 1)}
+                className="mt-3 inline-flex min-h-[44px] items-center justify-center rounded-xl bg-[#f2eee8] px-4 py-2 font-bold text-black outline-none transition hover:bg-white focus-visible:ring-2 focus-visible:ring-white"
+              >
+                Retry booking status
+              </button>
+            </div>
+          ) : null}
+
           {loadingClasses ? (
-            <div className="space-y-4">
+            <div className="space-y-4" role="status" aria-live="polite">
+              <span className="sr-only">Loading schedule…</span>
               {[0, 1, 2].map((i) => (
                 <div
                   key={i}
+                  aria-hidden="true"
                   className="h-[220px] animate-pulse rounded-[24px] border border-white/10 bg-[#151311]"
                 />
               ))}
+            </div>
+          ) : classesError ? (
+            <div className="rounded-[24px] border border-red-400/25 bg-red-400/10 p-7" role="alert">
+              <h3 className="font-heading text-4xl uppercase leading-none text-white">
+                Schedule unavailable
+              </h3>
+              <p className="mt-4 text-sm leading-6 text-red-100">{classesError}</p>
+              <button
+                type="button"
+                onClick={() => setClassesLoadAttempt((attempt) => attempt + 1)}
+                className="mt-5 inline-flex min-h-[44px] items-center justify-center rounded-xl bg-[#f2eee8] px-5 py-3 text-sm font-bold text-black outline-none transition hover:bg-white focus-visible:ring-2 focus-visible:ring-white"
+              >
+                Retry schedule
+              </button>
             </div>
           ) : filteredSelectedDayClasses.length === 0 ? (
             <div className="rounded-[24px] border border-white/10 bg-[#151311] p-7">
@@ -676,7 +1142,18 @@ export default function Schedule() {
                   data={data}
                   booked={Boolean(activeBookingsByClassId[id])}
                   busy={busyClassId === id}
+                  actionsLocked={busyClassId !== null}
+                  bookingState={bookingState}
                   isAdmin={isAdmin}
+                  access={resolveClassAccess({
+                    classData: data,
+                    limited: limitedAccess,
+                    entitlementClassSlots,
+                    entitlementWeeklyBookingLimit,
+                    strengthBlock: memberStrengthBlock,
+                    isAdmin,
+                    strengthBlocksEnabled,
+                  })}
                   onBook={handleBook}
                   onCancel={handleCancel}
                   onRoster={handleRoster}
@@ -719,7 +1196,10 @@ const ScheduleClassCard = React.memo(function ScheduleClassCard({
   data,
   booked,
   busy,
+  actionsLocked,
+  bookingState,
   isAdmin,
+  access,
   onBook,
   onCancel,
   onRoster,
@@ -728,7 +1208,10 @@ const ScheduleClassCard = React.memo(function ScheduleClassCard({
   data: ClassDoc;
   booked: boolean;
   busy: boolean;
+  actionsLocked: boolean;
+  bookingState: "loading" | "error" | "ready";
   isAdmin: boolean;
+  access: ClassAccess;
   onBook: (classId: string) => void;
   onCancel: (classId: string) => void;
   onRoster: (classId: string) => void;
@@ -739,15 +1222,18 @@ const ScheduleClassCard = React.memo(function ScheduleClassCard({
   const capacity = Number(data.capacity ?? 0);
   const bookedCount = Number(data.bookedCount ?? 0);
   const full = capacity > 0 && bookedCount >= capacity;
-  const bs = bookingStatus(data.startTime);
+  const bs = bookingStatus(data.startTime, tz);
   const bookingClosed = bs.state === "closed" || bs.state === "started";
-  const cs = cancelStatus(data.startTime);
+  const cs = cancelStatus(data.startTime, tz);
   const cancelClosed = cs.state === "closed" || cs.state === "started";
   const meta = typeMeta(data.title);
   const Icon = meta.icon;
   const showChili = isTuesdayHyroxClass(data);
   const percent = capacityPercent(bookedCount, capacity);
   const waitlist = capacity > 0 ? Math.max(0, bookedCount - capacity) : 0;
+  const bookingNotIncluded = bookingState === "ready" && !access.allowed && !booked;
+  const bookingActionUnavailable = bookingState !== "ready";
+  const operationalClosure = classClosureLabel(data);
 
   return (
     <article
@@ -787,6 +1273,11 @@ const ScheduleClassCard = React.memo(function ScheduleClassCard({
       </div>
 
       <div className="mt-4 flex flex-wrap gap-2">
+        {bookingNotIncluded ? (
+          <span className="rounded-full border border-amber-300/20 bg-amber-300/10 px-4 py-2 text-[12px] font-bold uppercase tracking-[0.12em] text-amber-200">
+            Not in your plan
+          </span>
+        ) : null}
         {booked ? (
           <span className="rounded-full bg-emerald-400/12 px-4 py-2 text-[12px] font-bold uppercase tracking-[0.12em] text-emerald-200">
             Booked
@@ -797,9 +1288,23 @@ const ScheduleClassCard = React.memo(function ScheduleClassCard({
             Full
           </span>
         ) : null}
-        {!booked && !full && bs.state === "open" && bs.msLeft != null ? (
+        {bookingState === "loading" ? (
+          <span className="rounded-full bg-white/[0.06] px-4 py-2 text-[12px] font-bold uppercase tracking-[0.12em] text-white/50">
+            Checking booking
+          </span>
+        ) : bookingState === "error" ? (
+          <span className="rounded-full bg-red-400/12 px-4 py-2 text-[12px] font-bold uppercase tracking-[0.12em] text-red-200">
+            Booking unavailable
+          </span>
+        ) : null}
+        {operationalClosure ? (
+          <span className="rounded-full bg-red-400/12 px-4 py-2 text-[12px] font-bold uppercase tracking-[0.12em] text-red-200">
+            {operationalClosure}
+          </span>
+        ) : null}
+        {!booked && !full && bs.state === "open" && bs.closes ? (
           <span className="rounded-full bg-[#8a633e]/24 px-4 py-2 text-[12px] font-bold uppercase tracking-[0.12em] text-[#f4b16d]">
-            Closes in {fmtRemaining(bs.msLeft)}
+            Book by {formatCutoff(bs.closes, tz)}
           </span>
         ) : null}
         {!booked && bookingClosed ? (
@@ -812,7 +1317,18 @@ const ScheduleClassCard = React.memo(function ScheduleClassCard({
             Cancellation closed
           </span>
         ) : null}
+        {booked && !cancelClosed && cs.closes ? (
+          <span className="rounded-full bg-[#8a633e]/24 px-4 py-2 text-[12px] font-bold uppercase tracking-[0.12em] text-[#f4b16d]">
+            Cancel by {formatCutoff(cs.closes, tz)}
+          </span>
+        ) : null}
       </div>
+
+      {bookingNotIncluded ? (
+        <div className="mt-4 rounded-xl border border-amber-300/15 bg-amber-300/[0.07] p-4">
+          <p className="text-sm leading-6 text-amber-50/75">{access.message}</p>
+        </div>
+      ) : null}
 
       <div className="mt-5 flex flex-col gap-3 border-t border-white/8 pt-4 sm:flex-row">
         {isAdmin ? (
@@ -825,23 +1341,60 @@ const ScheduleClassCard = React.memo(function ScheduleClassCard({
           </button>
         ) : null}
 
-        {booked ? (
+        {operationalClosure ? (
+          <button
+            type="button"
+            disabled
+            className="rounded-full bg-white/[0.06] px-5 py-4 text-sm font-bold text-white/45 disabled:cursor-not-allowed sm:min-w-[150px]"
+          >
+            {operationalClosure}
+          </button>
+        ) : booked ? (
           <button
             type="button"
             onClick={() => onCancel(id)}
-            disabled={busy || cancelClosed}
+            disabled={bookingActionUnavailable || actionsLocked || cancelClosed}
             className="rounded-full bg-[#f2eee8] px-5 py-4 text-sm font-bold text-black transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-35 sm:min-w-[150px]"
           >
-            {cancelClosed ? "Too late" : busy ? "Cancelling..." : "Cancel booking"}
+            {bookingState === "loading"
+              ? "Checking booking…"
+              : bookingState === "error"
+              ? "Booking unavailable"
+              : cancelClosed
+              ? "Too late"
+              : busy
+              ? "Cancelling..."
+              : actionsLocked
+              ? "Please wait…"
+              : "Cancel booking"}
           </button>
+        ) : bookingNotIncluded ? (
+          <Link
+            to="/memberships"
+            className="inline-flex min-h-[48px] items-center justify-center rounded-xl border border-amber-300/25 bg-amber-300/10 px-5 py-3 text-sm font-bold text-amber-100 outline-none transition hover:bg-amber-300/15 focus-visible:ring-2 focus-visible:ring-amber-200 sm:min-w-[150px]"
+          >
+            View full access
+          </Link>
         ) : (
           <button
             type="button"
             onClick={() => onBook(id)}
-            disabled={busy || full || bookingClosed}
+            disabled={bookingActionUnavailable || actionsLocked || full || bookingClosed}
             className="rounded-full bg-[#f2eee8] px-5 py-4 text-sm font-bold text-black transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-35 sm:min-w-[150px]"
           >
-            {bookingClosed ? "Closed" : busy ? "Booking..." : full ? "Join queue" : "Book session"}
+            {bookingState === "loading"
+              ? "Checking booking…"
+              : bookingState === "error"
+              ? "Booking unavailable"
+              : bookingClosed
+              ? "Closed"
+              : busy
+              ? "Booking..."
+              : actionsLocked
+              ? "Please wait…"
+              : full
+              ? "Join queue"
+              : "Book session"}
           </button>
         )}
       </div>

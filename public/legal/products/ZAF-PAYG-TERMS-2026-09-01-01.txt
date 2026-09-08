@@ -1,0 +1,89 @@
+Adult Pay As You Go Class Terms
+
+VERSION DATE
+1 September 2026
+
+DOCUMENT ID
+ZAF-PAYG-TERMS-2026-09-01-01
+
+CONTRACTING ENTITY
+ZERO ALPHA FITNESS LTD · company number 15978998
+
+TRADING NAME
+Zero Alpha Fitness
+
+ADDRESS
+Unit 3, Felinfoel Business Hub, Llanelli, SA14 8BE
+
+CONTACT
+support@zeroalphafitness.co.uk
+
+1. The booking
+
+These terms are for one named adult attendee to buy one place in the specific class, date and start time shown before payment. The price is £7. The purchase is not a membership, account, class credit, transferable balance or right to attend another session.
+
+The attendee must be aged 18 or over and provide accurate required details. The booking is personal to the named attendee and cannot be transferred or rescheduled. No Zero Alpha App account is required or created by this purchase.
+
+2. Information shown before payment
+
+Before the attendee confirms payment, the page must show the class title, date, start and end time, location, total price, current availability, cancellation rule, these terms and the applicable waiver. Stripe securely collects the payment details. Zero Alpha Fitness does not store full card or bank credentials in the app.
+
+3. How the contract is made
+
+Selecting a class may place a short-lived capacity hold while Stripe Checkout is open. A hold is not a confirmed booking. The contract is made only when Stripe confirms successful payment and Zero Alpha Fitness confirms the booking on screen or by email. A failed, abandoned or expired payment does not create a right to attend.
+
+If payment succeeds but the class cannot safely be confirmed because capacity or provider evidence is inconsistent, Zero Alpha Fitness will not create an extra place. It will investigate promptly and provide the refund or other remedy required by law.
+
+4. Specific-date cancellation position and voluntary refund policy
+
+A contract for a fitness class on a specific date and at a specific time is a contract for a service related to leisure activities for which the Consumer Contracts (Information, Cancellation and Additional Charges) Regulations 2013, regulation 28(1)(h), excludes the usual 14-day cancellation right.
+
+Whether or not a statutory cancellation right applies, Zero Alpha Fitness offers the following contractual policy:
+
+• If the attendee cancels at least 24 hours before the class's scheduled start time, Zero Alpha Fitness will refund the £7 payment to the original payment method.
+
+• If the attendee cancels less than 24 hours before the scheduled start time, the payment is non-refundable, except where the law requires otherwise.
+
+• If the attendee does not attend, the payment is non-refundable, except where the law requires otherwise.
+
+• A cancellation never creates a class credit and the booking cannot be rescheduled or transferred.
+
+The time the authorised cancellation request is received by the system determines whether it is at least 24 hours before the class. Payment-provider processing time does not change the eligibility decision. A refund may take additional time to appear depending on the payment method.
+
+If Zero Alpha Fitness cancels the class or cannot supply it, the attendee will receive a full refund to the original payment method unless the attendee freely chooses a lawful alternative. This policy does not restrict remedies for misdescription, failure to use reasonable care and skill, breach of contract, or any other right that cannot lawfully be excluded.
+
+5. Class participation and conduct
+
+The attendee must follow reasonable staff instructions, safety rules and equipment guidance; wear suitable clothing and footwear; use equipment only as instructed; and stop and tell a coach if they feel unwell or unsafe. The separate Adult PAYG Participant Waiver and Risk Acknowledgement explains inherent activity risks and does not remove Zero Alpha Fitness's duty to take reasonable care.
+
+Zero Alpha Fitness may refuse or end participation where reasonably necessary for immediate safety, serious misconduct, safeguarding or facility security. Any action and remedy will be proportionate and subject to the attendee's mandatory rights.
+
+6. Reasonable operational changes
+
+Zero Alpha Fitness may make reasonable changes to the instructor, workout content or equipment without changing the essential class purchased. If the class date, start time or essential nature is changed materially and the attendee does not accept the change, Zero Alpha Fitness will provide the refund or other remedy required by law.
+
+7. Personal information
+
+The attendee's full name, date of birth and email address are required to confirm adult eligibility, administer the named booking, send essential service messages, maintain safety and attendance records, and provide cancellation and payment support. A mobile number is optional. If supplied, it will be used only for urgent operational contact about that class unless another lawful purpose is separately explained.
+
+Stripe processes payment details. Firebase supports booking records and Resend supports transactional email. Marketing permission is not part of the PAYG purchase.
+
+The Privacy Notice explains the applicable lawful bases, processors, international transfers, rights, complaint route and controller contact. The approved PAYG retention schedule removes or irreversibly anonymises the named guest fields from an abandoned unpaid checkout intent after 30 days, order/contact/acceptance, transactional-email payload and guest-booking name fields 90 days after the scheduled class end, and waiver identity and acceptance fields 2,190 days after the scheduled class end. A live refund, dispute, complaint, fraud review, incident, insurance, safeguarding matter or legal hold may require limited information to be kept longer. Minimum non-identifying provider, financial, class, legal-version and audit evidence may be retained where lawfully required.
+
+8. Confirmation and support
+
+The confirmation should identify the attendee, class, date, time, location, amount paid, cancellation route, accepted document versions and acceptance time. Keep it for reference. For a complaint, cancellation problem, accessibility requirement or privacy request, contact support@zeroalphafitness.co.uk.
+
+9. General terms
+
+Zero Alpha Fitness must provide the service with reasonable care and skill. Nothing in these terms excludes or limits liability for death or personal injury caused by negligence, fraud or fraudulent misrepresentation, breach of statutory rights, or any liability that cannot lawfully be excluded or limited.
+
+If a provision is unenforceable, the remaining provisions continue so far as lawful. These terms are governed by the law of England and Wales, without removing any mandatory right to rely on the law or courts available to a consumer in another UK nation.
+
+10. Cancellation acceptance statement
+
+Stable statement ID: payg_specific_date_cancellation_v1
+
+Copy version: ZAF-PAYG-CANCELLATION-STATEMENT-2026-09-01-01
+
+“I understand that this purchase is for a leisure activity on the specific date and time shown and that the usual 14-day distance-contract cancellation right does not apply to a specific-date leisure booking. Zero Alpha Fitness will still refund me if I cancel at least 24 hours before the class starts. Cancellations less than 24 hours before the class and no-shows are non-refundable, except where the law requires otherwise.”

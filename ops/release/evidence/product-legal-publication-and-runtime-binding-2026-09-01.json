@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "product-legal-publication-and-runtime-binding",
+  "readinessItemId": "product-legal-publication-and-runtime-binding",
+  "verified": true,
+  "newProductPurchaseGatesRemainClosed": true,
+  "customerPiiRecorded": false,
+  "recordedAt": "2026-09-01T21:23:47.000Z",
+  "verifiedControls": [
+    "immutable-documents-published",
+    "runtime-config-bound",
+    "closed-gate-deployed",
+    "production-readback-matched",
+    "privacy-notice-before-personal-data"
+  ],
+  "productionOrigin": "https://alpha-wod.vercel.app",
+  "documents": [
+    {
+      "key": "adultConditioningAddendum",
+      "version": "ZAF-CONDITIONING-ADDENDUM-2026-09-01-01",
+      "bytes": 4116,
+      "sha256": "b91f7fd256bca8ca6bca8d020519c5e298b167a8b98ea039df213bd4bc71fc19",
+      "publicUrl": "/legal/products/ZAF-CONDITIONING-ADDENDUM-2026-09-01-01.txt"
+    },
+    {
+      "key": "paygPrivacyNotice",
+      "version": "ZAF-PAYG-PRIVACY-NOTICE-2026-09-01-01",
+      "bytes": 13220,
+      "sha256": "6091e9d8259815928da440528d1cea12a4703f691c00bfa6aa43c60fb8450377",
+      "publicUrl": "/legal/products/ZAF-PAYG-PRIVACY-NOTICE-2026-09-01-01.txt"
+    },
+    {
+      "key": "paygTerms",
+      "version": "ZAF-PAYG-TERMS-2026-09-01-01",
+      "bytes": 7406,
+      "sha256": "7b209af1b23144ce8f3e7fda38f09c0806d05be5f558b0d751e6a37d5ecbdb05",
+      "publicUrl": "/legal/products/ZAF-PAYG-TERMS-2026-09-01-01.txt"
+    },
+    {
+      "key": "paygWaiver",
+      "version": "ZAF-PAYG-WAIVER-2026-09-01-01",
+      "bytes": 4488,
+      "sha256": "137bf54c92eedb244114c525b6351400933a42d6e775d848576ff0c3e96a213d",
+      "publicUrl": "/legal/products/ZAF-PAYG-WAIVER-2026-09-01-01.txt"
+    }
+  ],
+  "deployment": {
+    "environment": "production",
+    "sourceCommit": "e1a253c97c74fbad3c5f47d768c49b39a573167f",
+    "completedAt": "2026-09-01T20:56:15.452Z",
+    "vercelDeploymentId": "dpl_FiTDdMjjFSn81n8NengQBKxjHuu3",
+    "vercelReadyState": "READY",
+    "canonicalAlias": "alpha-wod.vercel.app",
+    "nodeVersion": "24.x",
+    "adultConditioningPurchaseEnabled": false,
+    "paygAvailabilityEnabled": false,
+    "paygLegalApproved": false
+  },
+  "runtimeReadback": {
+    "firebaseProjectId": "alphawod-d1f2f",
+    "functionsRuntime": "nodejs24",
+    "publicScheduleFunctionActive": true,
+    "checkoutFunctionActive": true,
+    "paygPriceId": "price_1UAmoCFzNDZoGGA0lKDwjbBU",
+    "allFivePaygFunctionsMatchedApprovedVersionUrlHashBindings": true,
+    "allExpectedSecretBindingsUseVersionOne": true,
+    "secretValuesRecorded": false,
+    "inAppBrowserClosedGateReadback": "Not open yet",
+    "inAppBrowserConsoleErrorsOrWarnings": 0
+  },
+  "privacyOrderingReadback": {
+    "assetManifestUrl": "/asset-manifest.json",
+    "deployedChunkUrl": "/static/js/975.174cfc79.chunk.js",
+    "deployedChunkBytes": 35094,
+    "deployedChunkSha256": "95a27337668fca639b44603454890777b806ae11650ddf8fbd2b2c3193a22de8",
+    "privacyHeadingByteOffset": 22479,
+    "privacyLinkByteOffset": 22868,
+    "notMarketingByteOffset": 22975,
+    "fullNameByteOffset": 23117,
+    "dateOfBirthByteOffset": 23337,
+    "emailByteOffset": 23582,
+    "mobileByteOffset": 23813,
+    "noticePrecedesEveryPersonalDataField": true
+  },
+  "verification": {
+    "http200Utf8ExactBytes": true,
+    "manifestHashesMatched": true,
+    "runtimeVersionUrlHashBindingsMatched": true,
+    "deployedReadbackMatched": true,
+    "privacyNoticeShownBeforePersonalData": true,
+    "privacyNoticeTreatedAsConsent": false,
+    "allNewProductGatesStayedClosed": true
+  }
+}

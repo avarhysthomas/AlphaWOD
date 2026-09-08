@@ -49,8 +49,96 @@ describe("auth user builders", () => {
       entitlementStatus: "none",
       entitlementSource: "none",
       alphaWodAccess: false,
+      appAccessTier: "none",
       strengthBlock: "none",
     });
+  });
+
+  it("parses the current limited weekly allowance and fails closed on malformed policy", () => {
+    const limited = buildAppUser(
+      {uid: "abc", email: "member@example.com"},
+      {
+        role: "user",
+        approvalStatus: "approved",
+        entitlementStatus: "active",
+        entitlementSource: "stripe",
+        alphaWodAccess: true,
+        appAccessTier: "limited",
+        entitlementPlanKey: "adult_conditioning",
+        entitlementClassSlots: [
+          "monday_0600", "tuesday_1800", "thursday_1800", "friday_0530",
+        ],
+        entitlementWeeklyBookingLimit: 2,
+      }
+    );
+
+    expect(limited).toMatchObject({
+      appAccessTier: "limited",
+      entitlementPlanKey: "adult_conditioning",
+      entitlementClassSlots: [
+        "monday_0600", "tuesday_1800", "thursday_1800", "friday_0530",
+      ],
+      entitlementWeeklyBookingLimit: 2,
+    });
+    expect(hasAlphaWodAccess(limited)).toBe(true);
+    expect(hasAlphaWodAccess({...limited, entitlementWeeklyBookingLimit: 3}))
+      .toBe(false);
+    expect(hasAlphaWodAccess({...limited, entitlementClassSlots: ["monday_0600"]}))
+      .toBe(false);
+    expect(hasAlphaWodAccess(buildAppUser(
+      {uid: "abc", email: "member@example.com"},
+      {
+        role: "user",
+        approvalStatus: "approved",
+        entitlementStatus: "active",
+        entitlementSource: "stripe",
+        alphaWodAccess: true,
+        appAccessTier: "limited",
+        entitlementPlanKey: "adult_conditioning",
+        entitlementClassSlots: [
+          "monday_0600", "tuesday_1800", "thursday_1800", "friday_0530",
+        ],
+        entitlementWeeklyBookingLimit: "2",
+      }
+    ))).toBe(false);
+  });
+
+  it("keeps historical fixed-slot Conditioning entitlements valid", () => {
+    const historical = buildAppUser(
+      {uid: "abc", email: "member@example.com"},
+      {
+        role: "user",
+        approvalStatus: "approved",
+        entitlementStatus: "active",
+        entitlementSource: "stripe",
+        alphaWodAccess: true,
+        appAccessTier: "limited",
+        entitlementPlanKey: "adult_conditioning",
+        entitlementClassSlots: ["thursday_1800", "monday_0600"],
+      }
+    );
+
+    expect(hasAlphaWodAccess(historical)).toBe(true);
+    expect(hasAlphaWodAccess({...historical, entitlementPlanKey: undefined}))
+      .toBe(true);
+    expect(hasAlphaWodAccess({...historical, entitlementClassSlots: ["monday_0600"]}))
+      .toBe(false);
+
+    const explicitNullLimit = buildAppUser(
+      {uid: "abc", email: "member@example.com"},
+      {
+        role: "user",
+        approvalStatus: "approved",
+        entitlementStatus: "active",
+        entitlementSource: "stripe",
+        alphaWodAccess: true,
+        appAccessTier: "limited",
+        entitlementClassSlots: ["thursday_1800", "monday_0600"],
+        entitlementWeeklyBookingLimit: null,
+      }
+    );
+    expect(explicitNullLimit.entitlementWeeklyBookingLimit).toBeUndefined();
+    expect(hasAlphaWodAccess(explicitNullLimit)).toBe(true);
   });
 
   it.each([

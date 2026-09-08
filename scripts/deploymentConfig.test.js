@@ -19,9 +19,10 @@ test("Vercel production builds are preflighted and preserve SPA deep links", () 
   assert.deepEqual(vercel.rewrites, [
     {source: "/(.*)", destination: "/index.html"},
   ]);
-  assert.match(
+  assert.equal(
     packageJson.scripts["build:production"],
-    /^node scripts\/verifyFrontendProductionEnv\.js && /
+    "node scripts/verifyFrontendProductionEnv.js --expect-purchase-open " +
+      "--expect-conditioning-open && react-scripts build"
   );
   assert.equal(
     packageJson.scripts["verify:frontend-production-closed"],
@@ -30,6 +31,19 @@ test("Vercel production builds are preflighted and preserve SPA deep links", () 
   assert.equal(
     packageJson.scripts["verify:frontend-production-open"],
     "node scripts/verifyFrontendProductionEnv.js --expect-purchase-open"
+  );
+  assert.equal(
+    packageJson.scripts["verify:frontend-conditioning-production-open"],
+    "node scripts/verifyFrontendProductionEnv.js --expect-purchase-open " +
+      "--expect-conditioning-open"
+  );
+  assert.equal(
+    packageJson.scripts["verify:production-open-payg-config"],
+    "npm run verify:production-open-payg-config --prefix functions"
+  );
+  assert.equal(
+    packageJson.scripts["verify:production-open-conditioning-payg-config"],
+    "npm run verify:production-open-conditioning-payg-config --prefix functions"
   );
   assert.equal(packageJson.engines?.node, "24.x");
 });
@@ -57,7 +71,11 @@ test("CI exercises the production build preflight with an inert browser fixture"
   );
   assert.match(
     workflow,
-    /REACT_APP_MEMBERSHIP_PURCHASE_ENABLED: "false"/
+    /REACT_APP_MEMBERSHIP_PURCHASE_ENABLED: "true"/
+  );
+  assert.match(
+    workflow,
+    /REACT_APP_ADULT_CONDITIONING_PURCHASE_ENABLED: "true"/
   );
 });
 
@@ -86,7 +104,14 @@ test("checked-in production examples keep every purchase/test gate closed", () =
   assert.match(functions, /^MEMBERSHIP_CHECKOUT_APP_ID=/m);
   assert.match(functions, /^MEMBERSHIP_FIREBASE_PROJECT_ID=alphawod-d1f2f$/m);
   assert.match(functions, /^STRIPE_EXPECTED_MODE=live$/m);
+  assert.match(functions, /^PAYG_PII_REDACTION_IMPLEMENTED=true$/m);
+  assert.match(functions, /^PAYG_PII_RETENTION_APPROVED=false$/m);
+  assert.match(functions, /^PAYG_CANCELLATION_TOKEN_KEY_ID=cancel-v1$/m);
+  assert.match(functions, /^PAYG_DUPLICATE_LOCK_KEY_ID=lock-v1$/m);
   assert.match(functions, /MEMBERSHIP_CHECKOUT_RATE_LIMIT_SECRET/);
+  assert.match(functions, /PAYG_CANCELLATION_TOKEN_SECRET/);
+  assert.match(functions, /PAYG_CHECKOUT_RATE_LIMIT_SECRET/);
+  assert.match(functions, /PAYG_DUPLICATE_LOCK_SECRET/);
 });
 
 test("checkout abuse records have server-managed TTL field overrides", () => {
@@ -103,62 +128,59 @@ test("checkout abuse records have server-managed TTL field overrides", () => {
   for (const collection of [
     "membershipCheckoutRateAdmissions",
     "membershipCheckoutRateLimits",
+    "paygCheckoutAdmissions",
+    "paygCheckoutRateLimits",
   ]) {
     const override = overrides.get(`${collection}/expiresAt`);
     assert.equal(override?.ttl, true);
     assert.deepEqual(override?.indexes, []);
   }
+
+  const lockOverride = overrides.get("paygCheckoutLocks/deleteAt");
+  assert.equal(lockOverride?.ttl, true);
+  assert.deepEqual(lockOverride?.indexes, []);
+
+  assert.equal(
+    overrides.has("paygIntents/piiDeleteAt"),
+    false,
+    "PII redaction must retain the non-PII intent audit record"
+  );
+
+  for (const collection of [
+    "paygIntents",
+    "paygOrders",
+    "paygEmailOutbox",
+    "paygWaiverAcceptances",
+  ]) {
+    assert.equal(
+      overrides.has(`${collection}/piiRetentionCutoffAt`),
+      false,
+      `${collection} immutable cutoff must not be configured as whole-document TTL`
+    );
+    assert.equal(
+      overrides.has(`${collection}/piiRedactionRetryAt`),
+      false,
+      `${collection} retry field must keep its default single-field query index`
+    );
+  }
 });
 
-test("membership Functions deploy in complete selective batches of ten or fewer", () => {
-  const rollout = fs.readFileSync(
-    path.join(root, "docs/billing/phase-1-rollout.md"),
-    "utf8"
-  );
-  const deploymentSectionStart = rollout.indexOf(
-    "## 8. Deployment notes that inherit Phase 0 constraints"
-  );
-  assert.ok(deploymentSectionStart >= 0);
-  const deploymentSection = rollout.slice(deploymentSectionStart);
-  const batches = [...deploymentSection.matchAll(
-    /^firebase deploy --only (functions:[^\n]+) --project alphawod-d1f2f$/gm
-  )].map((match) => match[1].split(","));
-  const expectedTargets = [
-    "functions:claimMembership",
-    "functions:createCustomerPortalSession",
-    "functions:createMembershipCheckoutSession",
-    "functions:createMembershipCheckoutSessionV2",
-    "functions:getMyMemberships",
-    "functions:linkMembershipParticipant",
-    "functions:listMemberships",
-    "functions:releaseAbandonedMembershipCheckout",
-    "functions:recoverMembershipCancellations",
-    "functions:recoverStripeEvents",
-    "functions:reconcilePastDueMemberships",
-    "functions:requestMembershipCancellation",
-    "functions:retryMembershipConfirmations",
-    "functions:stripeWebhook",
-  ];
+test("Conditioning/PAYG Functions have a complete no-deploy batch manifest", () => {
+  const {
+    REQUIRED_BOOKING_ACCESS_TARGETS,
+    REQUIRED_PAYG_TARGETS,
+    verifyConditioningPaygDeployment,
+  } = require("./verifyConditioningPaygDeployment");
+  const manifest = verifyConditioningPaygDeployment();
+  const targets = manifest.batches.flatMap((batch) => batch.targets);
 
-  assert.equal(batches.length, 2);
-  for (const batch of batches) {
-    assert.ok(batch.length <= 10, "Firebase recommends batches of ten or fewer");
-    assert.ok(batch.every((target) => target.startsWith("functions:")));
+  assert.equal(manifest.deploymentMode, "template-only");
+  assert.equal(manifest.purchaseGatesExpectedClosed, true);
+  assert.ok(manifest.batches.every((batch) => batch.targets.length <= 10));
+  for (const target of [
+    ...REQUIRED_PAYG_TARGETS,
+    ...REQUIRED_BOOKING_ACCESS_TARGETS,
+  ]) {
+    assert.ok(targets.includes(target), `${target} is missing from deployment batches`);
   }
-  assert.deepEqual(
-    [...new Set(batches.flat())].sort(),
-    [...expectedTargets].sort()
-  );
-
-  const orderedMarkers = [
-    "firebase deploy --only firestore:indexes --project alphawod-d1f2f",
-    "firebase deploy --only firestore:rules,storage --project alphawod-d1f2f",
-    "npm run verify:frontend-production-closed",
-    "npm run verify:published-legal",
-    "firebase deploy --only functions:stripeWebhook,",
-    "firebase deploy --only functions:createMembershipCheckoutSession,",
-  ];
-  const positions = orderedMarkers.map((marker) => deploymentSection.indexOf(marker));
-  assert.ok(positions.every((position) => position >= 0));
-  assert.deepEqual(positions, [...positions].sort((left, right) => left - right));
 });

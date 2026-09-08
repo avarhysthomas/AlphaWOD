@@ -1,0 +1,32 @@
+{
+  "runtime": "Node.js 24.13.1",
+  "frontendTests": {
+    "suites": 36,
+    "passed": 324,
+    "failed": 0
+  },
+  "commonBackendTests": {
+    "passed": 291,
+    "failed": 0
+  },
+  "frontendLint": "passed",
+  "backendLint": "passed",
+  "frontendLocalBuild": "passed",
+  "compiledCommonBackend": {
+    "javascriptFiles": 13,
+    "byteDifferencesFromDeployed": 0
+  },
+  "infrastructureTests": {
+    "passed": 55,
+    "failed": 1,
+    "failure": "scripts/deploymentConfig.test.js:22 expects no explicit purchase flags in build:production; deployed command has --expect-purchase-open --expect-conditioning-open. Preserved as production evidence, not silently changed."
+  },
+  "offlineBaselineChecks": 597,
+  "dependencyReuse": "Reused installed dependencies with matching dependency declarations; no lockfile changes.",
+  "notPerformed": [
+    "Production deployment",
+    "Real payment or booking",
+    "Complete emulator integration suite",
+    "Consolidation of the three deployed backend source versions"
+  ]
+}

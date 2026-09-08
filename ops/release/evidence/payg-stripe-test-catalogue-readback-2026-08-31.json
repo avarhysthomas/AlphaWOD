@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "stripe-test-payg-catalogue-readback",
+  "recordedAt": "2026-08-31",
+  "stripeMode": "test",
+  "scope": "adult_payg_class",
+  "productId": "prod_VAOxXxpax1MuRt",
+  "priceId": "price_1UA49JFzNDZoGGA0ciTM2OOQ",
+  "portalConfigurationId": "bpc_1U5sNqFzNDZoGGA0gY8sswiI",
+  "amountPence": 750,
+  "currency": "gbp",
+  "priceType": "one_time",
+  "verification": "passed-read-only",
+  "stripeObjectsCreatedOrChanged": false,
+  "limitations": [
+    "No PAYG Checkout, refund, dispute or email journey was run because the customer-facing legal approval gate remains closed."
+  ],
+  "productionMutation": false,
+  "deploymentPerformed": false
+}

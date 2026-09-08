@@ -1,0 +1,190 @@
+[
+  {
+    "name": "projects/alphawod-d1f2f/databases/(default)/collectionGroups/movementLibrary/indexes/CICAgNiav4AK",
+    "queryScope": "COLLECTION",
+    "fields": [
+      {
+        "fieldPath": "isActive",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "sortOrder",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "ASCENDING"
+      }
+    ],
+    "state": "READY",
+    "density": "SPARSE_ALL"
+  },
+  {
+    "name": "projects/alphawod-d1f2f/databases/(default)/collectionGroups/trainingLogs/indexes/CICAgJim14AK",
+    "queryScope": "COLLECTION",
+    "fields": [
+      {
+        "fieldPath": "category",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "movementSlug",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "date",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "DESCENDING"
+      }
+    ],
+    "state": "READY",
+    "density": "SPARSE_ALL"
+  },
+  {
+    "name": "projects/alphawod-d1f2f/databases/(default)/collectionGroups/memberships/indexes/CICAgLjy8IAK",
+    "queryScope": "COLLECTION",
+    "fields": [
+      {
+        "fieldPath": "state",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "nextReconcileAt",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "ASCENDING"
+      }
+    ],
+    "state": "READY",
+    "density": "SPARSE_ALL"
+  },
+  {
+    "name": "projects/alphawod-d1f2f/databases/(default)/collectionGroups/classTemplates/indexes/CICAgOjXh4EK",
+    "queryScope": "COLLECTION",
+    "fields": [
+      {
+        "fieldPath": "dayOfWeek",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "startTime",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "ASCENDING"
+      }
+    ],
+    "state": "READY",
+    "density": "SPARSE_ALL"
+  },
+  {
+    "name": "projects/alphawod-d1f2f/databases/(default)/collectionGroups/bookings/indexes/CICAgNiroIEK",
+    "queryScope": "COLLECTION",
+    "fields": [
+      {
+        "fieldPath": "userId",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "status",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "ASCENDING"
+      }
+    ],
+    "state": "READY",
+    "density": "SPARSE_ALL"
+  },
+  {
+    "name": "projects/alphawod-d1f2f/databases/(default)/collectionGroups/bookings/indexes/CICAgNjpgYIK",
+    "queryScope": "COLLECTION",
+    "fields": [
+      {
+        "fieldPath": "classId",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "status",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "ASCENDING"
+      }
+    ],
+    "state": "READY",
+    "density": "SPARSE_ALL"
+  },
+  {
+    "name": "projects/alphawod-d1f2f/databases/(default)/collectionGroups/workoutSessions/indexes/CICAgOi3kJAK",
+    "queryScope": "COLLECTION",
+    "fields": [
+      {
+        "fieldPath": "userId",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "createdAt",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "DESCENDING"
+      }
+    ],
+    "state": "READY",
+    "density": "SPARSE_ALL"
+  },
+  {
+    "name": "projects/alphawod-d1f2f/databases/(default)/collectionGroups/trainingLogs/indexes/CICAgJiUsZIK",
+    "queryScope": "COLLECTION_GROUP",
+    "fields": [
+      {
+        "fieldPath": "movementSlug",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "metricType",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "createdAt",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "DESCENDING"
+      }
+    ],
+    "state": "READY",
+    "density": "SPARSE_ALL"
+  },
+  {
+    "name": "projects/alphawod-d1f2f/databases/(default)/collectionGroups/trainingLogs/indexes/CICAgNi4-ZIK",
+    "queryScope": "COLLECTION",
+    "fields": [
+      {
+        "fieldPath": "category",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "date",
+        "order": "DESCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "DESCENDING"
+      }
+    ],
+    "state": "READY",
+    "density": "SPARSE_ALL"
+  }
+]

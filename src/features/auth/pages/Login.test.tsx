@@ -22,6 +22,7 @@ jest.mock("../components/AuthShell", () => ({ children }: { children: React.Reac
 jest.mock(
   "react-router-dom",
   () => ({
+    Link: ({children, to}: {children: React.ReactNode; to: string}) => <a href={to}>{children}</a>,
     useNavigate: () => mockNavigate,
     useLocation: () => ({state: mockLocationState}),
     useSearchParams: () => [new URLSearchParams(mockSearch)],

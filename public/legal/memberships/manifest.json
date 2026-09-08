@@ -1,5 +1,5 @@
 {
-  "effectiveDate": "2026-08-27",
+  "effectiveDate": "2026-09-01",
   "hashCovers": "UTF-8 bytes of content",
   "documents": {
     "membershipTerms": {
@@ -41,6 +41,16 @@
       "filename": "ZAF-GUARDIAN-2026-08-27-01.txt",
       "sha256": "3628a34258a331e61408989d511a3a36d956742b689037dfebe77efb94795925",
       "bytes": 10978
+    },
+    "adultConditioningAddendum": {
+      "title": "Adult Conditioning Only Membership Product Addendum",
+      "version": "ZAF-CONDITIONING-ADDENDUM-2026-09-01-01",
+      "effectiveDate": "2026-09-01",
+      "sourcePath": "public/legal/products/ZAF-CONDITIONING-ADDENDUM-2026-09-01-01.txt",
+      "publicUrl": "/legal/products/ZAF-CONDITIONING-ADDENDUM-2026-09-01-01.txt",
+      "filename": "ZAF-CONDITIONING-ADDENDUM-2026-09-01-01.txt",
+      "sha256": "b91f7fd256bca8ca6bca8d020519c5e298b167a8b98ea039df213bd4bc71fc19",
+      "bytes": 4116
     }
   }
 }

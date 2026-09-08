@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 2,
+  "evidenceType": "conditioning-stripe-test-provider-membership-partial",
+  "readinessItemId": "conditioning-stripe-test-purchase-to-booking-journey",
+  "recordedAt": "2026-09-01T23:27:29Z",
+  "testedSourceCommit": "f0d9efc54d3c0d46e38b9515ba367450d142b03d",
+  "customerPiiRecorded": false,
+  "stripeMode": "test",
+  "planKey": "adult_conditioning",
+  "providerReferences": {
+    "checkoutSessionId": "cs_test_a1uamFiU0sbzlP0BRsXQjTGvPXZkoEn8wXFX2Li4p3JOKqSvu1M3TWZPeo",
+    "subscriptionId": "sub_1UB0sAFzNDZoGGA0DVWA0V2A",
+    "checkoutCompletedEventId": "evt_1UB0sCFzNDZoGGA0yTulLoEE"
+  },
+  "catalogue": {
+    "testProductId": "prod_VAOvaoryJOeb04",
+    "testPriceId": "price_1UA47fFzNDZoGGA0lgyZPUZ9",
+    "recurringAmountPence": 3000,
+    "initialProratedAmountPence": 2903,
+    "currency": "gbp",
+    "interval": "month",
+    "intervalCount": 1,
+    "quantity": 1
+  },
+  "providerReadback": {
+    "checkoutMode": "subscription",
+    "checkoutStatus": "complete",
+    "checkoutPaymentStatus": "paid",
+    "subscriptionStatus": "active",
+    "cancelAtPeriodEnd": false,
+    "checkoutEventType": "checkout.session.completed",
+    "checkoutEventAcknowledged": true,
+    "planMetadataMatched": true,
+    "limitedAccessMetadataMatched": true,
+    "weeklyLimitMetadataMatched": true,
+    "eligibleSlotMetadataMatched": true
+  },
+  "applicationReadback": {
+    "membershipId": "sub_1UB0sAFzNDZoGGA0DVWA0V2A",
+    "membershipState": "active",
+    "entitlementState": "active",
+    "appAccessTier": "limited",
+    "weeklyBookingLimit": 2,
+    "flexibleEligibleClassSelection": true,
+    "confirmationOutboxState": "pending",
+    "confirmationEmailTransport": "disabled",
+    "confirmationEmailDelivered": false,
+    "purchasedMemberAppBookingCreated": false
+  },
+  "verification": {
+    "hostedCheckoutCompleted": true,
+    "webhookAcknowledged": true,
+    "membershipCreated": true,
+    "entitlementActivated": true,
+    "limitedAccessPolicyPropagated": true,
+    "twoClassesPerLondonWeekPolicyPropagated": true,
+    "singleRunProviderToMembershipWithoutFixtureSubstitution": true,
+    "purchasedMemberAppBookingVerified": false,
+    "confirmationDelivered": false
+  },
+  "supportingEvidence": [
+    "ops/release/evidence/conditioning-stripe-test-and-local-browser-2026-09-01.json"
+  ],
+  "limitations": [
+    "The same genuine test-mode run reached an active application membership and limited entitlement without substituting a membership fixture.",
+    "The test run stopped before an authenticated member booked a class through that purchased membership; the older local-browser fixture remains supporting evidence for the two-per-week booking policy only.",
+    "The pending confirmation outbox proves durable queue state only. Email transport was disabled and no delivered confirmation was observed.",
+    "No live Stripe object, production Firebase document, deployment or purchase gate was changed."
+  ],
+  "testProviderMutationPerformed": true,
+  "liveProviderMutation": false,
+  "productionWritePerformed": false,
+  "deploymentPerformed": false,
+  "newProductPurchaseGatesRemainClosed": true
+}

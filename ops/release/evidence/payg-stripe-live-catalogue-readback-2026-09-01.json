@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "stripe-live-payg-catalogue-readback",
+  "recordedAt": "2026-09-01",
+  "stripeMode": "live",
+  "scope": "adult_payg_class",
+  "productId": "prod_VAOGG2ZsBQ65Qt",
+  "priceId": "price_1UAmoCFzNDZoGGA0lKDwjbBU",
+  "amountPence": 700,
+  "currency": "gbp",
+  "priceType": "one_time",
+  "active": true,
+  "productDefaultPrice": true,
+  "supersededPriceId": "price_1UA3TdFzNDZoGGA0dCgYfU2h",
+  "supersededPriceArchived": true,
+  "verification": "passed-authenticated-dashboard-readback",
+  "stripeObjectsCreatedOrChanged": true,
+  "limitations": [
+    "This evidence covers only the live PAYG Product and Price; the full live Stripe catalogue, webhook and closed production configuration preflight remains required."
+  ],
+  "productionMutation": true,
+  "deploymentPerformed": false
+}

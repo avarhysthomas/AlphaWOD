@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "stripe-test-payg-catalogue-readback",
+  "recordedAt": "2026-09-01T07:55:36Z",
+  "stripeMode": "test",
+  "scope": "adult_payg_class",
+  "productId": "prod_VAOxXxpax1MuRt",
+  "priceId": "price_1UAmVVFzNDZoGGA04z8hX10N",
+  "portalConfigurationId": "bpc_1U5sNqFzNDZoGGA0gY8sswiI",
+  "amountPence": 700,
+  "currency": "gbp",
+  "priceType": "one_time",
+  "verification": "passed-read-only",
+  "supersedesEvidence": "ops/release/evidence/payg-stripe-test-catalogue-readback-2026-08-31.json",
+  "readbackStripeObjectsCreatedOrChanged": false,
+  "limitations": [
+    "No PAYG Checkout, refund, dispute or email journey was run as part of this catalogue-only verification."
+  ],
+  "productionMutation": false,
+  "deploymentPerformed": false
+}

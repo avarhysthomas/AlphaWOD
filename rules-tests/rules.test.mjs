@@ -43,6 +43,7 @@ const accessProfiles = {
     approvalStatus: "approved",
     entitlementStatus: "active",
     entitlementSource: "staff",
+    appAccessTier: "full",
     alphaWodAccess: true,
   },
   sgpt: {
@@ -50,6 +51,7 @@ const accessProfiles = {
     approvalStatus: "approved",
     entitlementStatus: "active",
     entitlementSource: "staff",
+    appAccessTier: "full",
     alphaWodAccess: true,
   },
   member: {
@@ -57,6 +59,8 @@ const accessProfiles = {
     approvalStatus: "approved",
     entitlementStatus: "active",
     entitlementSource: "stripe",
+    entitlementPlanKey: "adult_unlimited",
+    appAccessTier: "full",
     alphaWodAccess: true,
   },
   legacy: {
@@ -64,6 +68,7 @@ const accessProfiles = {
     approvalStatus: "approved",
     entitlementStatus: "active",
     entitlementSource: "legacy",
+    appAccessTier: "full",
     alphaWodAccess: true,
   },
   pending: {
@@ -71,6 +76,8 @@ const accessProfiles = {
     approvalStatus: "pending",
     entitlementStatus: "active",
     entitlementSource: "stripe",
+    entitlementPlanKey: "adult_unlimited",
+    appAccessTier: "full",
     alphaWodAccess: true,
   },
   restricted: {
@@ -78,6 +85,7 @@ const accessProfiles = {
     approvalStatus: "approved",
     entitlementStatus: "restricted",
     entitlementSource: "stripe",
+    appAccessTier: "none",
     alphaWodAccess: true,
   },
   staffRestricted: {
@@ -85,6 +93,7 @@ const accessProfiles = {
     approvalStatus: "approved",
     entitlementStatus: "restricted",
     entitlementSource: "staff",
+    appAccessTier: "none",
     alphaWodAccess: true,
   },
   banned: {
@@ -92,6 +101,17 @@ const accessProfiles = {
     approvalStatus: "approved",
     entitlementStatus: "active",
     entitlementSource: "stripe",
+    appAccessTier: "none",
+    alphaWodAccess: true,
+  },
+  limited: {
+    role: "user",
+    approvalStatus: "approved",
+    entitlementStatus: "active",
+    entitlementSource: "stripe",
+    entitlementPlanKey: "adult_conditioning",
+    appAccessTier: "limited",
+    entitlementClassSlots: ["monday_0600", "tuesday_1800"],
     alphaWodAccess: true,
   },
 };
@@ -204,6 +224,30 @@ describe("authoritative access state", () => {
       await assertSucceeds(getDoc(doc(db, "appSettings", "booking")));
     }
   });
+
+  test("limited members can use classes, bookings, settings and profiles but not performance data", async () => {
+    await seedFirestore({
+      "users/limited": accessProfiles.limited,
+      "users/limited/trainingLogs/log-1": {userId: "limited"},
+      "classes/class-1": {title: "Conditioning"},
+      "bookings/class-1_limited": {
+        classId: "class-1",
+        userId: "limited",
+        status: "booked",
+      },
+      "appSettings/booking": {strengthBlocksEnabled: true},
+      "wods/today": {title: "Workout"},
+      "wodTemplates/template-1": {title: "Workout template"},
+    });
+    const db = firestoreFor("limited");
+    await assertSucceeds(getDoc(doc(db, "users", "limited")));
+    await assertSucceeds(getDoc(doc(db, "classes", "class-1")));
+    await assertSucceeds(getDoc(doc(db, "bookings", "class-1_limited")));
+    await assertSucceeds(getDoc(doc(db, "appSettings", "booking")));
+    await assertFails(getDoc(doc(db, "wods", "today")));
+    await assertFails(getDoc(doc(db, "wodTemplates", "template-1")));
+    await assertFails(getDoc(doc(db, "users/limited/trainingLogs/log-1")));
+  });
 });
 
 describe("user documents", () => {
@@ -253,6 +297,7 @@ describe("user documents", () => {
     await seedFirestore({
       "users/member": accessProfiles.member,
       "users/other": accessProfiles.member,
+      "users/limited": accessProfiles.limited,
       "users/admin": accessProfiles.admin,
       "users/sgpt": accessProfiles.sgpt,
     });
@@ -402,6 +447,7 @@ describe("profile picture storage", () => {
     await seedFirestore({
       "users/member": accessProfiles.member,
       "users/other": accessProfiles.member,
+      "users/limited": accessProfiles.limited,
       "users/admin": accessProfiles.admin,
       "users/restricted": accessProfiles.restricted,
     });
@@ -448,6 +494,7 @@ describe("profile picture storage", () => {
 
     await assertSucceeds(getBytes(picture));
     await assertSucceeds(getBytes(ref(storageFor("other"), "profilePics/member.jpg")));
+    await assertSucceeds(getBytes(ref(storageFor("limited"), "profilePics/member.jpg")));
     await assertFails(getBytes(ref(storageFor("restricted"), "profilePics/member.jpg")));
     await assertFails(
       getBytes(ref(testEnv.unauthenticatedContext().storage(bucket), "profilePics/member.jpg"))
@@ -475,12 +522,23 @@ describe("billing collections are server-only", () => {
     "membershipIntents/intent_test",
     "membershipCheckoutLocks/participant_test",
     "membershipEntitlementOwners/member_test",
+    "membershipBookingCleanupJobs/sub_test",
+    "conditioningWeeklyBookingUsage/week_test",
     "stripeEvents/evt_test",
     "membershipEmailOutbox/sub_test",
     "membershipCancellationReceipts/cancel_test",
     "membershipCheckoutRateAdmissions/attempt_test",
     "membershipCheckoutRateLimits/source_burst_1",
     "membershipAudit/audit_test",
+    "paygIntents/payg_test",
+    "paygOrders/payg_test",
+    "paygWaiverAcceptances/payg_test",
+    "paygEmailOutbox/payg_test",
+    "paygPiiRedactionDiscovery/paygIntents",
+    "paygCheckoutRateLimits/payg_test",
+    "paygCheckoutAdmissions/payg_test",
+    "paygCheckoutLocks/payg_test",
+    "paygPaymentReviews/payg_test",
   ];
 
   beforeEach(async () => {
@@ -543,6 +601,47 @@ describe("billing collections are server-only", () => {
         updatedAt: serverTimestamp(),
       })
     );
+  });
+});
+
+describe("whole-class cancellation audit", () => {
+  beforeEach(async () => {
+    await seedFirestore({
+      "users/member": accessProfiles.member,
+      "users/admin": accessProfiles.admin,
+      "users/sgpt": accessProfiles.sgpt,
+      "classCancellationOperations/class_cancel_test": {
+        operationId: "class_cancel_test",
+        classId: "class-1",
+        state: "processing",
+      },
+    });
+  });
+
+  test("only authoritative admins can read the pseudonymous audit", async () => {
+    const path = "classCancellationOperations/class_cancel_test";
+    await assertSucceeds(getDoc(doc(firestoreFor("admin"), path)));
+    await assertSucceeds(
+      getDocs(collection(firestoreFor("admin"), "classCancellationOperations"))
+    );
+    await assertFails(getDoc(doc(firestoreFor("member"), path)));
+    await assertFails(getDoc(doc(firestoreFor("sgpt"), path)));
+    await assertFails(
+      getDoc(doc(testEnv.unauthenticatedContext().firestore(), path))
+    );
+  });
+
+  test("no client role can create or mutate cancellation evidence", async () => {
+    const path = "classCancellationOperations/class_cancel_test";
+    for (const uid of ["admin", "member", "sgpt"]) {
+      const db = firestoreFor(uid);
+      await assertFails(updateDoc(doc(db, path), {state: "cancelled"}));
+      await assertFails(setDoc(doc(db, "classCancellationOperations/new"), {
+        operationId: "new",
+        classId: "class-2",
+        state: "cancelled",
+      }));
+    }
   });
 });
 

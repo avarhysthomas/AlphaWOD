@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "gcp-missed-membership-payment-email-alert",
+  "recordedAt": "2026-09-01T08:25:39Z",
+  "googleCloudProjectId": "alphawod-d1f2f",
+  "runtimeSignal": {
+    "marker": "BILLING_PAYMENT_FAILED",
+    "severity": "WARNING",
+    "piiAllowed": false,
+    "allowedFields": [
+      "stripeEventId",
+      "stripeInvoiceId",
+      "stripeSubscriptionId",
+      "stripeEventCreated"
+    ]
+  },
+  "alertPolicy": {
+    "id": "1784587597971323419",
+    "displayName": "Billing — missed membership payment",
+    "filter": "resource.type=\"cloud_run_revision\" AND severity>=WARNING AND (textPayload:\"BILLING_PAYMENT_FAILED\" OR jsonPayload.message:\"BILLING_PAYMENT_FAILED\")",
+    "threshold": 1,
+    "priority": "immediate",
+    "notificationRateLimitSeconds": 300,
+    "autoCloseSeconds": 3600
+  },
+  "notificationChannel": {
+    "type": "email",
+    "displayName": "Zero Alpha billing operations",
+    "recipientConfiguredInProvider": true,
+    "recipientCategory": "shared-business-inbox",
+    "recipientDomain": "zeroalphafitness.co.uk",
+    "intendedRecipientRole": "business-owner"
+  },
+  "verification": {
+    "policyCreated": true,
+    "emailChannelAttached": true,
+    "filterMatchesCheckedInTemplate": true,
+    "syntheticDeliveryTestPerformed": false
+  },
+  "limitations": [
+    "The application marker is not active in production until the reviewed Functions release is deployed.",
+    "This evidence covers one alert policy and one email channel only; it does not verify the other billing policies or the required second independent notification route.",
+    "No failed payment was created to test delivery."
+  ],
+  "providerConfigurationChanged": true,
+  "applicationDeploymentPerformed": false,
+  "purchaseGatesChanged": false
+}

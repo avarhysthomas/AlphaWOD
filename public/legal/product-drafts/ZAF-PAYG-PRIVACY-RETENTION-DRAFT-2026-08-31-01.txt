@@ -1,0 +1,112 @@
+DRAFT — INTERNAL DECISION RECORD — NOT A CUSTOMER PRIVACY NOTICE
+
+PAYG Privacy and Retention Decision Record
+
+DRAFT DATE
+31 August 2026
+
+DRAFT DOCUMENT ID
+ZAF-PAYG-PRIVACY-RETENTION-DRAFT-2026-08-31-01
+
+STATUS
+Owner and legal review required. No retention period or lawful-basis assessment in this record is approved. PAYG checkout must remain closed and PAYG_PII_RETENTION_APPROVED must remain false.
+
+1. Data minimisation decision
+
+Required for the public PAYG flow:
+
+• attendee full name;
+
+• date of birth, used to establish adult eligibility at the class date;
+
+• email address, used for the confirmation, private cancellation route and essential booking/payment support;
+
+• selected class, date, time and booking/payment references; and
+
+• exact legal-document versions and acceptance evidence.
+
+Optional:
+
+• mobile number. If supplied, use only for urgent operational contact about the booked class unless another purpose is separately explained. Do not require a mobile number merely because the field exists, and do not use it for marketing without a separate lawful route.
+
+Do not request free-text medical history in the public PAYG checkout. Provide a separate secure route only where information is genuinely necessary for safety or a requested adjustment.
+
+2. Draft purpose and lawful-basis analysis
+
+Owner and legal reviewer must confirm the Article 6 basis for each purpose. The working proposal is contract necessity for forming and administering the booking, sending essential confirmation/cancellation information and handling the payment; legitimate interests, subject to a recorded balancing assessment, for proportionate fraud prevention, capacity integrity, safety administration and defence of legal claims; and legal obligation where a record is required by tax, accounting, consumer, safeguarding or other law.
+
+Date of birth, attendance or workout context can sometimes reveal or be combined with health information. Do not treat a generic legitimate-interest label as permission to collect health data. If special-category data is genuinely required, document both an Article 6 basis and an Article 9 condition and provide a just-in-time notice before collection.
+
+3. Processors and disclosures to confirm
+
+• Stripe for Checkout, payment authentication, refunds, disputes and provider identifiers.
+
+• Firebase/Google Cloud for the application, booking ledger, access control and operational recovery.
+
+• Resend for transactional email delivery.
+
+• Professional advisers, insurers, emergency services, regulators or courts only where necessary and lawful.
+
+Confirm current contracts, locations, international-transfer safeguards, access controls and incident procedures before approval.
+
+4. Retention schedule requiring owner/legal decisions
+
+The UK GDPR storage-limitation principle requires a justified purpose, standard retention periods that are reviewed, and deletion or irreversible anonymisation when identifiable data is no longer needed. A technically convenient maximum is not a legal justification.
+
+Decision A — abandoned or expired checkout intent PII:
+
+APPROVED PERIOD: NOT DECIDED
+
+PROPOSED TRIGGER: checkout expiry or confirmed release of the unpaid capacity hold, after provider-recovery checks no longer need the intact contact/acceptance request.
+
+Decision B — confirmed/cancelled/refunded PAYG order contact PII:
+
+ENVIRONMENT FIELD: PAYG_ORDER_PII_RETENTION_DAYS
+
+APPROVED PERIOD: NOT DECIDED
+
+PROPOSED TRIGGER: scheduled class end, with a documented exception for a live refund, dispute, complaint, fraud review or legal hold.
+
+Decision C — identifiable waiver and electronic-signature evidence:
+
+ENVIRONMENT FIELD: PAYG_WAIVER_PII_RETENTION_DAYS
+
+APPROVED PERIOD: NOT DECIDED
+
+PROPOSED TRIGGER: scheduled class end, with a documented exception for a live incident, insurance, safeguarding or legal hold.
+
+Decision D — transactional email payload and provider-delivery evidence:
+
+APPROVED PERIOD: NOT DECIDED
+
+PROPOSED TRIGGER: successful delivery plus the period genuinely needed for support/retry evidence, or terminal failure and manual resolution.
+
+Decision E — rate-limit/admission and duplicate-lock pseudonyms:
+
+APPROVED PERIOD: NOT DECIDED
+
+PROPOSED TRIGGER: expiry of the relevant abuse-prevention or duplicate-booking window. Confirm that no raw network address is retained in these collections.
+
+5. Automation acceptance criteria
+
+Before PAYG_PII_REDACTION_IMPLEMENTED can be changed through a reviewed code release, tests must prove that bounded and resumable workers:
+
+• remove or irreversibly anonymise every approved PII field from abandoned intents, order/contact records, waiver records and email payloads at the correct deadline;
+
+• preserve only the minimum approved non-identifying commercial, capacity, refund and audit evidence;
+
+• do not redact data while a payment, refund, dispute, email lease, incident or approved legal hold still requires it;
+
+• retry safely after interruption and converge idempotently;
+
+• enforce the same rule in Firestore security rules and any configured TTL policy; and
+
+• emit monitored success/failure evidence without logging guest PII.
+
+6. Customer transparency acceptance criteria
+
+Before PAYG_LEGAL_APPROVED can change through an authorised release, the published Privacy Notice and PAYG terms must state the required and optional fields, purposes, lawful bases, processors, international transfers, exact retention periods or clear criteria, data-subject rights, complaint route and controller contact. The mobile number must be described as optional and restricted to urgent operational class contact if supplied.
+
+7. Required approvals
+
+Record the owner, legal reviewer, privacy reviewer, policy version, decision date, review date, approved periods, lawful-basis assessment references, processor review and automation evidence. None has been recorded in this draft.

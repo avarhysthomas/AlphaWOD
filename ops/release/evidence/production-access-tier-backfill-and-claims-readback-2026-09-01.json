@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "production-access-tier-backfill-and-claims-readback",
+  "readinessItemId": "production-access-tier-backfill-and-claims-readback",
+  "verified": true,
+  "recordedAt": "2026-09-01T21:58:50Z",
+  "firebaseProjectId": "alphawod-d1f2f",
+  "accessSchemaVersion": 3,
+  "sourceCommit": "12ba9cb3f8b6faba91c9dbf587af3b0d213a027e",
+  "newProductPurchaseGatesRemainClosed": true,
+  "customerPiiRecorded": false,
+  "dryRun": {
+    "reportSha256": "e0c1d87f70282e1be6d1e10ecfc63c55df3434c5ee4891b1bfd1876d4d638a6a",
+    "postResolutionReportSha256": "b6bdbd215e68ac4f7c13a3e43c110f18bc65cd24ecd2577614fa1a1a9a6ffab7",
+    "completedAt": "2026-09-01T21:49:40.059Z",
+    "scannedProfiles": 58,
+    "scannedAuthUsers": 59,
+    "approvedAccessGrants": 55,
+    "invalidCount": 0,
+    "missingAuthUsersCount": 0,
+    "incompleteLegacyWaiverCount": 0,
+    "implicitAccessGrantCount": 0,
+    "identityCorrectionCount": 0,
+    "reviewedByRole": "Zero Alpha Fitness operations"
+  },
+  "apply": {
+    "approvedReportSha256": "e0c1d87f70282e1be6d1e10ecfc63c55df3434c5ee4891b1bfd1876d4d638a6a",
+    "reportSha256": "721b00b8cb231c566667cc47703dcd9e7b0aaf75defaaf488032328c1b499c14",
+    "mode": "apply",
+    "startedAt": "2026-09-01T21:47:52.195Z",
+    "completedAt": "2026-09-01T21:48:32.997Z",
+    "ownerAuthorizationRecorded": true,
+    "preservationSafeConflictResolution": true
+  },
+  "readback": {
+    "reportSha256": "ac127bd4523f45a54b96b46ec72fd0bb2f614252d567d6eb8ecbcb3bd33b7c3c",
+    "completedAt": "2026-09-01T21:52:43.688Z",
+    "allProfilesHaveValidAppAccessTier": true,
+    "allManagedClaimsMatchProfiles": true,
+    "allCanonicalIdentitiesMatch": true,
+    "allMigrationMarkersMatch": true,
+    "authOnlyAccountsFailClosed": true,
+    "unresolvedCount": 0,
+    "profilesVerified": 58,
+    "authUsersVerified": 59,
+    "mainLegacyWaiverQuarantinesVerified": 49,
+    "markerConflictArchivesVerified": 1,
+    "profilesWithCanonicalWaiverMarkersVerified": 48
+  },
+  "rulesDeployment": {
+    "firebaseToolsVersion": "15.5.1",
+    "nodeVersion": "24.19.0",
+    "firestoreRulesDeployedAfterApply": true,
+    "storageRulesDeployedAfterApply": true,
+    "completedAt": "2026-09-01T21:54:42.861Z",
+    "exactSourceReadbackMatched": true,
+    "firestore": {
+      "releaseName": "projects/alphawod-d1f2f/releases/cloud.firestore",
+      "rulesetName": "projects/alphawod-d1f2f/rulesets/0adef580-78c6-4989-844e-b5b67cad2095",
+      "releaseUpdateTime": "2026-09-01T21:54:42.861092Z",
+      "rulesetCreateTime": "2026-09-01T21:54:40.957999Z",
+      "bytes": 11591,
+      "sha256": "936e8e46b2d3b99c106be2d6e0fa3a9f353e0b25420c5e569615f4357d6d5646",
+      "exactSourceMatch": true
+    },
+    "storage": {
+      "releaseName": "projects/alphawod-d1f2f/releases/firebase.storage/alphawod-d1f2f.firebasestorage.app",
+      "rulesetName": "projects/alphawod-d1f2f/rulesets/c5db015a-bf58-4679-9d11-c4fa3227b871",
+      "releaseUpdateTime": "2026-09-01T21:54:41.894961Z",
+      "rulesetCreateTime": "2026-09-01T21:54:38.585631Z",
+      "bytes": 2612,
+      "sha256": "6d56d1801909c0226a2a079cd4450f355f7901ee635b82aa6889d962c68db649",
+      "exactSourceMatch": true
+    }
+  },
+  "verifiedControls": [
+    "dry-run-reviewed",
+    "exact-report-applied",
+    "zero-unresolved-users",
+    "profiles-read-back",
+    "custom-claims-read-back",
+    "rules-deployed-after-backfill"
+  ]
+}

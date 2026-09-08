@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "conditioning-stripe-test-and-local-browser-partial",
+  "readinessItemId": "conditioning-stripe-test-purchase-to-booking-journey",
+  "recordedAt": "2026-09-01T15:29:44Z",
+  "customerPiiRecorded": false,
+  "stripeReadback": {
+    "mode": "test",
+    "planKey": "adult_conditioning",
+    "checkoutSessionId": "cs_test_a1SfbXmndUQS5DBMWcx95iFdk2xXLU2tucJO7DzhERuGDuIQB69oanwIXj",
+    "subscriptionId": "sub_1UAroiFzNDZoGGA04ISXiiwj",
+    "amountPence": 3000,
+    "currency": "gbp",
+    "checkoutPaymentStatus": "paid",
+    "subscriptionStatus": "active",
+    "membershipState": "active",
+    "appAccessTier": "limited",
+    "weeklyBookingLimit": 2,
+    "flexibleEligibleClassSelection": true,
+    "confirmationOutboxState": "pending",
+    "confirmationDeliveryEnabled": false,
+    "confirmationDelivered": false
+  },
+  "localBrowserRerun": {
+    "environment": "local-emulator-fixture",
+    "date": "2026-09-01",
+    "fixtureBoundToRecordedCheckoutAndSubscription": true,
+    "newStripeRequestPerformed": false,
+    "newStripeObjectCreatedOrChanged": false,
+    "productionWritePerformed": false,
+    "waiver": {
+      "version": "ZAF-ADULT-WAIVER-2026-08-23-01",
+      "currentMarkerObserved": true,
+      "requiredAcknowledgementCount": 1,
+      "storedAcknowledgementCount": 1,
+      "exactAcknowledgementSetMatched": true,
+      "acknowledgementTextRecorded": false
+    },
+    "bookingSequence": [
+      {
+        "fixtureLabel": "Thursday A",
+        "action": "book",
+        "result": "succeeded"
+      },
+      {
+        "fixtureLabel": "Friday C",
+        "action": "book",
+        "result": "succeeded"
+      },
+      {
+        "action": "book-third-eligible-current-week-class",
+        "result": "blocked-weekly-quota"
+      },
+      {
+        "fixtureLabel": "Friday C",
+        "action": "cancel",
+        "result": "succeeded-capacity-and-quota-released"
+      },
+      {
+        "fixtureLabel": "Friday D",
+        "action": "book-replacement",
+        "result": "succeeded"
+      }
+    ],
+    "finalEmulatorReadback": {
+      "activeBookingFixtureLabels": [
+        "Thursday A",
+        "Friday D"
+      ],
+      "cancelledBookingFixtureLabels": [
+        "Friday C"
+      ],
+      "quotaBookedCount": 2,
+      "quotaActiveBookingFixtureLabels": [
+        "Thursday A",
+        "Friday D"
+      ],
+      "allObservedUnbookedCandidateBookedCountsZero": true,
+      "unbookedCandidateBookedCount": 0
+    },
+    "accessReadback": {
+      "available": [
+        "Schedule",
+        "Profile",
+        "Membership"
+      ],
+      "notIncluded": [
+        "Dashboard",
+        "Training",
+        "Leaderboard"
+      ],
+      "notIncludedCopy": "Not included"
+    }
+  },
+  "releaseGateAssessment": {
+    "partialJourneyEvidenceRecorded": true,
+    "fullConditioningOperationalGateVerified": false,
+    "confirmationDeliveryVerified": false,
+    "classCancellationOperationsDrillVerified": false,
+    "productionDeploymentVerified": false,
+    "productionPublicationVerified": false
+  },
+  "limitations": [
+    "The paid, active Stripe test Session and Subscription were verified before the app-only rerun; the rerun used a local emulator fixture bound to those references and made no new Stripe request or provider mutation.",
+    "The pending confirmation outbox proves durable queue state only. Delivery was disabled and no delivered email was observed.",
+    "The member cancellation/rebook interaction is not the ordered whole-class cancellation, authorised-absence and PAYG refund operations drill.",
+    "No production data was written, no code was deployed, and no production legal publication or live delivery-backlog state was verified."
+  ],
+  "liveProviderMutation": false,
+  "productionWritePerformed": false,
+  "deploymentPerformed": false,
+  "purchaseGatesChanged": false
+}

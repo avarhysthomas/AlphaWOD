@@ -502,7 +502,7 @@ const effectiveUnit = formConfig.lockedUnit ?? unit;
     return <Navigate to="/training" replace />;
   }
 
-  const navItems = getUserNavItems(appUser?.role);
+  const navItems = getUserNavItems(appUser);
   const firstName = appUser?.name?.split(" ")[0] || appUser?.email?.split("@")[0] || "there";
   const profilePhotoURL = appUser?.photoURL || user?.photoURL || "";
   const oldestLog = filteredLogs[filteredLogs.length - 1] ?? null;

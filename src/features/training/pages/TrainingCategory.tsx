@@ -169,7 +169,7 @@ export default function TrainingCategory() {
     };
   }, [selectedCategory, user]);
 
-  const navItems = getUserNavItems(appUser?.role);
+  const navItems = getUserNavItems(appUser);
   const firstName = appUser?.name?.split(" ")[0] || appUser?.email?.split("@")[0] || "there";
   const profilePhotoURL = appUser?.photoURL || user?.photoURL || "";
 

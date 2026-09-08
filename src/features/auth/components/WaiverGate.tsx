@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "../../../context/AuthContext";
 import { hasAlphaWodAccess } from "../../../context/authUser";
 import {
@@ -17,6 +17,25 @@ if (!adultWaiverAcceptance) {
 
 const WAIVER_VERSION = adultWaiver.version;
 const requiredAcknowledgements = [adultWaiverAcceptance.statement];
+const LOCAL_TEST_USER_EMAILS = new Set([
+  "dev-admin@zeroalpha.test",
+  "dev-member@zeroalpha.test",
+]);
+
+export function shouldBypassWaiverForLocalTestUser({
+  nodeEnv,
+  useEmulators,
+  email,
+}: {
+  nodeEnv?: string;
+  useEmulators?: string;
+  email?: string | null;
+}) {
+  return nodeEnv === "development" &&
+    useEmulators === "true" &&
+    typeof email === "string" &&
+    LOCAL_TEST_USER_EMAILS.has(email.trim().toLowerCase());
+}
 
 function needsCurrentWaiver(appUser: ReturnType<typeof useAuth>["appUser"]) {
   return (
@@ -42,6 +61,26 @@ function describeWaiverSaveError(error: unknown): string {
   return "We could not save your waiver yet. Check your connection and try again.";
 }
 
+type WaiverGateState = {
+  uid: string | null;
+  signature: string;
+  acknowledgements: boolean[];
+  submitting: boolean;
+  signedUid: string | null;
+  error: string;
+};
+
+function emptyWaiverGateState(uid: string | null): WaiverGateState {
+  return {
+    uid,
+    signature: "",
+    acknowledgements: requiredAcknowledgements.map(() => false),
+    submitting: false,
+    signedUid: null,
+    error: "",
+  };
+}
+
 export default function WaiverGate({
   children,
   bypass = false,
@@ -50,23 +89,48 @@ export default function WaiverGate({
   bypass?: boolean;
 }) {
   const { user, appUser, loading, refreshAppUser } = useAuth();
-  const [signature, setSignature] = useState("");
-  const [acknowledgements, setAcknowledgements] = useState<boolean[]>(
-    () => requiredAcknowledgements.map(() => false)
+  const activeUid = user?.uid ?? null;
+  const activeUidRef = useRef(activeUid);
+  activeUidRef.current = activeUid;
+  const [waiverState, setWaiverState] = useState<WaiverGateState>(
+    () => emptyWaiverGateState(activeUid)
   );
-  const [submitting, setSubmitting] = useState(false);
-  const [signedThisSession, setSignedThisSession] = useState(false);
-  const [error, setError] = useState("");
+  const scopedState = waiverState.uid === activeUid
+    ? waiverState
+    : emptyWaiverGateState(activeUid);
+  const {signature, acknowledgements, submitting, signedUid, error} = scopedState;
+
+  useEffect(() => {
+    setWaiverState((current) =>
+      current.uid === activeUid ? current : emptyWaiverGateState(activeUid)
+    );
+  }, [activeUid]);
+
+  function updateScopedState(
+    patch: Partial<Omit<WaiverGateState, "uid">>
+  ) {
+    setWaiverState((current) => ({
+      ...(current.uid === activeUid ? current : emptyWaiverGateState(activeUid)),
+      ...patch,
+    }));
+  }
 
   const suggestedName = useMemo(
     () => appUser?.name?.trim() || user?.displayName?.trim() || "",
     [appUser?.name, user?.displayName]
   );
+  const localTestWaiverBypass = shouldBypassWaiverForLocalTestUser({
+    nodeEnv: process.env.NODE_ENV,
+    useEmulators: process.env.REACT_APP_USE_EMULATORS,
+    email: user?.email,
+  });
 
   // Billing, cancellation and the public legal/purchase routes must remain
   // reachable even when the participation waiver is outstanding. The waiver
   // controls workout access; it cannot condition access to payment controls.
-  if (bypass || !user) {
+  // The two fixed synthetic emulator personas bypass the unresolved waiver
+  // rollover without writing fake legal evidence. Real users still fail closed.
+  if (bypass || localTestWaiverBypass || !user) {
     return <>{children}</>;
   }
 
@@ -80,7 +144,7 @@ export default function WaiverGate({
 
   if (
     !hasAlphaWodAccess(appUser) ||
-    signedThisSession ||
+    signedUid === activeUid ||
     !needsCurrentWaiver(appUser)
   ) {
     return <>{children}</>;
@@ -92,25 +156,42 @@ export default function WaiverGate({
 
   const handleSign = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!canSign) return;
+    const submissionUid = activeUid;
+    if (!canSign || !submissionUid) return;
 
     try {
-      setSubmitting(true);
-      setError("");
+      setWaiverState({...scopedState, submitting: true, error: ""});
       const { acceptCurrentWaiver } = await import("../services/account");
+      if (activeUidRef.current !== submissionUid) return;
       await acceptCurrentWaiver({
         acceptedName: typedName,
         waiverVersion: WAIVER_VERSION,
         acknowledgements: requiredAcknowledgements,
         mediaConsent: false,
       });
-      setSignedThisSession(true);
+      if (activeUidRef.current !== submissionUid) return;
+      setWaiverState((current) =>
+        current.uid === submissionUid
+          ? {...current, signedUid: submissionUid}
+          : current
+      );
       await refreshAppUser();
     } catch (err) {
+      if (activeUidRef.current !== submissionUid) return;
       console.error("Failed to record waiver acceptance:", err);
-      setError(describeWaiverSaveError(err));
+      setWaiverState((current) =>
+        current.uid === submissionUid
+          ? {...current, error: describeWaiverSaveError(err)}
+          : current
+      );
     } finally {
-      setSubmitting(false);
+      if (activeUidRef.current === submissionUid) {
+        setWaiverState((current) =>
+          current.uid === submissionUid
+            ? {...current, submitting: false}
+            : current
+        );
+      }
     }
   };
 
@@ -174,7 +255,7 @@ export default function WaiverGate({
                 type="text"
                 autoComplete="name"
                 value={signature}
-                onChange={(event) => setSignature(event.target.value)}
+                onChange={(event) => updateScopedState({signature: event.target.value})}
                 placeholder={suggestedName || "Full name"}
                 aria-describedby={error ? "waiver-save-error" : undefined}
                 maxLength={160}
@@ -195,7 +276,7 @@ export default function WaiverGate({
                     onChange={(event) => {
                       const next = [...acknowledgements];
                       next[index] = event.target.checked;
-                      setAcknowledgements(next);
+                      updateScopedState({acknowledgements: next});
                     }}
                     className="mt-1 h-4 w-4 accent-amber-400"
                   />

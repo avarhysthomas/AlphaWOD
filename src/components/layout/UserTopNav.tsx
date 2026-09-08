@@ -15,6 +15,8 @@ import {
   Rows3,
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
+import type { AppUser } from "../../context/authUser";
+import { isLimitedAppUser } from "../../lib/appAccess";
 import { isAdminRole, isSgptRole } from "../../lib/roles";
 
 export type NavItem = {
@@ -49,9 +51,15 @@ export const sgptNavItems: NavItem[] = [
   { to: "/admin/performance", label: "Dashboard", icon: Activity, adminOnly: true },
 ];
 
+export const limitedNavItems: NavItem[] = [
+  { to: "/schedule", label: "Schedule", icon: CalendarDays },
+  { to: "/profile", label: "Profile", icon: User },
+  { to: "/account/membership", label: "Membership", icon: CreditCard },
+];
+
 export default function UserTopNav() {
   const { appUser } = useAuth();
-  const navItems = getUserNavItems(appUser?.role);
+  const navItems = getUserNavItems(appUser);
 
   return (
     <div
@@ -89,9 +97,11 @@ export default function UserTopNav() {
   );
 }
 
-export function getUserNavItems(role?: string) {
-  const isAdmin = isAdminRole(role);
-  const isSgpt = isSgptRole(role);
+export function getUserNavItems(appUser?: Pick<AppUser, "role" | "approvalStatus" | "entitlementStatus" | "entitlementSource" | "alphaWodAccess" | "appAccessTier"> | null) {
+  if (isLimitedAppUser(appUser as AppUser | null | undefined)) return limitedNavItems;
+
+  const isAdmin = isAdminRole(appUser?.role);
+  const isSgpt = isSgptRole(appUser?.role);
 
   return isSgpt
     ? sgptNavItems

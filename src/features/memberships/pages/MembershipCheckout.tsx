@@ -3,6 +3,7 @@ import { Link, Navigate, useParams } from "react-router-dom";
 import { useAuth } from "../../../context/AuthContext";
 import {
   COMPANY,
+  CONDITIONING_SLOT_OPTIONS,
   EXISTING_MEMBER_OFFER,
   MEMBERSHIP_PLANS,
   POLICY_TEXT,
@@ -113,10 +114,12 @@ export default function MembershipCheckout() {
   const plan = isPlanKey(planKey) ? MEMBERSHIP_PLANS[planKey] : null;
   const {
     checkoutEnabled,
+    conditioningCheckoutEnabled,
     documentsApproved,
     localTestJourneyEnabled,
   } = MEMBERSHIP_PURCHASE_AVAILABILITY;
   const isYouth = plan?.audience === "youth";
+  const isConditioning = plan?.key === "adult_conditioning";
   const participantCount = isYouth ? 1 + additionalParticipants.length : 1;
   const presale = isFoundingPresale();
   const promotionCodeAvailable =
@@ -205,7 +208,7 @@ export default function MembershipCheckout() {
     acceptedStatements[id] === true
   );
   const canSubmit =
-    checkoutEnabled &&
+    (isConditioning ? conditioningCheckoutEnabled : checkoutEnabled) &&
     participantFullName.trim().length >= 2 &&
     age !== null &&
     !ageMismatch &&
@@ -229,7 +232,7 @@ export default function MembershipCheckout() {
       setBillingPolicyChanged(false);
 
       const checkoutDetails: CheckoutDetails = {
-        checkoutSchemaVersion: 4,
+        checkoutSchemaVersion: 6,
         // This is deliberately the same snapshot that chose every price/date
         // shown on this render. The callable fails closed if the cutoff moved.
         expectedBillingMode: presale ? "presale_deferred" : "standard",
@@ -311,6 +314,16 @@ export default function MembershipCheckout() {
   const familySavingPence = youthPricing ?
     youthPricing.standardMonthlyPence - youthPricing.recurringMonthlyPence : 0;
   const childWord = participantCount === 1 ? "child" : "children";
+
+  if (isConditioning && !conditioningCheckoutEnabled) {
+    return (
+      <ConditioningCheckoutPreview
+        planName={plan.name}
+        planSummary={plan.summary}
+        price={formatPlanPrice(plan)}
+      />
+    );
+  }
 
   return (
     <div className="carbon-fiber-bg min-h-screen overflow-x-hidden text-[#f4f0ea]">
@@ -407,6 +420,9 @@ export default function MembershipCheckout() {
         )}
 
         <form onSubmit={handleSubmit} className="mt-8 space-y-5">
+          {isConditioning ? (
+            <ConditioningBookingAllowance idPrefix="active-conditioning" />
+          ) : null}
           {promotionCodeAvailable && (
             <div className="rounded-[28px] border border-amber-500/25 bg-amber-500/10 p-6">
               <label className="block">
@@ -946,5 +962,96 @@ export default function MembershipCheckout() {
         </footer>
       </div>
     </div>
+  );
+}
+
+function ConditioningCheckoutPreview({
+  planName,
+  planSummary,
+  price,
+}: {
+  planName: string;
+  planSummary: string;
+  price: string;
+}) {
+  return (
+    <main className="carbon-fiber-bg min-h-screen overflow-x-hidden px-5 py-10 text-[#f4f0ea] sm:px-8">
+      <div className="mx-auto max-w-2xl">
+        <Link to="/memberships" className="text-sm text-white/55 underline underline-offset-4">
+          Back to memberships
+        </Link>
+        <h1 className="mt-7 font-heading text-5xl uppercase leading-none text-white sm:text-6xl">
+          {planName}
+        </h1>
+        <p className="mt-4 text-lg font-bold text-[#f4b16d]">{price} per month</p>
+        <p className="mt-4 max-w-xl text-sm leading-7 text-white/68">{planSummary}</p>
+
+        <div className="mt-8">
+          <ConditioningBookingAllowance idPrefix="conditioning-preview" />
+        </div>
+
+        <section className="mt-6 rounded-2xl border border-amber-300/20 bg-amber-300/10 p-6 text-amber-50">
+          <h2 className="font-heading text-3xl uppercase">Coming soon</h2>
+          <p className="mt-3 text-sm leading-7 text-amber-50/80">
+            Online purchase for Conditioning Only is closed while its plan-specific terms,
+            waiver wording and Stripe price are reviewed. No payment can be started here yet.
+          </p>
+          <a href={`mailto:${COMPANY.supportEmail}`} className="mt-5 inline-flex min-h-[48px] items-center rounded-xl bg-amber-100 px-5 py-3 text-sm font-black text-amber-950 outline-none focus-visible:ring-2 focus-visible:ring-white">
+            Ask about Conditioning Only
+          </a>
+        </section>
+      </div>
+    </main>
+  );
+}
+
+function ConditioningBookingAllowance({idPrefix}: {idPrefix: string}) {
+  const titleId = `${idPrefix}-allowance-title`;
+
+  return (
+    <section
+      className="rounded-2xl border border-white/10 bg-[#151311] p-6 sm:p-7"
+      aria-labelledby={titleId}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="max-w-xl">
+          <h2 id={titleId} className="font-heading text-3xl uppercase text-white">
+            Book any two each week
+          </h2>
+          <p className="mt-2 text-sm leading-6 text-white/68">
+            Choose up to two eligible Conditioning classes in each Monday–Sunday week.
+            Your choices are not fixed, so you can book different days from one week to
+            the next.
+          </p>
+        </div>
+        <p className="rounded-full border border-amber-300/25 bg-amber-300/10 px-3 py-2 text-xs font-black uppercase tracking-[0.14em] text-amber-100">
+          2 bookings / week
+        </p>
+      </div>
+
+      <h3 className="mt-6 text-[11px] font-black uppercase tracking-[0.2em] text-white/50">
+        Eligible timetable
+      </h3>
+      <ul
+        aria-label="Eligible Conditioning timetable"
+        className="mt-3 grid gap-3 sm:grid-cols-2"
+      >
+        {CONDITIONING_SLOT_OPTIONS.map((slot) => (
+          <li
+            key={slot.key}
+            className="flex items-center justify-between gap-4 rounded-xl border border-white/10 bg-black/30 px-4 py-3"
+          >
+            <span className="text-sm font-bold text-white/72">{slot.day}</span>
+            <span className="font-heading text-2xl text-white">{slot.time}</span>
+          </li>
+        ))}
+      </ul>
+
+      <p className="mt-5 text-sm leading-6 text-white/62">
+        Cancel before the class booking cutoff to free that booking and choose another
+        eligible class. App access includes Schedule, Profile and Membership only;
+        Dashboard/WOD, Training, Leaderboards and performance stats are not included.
+      </p>
+    </section>
   );
 }

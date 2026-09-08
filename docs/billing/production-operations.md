@@ -73,6 +73,72 @@ and two TEEN ALPHAS - 11 & UP at £59.50.
 
 ## Release preflights
 
+For the Conditioning/PAYG release, begin with the offline, mutation-free gate:
+
+```sh
+npm run verify:release-candidate
+```
+
+This keeps every purchase gate closed and validates the authoritative release
+manifests at `ops/deployment/conditioning-payg-functions.json`,
+`ops/stripe/billing-webhook-events.json` and
+`ops/monitoring/billing-alerts.json`. A `BLOCKED_BY_OWNER` or
+`BLOCKED_BY_OPERATIONS` result is a stop condition, not permission to deploy.
+The older fourteen-service counts below are historical evidence for the prior
+membership-only rollout; they are not the target manifest for Conditioning or
+PAYG.
+
+Whole-class cancellation uses a resumable two-phase admin workflow on the class
+roster. `beginClassCancellation` first freezes the occurrence, then releases
+eligible member bookings as authorised absences, restores Conditioning quota,
+reconciles and releases only provider-safe unpaid PAYG holds, suppresses
+confirmations that have not been sent, and inventories every paid PAYG guest.
+An ambiguous hold or duplicate lock remains visible as a processing blocker
+until exact idempotent Checkout recovery establishes provider state. Staff must
+resume reconciliation until
+every Stripe Checkout/payment state is authoritative, every required refund is
+successful, and any confirmation already accepted by the email provider has a
+durable corrective/refund communication. `finalizeClassCancellation` is a
+separate fail-closed step: it will not mark the occurrence cancelled while any
+booking, capacity counter, hold, duplicate lock, payment review, refund, or
+email-delivery state is missing or ambiguous. Never repair the result with
+direct Firestore edits.
+
+The pseudonymous operation record in `classCancellationOperations` is
+server-written and admin-readable. It binds the freeze, released member booking
+hashes, every inventoried PAYG order, safe Stripe/PAYG references,
+reconciliation observations, and final state to one deterministic operation
+id. An order that is not durably bound remains a hard blocker. The release
+candidate must remain
+`BLOCKED_BY_OPERATIONS class-cancellation-quota-and-payg-refund-drill` until a
+full emulator and staff-browser drill is attached as durable evidence; the
+presence of the workflow alone does not clear that gate.
+
+The saved production parameter file and live Stripe catalogue must also pass
+their read-only closed-gate checks before any deployment. Record both under
+`live-product-catalogue-and-closed-config-readback`; missing new variables,
+sandbox objects, placeholders or a source-only assertion all leave that blocker
+open.
+
+The live Stripe unsuccessful-delivery backlog must also be empty. Record every
+readback under `live-stripe-delivery-backlog-cleared`; an exact webhook event
+allowlist does not close this separate delivery-health gate. The 1 September
+2026 readback from 25 August onward found one pending `invoice.paid` event that
+the application ledger had dead-lettered after repeated incompatible
+first-payment validation. Keep the release blocked until compatible reviewed
+code is deployed to both `stripeWebhook` and `reconcilePastDueMemberships`, the
+scheduled reconciliation records the exact paid Invoice and the deterministic
+`legacy_presale_discount_recovered` audit, and the authoritative membership is
+verified. The terminal event ledger remains an immutable `dead_letter` history;
+do not relabel or delete it. Only after that reconciliation may Stripe redeliver
+the known event and receive the reviewed manual-review acknowledgement. Repeat
+the unsuccessful-delivery query against the exact live account from 25 August
+through the readback completion time, exhaust every result page, and require
+zero events. Clearance evidence must bind the deployed function revisions and
+current compatibility-source SHA-256 to the exact event, Invoice, hashed
+Subscription identity, recovery audit and ordered timestamps. Never acknowledge
+the provider event merely to make the query empty.
+
 Run these from a reviewed release commit:
 
 ```sh
@@ -107,6 +173,52 @@ provider host override, the revised document source gate `true`, and the
 backend runtime purchase gate `false`. It rejects every checked-in sandbox
 Stripe object. Keep secrets in Secret Manager, not this file.
 
+The PAYG redaction implementation marker is `true` in the reviewed example,
+while `PAYG_AVAILABILITY_ENABLED`, `PAYG_LEGAL_APPROVED` and
+`PAYG_PII_RETENTION_APPROVED` remain `false`. This is deliberate: implemented
+cleanup is not authority to sell. The hourly `redactPaygPii` worker handles at
+most 50 due rows and scans at most 50 discovery rows in each PAYG PII collection
+per run. A durable, server-only document-ID cursor and short transaction lease
+make that discovery bounded, resumable and safe under overlapping invocations;
+the cursor wraps after every full pass so a legacy, malformed or manually
+changed row that lacks its query marker is eventually rediscovered. Each valid
+row freezes the immutable retention boundary in `piiRetentionCutoffAt`; the
+worker queries the independently mutable `piiRedactionRetryAt`, and a failure
+moves only that retry schedule. Discovery never reconstructs a missing boundary
+from timestamps or legacy fields: missing or malformed cutoff evidence fails
+closed into immediate redaction, while a valid future cutoff seeds the retry
+marker at that exact boundary. No checkout recovery or email path treats a retry
+time as permission to use PII. An outbox retry is deferred only until a
+verifiable active ten-minute delivery lease that began before its valid cutoff
+ends, without changing its retention boundary. Monitor PAYG privacy-redaction
+and discovery-failure signals. Before relying on the worker, apply the reviewed
+Firestore indexes configuration that removes the old
+`paygIntents.piiDeleteAt` whole-document TTL; the redacted provider/audit record
+must remain.
+
+The business owner approved the frozen Adult Conditioning and PAYG product
+terms on 1 September 2026. The immutable Conditioning addendum is now included
+in the membership checkout/confirmation registry, and the closed production
+configuration template contains the final PAYG terms, waiver and owner-approved
+Privacy Notice versions, same-origin URLs and SHA-256 digests.
+`PAYG_LEGAL_APPROVED` remains false until the complete bundle is deployed with
+purchase closed and read back byte-for-byte. `PAYG_PRIVACY_NOTICE_VERSION`,
+`PAYG_PRIVACY_NOTICE_PUBLIC_URL` and `PAYG_PRIVACY_NOTICE_SHA256` bind that one
+immutable final. The checkout shows the Notice before guest details and records
+the version presented. It does not ask for privacy consent.
+
+A delayed paid webhook or recovery may promote retained intent evidence into a
+paid order only when an authoritative, exactly bound card Charge proves that
+successful payment completed strictly before the immutable intent cutoff, and
+only while the destination order's class-end-plus-90-day PII boundary is still
+strictly in the future. Any non-null scrub marker is authoritative closure even
+if malformed or followed by a stale/manual reintroduction of identity fields.
+The final Firestore transaction rechecks the marker, immutable boundaries and
+current PII so a concurrent redaction cannot be undone. Missing, malformed,
+closed, reintroduced or late evidence routes the payment to the no-PII
+review/refund path; it must not create an order, waiver, confirmation payload or
+guest roster name from stale intent data.
+
 After an authorised operator has created the live Stripe catalogue, expose a
 live restricted/read key to one process (not a file or shell history) and run:
 
@@ -121,7 +233,10 @@ product-scoped three-month Coupon, the one active shared Promotion Code and the
 locked-down Customer Portal configuration. It also retrieves the youth-family
 Coupon and requires exactly 15% off forever, no amount/currency, redemption
 deadline or cap, and an `applies_to` set containing exactly the two youth
-Products named MINI ALPHAS - 10 & Under and TEEN ALPHAS - 11 & UP. It exits
+Products named MINI ALPHAS - 10 & Under and TEEN ALPHAS - 11 & UP. Finally it
+retrieves the reviewed live webhook endpoint and requires the exact 18 events
+in `ops/stripe/billing-webhook-events.json`, including all PAYG refund and
+dispute convergence events. It exits
 before reporting success
 if any object is inactive, in test mode, has the wrong commercial terms or
 enables subscription changes. Both campaign objects must have no automatic
@@ -168,15 +283,33 @@ must still create real log-based alerts in project `alphawod-d1f2f`, attach at
 least two staffed notification routes, and fire a synthetic matching log to
 prove delivery.
 
+A staffed notification route is a real notification channel watched by a named
+responder whenever purchase is enabled, with a named backup or escalation path
+if the first responder cannot act. Use at least two independent routes for each
+policy so one delivery failure does not make the alert silent. The repository
+does not prescribe a provider, address or individual: operators must record the
+chosen channels and coverage roster in the release evidence without committing
+personal contact details here.
+
+The dedicated `billing-payment-failed` policy uses the externally configured
+`business-owner-email` route so the business owner receives each missed-payment
+signal. Its recipient address remains in Google Cloud rather than source code.
+This single email route does not satisfy the separate two-route resilience
+requirement for the complete billing alert set.
+
 The required policies are:
 
 | Policy | Trigger | First response |
 | --- | --- | --- |
 | `billing-critical-runtime` | Any `CRITICAL_BILLING_*` log | Keep/close purchase, capture IDs, inspect Stripe authoritatively and assign an incident owner. |
+| `billing-payment-failed` | One `BILLING_PAYMENT_FAILED` warning | Open the referenced Invoice in Stripe, confirm the current payment and Subscription state, and follow the failed-payment grace procedure. |
 | `billing-recovery-worker-errors` | Two worker errors in 15 minutes | Check Scheduler invocation, Function errors, leases and the due/dead-letter queues. |
 | `billing-webhook-processing-errors` | Two handler errors in five minutes | Check Stripe endpoint health and event deliveries; rely on the recovery worker, not blind state edits. |
 | `billing-checkout-provider-rejections` | Five provider rejections in five minutes | Close purchase if systemic; verify the live catalogue and billing anchor before retrying. |
 | `billing-checkout-abuse-signals` | Ten rate-limit or consumed-token events in five minutes | Inspect App Check metrics and checkout velocity without logging source addresses; close purchase if the pattern is sustained or distributed. |
+| `payg-recovery-errors` | Two PAYG recovery, refund, privacy or attendance-convergence errors in 15 minutes | Inspect the affected intent/order warning, worker lease, due state and Stripe source; assign an incident owner and use only the reviewed recovery path. |
+| `payg-confirmation-delivery-errors` | Two PAYG confirmation-delivery or provider-acceptance persistence errors in 15 minutes | Preserve the frozen outbox and idempotency evidence; check Resend and retry through the scheduled worker only after correcting the cause. |
+| `payg-provider-preflight-and-checkout-errors` | One PAYG catalogue-preflight or Stripe Checkout-creation error in five minutes | Keep or close PAYG purchase and verify the live Product, Price, mode and immutable provider contract before retrying. |
 
 Also configure outside Cloud Logging:
 
@@ -214,10 +347,20 @@ while a scheduled worker is unhealthy.
    failed release: contact the customer out of band only if staff already hold a
    lawful address. Never paste an address into the outbox or reuse an expired
    Checkout URL.
-7. For orphan locks, duplicate sessions, customer conflicts, cancellation drift
+7. For `PAYG intent privacy state requires manual review`, use the logged intent
+   ID to inspect the durable `piiRedactionOperationalWarning`; confirm the five
+   approved intent PII fields are absent before resolving the operational state.
+   For `PAYG order booking privacy binding requires manual review`, inspect the
+   durable `piiRedactionBookingWarning`, the order's `bookingId`, and the linked
+   booking. Never delete a booking name unless `bookingKind=payg_guest` and
+   `paygOrderId` exactly matches the order. If the booking is unrelated, preserve
+   it and document the bad order binding; if it is a PAYG guest, use a reviewed,
+   audited server-side repair to remove `userName`. Keep the alert open until a
+   second reviewer confirms no overdue PAYG booking PII remains.
+8. For orphan locks, duplicate sessions, customer conflicts, cancellation drift
    or entitlement-projection review, keep the record for audit and escalate to
    the billing owner. Direct Firestore edits are not a recovery procedure.
-8. Close the incident only after Stripe, Firestore entitlement, email/outbox,
+9. Close the incident only after Stripe, Firestore entitlement, email/outbox,
    webhook ledger and audit evidence agree, alerts have recovered, and a second
    reviewer signs off.
 
@@ -274,14 +417,14 @@ npm run verify:production-armed-config --prefix functions
 npm run verify:stripe-live-config --prefix functions
 ```
 
-The closed-state Functions deployment has completed: the webhook, four workers
+The earlier membership-only closed-state Functions deployment completed: the webhook, four workers
 and nine callables, including both checkout exports, are active on Node.js 24.
 The nine callables were re-blocked after creation, then only
 `createMembershipCheckoutSessionV2` and the seven non-checkout callables regained
 the reviewed service-level transport; legacy
 `createMembershipCheckoutSession` remains blocked. Preserve those IAM boundaries
 on every future selective redeployment.
-The compatible frontend calls V2 with `checkoutSchemaVersion: 4`, so a frontend
+The compatible frontend calls V2 with `checkoutSchemaVersion: 6`, so a frontend
 deployed before V2 fails safely and a cached V1 client cannot cross the new
 schema boundary. Complete the closed-state smoke tests: V2 must reach its handler
 and fail at the runtime gate without creating a Stripe Session. Only after every
