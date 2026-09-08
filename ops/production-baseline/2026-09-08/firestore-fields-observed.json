@@ -1,0 +1,132 @@
+[
+  {
+    "name": "projects/alphawod-d1f2f/databases/(default)/collectionGroups/__default__/fields/*",
+    "indexConfig": {
+      "indexes": [
+        {
+          "queryScope": "COLLECTION",
+          "fields": [
+            {
+              "fieldPath": "*",
+              "order": "ASCENDING"
+            }
+          ],
+          "state": "READY"
+        },
+        {
+          "queryScope": "COLLECTION",
+          "fields": [
+            {
+              "fieldPath": "*",
+              "order": "DESCENDING"
+            }
+          ],
+          "state": "READY"
+        },
+        {
+          "queryScope": "COLLECTION",
+          "fields": [
+            {
+              "fieldPath": "*",
+              "arrayConfig": "CONTAINS"
+            }
+          ],
+          "state": "READY"
+        }
+      ]
+    }
+  },
+  {
+    "name": "projects/alphawod-d1f2f/databases/(default)/collectionGroups/membershipCheckoutRateAdmissions/fields/expiresAt",
+    "indexConfig": {
+      "ancestorField": "projects/alphawod-d1f2f/databases/(default)/collectionGroups/__default__/fields/*"
+    },
+    "ttlConfig": {
+      "state": "ACTIVE"
+    }
+  },
+  {
+    "name": "projects/alphawod-d1f2f/databases/(default)/collectionGroups/membershipCheckoutRateLimits/fields/expiresAt",
+    "indexConfig": {
+      "ancestorField": "projects/alphawod-d1f2f/databases/(default)/collectionGroups/__default__/fields/*"
+    },
+    "ttlConfig": {
+      "state": "ACTIVE"
+    }
+  },
+  {
+    "name": "projects/alphawod-d1f2f/databases/(default)/collectionGroups/paygCheckoutAdmissions/fields/expiresAt",
+    "indexConfig": {
+      "ancestorField": "projects/alphawod-d1f2f/databases/(default)/collectionGroups/__default__/fields/*"
+    },
+    "ttlConfig": {
+      "state": "ACTIVE"
+    }
+  },
+  {
+    "name": "projects/alphawod-d1f2f/databases/(default)/collectionGroups/paygCheckoutLocks/fields/deleteAt",
+    "indexConfig": {
+      "ancestorField": "projects/alphawod-d1f2f/databases/(default)/collectionGroups/__default__/fields/*"
+    },
+    "ttlConfig": {
+      "state": "ACTIVE"
+    }
+  },
+  {
+    "name": "projects/alphawod-d1f2f/databases/(default)/collectionGroups/paygCheckoutRateLimits/fields/expiresAt",
+    "indexConfig": {
+      "ancestorField": "projects/alphawod-d1f2f/databases/(default)/collectionGroups/__default__/fields/*"
+    },
+    "ttlConfig": {
+      "state": "ACTIVE"
+    }
+  },
+  {
+    "name": "projects/alphawod-d1f2f/databases/(default)/collectionGroups/trainingLogs/fields/createdAt",
+    "indexConfig": {
+      "indexes": [
+        {
+          "queryScope": "COLLECTION",
+          "fields": [
+            {
+              "fieldPath": "createdAt",
+              "order": "ASCENDING"
+            }
+          ],
+          "state": "READY"
+        },
+        {
+          "queryScope": "COLLECTION",
+          "fields": [
+            {
+              "fieldPath": "createdAt",
+              "order": "DESCENDING"
+            }
+          ],
+          "state": "READY"
+        },
+        {
+          "queryScope": "COLLECTION",
+          "fields": [
+            {
+              "fieldPath": "createdAt",
+              "arrayConfig": "CONTAINS"
+            }
+          ],
+          "state": "READY"
+        },
+        {
+          "queryScope": "COLLECTION_GROUP",
+          "fields": [
+            {
+              "fieldPath": "createdAt",
+              "order": "DESCENDING"
+            }
+          ],
+          "state": "READY"
+        }
+      ],
+      "ancestorField": "projects/alphawod-d1f2f/databases/(default)/collectionGroups/__default__/fields/*"
+    }
+  }
+]

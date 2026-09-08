@@ -1,0 +1,2048 @@
+"use strict";
+/* eslint-disable
+  require-jsdoc,
+  valid-jsdoc,
+  max-len,
+  @typescript-eslint/no-explicit-any,
+  @typescript-eslint/no-unused-vars
+*/
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.redactPaygPii = exports.retryPaygConfirmations = exports.recoverPaygOperations = exports.requestPaygCancellation = exports.getPaygCheckoutStatus = exports.getPaygCancellationPreview = exports.createPaygCheckoutSession = exports.getPublicPaygSchedule = exports.linkMembershipParticipant = exports.releaseAbandonedMembershipCheckout = exports.listMemberships = exports.claimMembership = exports.requestMembershipCancellation = exports.retryMembershipConfirmations = exports.reconcilePastDueMemberships = exports.reconcileMembershipBookings = exports.recoverMembershipCancellations = exports.recoverStripeEvents = exports.stripeWebhook = exports.createMembershipCheckoutSessionV2 = exports.createMembershipCheckoutSession = exports.getMyMemberships = exports.createCustomerPortalSession = exports.inviteMemberByEmail = exports.updateStrengthBlockSettings = exports.updateMemberStrengthBlock = exports.updateMemberRole = exports.approveUserAccess = exports.setMemberEntitlement = exports.acceptCurrentWaiver = exports.bootstrapUserProfile = exports.listStaffUsers = exports.getMonthlyDipLeaderboard = exports.reconcileMonthlyLeaderboard = exports.getMonthlyLeaderboard = exports.onLeaderboardEntryWritten = exports.getClassRoster = exports.markBookingStatus = exports.onUserDocWritten = exports.checkInBooking = exports.adminAddBooking = exports.cancelBooking = exports.bookClass = exports.generateClassOccurrences = exports.generateClassOccurrencesDaily = void 0;
+const https_1 = require("firebase-functions/v2/https");
+const scheduler_1 = require("firebase-functions/v2/scheduler");
+const firestore_1 = require("firebase-functions/v2/firestore");
+const v2_1 = require("firebase-functions/v2");
+const params_1 = require("firebase-functions/params");
+const admin = __importStar(require("firebase-admin"));
+const firestore_2 = require("firebase-admin/firestore");
+const crypto_1 = require("crypto");
+const luxon_1 = require("luxon");
+const authz_1 = require("./authz");
+const membership_1 = require("./membership");
+const conditioningQuota_1 = require("./conditioningQuota");
+const payg_1 = require("./payg");
+const leaderboard_1 = require("./leaderboard");
+(0, v2_1.setGlobalOptions)({ region: "europe-west1" });
+admin.initializeApp();
+const db = admin.firestore();
+const resendApiKey = (0, params_1.defineSecret)("RESEND_API_KEY");
+const resendFromEmail = (0, params_1.defineSecret)("RESEND_FROM_EMAIL");
+const defaultInviteOrigin = "https://alpha-wod.vercel.app";
+function sha256(value) {
+    return (0, crypto_1.createHash)("sha256").update(value).digest("hex");
+}
+/** -----------------------------
+ * Helpers
+ * ----------------------------*/
+function requireAuth(request) {
+    if (!request.auth)
+        throw new https_1.HttpsError("unauthenticated", "Login required.");
+    return request.auth.uid;
+}
+function requireString(value, field) {
+    const v = typeof value === "string" ? value.trim() : "";
+    if (!v)
+        throw new https_1.HttpsError("invalid-argument", `${field} required`);
+    return v;
+}
+function requireEmail(value, field) {
+    const email = requireString(value, field).toLowerCase();
+    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailPattern.test(email)) {
+        throw new https_1.HttpsError("invalid-argument", `${field} must be a valid email address`);
+    }
+    return email;
+}
+function optionalBoundedString(value, field, maxLength) {
+    if (value === undefined || value === null || value === "")
+        return undefined;
+    if (typeof value !== "string") {
+        throw new https_1.HttpsError("invalid-argument", `${field} must be a string`);
+    }
+    const normalised = value.trim();
+    if (!normalised)
+        return undefined;
+    if (normalised.length > maxLength) {
+        throw new https_1.HttpsError("invalid-argument", `${field} must be ${maxLength} characters or fewer`);
+    }
+    return normalised;
+}
+function userAccessPatch(user) {
+    const access = (0, authz_1.resolveUserAuthorisation)(user);
+    return {
+        alphaWodAccess: access.alphaWodAccess,
+        // Profile fields hold the frozen entitlement policy. Claims and runtime
+        // checks continue to use the effective tier/slots from `buildManagedClaims`.
+        appAccessTier: access.entitlementPolicyAppAccessTier,
+        entitlementClassSlots: access.entitlementPolicyClassSlots,
+        entitlementWeeklyBookingLimit: access.entitlementPolicyWeeklyBookingLimit,
+        accessSchemaVersion: authz_1.ACCESS_SCHEMA_VERSION,
+    };
+}
+async function syncUserCustomClaims(userId, user, profileExists = true) {
+    let authUser;
+    try {
+        authUser = await admin.auth().getUser(userId);
+    }
+    catch (error) {
+        if ((error === null || error === void 0 ? void 0 : error.code) === "auth/user-not-found") {
+            console.warn("Cannot sync claims for missing Auth user", userId);
+            return;
+        }
+        throw error;
+    }
+    const managed = (0, authz_1.buildManagedClaims)(user, { profileExists });
+    const nextClaims = (0, authz_1.mergeManagedClaims)(authUser.customClaims, managed);
+    if (!(0, authz_1.claimsEqual)(authUser.customClaims, nextClaims)) {
+        await admin.auth().setCustomUserClaims(userId, nextClaims);
+    }
+}
+function isFailedPrecondition(error) {
+    const code = error === null || error === void 0 ? void 0 : error.code;
+    return code === 9 || code === "failed-precondition";
+}
+function sameDocumentVersion(left, right) {
+    if (left.exists !== right.exists)
+        return false;
+    if (!left.exists)
+        return true;
+    return Boolean(left.updateTime && right.updateTime && left.updateTime.isEqual(right.updateTime));
+}
+/**
+ * Converges derived Firestore markers and Auth claims from the current profile.
+ * Firestore events can be delivered out of order, so the event's `after` image
+ * must never be used as the authority for revocable access state.
+ */
+async function convergeUserDerivedAccess(userId) {
+    var _a, _b;
+    const userRef = db.collection("users").doc(userId);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+        const current = await userRef.get();
+        if (!current.exists) {
+            await syncUserCustomClaims(userId, undefined, false);
+            const verification = await userRef.get();
+            if (!verification.exists)
+                return;
+            continue;
+        }
+        const user = current.data();
+        const accessPatch = userAccessPatch(user);
+        if (user.alphaWodAccess !== accessPatch.alphaWodAccess ||
+            user.appAccessTier !== accessPatch.appAccessTier ||
+            JSON.stringify((_a = user.entitlementClassSlots) !== null && _a !== void 0 ? _a : []) !==
+                JSON.stringify(accessPatch.entitlementClassSlots) ||
+            ((_b = user.entitlementWeeklyBookingLimit) !== null && _b !== void 0 ? _b : null) !==
+                accessPatch.entitlementWeeklyBookingLimit ||
+            user.accessSchemaVersion !== authz_1.ACCESS_SCHEMA_VERSION) {
+            if (!current.updateTime) {
+                throw new Error(`Cannot derive access for ${userId} without an update time.`);
+            }
+            try {
+                await userRef.update(Object.assign(Object.assign({}, accessPatch), { updatedAt: firestore_2.FieldValue.serverTimestamp() }), { lastUpdateTime: current.updateTime });
+            }
+            catch (error) {
+                if (isFailedPrecondition(error))
+                    continue;
+                throw error;
+            }
+            // Re-read the version created by our marker correction before syncing
+            // claims. The correction itself emits another event, but this invocation
+            // also converges so correctness does not depend on its delivery order.
+            continue;
+        }
+        await syncUserCustomClaims(userId, user, true);
+        const verification = await userRef.get();
+        if (sameDocumentVersion(current, verification))
+            return;
+    }
+    // retry:true asks Eventarc to redeliver after sustained concurrent writes.
+    throw new Error(`User ${userId} changed repeatedly while deriving access state.`);
+}
+function requireStrictAuthorisation(user) {
+    const resolved = (0, authz_1.resolveUserAuthorisation)(user, { profileExists: Boolean(user) });
+    if (!resolved.valid) {
+        throw new https_1.HttpsError("failed-precondition", "This account profile is incomplete or invalid. Contact support.");
+    }
+    return resolved;
+}
+function normaliseAppOrigin(value) {
+    const raw = typeof value === "string" ? value.trim() : "";
+    if (!raw) {
+        throw new https_1.HttpsError("invalid-argument", "origin required");
+    }
+    let parsed;
+    try {
+        parsed = new URL(raw);
+    }
+    catch (_a) {
+        throw new https_1.HttpsError("invalid-argument", "origin must be a valid URL");
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        throw new https_1.HttpsError("invalid-argument", "origin must use http or https");
+    }
+    return parsed.origin;
+}
+function resolveInviteOrigin(value) {
+    const origin = normaliseAppOrigin(value);
+    const hostname = new URL(origin).hostname.toLowerCase();
+    if (hostname === "localhost" || hostname === "127.0.0.1") {
+        return defaultInviteOrigin;
+    }
+    if (origin !== defaultInviteOrigin) {
+        throw new https_1.HttpsError("invalid-argument", "origin is not an approved app URL");
+    }
+    return defaultInviteOrigin;
+}
+function inviteDocIdFor(email) {
+    return Buffer.from(email.toLowerCase()).toString("base64url");
+}
+function normaliseStrengthBlock(value) {
+    return value === "A" || value === "B" ? value : "none";
+}
+function getStrengthSlotForClass(classData) {
+    var _a, _b, _c;
+    const start = (_b = (_a = classData.startTime) === null || _a === void 0 ? void 0 : _a.toDate) === null || _b === void 0 ? void 0 : _b.call(_a);
+    if (!start)
+        return null;
+    const title = String((_c = classData.title) !== null && _c !== void 0 ? _c : "").toLowerCase();
+    if (!title.includes("strength"))
+        return null;
+    const zone = String(classData.timezone || "Europe/London");
+    const session = luxon_1.DateTime.fromJSDate(start, { zone });
+    const weekday = session.weekday; // Mon=1 .. Sun=7
+    const hour = session.hour;
+    if ((weekday === 2 || weekday === 4) && hour === 6)
+        return "A";
+    if ((weekday === 1 || weekday === 3) && hour === 18)
+        return "B";
+    return null;
+}
+function normaliseStrengthBlocksEnabled(value) {
+    return value === false ? false : true;
+}
+function canUserAccessClass(user, classData, strengthBlocksEnabled) {
+    if (!strengthBlocksEnabled)
+        return true;
+    const slot = getStrengthSlotForClass(classData);
+    if (!slot)
+        return true;
+    const strengthBlock = normaliseStrengthBlock(user.strengthBlock);
+    if (user.role === "admin" && strengthBlock === "none")
+        return true;
+    return strengthBlock === slot;
+}
+function getClassStart(classData) {
+    var _a, _b;
+    const start = (_b = (_a = classData.startTime) === null || _a === void 0 ? void 0 : _a.toDate) === null || _b === void 0 ? void 0 : _b.call(_a);
+    if (!start)
+        return null;
+    return luxon_1.DateTime.fromJSDate(start, {
+        zone: String(classData.timezone || "Europe/London"),
+    });
+}
+function getBookingClosesAt(classData) {
+    const start = getClassStart(classData);
+    if (!start)
+        return null;
+    if (start.hour === 5 || start.hour === 6) {
+        return start.minus({ days: 1 }).set({
+            hour: 21,
+            minute: 0,
+            second: 0,
+            millisecond: 0,
+        });
+    }
+    if (start.hour === 18) {
+        return start.set({
+            hour: 15,
+            minute: 0,
+            second: 0,
+            millisecond: 0,
+        });
+    }
+    return start.minus({ hours: 2 });
+}
+function assertBookingWindowOpen(classData, message) {
+    const start = getClassStart(classData);
+    const closesAt = getBookingClosesAt(classData);
+    if (!start || !closesAt)
+        return;
+    const now = luxon_1.DateTime.now().setZone(start.zone);
+    if (now >= start || now >= closesAt) {
+        throw new https_1.HttpsError("failed-precondition", message);
+    }
+}
+function assertClassScheduledForBooking(classData) {
+    if (classData.status !== "scheduled") {
+        throw new https_1.HttpsError("failed-precondition", "This class is not available for booking.", { reason: "class_unavailable" });
+    }
+}
+async function updateDipLeaderboardCount(tx, monthKey, userId, user, bookingUserName, delta) {
+    var _a, _b, _c, _d;
+    if (delta === 0)
+        return;
+    const ref = db
+        .collection("leaderboards")
+        .doc(monthKey)
+        .collection("dipUsers")
+        .doc(userId);
+    const snap = await tx.get(ref);
+    const current = snap.exists ?
+        Number((_a = snap.data().dipCount) !== null && _a !== void 0 ? _a : 0) :
+        0;
+    const nextCount = Math.max(0, current + delta);
+    tx.set(ref, {
+        userId,
+        name: (_c = (_b = user.name) !== null && _b !== void 0 ? _b : bookingUserName) !== null && _c !== void 0 ? _c : "Member",
+        email: firestore_2.FieldValue.delete(),
+        photoURL: (_d = user.photoURL) !== null && _d !== void 0 ? _d : "",
+        dipCount: nextCount,
+        updatedAt: firestore_2.FieldValue.serverTimestamp(),
+    }, { merge: true });
+}
+function buildInviteEmailHtml(signUpUrl) {
+    const logoUrl = `${defaultInviteOrigin}/ZERO-ALPHA.png`;
+    return `
+    <!doctype html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Zero Alpha Invite</title>
+      </head>
+      <body style="margin:0;padding:0;background-color:#060606;color:#f5f5f5;font-family:Arial,sans-serif;">
+        <div style="display:none;max-height:0;overflow:hidden;opacity:0;">
+          Your Zero Alpha invite is ready. Create your account and we’ll get you inside.
+        </div>
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#060606;">
+          <tr>
+            <td align="center" style="padding:32px 16px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:640px;border-collapse:collapse;">
+                <tr>
+                  <td style="padding-bottom:14px;text-align:center;">
+                    <img
+                      src="${logoUrl}"
+                      alt="Zero Alpha"
+                      width="188"
+                      style="display:inline-block;width:188px;max-width:100%;height:auto;border:0;"
+                    />
+                  </td>
+                </tr>
+                <tr>
+                  <td style="background:linear-gradient(180deg,#141414 0%,#090909 100%);border:1px solid #242424;border-radius:28px;overflow:hidden;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                      <tr>
+                        <td style="padding:0;">
+                          <div style="height:10px;background:linear-gradient(90deg,#f59e0b 0%,#fcd34d 55%,#fb7185 100%);"></div>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding:42px 34px 18px 34px;background:
+                          radial-gradient(circle at top left, rgba(245,158,11,0.22), transparent 34%),
+                          radial-gradient(circle at bottom right, rgba(244,63,94,0.14), transparent 26%),
+                          #0b0b0b;">
+                          <div style="color:#f6c35b;font-size:12px;font-weight:700;letter-spacing:0.22em;text-transform:uppercase;margin-bottom:14px;">
+                            Member Invite
+                          </div>
+                          <h1 style="margin:0 0 14px 0;font-size:42px;line-height:0.92;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;color:#ffffff;font-family:'Anton','Arial Narrow',Arial,sans-serif;">
+                            YOU&rsquo;RE IN.
+                            <br />
+                            LET&rsquo;S GET YOU SET UP.
+                          </h1>
+                          <p style="margin:0;max-width:450px;font-size:16px;line-height:1.7;color:#c7c7c7;">
+                            You’ve been invited to join Zero Alpha. Create your account using the link below, then an admin can approve your access and get you moving.
+                          </p>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding:0 34px 34px 34px;background:#0b0b0b;">
+                          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border:1px solid #252525;border-radius:22px;background:#111111;">
+                            <tr>
+                              <td style="padding:24px 24px 10px 24px;">
+                                <div style="font-size:14px;line-height:1.7;color:#e5e5e5;">
+                                  1. Create your account
+                                  <br />
+                                  2. Wait for admin approval
+                                  <br />
+                                  3. Jump into classes, programming, and progress tracking
+                                </div>
+                              </td>
+                            </tr>
+                            <tr>
+                              <td style="padding:10px 24px 24px 24px;">
+                                <a href="${signUpUrl}" style="display:inline-block;padding:15px 24px;border-radius:14px;background:linear-gradient(135deg,#fde68a 0%,#f59e0b 100%);color:#111111;text-decoration:none;font-size:15px;font-weight:800;letter-spacing:0.01em;">
+                                  Create your account
+                                </a>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding:0 34px 34px 34px;background:#0b0b0b;">
+                          <div style="border-top:1px solid #222222;padding-top:22px;">
+                            <div style="font-size:12px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;color:#8f8f8f;margin-bottom:10px;">
+                              Need the raw link?
+                            </div>
+                            <p style="margin:0;font-size:13px;line-height:1.8;color:#b8b8b8;word-break:break-word;">
+                              <a href="${signUpUrl}" style="color:#f6c35b;text-decoration:none;">${signUpUrl}</a>
+                            </p>
+                          </div>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:18px 12px 0 12px;text-align:center;">
+                    <p style="margin:0;font-size:12px;line-height:1.7;color:#7b7b7b;">
+                      Zero Alpha Fitness
+                      <br />
+                      Wherever we go, we go together.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </body>
+    </html>
+  `;
+}
+async function sendInviteEmail(email, signUpUrl) {
+    const apiKey = resendApiKey.value().trim();
+    const fromEmail = resendFromEmail.value().trim();
+    if (!apiKey) {
+        throw new https_1.HttpsError("failed-precondition", "RESEND_API_KEY is not configured.");
+    }
+    if (!fromEmail) {
+        throw new https_1.HttpsError("failed-precondition", "RESEND_FROM_EMAIL is not configured.");
+    }
+    const response = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+            "Authorization": `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+            from: `Zero Alpha <${fromEmail}>`,
+            to: [email],
+            subject: "You're invited to join Zero Alpha",
+            html: buildInviteEmailHtml(signUpUrl),
+        }),
+    });
+    if (!response.ok) {
+        const message = await response.text();
+        throw new https_1.HttpsError("internal", `Failed to send invite email: ${message || response.statusText}`);
+    }
+}
+function hhmmToParts(hhmm) {
+    const [h, m] = (hhmm || "").split(":").map((x) => Number(x));
+    return {
+        hour: Number.isFinite(h) ? h : 0,
+        minute: Number.isFinite(m) ? m : 0,
+    };
+}
+function toJsDayOfWeek(luxonWeekday) {
+    // luxon: 1=Mon..7=Sun
+    // ours:  0=Sun..6=Sat
+    return luxonWeekday === 7 ? 0 : luxonWeekday;
+}
+function classIdFor(templateId, start) {
+    // deterministic: templateId_YYYY-MM-DD_HHmm
+    return `${templateId}_${start.toFormat("yyyy-LL-dd")}_${start.toFormat("HHmm")}`;
+}
+function bookingIdFor(classId, userId) {
+    return `${classId}_${userId}`;
+}
+const CONDITIONING_SLOT_BY_LONDON_WEEKDAY_TIME = new Map([
+    ["1|06:00", "monday_0600"],
+    ["2|18:00", "tuesday_1800"],
+    ["4|18:00", "thursday_1800"],
+    ["5|05:30", "friday_0530"],
+]);
+function conditioningSlotForSchedule(jsDayOfWeek, startTime) {
+    var _a;
+    const luxonWeekday = jsDayOfWeek === 0 ? 7 : jsDayOfWeek;
+    return (_a = CONDITIONING_SLOT_BY_LONDON_WEEKDAY_TIME.get(`${luxonWeekday}|${startTime}`)) !== null && _a !== void 0 ? _a : null;
+}
+function conditioningSlotForTemplate(template) {
+    // Slots are a London commercial promise. A non-London template never gains
+    // entitlement merely because its wall-clock fields happen to match.
+    if ((template.timezone || "Europe/London") !== "Europe/London" ||
+        !Number.isInteger(template.dayOfWeek) ||
+        typeof template.startTime !== "string")
+        return null;
+    const scheduled = conditioningSlotForSchedule(template.dayOfWeek, template.startTime);
+    if (template.conditioningSlotKey === null)
+        return null;
+    if (template.conditioningSlotKey !== undefined) {
+        return (0, authz_1.isConditioningSlotKey)(template.conditioningSlotKey) &&
+            template.conditioningSlotKey === scheduled ?
+            template.conditioningSlotKey : null;
+    }
+    // Compatibility for the four existing exact weekly templates. No class
+    // title or other mutable copy participates in this decision.
+    return scheduled;
+}
+function conditioningSlotForOccurrence(occurrence) {
+    var _a, _b, _c;
+    if (occurrence.timezone !== "Europe/London" ||
+        occurrence.conditioningSlotKey === null)
+        return null;
+    const startDate = (_b = (_a = occurrence.startTime) === null || _a === void 0 ? void 0 : _a.toDate) === null || _b === void 0 ? void 0 : _b.call(_a);
+    if (!(startDate instanceof Date) || !Number.isFinite(startDate.getTime())) {
+        return null;
+    }
+    const london = luxon_1.DateTime.fromJSDate(startDate, { zone: "Europe/London" });
+    const scheduled = (_c = CONDITIONING_SLOT_BY_LONDON_WEEKDAY_TIME.get(`${london.weekday}|${london.toFormat("HH:mm")}`)) !== null && _c !== void 0 ? _c : null;
+    if (occurrence.conditioningSlotKey !== undefined) {
+        return (0, authz_1.isConditioningSlotKey)(occurrence.conditioningSlotKey) &&
+            occurrence.conditioningSlotKey === scheduled ?
+            occurrence.conditioningSlotKey : null;
+    }
+    return scheduled;
+}
+function assertClassBookingEntitlement(user, classData) {
+    const access = requireStrictAuthorisation(user);
+    if (access.appAccessTier === "full")
+        return null;
+    if (access.appAccessTier !== "limited") {
+        throw new https_1.HttpsError("permission-denied", "This account does not include class booking access.", { reason: "class_booking_access_not_included" });
+    }
+    const classSlot = conditioningSlotForOccurrence(classData);
+    if (!classSlot) {
+        throw new https_1.HttpsError("permission-denied", "Adult Conditioning membership covers only eligible Conditioning sessions.", {
+            reason: "class_not_conditioning_membership_slot",
+            allowedConditioningSlotKeys: access.entitlementClassSlots,
+        });
+    }
+    if (access.entitlementWeeklyBookingLimit === 2)
+        return classSlot;
+    if (!access.entitlementClassSlots.includes(classSlot)) {
+        throw new https_1.HttpsError("permission-denied", "This recurring conditioning session is not included in this membership's eligible scope.", {
+            reason: "conditioning_slot_not_selected",
+            classConditioningSlotKey: classSlot,
+            allowedConditioningSlotKeys: access.entitlementClassSlots,
+        });
+    }
+    return classSlot;
+}
+function ukDateKeyNow() {
+    return luxon_1.DateTime.now().setZone("Europe/London").toFormat("yyyy-LL-dd");
+}
+function ukYesterdayKeyNow() {
+    return luxon_1.DateTime.now().setZone("Europe/London").minus({ days: 1 }).toFormat("yyyy-LL-dd");
+}
+function ukMonthKeyFromDate(d) {
+    return luxon_1.DateTime.fromJSDate(d, { zone: "Europe/London" }).toFormat("yyyy-LL"); // YYYY-MM
+}
+/** -----------------------------
+ * Class generation
+ * ----------------------------*/
+async function generateRange(daysAhead) {
+    const nowUtc = luxon_1.DateTime.utc();
+    const templatesSnap = await db
+        .collection("classTemplates")
+        .where("isActive", "==", true)
+        .get();
+    const templates = templatesSnap.docs.map((d) => (Object.assign({ id: d.id }, d.data())));
+    const created = [];
+    const skipped = [];
+    for (const t of templates) {
+        const tz = t.timezone || "Europe/London";
+        const { hour, minute } = hhmmToParts(t.startTime);
+        for (let i = 0; i <= daysAhead; i++) {
+            const day = nowUtc.plus({ days: i }).setZone(tz);
+            const dow = toJsDayOfWeek(day.weekday);
+            if (dow !== t.dayOfWeek)
+                continue;
+            const start = day.set({ hour, minute, second: 0, millisecond: 0 });
+            const end = start.plus({ minutes: t.durationMinutes || 60 });
+            const id = classIdFor(t.id, start);
+            const ref = db.collection("classes").doc(id);
+            const payload = {
+                templateId: t.id,
+                title: t.title,
+                timezone: tz,
+                startTime: firestore_2.Timestamp.fromDate(start.toJSDate()),
+                endTime: firestore_2.Timestamp.fromDate(end.toJSDate()),
+                coachId: t.coachId,
+                coachName: t.coachName,
+                capacity: t.capacity,
+                bookedCount: 0,
+                location: t.location,
+                status: "scheduled",
+                conditioningSlotKey: conditioningSlotForTemplate(t),
+                paygEligible: !(0, payg_1.isPaygStrengthClass)(t) && t.paygEligible !== false,
+                createdAt: firestore_2.FieldValue.serverTimestamp(),
+            };
+            try {
+                await ref.create(payload); // idempotent: fails if exists
+                created.push(id);
+            }
+            catch (_a) {
+                skipped.push(id);
+            }
+        }
+    }
+    return { createdCount: created.length, skippedCount: skipped.length };
+}
+exports.generateClassOccurrencesDaily = (0, scheduler_1.onSchedule)({ schedule: "0 2 * * *", timeZone: "Europe/London" }, async () => {
+    const result = await generateRange(28);
+    console.log("Generation result:", result);
+});
+exports.generateClassOccurrences = (0, https_1.onCall)(async (request) => {
+    var _a;
+    requireAuth(request);
+    await requireAdmin(request);
+    const requestedDays = (_a = request.data) === null || _a === void 0 ? void 0 : _a.daysAhead;
+    const daysAhead = requestedDays === undefined ? 28 : requestedDays;
+    if (!Number.isInteger(daysAhead) || daysAhead < 1 || daysAhead > 90) {
+        throw new https_1.HttpsError("invalid-argument", "daysAhead must be an integer between 1 and 90.");
+    }
+    try {
+        return await generateRange(daysAhead);
+    }
+    catch (err) {
+        console.error("generateClassOccurrences failed", err === null || err === void 0 ? void 0 : err.message, err === null || err === void 0 ? void 0 : err.stack, err);
+        throw new https_1.HttpsError("internal", (err === null || err === void 0 ? void 0 : err.message) || "generateRange failed");
+    }
+});
+/** -----------------------------
+ * Booking
+ * ----------------------------*/
+exports.bookClass = (0, https_1.onCall)(async (request) => {
+    var _a;
+    const uid = requireAuth(request);
+    const classId = requireString((_a = request.data) === null || _a === void 0 ? void 0 : _a.classId, "classId");
+    const classRef = db.collection("classes").doc(classId);
+    const bookingRef = db.collection("bookings").doc(bookingIdFor(classId, uid));
+    const userRef = db.collection("users").doc(uid);
+    const bookingSettingsRef = db.collection("appSettings").doc("booking");
+    return db.runTransaction(async (tx) => {
+        var _a, _b, _c;
+        const [classSnap, existingBookingSnap, userSnap, bookingSettingsSnap,] = await Promise.all([
+            tx.get(classRef),
+            tx.get(bookingRef),
+            tx.get(userRef),
+            tx.get(bookingSettingsRef),
+        ]);
+        if (!classSnap.exists)
+            throw new https_1.HttpsError("not-found", "Class not found");
+        const member = assertApprovedMember(userSnap.data());
+        const classData = classSnap.data();
+        assertClassScheduledForBooking(classData);
+        const conditioningClassSlot = assertClassBookingEntitlement(member, classData);
+        const membershipEligibility = await (0, membership_1.assertStripeMembershipBookingEligibility)(tx, uid, member, classData.startTime);
+        const bookingSettings = bookingSettingsSnap.data();
+        const strengthBlocksEnabled = normaliseStrengthBlocksEnabled(bookingSettings === null || bookingSettings === void 0 ? void 0 : bookingSettings.strengthBlocksEnabled);
+        if (!canUserAccessClass(member, classData, strengthBlocksEnabled)) {
+            throw new https_1.HttpsError("permission-denied", "This member is not assigned to the strength block for this class.");
+        }
+        assertBookingWindowOpen(classData, "Booking closed");
+        const capacity = Number((_a = classData.capacity) !== null && _a !== void 0 ? _a : 0);
+        const bookedCount = Number((_b = classData.bookedCount) !== null && _b !== void 0 ? _b : 0);
+        if (capacity <= 0)
+            throw new https_1.HttpsError("failed-precondition", "Class has no capacity set");
+        if (bookedCount >= capacity)
+            throw new https_1.HttpsError("failed-precondition", "Class is full");
+        if (existingBookingSnap.exists) {
+            const b = existingBookingSnap.data();
+            if (b.status === "booked")
+                throw new https_1.HttpsError("already-exists", "Already booked");
+            // if cancelled, we allow re-book (overwrite below)
+        }
+        let conditioningQuotaBinding = null;
+        const conditioningPolicy = membershipEligibility.conditioningBookingPolicy;
+        if (conditioningPolicy) {
+            const subscriptionId = membershipEligibility.subscriptionId;
+            if (!subscriptionId || !conditioningClassSlot) {
+                throw new https_1.HttpsError("permission-denied", "The Conditioning booking policy could not be verified.");
+            }
+            conditioningQuotaBinding = await (0, conditioningQuota_1.reserveConditioningWeeklyQuota)(tx, db, {
+                userId: uid,
+                subscriptionId,
+                bookingId: bookingRef.id,
+                classStart: classData.startTime,
+                classSlot: conditioningClassSlot,
+                policy: conditioningPolicy,
+            });
+        }
+        const userName = ((_c = userSnap.data()) === null || _c === void 0 ? void 0 : _c.name) || "Member";
+        tx.set(bookingRef, Object.assign(Object.assign(Object.assign({ classId, userId: uid, userName, status: "booked", bookingKind: "member" }, (membershipEligibility.subscriptionId ? {
+            entitlementSubscriptionId: membershipEligibility.subscriptionId,
+        } : {})), (conditioningQuotaBinding !== null && conditioningQuotaBinding !== void 0 ? conditioningQuotaBinding : {})), { createdAt: firestore_2.FieldValue.serverTimestamp() }));
+        tx.update(classRef, {
+            bookedCount: firestore_2.FieldValue.increment(1),
+            updatedAt: firestore_2.FieldValue.serverTimestamp(),
+        });
+        return { success: true };
+    });
+});
+exports.cancelBooking = (0, https_1.onCall)(async (request) => {
+    var _a;
+    const uid = requireAuth(request);
+    const classId = requireString((_a = request.data) === null || _a === void 0 ? void 0 : _a.classId, "classId");
+    const classRef = db.collection("classes").doc(classId);
+    const bookingRef = db.collection("bookings").doc(bookingIdFor(classId, uid));
+    const userRef = db.collection("users").doc(uid);
+    return db.runTransaction(async (tx) => {
+        var _a;
+        const [bookingSnap, classSnap, userSnap] = await Promise.all([
+            tx.get(bookingRef),
+            tx.get(classRef),
+            tx.get(userRef),
+        ]);
+        assertApprovedMember(userSnap.data());
+        if (!bookingSnap.exists)
+            throw new https_1.HttpsError("not-found", "No booking found");
+        const booking = bookingSnap.data();
+        if (booking.status !== "booked")
+            throw new https_1.HttpsError("failed-precondition", "No active booking found");
+        if (!classSnap.exists)
+            throw new https_1.HttpsError("not-found", "Class not found");
+        const classData = classSnap.data();
+        assertBookingWindowOpen(classData, "Cancellation closed");
+        const bookedCount = Number((_a = classData.bookedCount) !== null && _a !== void 0 ? _a : 0);
+        const quotaRelease = await (0, conditioningQuota_1.prepareConditioningQuotaRelease)(tx, db, bookingRef.id, booking);
+        (0, conditioningQuota_1.applyConditioningQuotaRelease)(tx, quotaRelease);
+        tx.update(bookingRef, {
+            status: "cancelled",
+            cancelledAt: firestore_2.FieldValue.serverTimestamp(),
+        });
+        // Guard against negatives
+        tx.update(classRef, {
+            bookedCount: firestore_2.FieldValue.increment(bookedCount > 0 ? -1 : 0),
+            updatedAt: firestore_2.FieldValue.serverTimestamp(),
+        });
+        return { success: true };
+    });
+});
+exports.adminAddBooking = (0, https_1.onCall)(async (request) => {
+    var _a, _b;
+    const callerUid = requireAuth(request);
+    await requireAdmin(request);
+    const classId = requireString((_a = request.data) === null || _a === void 0 ? void 0 : _a.classId, "classId");
+    const userId = requireString((_b = request.data) === null || _b === void 0 ? void 0 : _b.userId, "userId");
+    const classRef = db.collection("classes").doc(classId);
+    const bookingRef = db.collection("bookings").doc(bookingIdFor(classId, userId));
+    const userRef = db.collection("users").doc(userId);
+    return db.runTransaction(async (tx) => {
+        var _a, _b;
+        const [classSnap, existingBookingSnap, userSnap] = await Promise.all([
+            tx.get(classRef),
+            tx.get(bookingRef),
+            tx.get(userRef),
+        ]);
+        if (!classSnap.exists) {
+            throw new https_1.HttpsError("not-found", "Class not found.");
+        }
+        if (!userSnap.exists) {
+            throw new https_1.HttpsError("not-found", "User not found.");
+        }
+        const userData = assertApprovedMember(userSnap.data());
+        const classData = classSnap.data();
+        assertClassScheduledForBooking(classData);
+        const conditioningClassSlot = assertClassBookingEntitlement(userData, classData);
+        const membershipEligibility = await (0, membership_1.assertStripeMembershipBookingEligibility)(tx, userId, userData, classData.startTime);
+        const capacity = Number((_a = classData.capacity) !== null && _a !== void 0 ? _a : 0);
+        const bookedCount = Number((_b = classData.bookedCount) !== null && _b !== void 0 ? _b : 0);
+        if (capacity <= 0) {
+            throw new https_1.HttpsError("failed-precondition", "Class has no capacity set.");
+        }
+        if (bookedCount >= capacity) {
+            throw new https_1.HttpsError("failed-precondition", "Class is full.");
+        }
+        if (existingBookingSnap.exists) {
+            const b = existingBookingSnap.data();
+            if (b.status === "booked") {
+                throw new https_1.HttpsError("already-exists", "Already booked.");
+            }
+            // If cancelled, allow overwrite / re-add
+        }
+        let conditioningQuotaBinding = null;
+        const conditioningPolicy = membershipEligibility.conditioningBookingPolicy;
+        if (conditioningPolicy) {
+            const subscriptionId = membershipEligibility.subscriptionId;
+            if (!subscriptionId || !conditioningClassSlot) {
+                throw new https_1.HttpsError("permission-denied", "The Conditioning booking policy could not be verified.");
+            }
+            conditioningQuotaBinding = await (0, conditioningQuota_1.reserveConditioningWeeklyQuota)(tx, db, {
+                userId,
+                subscriptionId,
+                bookingId: bookingRef.id,
+                classStart: classData.startTime,
+                classSlot: conditioningClassSlot,
+                policy: conditioningPolicy,
+            });
+        }
+        const userName = userData.name || "Member";
+        tx.set(bookingRef, Object.assign(Object.assign(Object.assign({ classId,
+            userId,
+            userName, status: "booked", bookingKind: "member" }, (membershipEligibility.subscriptionId ? {
+            entitlementSubscriptionId: membershipEligibility.subscriptionId,
+        } : {})), (conditioningQuotaBinding !== null && conditioningQuotaBinding !== void 0 ? conditioningQuotaBinding : {})), { createdAt: firestore_2.FieldValue.serverTimestamp(), attendanceStatus: "none", attended: false, checkedInAt: null, checkedInBy: null, addedByAdmin: true, addedByAdminBy: callerUid, addedByAdminAt: firestore_2.FieldValue.serverTimestamp() }));
+        tx.update(classRef, {
+            bookedCount: firestore_2.FieldValue.increment(1),
+            updatedAt: firestore_2.FieldValue.serverTimestamp(),
+        });
+        return { success: true };
+    });
+});
+/** -----------------------------
+ * Admin check-in
+ * ----------------------------*/
+const PAYG_CHECK_IN_EARLY_WINDOW_MS = 30 * 60 * 1000;
+function isPaygGuestBooking(booking) {
+    return booking.bookingKind === "payg_guest" &&
+        booking.isGuestBooking === true &&
+        typeof booking.paygOrderId === "string" &&
+        /^payg_[a-f0-9]{64}$/.test(booking.paygOrderId);
+}
+function assertBookingPayloadMatches(booking, classId, userId) {
+    if ((classId && booking.classId !== classId) ||
+        (userId && booking.userId !== userId)) {
+        throw new https_1.HttpsError("failed-precondition", "The booking does not match the supplied class or attendee.");
+    }
+}
+async function updatePaygGuestAttendance(tx, bookingRef, booking, callerUid, status) {
+    var _a;
+    if (!["booked", "checked_in", "dip"].includes(status)) {
+        throw new https_1.HttpsError("invalid-argument", "Invalid PAYG attendance status.");
+    }
+    if (!isPaygGuestBooking(booking) || !booking.paygOrderId) {
+        throw new https_1.HttpsError("failed-precondition", "This guest booking is missing its PAYG order binding.");
+    }
+    const orderRef = db.collection("paygOrders").doc(booking.paygOrderId);
+    const orderSnap = await tx.get(orderRef);
+    if (!orderSnap.exists) {
+        throw new https_1.HttpsError("failed-precondition", "The PAYG order was not found.");
+    }
+    const order = orderSnap.data();
+    if (order.purchaseKind !== "payg_class" ||
+        order.offeringKey !== "adult_payg_class" ||
+        order.orderId !== booking.paygOrderId ||
+        order.bookingId !== bookingRef.id ||
+        ((_a = order.class) === null || _a === void 0 ? void 0 : _a.classId) !== booking.classId) {
+        throw new https_1.HttpsError("failed-precondition", "The guest booking does not match its PAYG order.");
+    }
+    const orderStatus = String(order.status);
+    const allowedOrderStatuses = status === "dip" ?
+        ["confirmed", "attended", "no_show"] :
+        status === "checked_in" ? ["confirmed", "attended", "no_show"] :
+            ["confirmed", "attended"];
+    if (!allowedOrderStatuses.includes(orderStatus)) {
+        throw new https_1.HttpsError("failed-precondition", "This PAYG order can no longer have its attendance changed.");
+    }
+    const checkedIn = status === "checked_in";
+    const noShow = status === "dip";
+    const classStartMillis = Number(order.classStartMillis);
+    const classEndMillis = Number(order.classEndMillis);
+    if (!Number.isSafeInteger(classStartMillis) || classStartMillis <= 0 ||
+        !Number.isSafeInteger(classEndMillis) ||
+        classEndMillis <= classStartMillis) {
+        throw new https_1.HttpsError("failed-precondition", "The PAYG order has invalid class timing evidence.");
+    }
+    const nowMillis = Date.now();
+    if (checkedIn && (nowMillis < classStartMillis - PAYG_CHECK_IN_EARLY_WINDOW_MS ||
+        nowMillis > classEndMillis)) {
+        throw new https_1.HttpsError("failed-precondition", "PAYG check-in opens 30 minutes before class and closes when class ends.", { reason: "payg_check_in_outside_window" });
+    }
+    if (noShow && nowMillis < classEndMillis) {
+        throw new https_1.HttpsError("failed-precondition", "A PAYG booking cannot be marked as a no-show before the class ends.", { reason: "payg_no_show_too_early" });
+    }
+    const duplicateLockId = typeof order.duplicateLockId === "string" &&
+        /^[a-f0-9]{64}$/.test(order.duplicateLockId) ?
+        order.duplicateLockId : null;
+    if (status !== "booked" && !duplicateLockId) {
+        throw new https_1.HttpsError("failed-precondition", "The PAYG order is missing its duplicate-booking lock.");
+    }
+    tx.update(bookingRef, Object.assign(Object.assign({ attended: checkedIn, attendanceStatus: checkedIn ? "checked_in" : noShow ? "dip" : "none", checkedInAt: checkedIn ? firestore_2.FieldValue.serverTimestamp() : null, checkedInBy: callerUid, paygAttendanceOutcome: checkedIn ? "attended" :
+            noShow ? "no_show" : firestore_2.FieldValue.delete() }, (checkedIn && orderStatus === "no_show" ? {
+        attendanceCorrectedAt: firestore_2.FieldValue.serverTimestamp(),
+        attendanceCorrectedFrom: "no_show",
+    } : {})), { updatedAt: firestore_2.FieldValue.serverTimestamp() }));
+    tx.set(orderRef, Object.assign(Object.assign({ status: checkedIn ? "attended" : noShow ? "no_show" : "confirmed", capacityState: status === "booked" ? "held" : "consumed", noShowReviewAt: status === "booked" ? firestore_2.Timestamp.fromMillis(classEndMillis + payg_1.PAYG_NO_SHOW_REVIEW_DELAY_MS) : firestore_2.FieldValue.delete(), attendanceResolvedAt: status === "booked" ?
+            firestore_2.FieldValue.delete() : firestore_2.FieldValue.serverTimestamp(), attendedAt: checkedIn ? firestore_2.FieldValue.serverTimestamp() : firestore_2.FieldValue.delete(), noShowAt: noShow ? firestore_2.FieldValue.serverTimestamp() : firestore_2.FieldValue.delete() }, (checkedIn && orderStatus === "no_show" ? {
+        attendanceCorrectedAt: firestore_2.FieldValue.serverTimestamp(),
+        attendanceCorrectedBy: callerUid,
+        attendanceCorrectedFrom: "no_show",
+    } : {})), { updatedAt: firestore_2.FieldValue.serverTimestamp() }), { merge: true });
+    if (duplicateLockId && (0, payg_1.shouldReleasePaygDuplicateLockForAttendance)({
+        attendanceStatus: status,
+        classEndMillis,
+        nowMillis,
+    })) {
+        tx.delete(db.collection(payg_1.PAYG_DUPLICATE_LOCK_COLLECTION).doc(duplicateLockId));
+    }
+    return {
+        ok: true,
+        leaderboardChanged: false,
+        paygGuest: true,
+        kind: status,
+    };
+}
+exports.checkInBooking = (0, https_1.onCall)(async (request) => {
+    var _a, _b, _c, _d;
+    const callerUid = requireAuth(request);
+    await requireAdmin(request);
+    // Accept either bookingId OR (classId + userId)
+    const bookingIdFromPayload = typeof ((_a = request.data) === null || _a === void 0 ? void 0 : _a.bookingId) === "string" ? request.data.bookingId.trim() : "";
+    const classId = typeof ((_b = request.data) === null || _b === void 0 ? void 0 : _b.classId) === "string" ? request.data.classId.trim() : "";
+    const userIdFromPayload = typeof ((_c = request.data) === null || _c === void 0 ? void 0 : _c.userId) === "string" ? request.data.userId.trim() : "";
+    const bookingId = bookingIdFromPayload ||
+        (classId && userIdFromPayload ? bookingIdFor(classId, userIdFromPayload) : "");
+    if (!bookingId) {
+        throw new https_1.HttpsError("invalid-argument", "bookingId OR (classId and userId) required.");
+    }
+    const nextAttended = Boolean((_d = request.data) === null || _d === void 0 ? void 0 : _d.attended);
+    const bookingRef = db.collection("bookings").doc(bookingId);
+    try {
+        const result = await db.runTransaction(async (tx) => {
+            var _a, _b, _c, _d, _e, _f, _g, _h, _j;
+            const bookingSnap = await tx.get(bookingRef);
+            if (!bookingSnap.exists)
+                throw new https_1.HttpsError("not-found", "Booking not found.");
+            const booking = bookingSnap.data();
+            assertBookingPayloadMatches(booking, classId, userIdFromPayload);
+            if (booking.status !== "booked") {
+                throw new https_1.HttpsError("failed-precondition", "Not an active booking.");
+            }
+            if (isPaygGuestBooking(booking)) {
+                return updatePaygGuestAttendance(tx, bookingRef, booking, callerUid, nextAttended ? "checked_in" : "booked");
+            }
+            const classRef = db.collection("classes").doc(booking.classId);
+            const userRef = db.collection("users").doc(booking.userId);
+            const [classSnap, userSnap] = await Promise.all([
+                tx.get(classRef),
+                tx.get(userRef),
+            ]);
+            if (!classSnap.exists)
+                throw new https_1.HttpsError("not-found", "Class not found.");
+            const classDoc = classSnap.data();
+            const u = (userSnap.data() || {});
+            await (0, membership_1.assertStripeMembershipBookingEligibility)(tx, booking.userId, u, classDoc.startTime, booking.entitlementSubscriptionId);
+            // If attended isn't changing, we still allow updating checkedInBy timestamp if you want,
+            // but leaderboard should not change.
+            const prevAttended = booking.attended === true;
+            const prevAttendanceStatus = (_a = booking.attendanceStatus) !== null && _a !== void 0 ? _a : (prevAttended ? "checked_in" : "none");
+            const nextAttendanceStatus = nextAttended ? "checked_in" : "none";
+            const dipDelta = prevAttendanceStatus === "dip" ? -1 : 0;
+            if (prevAttended === nextAttended) {
+                if (dipDelta !== 0) {
+                    const monthKey = ukMonthKeyFromDate(classDoc.startTime.toDate());
+                    await updateDipLeaderboardCount(tx, monthKey, booking.userId, u, booking.userName, dipDelta);
+                }
+                tx.update(bookingRef, {
+                    checkedInBy: callerUid,
+                    checkedInAt: prevAttended ? firestore_2.FieldValue.serverTimestamp() : (_b = booking.checkedInAt) !== null && _b !== void 0 ? _b : null,
+                    attendanceStatus: nextAttendanceStatus,
+                });
+                return { ok: true, leaderboardChanged: false };
+            }
+            // We need the class to determine which month to count it in
+            const classStart = classDoc.startTime.toDate();
+            // Use UK month bucket (matches your gym reality)
+            const monthKey = ukMonthKeyFromDate(classStart);
+            const delta = nextAttended ? 1 : -1;
+            const lbUserRef = db
+                .collection("leaderboards")
+                .doc(monthKey)
+                .collection("users")
+                .doc(booking.userId);
+            // Read current leaderboard doc so we can clamp at >= 0
+            const lbSnap = await tx.get(lbUserRef);
+            const current = lbSnap.exists ?
+                Number((_c = lbSnap.data().attendedCount) !== null && _c !== void 0 ? _c : 0) :
+                0;
+            const nextCount = Math.max(0, current + delta);
+            await updateDipLeaderboardCount(tx, monthKey, booking.userId, u, booking.userName, dipDelta);
+            // ---- Tier 1 Stats: totals + streaks (UK local day key) ----
+            const today = ukDateKeyNow();
+            const yesterday = ukYesterdayKeyNow();
+            const existingStats = (u.stats || {});
+            const prevTotal = Number((_d = existingStats.totalCheckIns) !== null && _d !== void 0 ? _d : 0);
+            const prevMonth = Number((_e = (existingStats.monthCheckIns || {})[monthKey]) !== null && _e !== void 0 ? _e : 0);
+            let nextTotal = prevTotal;
+            let nextMonth = prevMonth;
+            let currentStreak = Number((_f = existingStats.currentStreak) !== null && _f !== void 0 ? _f : 0);
+            let longestStreak = Number((_g = existingStats.longestStreak) !== null && _g !== void 0 ? _g : 0);
+            let lastCheckInDate = typeof existingStats.lastCheckInDate === "string" ? existingStats.lastCheckInDate : "";
+            // delta = +1 when checking in, -1 when unchecking
+            if (delta === 1) {
+                // counts
+                nextTotal = prevTotal + 1;
+                nextMonth = prevMonth + 1;
+                // streak
+                if (lastCheckInDate === today) {
+                    // idempotent-ish: shouldn't happen because we gate on attended change,
+                    // but safe if data gets weird.
+                }
+                else if (lastCheckInDate === yesterday) {
+                    currentStreak = currentStreak + 1;
+                }
+                else {
+                    currentStreak = 1;
+                }
+                longestStreak = Math.max(longestStreak, currentStreak);
+                lastCheckInDate = today;
+            }
+            if (delta === -1) {
+                // counts (clamped)
+                nextTotal = Math.max(0, prevTotal - 1);
+                nextMonth = Math.max(0, prevMonth - 1);
+                // Quick-win behavior:
+                // we do NOT recompute streak on uncheck (rare edge case).
+                // If you ever need perfect streak correctness, we’ll add a nightly recompute job.
+            }
+            // Update booking
+            tx.update(bookingRef, {
+                attended: nextAttended,
+                attendanceStatus: nextAttended ? "checked_in" : "none",
+                checkedInAt: nextAttended ? firestore_2.FieldValue.serverTimestamp() : null,
+                checkedInBy: callerUid,
+            });
+            // Update the member-visible leaderboard without private contact data.
+            tx.set(lbUserRef, {
+                userId: booking.userId,
+                name: (_j = (_h = u.name) !== null && _h !== void 0 ? _h : booking.userName) !== null && _j !== void 0 ? _j : "Member",
+                email: firestore_2.FieldValue.delete(),
+                attendedCount: nextCount,
+                updatedAt: firestore_2.FieldValue.serverTimestamp(),
+            }, { merge: true });
+            // Write user stats (merge)
+            tx.set(userRef, {
+                stats: {
+                    totalCheckIns: nextTotal,
+                    monthCheckIns: { [monthKey]: nextMonth },
+                    currentStreak,
+                    longestStreak,
+                    lastCheckInDate: lastCheckInDate || null,
+                    updatedAt: firestore_2.FieldValue.serverTimestamp(),
+                },
+            }, { merge: true });
+            return { ok: true, leaderboardChanged: true, monthKey, attendedCount: nextCount };
+        });
+        return result;
+    }
+    catch (err) {
+        console.error("checkInBooking failed", err === null || err === void 0 ? void 0 : err.message, err === null || err === void 0 ? void 0 : err.stack, err);
+        throw err instanceof https_1.HttpsError ? err : new https_1.HttpsError("internal", (err === null || err === void 0 ? void 0 : err.message) || "Check-in failed");
+    }
+});
+async function requireAdmin(request) {
+    const uid = requireAuth(request);
+    const snap = await db.collection("users").doc(uid).get();
+    const user = snap.exists ? snap.data() : undefined;
+    const access = requireStrictAuthorisation(user);
+    if (access.role !== "admin" || access.approvalStatus !== "approved" ||
+        !access.alphaWodAccess || access.disabled) {
+        throw new https_1.HttpsError("permission-denied", "Admin only.");
+    }
+}
+async function requireAdminOrSgpt(request) {
+    const uid = requireAuth(request);
+    const snap = await db.collection("users").doc(uid).get();
+    const user = snap.exists ? snap.data() : undefined;
+    const access = requireStrictAuthorisation(user);
+    if ((access.role !== "admin" && access.role !== "sgpt") ||
+        access.approvalStatus !== "approved" || !access.alphaWodAccess ||
+        access.disabled) {
+        throw new https_1.HttpsError("permission-denied", "Staff only.");
+    }
+}
+async function requireFullAppMember(request) {
+    const uid = requireAuth(request);
+    const snap = await db.collection("users").doc(uid).get();
+    const user = snap.exists ? snap.data() : undefined;
+    assertApprovedMember(user);
+    const access = requireStrictAuthorisation(user);
+    if (access.appAccessTier !== "full") {
+        throw new https_1.HttpsError("permission-denied", "Leaderboard access is not included with this membership.", { reason: "full_app_access_required", requiredAppAccessTier: "full" });
+    }
+}
+/**
+ * Synchronises the complete, fail-closed access claim set while preserving
+ * claims owned by other systems. Firestore remains authoritative for
+ * privileged callable checks so stale ID tokens cannot extend access.
+ */
+exports.onUserDocWritten = (0, firestore_1.onDocumentWritten)({
+    document: "users/{userId}",
+    retry: true,
+}, async (event) => {
+    await convergeUserDerivedAccess(event.params.userId);
+});
+function assertApprovedMember(user) {
+    if (!user) {
+        throw new https_1.HttpsError("failed-precondition", "This account profile is missing. Contact support.");
+    }
+    const access = requireStrictAuthorisation(user);
+    if (access.role === "banned" || access.disabled) {
+        throw new https_1.HttpsError("permission-denied", "Your account is currently suspended.");
+    }
+    if (access.approvalStatus !== "approved") {
+        throw new https_1.HttpsError("permission-denied", "Your account is awaiting admin approval.");
+    }
+    if (!access.alphaWodAccess) {
+        throw new https_1.HttpsError("permission-denied", "This account does not currently have Zero Alpha App access.");
+    }
+    return user;
+}
+/**
+ * Admin check-in / dip / authorised absence
+ * - checked_in: uses your existing stats/leaderboard logic (delegates to checkInBooking)
+ * - dip: marks as no-show (does NOT change leaderboard/stats)
+ * - authorised_absence: cancels booking and frees capacity (does NOT change leaderboard/stats)
+ */
+exports.markBookingStatus = (0, https_1.onCall)(async (request) => {
+    var _a, _b, _c, _d;
+    const callerUid = requireAuth(request);
+    await requireAdmin(request);
+    const bookingIdFromPayload = typeof ((_a = request.data) === null || _a === void 0 ? void 0 : _a.bookingId) === "string" ? request.data.bookingId.trim() : "";
+    const classIdFromPayload = typeof ((_b = request.data) === null || _b === void 0 ? void 0 : _b.classId) === "string" ? request.data.classId.trim() : "";
+    const userIdFromPayload = typeof ((_c = request.data) === null || _c === void 0 ? void 0 : _c.userId) === "string" ? request.data.userId.trim() : "";
+    const status = requireString((_d = request.data) === null || _d === void 0 ? void 0 : _d.status, "status");
+    const bookingId = bookingIdFromPayload ||
+        (classIdFromPayload && userIdFromPayload ?
+            bookingIdFor(classIdFromPayload, userIdFromPayload) : "");
+    if (!bookingId) {
+        throw new https_1.HttpsError("invalid-argument", "bookingId OR (classId and userId) required.");
+    }
+    const bookingRef = db.collection("bookings").doc(bookingId);
+    return db.runTransaction(async (tx) => {
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j;
+        const bookingSnap = await tx.get(bookingRef);
+        if (!bookingSnap.exists)
+            throw new https_1.HttpsError("not-found", "Booking not found.");
+        const booking = bookingSnap.data();
+        assertBookingPayloadMatches(booking, classIdFromPayload, userIdFromPayload);
+        if (booking.status !== "booked") {
+            throw new https_1.HttpsError("failed-precondition", "Not an active booking.");
+        }
+        const classId = booking.classId;
+        const userId = booking.userId;
+        const classRef = db.collection("classes").doc(classId);
+        const classSnap = await tx.get(classRef);
+        if (!classSnap.exists)
+            throw new https_1.HttpsError("not-found", "Class not found.");
+        const classDoc = classSnap.data();
+        if (isPaygGuestBooking(booking)) {
+            if (status === "authorised_absence") {
+                throw new https_1.HttpsError("failed-precondition", "Use the PAYG cancellation flow so the 24-hour refund policy is applied.");
+            }
+            return updatePaygGuestAttendance(tx, bookingRef, booking, callerUid, status);
+        }
+        const classStart = classDoc.startTime.toDate();
+        const monthKey = ukMonthKeyFromDate(classStart);
+        const userRef = db.collection("users").doc(userId);
+        const userSnap = await tx.get(userRef);
+        const u = (userSnap.data() || {});
+        await (0, membership_1.assertStripeMembershipBookingEligibility)(tx, userId, u, classDoc.startTime, booking.entitlementSubscriptionId);
+        const quotaRelease = status === "authorised_absence" ?
+            await (0, conditioningQuota_1.prepareConditioningQuotaRelease)(tx, db, bookingRef.id, booking) : null;
+        const lbUserRef = db
+            .collection("leaderboards")
+            .doc(monthKey)
+            .collection("users")
+            .doc(userId);
+        const prevAttended = booking.attended === true;
+        const prevAttendanceStatus = (_a = booking.attendanceStatus) !== null && _a !== void 0 ? _a : (prevAttended ? "checked_in" : "none");
+        let nextAttended = prevAttended;
+        let nextAttendanceStatus = prevAttendanceStatus;
+        if (status === "checked_in") {
+            nextAttended = true;
+            nextAttendanceStatus = "checked_in";
+        }
+        else if (status === "booked") {
+            nextAttended = false;
+            nextAttendanceStatus = "none";
+        }
+        else if (status === "dip") {
+            nextAttended = false;
+            nextAttendanceStatus = "dip";
+        }
+        else if (status === "authorised_absence") {
+            nextAttended = false;
+            nextAttendanceStatus = "none";
+        }
+        else {
+            throw new https_1.HttpsError("invalid-argument", "Invalid status.");
+        }
+        const delta = (nextAttended ? 1 : 0) - (prevAttended ? 1 : 0);
+        const dipDelta = (nextAttendanceStatus === "dip" ? 1 : 0) -
+            (prevAttendanceStatus === "dip" ? 1 : 0);
+        // Update leaderboard + user stats ONLY if attended changed
+        if (delta !== 0) {
+            const lbSnap = await tx.get(lbUserRef);
+            const currentLb = lbSnap.exists ?
+                Number((_b = lbSnap.data().attendedCount) !== null && _b !== void 0 ? _b : 0) :
+                0;
+            const nextLb = Math.max(0, currentLb + delta);
+            const existingStats = (u.stats || {});
+            const prevTotal = Number((_c = existingStats.totalCheckIns) !== null && _c !== void 0 ? _c : 0);
+            const prevMonth = Number((_d = (existingStats.monthCheckIns || {})[monthKey]) !== null && _d !== void 0 ? _d : 0);
+            let nextTotal = prevTotal;
+            let nextMonth = prevMonth;
+            let currentStreak = Number((_e = existingStats.currentStreak) !== null && _e !== void 0 ? _e : 0);
+            let longestStreak = Number((_f = existingStats.longestStreak) !== null && _f !== void 0 ? _f : 0);
+            let lastCheckInDate = typeof existingStats.lastCheckInDate === "string" ? existingStats.lastCheckInDate : "";
+            const today = ukDateKeyNow();
+            const yesterday = ukYesterdayKeyNow();
+            if (delta === 1) {
+                nextTotal = prevTotal + 1;
+                nextMonth = prevMonth + 1;
+                if (lastCheckInDate === today) {
+                    // no-op
+                }
+                else if (lastCheckInDate === yesterday) {
+                    currentStreak = currentStreak + 1;
+                }
+                else {
+                    currentStreak = 1;
+                }
+                longestStreak = Math.max(longestStreak, currentStreak);
+                lastCheckInDate = today;
+            }
+            if (delta === -1) {
+                nextTotal = Math.max(0, prevTotal - 1);
+                nextMonth = Math.max(0, prevMonth - 1);
+                // keeping your existing simple behavior:
+                // do not fully recompute streak on removal
+            }
+            await updateDipLeaderboardCount(tx, monthKey, userId, u, booking.userName, dipDelta);
+            tx.set(lbUserRef, {
+                userId,
+                name: (_h = (_g = u.name) !== null && _g !== void 0 ? _g : booking.userName) !== null && _h !== void 0 ? _h : "Member",
+                email: firestore_2.FieldValue.delete(),
+                attendedCount: nextLb,
+                updatedAt: firestore_2.FieldValue.serverTimestamp(),
+            }, { merge: true });
+            tx.set(userRef, {
+                stats: {
+                    totalCheckIns: nextTotal,
+                    monthCheckIns: { [monthKey]: nextMonth },
+                    currentStreak,
+                    longestStreak,
+                    lastCheckInDate: lastCheckInDate || null,
+                    updatedAt: firestore_2.FieldValue.serverTimestamp(),
+                },
+            }, { merge: true });
+        }
+        else if (dipDelta !== 0) {
+            await updateDipLeaderboardCount(tx, monthKey, userId, u, booking.userName, dipDelta);
+        }
+        // Authorised absence = cancel booking + free spot
+        if (status === "authorised_absence") {
+            const bookedCount = Number((_j = classDoc.bookedCount) !== null && _j !== void 0 ? _j : 0);
+            (0, conditioningQuota_1.applyConditioningQuotaRelease)(tx, quotaRelease);
+            tx.update(bookingRef, {
+                status: "cancelled",
+                cancelledAt: firestore_2.FieldValue.serverTimestamp(),
+                cancelledReason: "authorised_absence",
+                attendanceStatus: "none",
+                attended: false,
+                checkedInAt: null,
+                checkedInBy: null,
+            });
+            tx.update(classRef, {
+                bookedCount: firestore_2.FieldValue.increment(bookedCount > 0 ? -1 : 0),
+                updatedAt: firestore_2.FieldValue.serverTimestamp(),
+            });
+            return { ok: true, kind: "authorised_absence", delta };
+        }
+        // booked / checked_in / dip stay as active bookings
+        tx.update(bookingRef, {
+            attendanceStatus: nextAttendanceStatus,
+            attended: nextAttended,
+            checkedInAt: nextAttended ? firestore_2.FieldValue.serverTimestamp() : null,
+            checkedInBy: callerUid,
+        });
+        return {
+            ok: true,
+            kind: status,
+            delta,
+            prevAttendanceStatus,
+            nextAttendanceStatus,
+        };
+    });
+});
+/**
+ * Admin-only: return roster for a class.
+ * Includes only active bookings (status === "booked").
+ */
+exports.getClassRoster = (0, https_1.onCall)(async (request) => {
+    var _a;
+    if (!request.auth) {
+        throw new https_1.HttpsError("unauthenticated", "Login required.");
+    }
+    await requireAdmin(request);
+    const classId = String(((_a = request.data) === null || _a === void 0 ? void 0 : _a.classId) || "").trim();
+    if (!classId) {
+        throw new https_1.HttpsError("invalid-argument", "classId required.");
+    }
+    // Only active bookings in the roster
+    const snap = await db
+        .collection("bookings")
+        .where("classId", "==", classId)
+        .where("status", "==", "booked")
+        .get();
+    const attendees = snap.docs.map((doc) => ({
+        bookingId: doc.id,
+        booking: doc.data(),
+    }));
+    const memberUserIds = Array.from(new Set(attendees
+        .filter(({ booking }) => !isPaygGuestBooking(booking))
+        .map(({ booking }) => booking.userId)
+        .filter(Boolean)));
+    const membershipBindingByUserId = new Map(attendees
+        .filter(({ booking }) => !isPaygGuestBooking(booking))
+        .map(({ booking }) => [
+        booking.userId,
+        booking.entitlementSubscriptionId,
+    ]));
+    const { profiles, eligibleMemberIds } = await db.runTransaction(async (tx) => {
+        const classSnap = await tx.get(db.collection("classes").doc(classId));
+        if (!classSnap.exists)
+            throw new https_1.HttpsError("not-found", "Class not found.");
+        const classData = classSnap.data();
+        const resolvedProfiles = new Map();
+        const resolvedEligibleMemberIds = new Set();
+        for (const userId of memberUserIds) {
+            const profileSnap = await tx.get(db.collection("users").doc(userId));
+            if (!profileSnap.exists)
+                continue;
+            const profile = profileSnap.data();
+            resolvedProfiles.set(userId, profile);
+            try {
+                await (0, membership_1.assertStripeMembershipBookingEligibility)(tx, userId, profile, classData.startTime, membershipBindingByUserId.get(userId));
+                resolvedEligibleMemberIds.add(userId);
+            }
+            catch (error) {
+                if (error instanceof https_1.HttpsError && error.code === "permission-denied") {
+                    continue;
+                }
+                throw error;
+            }
+        }
+        return {
+            profiles: resolvedProfiles,
+            eligibleMemberIds: resolvedEligibleMemberIds,
+        };
+    });
+    const visibleAttendees = attendees.filter(({ booking }) => isPaygGuestBooking(booking) || eligibleMemberIds.has(booking.userId));
+    const checkedInCount = visibleAttendees.filter(({ booking }) => booking.attended === true).length;
+    return {
+        classId,
+        total: visibleAttendees.length,
+        checkedInCount,
+        attendees: visibleAttendees
+            .map(({ bookingId, booking: b }) => {
+            var _a, _b, _c, _d;
+            const isGuestBooking = isPaygGuestBooking(b);
+            const profile = profiles.get(b.userId);
+            const name = isGuestBooking ?
+                b.userName || "PAYG guest" : (profile === null || profile === void 0 ? void 0 : profile.name) || b.userName || "Member";
+            return {
+                bookingId,
+                bookingKind: isGuestBooking ? "payg_guest" : "member",
+                isGuestBooking,
+                paygOrderId: isGuestBooking ? b.paygOrderId : undefined,
+                userId: b.userId,
+                userName: name,
+                name,
+                email: isGuestBooking ? "" : (_a = profile === null || profile === void 0 ? void 0 : profile.email) !== null && _a !== void 0 ? _a : "",
+                photoURL: isGuestBooking ? "" : (_b = profile === null || profile === void 0 ? void 0 : profile.photoURL) !== null && _b !== void 0 ? _b : "",
+                attended: Boolean(b.attended),
+                attendanceStatus: (_c = b.attendanceStatus) !== null && _c !== void 0 ? _c : (b.attended ? "checked_in" : "none"),
+                checkedInAt: (_d = b.checkedInAt) !== null && _d !== void 0 ? _d : null,
+            };
+        })
+            .sort((a, b) => a.name.localeCompare(b.name)),
+    };
+});
+/**
+ * Builds the merged, ranked leaderboard for a month
+ * (every non-pending user appears, default count 0).
+ */
+async function buildMonthlyLeaderboardRows(monthKey) {
+    const [usersSnap, lbSnap] = await Promise.all([
+        db.collection("users").get(),
+        db.collection("leaderboards").doc(monthKey).collection("users").get(),
+    ]);
+    const counts = new Map();
+    lbSnap.forEach((doc) => {
+        const data = doc.data();
+        counts.set(doc.id, Number(data.attendedCount || 0));
+    });
+    return usersSnap.docs
+        .map((d) => {
+        const user = d.data();
+        return {
+            userId: d.id,
+            name: String(user.name || "Member"),
+            photoURL: String(user.photoURL || ""),
+            access: (0, authz_1.resolveUserAuthorisation)(user),
+        };
+    })
+        .filter((u) => u.access.appAccessTier === "full")
+        .map((u) => {
+        var _a;
+        return ({
+            userId: u.userId,
+            name: u.name,
+            photoURL: u.photoURL,
+            attendedCount: (_a = counts.get(u.userId)) !== null && _a !== void 0 ? _a : 0,
+        });
+    })
+        .sort((a, b) => {
+        const diff = (b.attendedCount || 0) - (a.attendedCount || 0);
+        if (diff !== 0)
+            return diff;
+        return a.name.localeCompare(b.name);
+    });
+}
+function requireLeaderboardMonthKey(value) {
+    const monthKey = (0, leaderboard_1.resolveBoundedLeaderboardMonthKey)(value, ukMonthKeyFromDate(new Date()));
+    if (!monthKey) {
+        throw new https_1.HttpsError("invalid-argument", "monthKey must be a supported YYYY-MM month.");
+    }
+    return monthKey;
+}
+function leaderboardLimit(value) {
+    return typeof value === "number" && Number.isFinite(value) && value > 0 ?
+        Math.min(200, Math.floor(value)) : 200;
+}
+async function loadLeaderboardProfiles(values) {
+    const userIds = Array.from(new Set(values.map((value) => {
+        const row = (value || {});
+        return typeof row.userId === "string" ? row.userId : "";
+    }).filter(Boolean))).slice(0, leaderboard_1.LEADERBOARD_CANDIDATE_MAX_ROWS);
+    if (!userIds.length)
+        return new Map();
+    const snapshots = await db.getAll(...userIds.map((userId) => db.collection("users").doc(userId)));
+    return new Map(snapshots
+        .filter((snapshot) => snapshot.exists &&
+        (0, authz_1.resolveUserAuthorisation)(snapshot.data()).appAccessTier === "full")
+        .map((snapshot) => [snapshot.id, snapshot.data()]));
+}
+/**
+ * Precomputes the month's ranked leaderboard into a `summary` field on
+ * `leaderboards/{monthKey}` so clients can read one doc instead of
+ * calling a function that scans the whole users collection.
+ */
+async function rebuildLeaderboardSummary(monthKey) {
+    const rows = await buildMonthlyLeaderboardRows(monthKey);
+    await db.collection("leaderboards").doc(monthKey).set({
+        summary: {
+            rows: rows.slice(0, leaderboard_1.LEADERBOARD_CANDIDATE_MAX_ROWS),
+            total: rows.length,
+            updatedAt: firestore_2.FieldValue.serverTimestamp(),
+        },
+    }, { merge: true });
+    return rows;
+}
+/**
+ * Keeps the precomputed summary fresh whenever a per-user leaderboard
+ * entry changes (check-ins, reconciles, etc.).
+ */
+exports.onLeaderboardEntryWritten = (0, firestore_1.onDocumentWritten)("leaderboards/{monthKey}/users/{userId}", async (event) => {
+    var _a, _b, _c, _d;
+    const before = ((_b = (_a = event.data) === null || _a === void 0 ? void 0 : _a.before) === null || _b === void 0 ? void 0 : _b.exists) ? event.data.before.data() : undefined;
+    const after = ((_d = (_c = event.data) === null || _c === void 0 ? void 0 : _c.after) === null || _d === void 0 ? void 0 : _d.exists) ? event.data.after.data() : undefined;
+    // The Phase 0 scrub removes only legacy email fields. Counts and display
+    // data are unchanged, so avoid a full rebuild for every migrated row.
+    if (before && after &&
+        before.userId === after.userId &&
+        before.name === after.name &&
+        before.photoURL === after.photoURL &&
+        before.attendedCount === after.attendedCount) {
+        return;
+    }
+    await rebuildLeaderboardSummary(event.params.monthKey);
+});
+exports.getMonthlyLeaderboard = (0, https_1.onCall)(async (request) => {
+    var _a, _b, _c;
+    requireAuth(request);
+    await requireFullAppMember(request);
+    const monthKey = requireLeaderboardMonthKey((_a = request.data) === null || _a === void 0 ? void 0 : _a.monthKey);
+    const limit = leaderboardLimit((_b = request.data) === null || _b === void 0 ? void 0 : _b.limit);
+    // Fast path: serve the precomputed summary.
+    const monthSnap = await db.collection("leaderboards").doc(monthKey).get();
+    const summary = (_c = monthSnap.data()) === null || _c === void 0 ? void 0 : _c.summary;
+    if (summary && Array.isArray(summary.rows)) {
+        const profiles = await loadLeaderboardProfiles(summary.rows);
+        const rows = (0, leaderboard_1.filterAttendanceLeaderboardRows)(summary.rows, profiles, limit);
+        return { monthKey, total: rows.length, rows };
+    }
+    // A member cache miss remains read-only and bounded. Summary generation is
+    // owned by trusted triggers/admin reconciliation, not arbitrary read input.
+    const countSnap = await db.collection("leaderboards").doc(monthKey)
+        .collection("users").limit(leaderboard_1.LEADERBOARD_CANDIDATE_MAX_ROWS).get();
+    const rawRows = countSnap.docs.map((snapshot) => ({
+        userId: snapshot.id,
+        attendedCount: snapshot.data().attendedCount,
+    }));
+    const profiles = await loadLeaderboardProfiles(rawRows);
+    const rows = (0, leaderboard_1.filterAttendanceLeaderboardRows)(rawRows, profiles, limit);
+    return { monthKey, total: rows.length, rows };
+});
+exports.reconcileMonthlyLeaderboard = (0, https_1.onCall)(async (request) => {
+    var _a, _b, _c, _d;
+    requireAuth(request);
+    await requireAdmin(request);
+    const monthKey = requireLeaderboardMonthKey((_a = request.data) === null || _a === void 0 ? void 0 : _a.monthKey);
+    const bookingsSnap = await db.collection("bookings").get();
+    const counts = new Map();
+    for (const doc of bookingsSnap.docs) {
+        const b = doc.data();
+        if (!b.classId || !b.userId)
+            continue;
+        // only attended bookings count
+        if (b.attended !== true)
+            continue;
+        const classSnap = await db.collection("classes").doc(String(b.classId)).get();
+        if (!classSnap.exists)
+            continue;
+        const classData = classSnap.data();
+        const classStart = (_c = (_b = classData.startTime) === null || _b === void 0 ? void 0 : _b.toDate) === null || _c === void 0 ? void 0 : _c.call(_b);
+        if (!classStart)
+            continue;
+        const bookingMonthKey = ukMonthKeyFromDate(classStart);
+        if (bookingMonthKey !== monthKey)
+            continue;
+        counts.set(String(b.userId), (counts.get(String(b.userId)) || 0) + 1);
+    }
+    const lbMonthRef = db.collection("leaderboards").doc(monthKey);
+    const existingSnap = await lbMonthRef.collection("users").get();
+    const batch = db.batch();
+    // clear old docs first
+    existingSnap.forEach((doc) => batch.delete(doc.ref));
+    // rebuild
+    for (const [userId, attendedCount] of counts.entries()) {
+        const userSnap = await db.collection("users").doc(userId).get();
+        if (!userSnap.exists)
+            continue;
+        const u = userSnap.data();
+        if ((0, authz_1.resolveUserAuthorisation)(u).appAccessTier !== "full")
+            continue;
+        const ref = lbMonthRef.collection("users").doc(userId);
+        batch.set(ref, {
+            userId,
+            name: (_d = u.name) !== null && _d !== void 0 ? _d : "Member",
+            attendedCount,
+            updatedAt: firestore_2.FieldValue.serverTimestamp(),
+        });
+    }
+    await batch.commit();
+    return {
+        ok: true,
+        monthKey,
+        rebuiltUsers: counts.size,
+    };
+});
+exports.getMonthlyDipLeaderboard = (0, https_1.onCall)(async (request) => {
+    var _a, _b;
+    requireAuth(request);
+    await requireFullAppMember(request);
+    const monthKey = requireLeaderboardMonthKey((_a = request.data) === null || _a === void 0 ? void 0 : _a.monthKey);
+    const limit = leaderboardLimit((_b = request.data) === null || _b === void 0 ? void 0 : _b.limit);
+    const dipRollupSnap = await db
+        .collection("leaderboards")
+        .doc(monthKey)
+        .collection("dipUsers")
+        .orderBy("dipCount", "desc")
+        .limit(leaderboard_1.LEADERBOARD_CANDIDATE_MAX_ROWS)
+        .get();
+    if (!dipRollupSnap.empty) {
+        const rawRows = dipRollupSnap.docs.map((snapshot) => ({
+            userId: String(snapshot.data().userId || snapshot.id),
+            dipCount: snapshot.data().dipCount,
+        }));
+        const profiles = await loadLeaderboardProfiles(rawRows);
+        const rows = (0, leaderboard_1.filterDipLeaderboardRows)(rawRows, profiles, limit);
+        return { monthKey, total: rows.length, rows };
+    }
+    // Rollups are maintained transactionally by attendance mutations. Do not
+    // turn a member-facing cache miss into an all-bookings/all-classes scan.
+    return { monthKey, total: 0, rows: [] };
+});
+exports.listStaffUsers = (0, https_1.onCall)(async (request) => {
+    requireAuth(request);
+    await requireAdminOrSgpt(request);
+    const usersSnap = await db.collection("users").get();
+    const users = usersSnap.docs.map((doc) => {
+        const user = doc.data();
+        const access = (0, authz_1.resolveUserAuthorisation)(user);
+        const stats = user.stats ? {
+            totalCheckIns: Math.max(0, Number(user.stats.totalCheckIns || 0)),
+            monthCheckIns: Object.fromEntries(Object.entries(user.stats.monthCheckIns || {}).map(([month, count]) => [
+                month,
+                Math.max(0, Number(count || 0)),
+            ])),
+            currentStreak: Math.max(0, Number(user.stats.currentStreak || 0)),
+            longestStreak: Math.max(0, Number(user.stats.longestStreak || 0)),
+            lastCheckInDate: typeof user.stats.lastCheckInDate === "string" ?
+                user.stats.lastCheckInDate : null,
+        } : undefined;
+        return {
+            id: doc.id,
+            name: typeof user.name === "string" ? user.name : "",
+            email: typeof user.email === "string" ? user.email : "",
+            photoURL: typeof user.photoURL === "string" ? user.photoURL : "",
+            role: access.role,
+            approvalStatus: access.approvalStatus,
+            entitlementStatus: access.entitlementStatus,
+            entitlementSource: access.entitlementSource,
+            entitlementPlanKey: typeof user.entitlementPlanKey === "string" ?
+                user.entitlementPlanKey : null,
+            appAccessTier: access.appAccessTier,
+            entitlementClassSlots: access.entitlementClassSlots,
+            entitlementWeeklyBookingLimit: access.entitlementWeeklyBookingLimit,
+            alphaWodAccess: access.alphaWodAccess,
+            strengthBlock: user.strengthBlock === "A" || user.strengthBlock === "B" ?
+                user.strengthBlock : "none",
+            stats,
+        };
+    });
+    return { users };
+});
+exports.bootstrapUserProfile = (0, https_1.onCall)(async (request) => {
+    var _a, _b, _c;
+    const userId = requireAuth(request);
+    const requestedName = optionalBoundedString((_a = request.data) === null || _a === void 0 ? void 0 : _a.displayName, "displayName", 120);
+    const authUser = await admin.auth().getUser(userId);
+    const canonicalEmail = ((_b = authUser.email) === null || _b === void 0 ? void 0 : _b.trim().toLowerCase()) || null;
+    const fallbackName = ((_c = authUser.displayName) === null || _c === void 0 ? void 0 : _c.trim()) || null;
+    const userRef = db.collection("users").doc(userId);
+    let finalUser = {};
+    await db.runTransaction(async (tx) => {
+        const snap = await tx.get(userRef);
+        const existing = snap.exists ? snap.data() : {};
+        const existingAccess = (0, authz_1.resolveUserAuthorisation)(existing);
+        const safeAuthorisation = existingAccess.valid ? Object.assign(Object.assign({ role: existingAccess.role, approvalStatus: existingAccess.approvalStatus, entitlementStatus: existingAccess.entitlementStatus, entitlementSource: existingAccess.entitlementSource }, (typeof existing.entitlementPlanKey === "string" ? {
+            entitlementPlanKey: existing.entitlementPlanKey,
+        } : {})), { appAccessTier: existingAccess.entitlementPolicyAppAccessTier, entitlementClassSlots: existingAccess.entitlementPolicyClassSlots, entitlementWeeklyBookingLimit: existingAccess.entitlementPolicyWeeklyBookingLimit }) : {
+            role: "user",
+            approvalStatus: "pending",
+            entitlementStatus: "none",
+            entitlementSource: "none",
+            appAccessTier: "none",
+            entitlementClassSlots: [],
+            entitlementWeeklyBookingLimit: null,
+        };
+        const nextAccess = (0, authz_1.resolveUserAuthorisation)(safeAuthorisation);
+        const currentName = typeof existing.name === "string" && existing.name.trim() ?
+            existing.name.trim() : undefined;
+        const resolvedName = currentName || requestedName || fallbackName || undefined;
+        const patch = Object.assign(Object.assign(Object.assign(Object.assign(Object.assign({}, safeAuthorisation), { appAccessTier: nextAccess.entitlementPolicyAppAccessTier, entitlementClassSlots: nextAccess.entitlementPolicyClassSlots, entitlementWeeklyBookingLimit: nextAccess.entitlementPolicyWeeklyBookingLimit, alphaWodAccess: nextAccess.alphaWodAccess, accessSchemaVersion: authz_1.ACCESS_SCHEMA_VERSION, profileSchemaVersion: 1, email: canonicalEmail, emailVerified: authUser.emailVerified }), (resolvedName ? { name: resolvedName } : {})), { strengthBlock: existing.strengthBlock === "A" || existing.strengthBlock === "B" ?
+                existing.strengthBlock : "none", updatedAt: firestore_2.FieldValue.serverTimestamp() }), (!snap.exists || !existing.createdAt ? {
+            createdAt: firestore_2.FieldValue.serverTimestamp(),
+        } : {}));
+        tx.set(userRef, patch, { merge: true });
+        finalUser = Object.assign(Object.assign({}, existing), patch);
+    });
+    await convergeUserDerivedAccess(userId);
+    const access = (0, authz_1.resolveUserAuthorisation)(finalUser);
+    return {
+        ok: true,
+        profile: {
+            userId,
+            role: access.role,
+            approvalStatus: access.approvalStatus,
+            entitlementStatus: access.entitlementStatus,
+            entitlementSource: access.entitlementSource,
+            appAccessTier: access.appAccessTier,
+            entitlementClassSlots: access.entitlementClassSlots,
+            entitlementWeeklyBookingLimit: access.entitlementWeeklyBookingLimit,
+            alphaWodAccess: access.alphaWodAccess,
+        },
+    };
+});
+exports.acceptCurrentWaiver = (0, https_1.onCall)(async (request) => {
+    var _a, _b, _c, _d, _e, _f;
+    const userId = requireAuth(request);
+    const signedName = optionalBoundedString((_a = request.data) === null || _a === void 0 ? void 0 : _a.signedName, "signedName", 160);
+    if (!signedName || signedName.length < 2) {
+        throw new https_1.HttpsError("invalid-argument", "signedName must contain at least 2 characters.");
+    }
+    if (((_b = request.data) === null || _b === void 0 ? void 0 : _b.version) !== authz_1.CURRENT_WAIVER_VERSION) {
+        throw new https_1.HttpsError("failed-precondition", `The current waiver version is ${authz_1.CURRENT_WAIVER_VERSION}.`);
+    }
+    if (!Array.isArray((_c = request.data) === null || _c === void 0 ? void 0 : _c.acknowledgements) ||
+        request.data.acknowledgements.length !== authz_1.CURRENT_WAIVER_ACKNOWLEDGEMENTS.length ||
+        !authz_1.CURRENT_WAIVER_ACKNOWLEDGEMENTS.every((text, index) => request.data.acknowledgements[index] === text)) {
+        throw new https_1.HttpsError("invalid-argument", "Every current waiver acknowledgement must be accepted exactly.");
+    }
+    if (typeof ((_d = request.data) === null || _d === void 0 ? void 0 : _d.mediaConsent) !== "boolean") {
+        throw new https_1.HttpsError("invalid-argument", "mediaConsent must be true or false.");
+    }
+    const authUser = await admin.auth().getUser(userId);
+    const firebaseToken = (_f = (_e = request.auth) === null || _e === void 0 ? void 0 : _e.token) === null || _f === void 0 ? void 0 : _f.firebase;
+    const userRef = db.collection("users").doc(userId);
+    const acceptanceRef = db.collection("waiverAcceptances")
+        .doc(`${userId}__${authz_1.CURRENT_WAIVER_VERSION}`);
+    let alreadyAccepted = false;
+    await db.runTransaction(async (tx) => {
+        var _a, _b, _c;
+        const [userSnap, acceptanceSnap] = await Promise.all([
+            tx.get(userRef),
+            tx.get(acceptanceRef),
+        ]);
+        if (!userSnap.exists) {
+            throw new https_1.HttpsError("failed-precondition", "Create your member profile before accepting the waiver.");
+        }
+        if (acceptanceSnap.exists) {
+            const existingAcceptance = acceptanceSnap.data();
+            if (!(0, authz_1.isCanonicalCurrentWaiverAcceptance)(userId, existingAcceptance)) {
+                throw new https_1.HttpsError("failed-precondition", "Stored waiver evidence is invalid. Contact an administrator before retrying.");
+            }
+            alreadyAccepted = true;
+            const existingAcceptedAt = acceptanceSnap.get("acceptedAt");
+            tx.set(userRef, {
+                waiverAcceptedVersion: authz_1.CURRENT_WAIVER_VERSION,
+                waiverAcceptedAt: existingAcceptedAt,
+            }, { merge: true });
+            return;
+        }
+        const acceptedAt = firestore_2.FieldValue.serverTimestamp();
+        tx.create(acceptanceRef, {
+            acceptanceSchemaVersion: 1,
+            userId,
+            version: authz_1.CURRENT_WAIVER_VERSION,
+            agreementTitle: authz_1.CURRENT_WAIVER_TITLE,
+            acceptedAt,
+            acceptedName: signedName,
+            acceptedEmail: ((_a = authUser.email) === null || _a === void 0 ? void 0 : _a.trim().toLowerCase()) || null,
+            acceptedEmailVerified: authUser.emailVerified,
+            acknowledgements: [...authz_1.CURRENT_WAIVER_ACKNOWLEDGEMENTS],
+            mediaConsent: request.data.mediaConsent,
+            authenticatedAt: ((_c = (_b = request.auth) === null || _b === void 0 ? void 0 : _b.token) === null || _c === void 0 ? void 0 : _c.auth_time) || null,
+            signInProvider: typeof (firebaseToken === null || firebaseToken === void 0 ? void 0 : firebaseToken.sign_in_provider) === "string" ?
+                firebaseToken.sign_in_provider : null,
+            userAgent: String(request.rawRequest.get("user-agent") || "").slice(0, 500),
+            source: "authenticated_callable",
+        });
+        tx.set(userRef, {
+            waiverAcceptedVersion: authz_1.CURRENT_WAIVER_VERSION,
+            waiverAcceptedAt: acceptedAt,
+        }, { merge: true });
+    });
+    return { ok: true, version: authz_1.CURRENT_WAIVER_VERSION, alreadyAccepted };
+});
+exports.setMemberEntitlement = (0, https_1.onCall)(async (request) => {
+    var _a, _b, _c, _d, _e;
+    const callerUid = requireAuth(request);
+    await requireAdmin(request);
+    const userId = requireString((_a = request.data) === null || _a === void 0 ? void 0 : _a.userId, "userId");
+    const status = (_b = request.data) === null || _b === void 0 ? void 0 : _b.entitlementStatus;
+    const source = (_c = request.data) === null || _c === void 0 ? void 0 : _c.entitlementSource;
+    if (!(0, authz_1.isEntitlementStatus)(status) || !(0, authz_1.isEntitlementSource)(source) ||
+        !(0, authz_1.isValidEntitlementPair)(status, source)) {
+        throw new https_1.HttpsError("invalid-argument", "entitlementStatus and entitlementSource are not a valid combination.");
+    }
+    if ((status === "none" && source !== "none") ||
+        (status !== "none" && source !== "manual")) {
+        throw new https_1.HttpsError("invalid-argument", "Administrative entitlement changes must use source manual, or none when removing access.");
+    }
+    const planKey = optionalBoundedString((_d = request.data) === null || _d === void 0 ? void 0 : _d.planKey, "planKey", 100);
+    const reason = optionalBoundedString((_e = request.data) === null || _e === void 0 ? void 0 : _e.reason, "reason", 500);
+    const userRef = db.collection("users").doc(userId);
+    const entitlementOwnerRef = db.collection("membershipEntitlementOwners")
+        .doc(sha256(userId));
+    let finalUser;
+    await db.runTransaction(async (tx) => {
+        const [snap, entitlementOwner] = await Promise.all([
+            tx.get(userRef),
+            tx.get(entitlementOwnerRef),
+        ]);
+        if (!snap.exists)
+            throw new https_1.HttpsError("not-found", "User not found.");
+        // A paid membership owns both the current Stripe projection and the
+        // entitlement value that must be restored when it ends. Allowing a manual
+        // edit here would leave that frozen restoration snapshot stale, so a later
+        // cancellation could silently erase the administrator's newer decision.
+        // Fail closed until the membership generation has atomically released its
+        // owner row; support can then apply the manual change normally.
+        if (entitlementOwner.exists && entitlementOwner.get("state") !== "released") {
+            throw new https_1.HttpsError("failed-precondition", "This member has an active Stripe entitlement. End or repair that membership before assigning manual access.");
+        }
+        const user = snap.data();
+        if (!(0, authz_1.isUserRole)(user.role) || !(0, authz_1.isApprovalStatus)(user.approvalStatus)) {
+            throw new https_1.HttpsError("failed-precondition", "The member role or approval state is invalid; repair it before assigning access.");
+        }
+        if (!(0, authz_1.isEntitlementCompatibleWithRole)(user.role, status, source)) {
+            throw new https_1.HttpsError("invalid-argument", "That active entitlement source is not valid for the member role.");
+        }
+        const next = {
+            role: user.role,
+            approvalStatus: user.approvalStatus,
+            entitlementStatus: status,
+            entitlementSource: source,
+        };
+        const access = (0, authz_1.resolveUserAuthorisation)(next);
+        const patch = Object.assign(Object.assign({}, next), { appAccessTier: access.entitlementPolicyAppAccessTier, entitlementClassSlots: access.entitlementPolicyClassSlots, entitlementWeeklyBookingLimit: access.entitlementPolicyWeeklyBookingLimit, alphaWodAccess: access.alphaWodAccess, accessSchemaVersion: authz_1.ACCESS_SCHEMA_VERSION, entitlementPlanKey: planKey || firestore_2.FieldValue.delete(), entitlementReason: reason || firestore_2.FieldValue.delete(), entitlementUpdatedAt: firestore_2.FieldValue.serverTimestamp(), entitlementUpdatedBy: callerUid, updatedAt: firestore_2.FieldValue.serverTimestamp() });
+        tx.set(userRef, patch, { merge: true });
+        finalUser = Object.assign(Object.assign(Object.assign({}, user), next), { appAccessTier: access.entitlementPolicyAppAccessTier, entitlementClassSlots: access.entitlementPolicyClassSlots, entitlementWeeklyBookingLimit: access.entitlementPolicyWeeklyBookingLimit, alphaWodAccess: access.alphaWodAccess });
+    });
+    await convergeUserDerivedAccess(userId);
+    const access = (0, authz_1.resolveUserAuthorisation)(finalUser);
+    return Object.assign({ ok: true, userId }, access);
+});
+exports.approveUserAccess = (0, https_1.onCall)(async (request) => {
+    var _a;
+    const callerUid = requireAuth(request);
+    await requireAdmin(request);
+    const userId = requireString((_a = request.data) === null || _a === void 0 ? void 0 : _a.userId, "userId");
+    const userRef = db.collection("users").doc(userId);
+    await db.runTransaction(async (tx) => {
+        const snap = await tx.get(userRef);
+        if (!snap.exists)
+            throw new https_1.HttpsError("not-found", "User not found.");
+        const user = snap.data();
+        if (!(0, authz_1.isUserRole)(user.role)) {
+            throw new https_1.HttpsError("failed-precondition", "The member role is invalid.");
+        }
+        if (user.role === "admin") {
+            throw new https_1.HttpsError("failed-precondition", "Admins do not require approval.");
+        }
+        if (user.role === "banned") {
+            throw new https_1.HttpsError("failed-precondition", "A suspended member cannot be approved.");
+        }
+        const memberSources = ["legacy", "manual", "stripe"];
+        const preserveMemberEntitlement = user.role === "user" &&
+            user.entitlementStatus === "active" &&
+            (0, authz_1.isEntitlementSource)(user.entitlementSource) &&
+            memberSources.includes(user.entitlementSource);
+        const entitlementStatus = "active";
+        const entitlementSource = user.role === "sgpt" ?
+            "staff" : preserveMemberEntitlement ?
+            user.entitlementSource : "manual";
+        const next = Object.assign(Object.assign({ role: user.role, approvalStatus: "approved", entitlementStatus,
+            entitlementSource }, (preserveMemberEntitlement &&
+            typeof user.entitlementPlanKey === "string" ? {
+            entitlementPlanKey: user.entitlementPlanKey,
+        } : {})), (preserveMemberEntitlement ? {
+            appAccessTier: user.appAccessTier,
+            entitlementClassSlots: user.entitlementClassSlots,
+            entitlementWeeklyBookingLimit: user.entitlementWeeklyBookingLimit,
+        } : {}));
+        const access = (0, authz_1.resolveUserAuthorisation)(next);
+        const patch = Object.assign(Object.assign({}, next), { appAccessTier: access.entitlementPolicyAppAccessTier, entitlementClassSlots: access.entitlementPolicyClassSlots, entitlementWeeklyBookingLimit: access.entitlementPolicyWeeklyBookingLimit, alphaWodAccess: access.alphaWodAccess, accessSchemaVersion: authz_1.ACCESS_SCHEMA_VERSION, approvedAt: firestore_2.FieldValue.serverTimestamp(), approvedBy: callerUid, entitlementUpdatedAt: firestore_2.FieldValue.serverTimestamp(), entitlementUpdatedBy: callerUid, updatedAt: firestore_2.FieldValue.serverTimestamp() });
+        tx.set(userRef, patch, { merge: true });
+    });
+    await convergeUserDerivedAccess(userId);
+    return { ok: true };
+});
+exports.updateMemberRole = (0, https_1.onCall)(async (request) => {
+    var _a, _b;
+    const callerUid = requireAuth(request);
+    await requireAdmin(request);
+    const userId = requireString((_a = request.data) === null || _a === void 0 ? void 0 : _a.userId, "userId");
+    const role = requireString((_b = request.data) === null || _b === void 0 ? void 0 : _b.role, "role");
+    if (role !== "user" && role !== "sgpt" && role !== "banned") {
+        throw new https_1.HttpsError("invalid-argument", "Role must be user, sgpt, or banned.");
+    }
+    const userRef = db.collection("users").doc(userId);
+    const entitlementOwnerRef = db.collection("membershipEntitlementOwners")
+        .doc(sha256(userId));
+    await db.runTransaction(async (tx) => {
+        const [snap, entitlementOwner] = await Promise.all([
+            tx.get(userRef),
+            tx.get(entitlementOwnerRef),
+        ]);
+        if (!snap.exists)
+            throw new https_1.HttpsError("not-found", "User not found.");
+        if (entitlementOwner.exists && entitlementOwner.get("state") !== "released") {
+            throw new https_1.HttpsError("failed-precondition", "This member has an active Stripe entitlement. End or repair that membership before changing their role.");
+        }
+        const user = snap.data();
+        if (!(0, authz_1.isUserRole)(user.role)) {
+            throw new https_1.HttpsError("failed-precondition", "The member role is invalid.");
+        }
+        if (user.role === "admin") {
+            throw new https_1.HttpsError("failed-precondition", "Admins cannot be reassigned.");
+        }
+        const entitlementStatus = role === "sgpt" ?
+            "active" : role === "banned" ? "restricted" : "none";
+        const entitlementSource = role === "sgpt" ?
+            "staff" : role === "banned" ? "manual" : "none";
+        const next = {
+            role,
+            approvalStatus: "approved",
+            entitlementStatus,
+            entitlementSource,
+        };
+        const access = (0, authz_1.resolveUserAuthorisation)(next);
+        const patch = Object.assign(Object.assign(Object.assign({}, next), { appAccessTier: access.entitlementPolicyAppAccessTier, entitlementClassSlots: access.entitlementPolicyClassSlots, entitlementWeeklyBookingLimit: access.entitlementPolicyWeeklyBookingLimit, entitlementPlanKey: firestore_2.FieldValue.delete(), alphaWodAccess: access.alphaWodAccess, accessSchemaVersion: authz_1.ACCESS_SCHEMA_VERSION, updatedAt: firestore_2.FieldValue.serverTimestamp() }), (role === "banned" ? {
+            suspendedAt: firestore_2.FieldValue.serverTimestamp(),
+            suspendedBy: callerUid,
+            entitlementReason: "suspended_by_admin",
+        } : {
+            restoredAt: firestore_2.FieldValue.serverTimestamp(),
+            restoredBy: callerUid,
+            entitlementReason: role === "user" ?
+                "access_requires_explicit_entitlement" : "staff_role",
+        }));
+        tx.set(userRef, patch, { merge: true });
+    });
+    await convergeUserDerivedAccess(userId);
+    return { ok: true };
+});
+exports.updateMemberStrengthBlock = (0, https_1.onCall)(async (request) => {
+    var _a, _b;
+    const callerUid = requireAuth(request);
+    await requireAdmin(request);
+    const userId = requireString((_a = request.data) === null || _a === void 0 ? void 0 : _a.userId, "userId");
+    const strengthBlock = normaliseStrengthBlock((_b = request.data) === null || _b === void 0 ? void 0 : _b.strengthBlock);
+    if (strengthBlock !== "A" &&
+        strengthBlock !== "B" &&
+        strengthBlock !== "none") {
+        throw new https_1.HttpsError("invalid-argument", "Strength block must be A, B, or none.");
+    }
+    const userRef = db.collection("users").doc(userId);
+    const snap = await userRef.get();
+    if (!snap.exists) {
+        throw new https_1.HttpsError("not-found", "User not found.");
+    }
+    await userRef.set({
+        strengthBlock,
+        updatedAt: firestore_2.FieldValue.serverTimestamp(),
+        strengthBlockUpdatedAt: firestore_2.FieldValue.serverTimestamp(),
+        strengthBlockUpdatedBy: callerUid,
+    }, { merge: true });
+    return { ok: true };
+});
+exports.updateStrengthBlockSettings = (0, https_1.onCall)(async (request) => {
+    var _a;
+    const callerUid = requireAuth(request);
+    await requireAdmin(request);
+    if (typeof ((_a = request.data) === null || _a === void 0 ? void 0 : _a.strengthBlocksEnabled) !== "boolean") {
+        throw new https_1.HttpsError("invalid-argument", "strengthBlocksEnabled must be a boolean.");
+    }
+    const strengthBlocksEnabled = request.data.strengthBlocksEnabled;
+    await db.collection("appSettings").doc("booking").set({
+        strengthBlocksEnabled,
+        updatedAt: firestore_2.FieldValue.serverTimestamp(),
+        updatedBy: callerUid,
+    }, { merge: true });
+    return { ok: true, strengthBlocksEnabled };
+});
+exports.inviteMemberByEmail = (0, https_1.onCall)({ secrets: [resendApiKey, resendFromEmail] }, async (request) => {
+    var _a, _b;
+    const callerUid = requireAuth(request);
+    await requireAdmin(request);
+    const email = requireEmail((_a = request.data) === null || _a === void 0 ? void 0 : _a.email, "email");
+    const origin = resolveInviteOrigin((_b = request.data) === null || _b === void 0 ? void 0 : _b.origin);
+    const existingAuthUser = await admin.auth().getUserByEmail(email).catch((err) => {
+        if ((err === null || err === void 0 ? void 0 : err.code) === "auth/user-not-found") {
+            return null;
+        }
+        throw err;
+    });
+    if (existingAuthUser) {
+        const userSnap = await db.collection("users").doc(existingAuthUser.uid).get();
+        const user = (userSnap.data() || {});
+        if (user.role === "admin") {
+            throw new https_1.HttpsError("already-exists", "That email already belongs to an admin.");
+        }
+        if (user.approvalStatus !== "pending") {
+            throw new https_1.HttpsError("already-exists", "That member already has an account.");
+        }
+    }
+    const inviteToken = crypto.randomUUID();
+    const signUpUrl = `${origin}/signup?email=${encodeURIComponent(email)}&invite=${encodeURIComponent(inviteToken)}`;
+    const inviteRef = db.collection("memberInvites").doc(inviteDocIdFor(email));
+    await sendInviteEmail(email, signUpUrl);
+    await inviteRef.set({
+        email,
+        invitedBy: callerUid,
+        inviteToken,
+        signUpUrl,
+        status: "sent",
+        createdAt: firestore_2.FieldValue.serverTimestamp(),
+        updatedAt: firestore_2.FieldValue.serverTimestamp(),
+        lastSentAt: firestore_2.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    return { ok: true, signUpUrl };
+});
+/** -----------------------------
+ * Phase 1: membership purchase and Stripe Billing
+ *
+ * The membership module is self-contained and receives the two trusted Phase 0
+ * routines it must not reimplement: derived-access convergence and the admin
+ * guard. Handlers are re-exported here so the deployed function names stay in
+ * one manifest.
+ * ----------------------------*/
+var membership_2 = require("./membership");
+Object.defineProperty(exports, "createCustomerPortalSession", { enumerable: true, get: function () { return membership_2.createCustomerPortalSession; } });
+Object.defineProperty(exports, "getMyMemberships", { enumerable: true, get: function () { return membership_2.getMyMemberships; } });
+exports.createMembershipCheckoutSession = (0, membership_1.buildCreateMembershipCheckoutSession)(convergeUserDerivedAccess, membership_1.MEMBERSHIP_CHECKOUT_SCHEMA_VERSION);
+// Both names require the explicit current browser contract. A pre-v2 page
+// therefore cannot submit old checkbox ids and have the server silently store
+// the new legal/commercial statements. Already-created Sessions continue to
+// fulfil independently from their frozen membership intent.
+exports.createMembershipCheckoutSessionV2 = (0, membership_1.buildCreateMembershipCheckoutSession)(convergeUserDerivedAccess, membership_1.MEMBERSHIP_CHECKOUT_SCHEMA_VERSION);
+const sharedStripeWebhookSecrets = [
+    ...membership_1.MEMBERSHIP_WEBHOOK_SECRETS,
+    payg_1.PAYG_CANCELLATION_TOKEN_SECRET,
+];
+const sharedStripeWorkerSecrets = [
+    ...membership_1.MEMBERSHIP_STRIPE_WORKER_SECRETS,
+    payg_1.PAYG_CANCELLATION_TOKEN_SECRET,
+];
+exports.stripeWebhook = (0, membership_1.buildStripeWebhook)(convergeUserDerivedAccess, payg_1.dispatchPaygStripeEvent, sharedStripeWebhookSecrets);
+exports.recoverStripeEvents = (0, membership_1.buildRecoverStripeEvents)(convergeUserDerivedAccess, payg_1.dispatchPaygStripeEvent, sharedStripeWorkerSecrets);
+exports.recoverMembershipCancellations = (0, membership_1.buildRecoverMembershipCancellations)(convergeUserDerivedAccess);
+exports.reconcileMembershipBookings = (0, membership_1.buildReconcileMembershipBookings)();
+exports.reconcilePastDueMemberships = (0, membership_1.buildReconcilePastDueMemberships)(convergeUserDerivedAccess);
+exports.retryMembershipConfirmations = (0, membership_1.buildRetryMembershipConfirmations)();
+exports.requestMembershipCancellation = (0, membership_1.buildRequestMembershipCancellation)(convergeUserDerivedAccess);
+exports.claimMembership = (0, membership_1.buildClaimMembership)(convergeUserDerivedAccess);
+exports.listMemberships = (0, membership_1.buildListMemberships)(requireAdmin);
+exports.releaseAbandonedMembershipCheckout = (0, membership_1.buildReleaseAbandonedMembershipCheckout)(requireAdmin);
+exports.linkMembershipParticipant = (0, membership_1.buildLinkMembershipParticipant)(requireAdmin, convergeUserDerivedAccess);
+/** Separate, account-free one-time PAYG purchase domain. */
+exports.getPublicPaygSchedule = (0, payg_1.buildGetPublicPaygSchedule)();
+exports.createPaygCheckoutSession = (0, payg_1.buildCreatePaygCheckoutSession)();
+exports.getPaygCancellationPreview = (0, payg_1.buildGetPaygCancellationPreview)();
+exports.getPaygCheckoutStatus = (0, payg_1.buildGetPaygCheckoutStatus)();
+exports.requestPaygCancellation = (0, payg_1.buildRequestPaygCancellation)();
+exports.recoverPaygOperations = (0, payg_1.buildRecoverPaygOperations)();
+exports.retryPaygConfirmations = (0, payg_1.buildRetryPaygConfirmations)();
+exports.redactPaygPii = (0, payg_1.buildRedactPaygPii)();
+//# sourceMappingURL=index.js.map

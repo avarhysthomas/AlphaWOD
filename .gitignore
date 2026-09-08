@@ -49,3 +49,7 @@ functions/.env.*
 !functions/.env.production.example
 functions/.secret.local
 functions/.secret.*
+
+# Production reconciliation: environment values and private captures are never source.
+.env
+.production-reconciliation/

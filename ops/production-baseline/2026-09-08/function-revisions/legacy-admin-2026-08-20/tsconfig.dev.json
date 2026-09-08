@@ -1,0 +1,7 @@
+{
+  "include": [
+    ".eslintrc.js",
+    "test/**/*.js",
+    "test-emulator/**/*.js"
+  ]
+}
