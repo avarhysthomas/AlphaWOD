@@ -69,3 +69,7 @@ The earlier audit examined `main` and a September 7 branch that is not the commo
 On Node 24.13.1: 324 frontend tests and 291 common-backend tests passed; frontend/backend lint and a local frontend build passed. All 13 recompiled common-backend JavaScript files match their deployed copies byte-for-byte. The offline baseline check passes 597 file checks.
 
 Infrastructure tests: 55 passed, one failed. `scripts/deploymentConfig.test.js:22` expects the earlier build command without explicit purchase flags, while production includes those flags. The deployed command is preserved. This known tooling mismatch must be deliberately addressed before a future CI/release change; the baseline does not claim every check is green. Capturing production preserves its defects as well as its working behaviour.
+
+## Release preparation
+
+The CI mismatch above is repaired in the release candidate without changing the deployed build command or application source. The frozen identity check now reports the two intentional tooling edits. See [the release procedure](docs/production-baseline-release.md) for validation, frontend-only deployment scope, remaining checks and rollback.

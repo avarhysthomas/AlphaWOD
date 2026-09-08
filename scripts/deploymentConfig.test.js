@@ -19,9 +19,10 @@ test("Vercel production builds are preflighted and preserve SPA deep links", () 
   assert.deepEqual(vercel.rewrites, [
     {source: "/(.*)", destination: "/index.html"},
   ]);
-  assert.match(
+  assert.equal(
     packageJson.scripts["build:production"],
-    /^node scripts\/verifyFrontendProductionEnv\.js && /
+    "node scripts/verifyFrontendProductionEnv.js --expect-purchase-open " +
+      "--expect-conditioning-open && react-scripts build"
   );
   assert.equal(
     packageJson.scripts["verify:frontend-production-closed"],
@@ -70,11 +71,11 @@ test("CI exercises the production build preflight with an inert browser fixture"
   );
   assert.match(
     workflow,
-    /REACT_APP_MEMBERSHIP_PURCHASE_ENABLED: "false"/
+    /REACT_APP_MEMBERSHIP_PURCHASE_ENABLED: "true"/
   );
   assert.match(
     workflow,
-    /REACT_APP_ADULT_CONDITIONING_PURCHASE_ENABLED: "false"/
+    /REACT_APP_ADULT_CONDITIONING_PURCHASE_ENABLED: "true"/
   );
 });
 
