@@ -56,7 +56,7 @@ Normal unit tests, lint and local builds can be run separately. Never use a real
 
 ## Existing local work
 
-The pre-reconciliation workspace was saved as binary staged/unstaged patches, a complete untracked-file archive and SHA-256 file inventory. A local preservation branch is created before switching the main workspace to this baseline. That work has not been discarded or automatically reapplied over production.
+The pre-reconciliation workspace was saved as binary staged/unstaged patches, a complete untracked-file archive and SHA-256 file inventory. A complete private source copy with per-file SHA-256 hashes is stored at `.production-reconciliation/original-workspace-20260908/`. All 35 modified tracked files and 11 untracked files were verified against this backup before switching. No WIP Git commit was made, so populated environment files were not newly committed. That work has not been discarded or automatically reapplied over production.
 
 Private evidence is under `.production-reconciliation/capture-20260908`, excluded through the repository's local Git exclude file and protected by a private directory. Do not publish that directory: it contains deployment configuration, populated environment files and original diagnostic archives. The checked-in manifest contains no secret values.
 
